@@ -1,0 +1,211 @@
+REPORT FACTORY AI - SPRINT 1
+
+OBJECTIVE
+
+Build a real AI-powered Topic Intelligence Engine.
+
+The current topic expansion system relies on templates and keyword substitution.
+
+Example of current failure:
+
+Input:
+
+牛排
+
+Output:
+
+牛排的生物特徵與生活習性研究
+
+This is incorrect.
+
+The system must first understand the topic before generating report directions.
+
+⸻
+
+GOAL
+
+Transform topic expansion from:
+
+Topic
+
+↓
+
+Template
+
+↓
+
+Output
+
+into:
+
+Topic
+
+↓
+
+Topic Analysis
+
+↓
+
+Domain Classification
+
+↓
+
+Research Direction Generation
+
+↓
+
+Output
+
+⸻
+
+SUCCESS CRITERIA
+
+The following topics must produce significantly different research directions:
+
+Input:
+
+牛
+
+Expected category:
+
+Biology / Agriculture
+
+⸻
+
+Input:
+
+牛排
+
+Expected category:
+
+Food Industry / Culinary Science
+
+⸻
+
+Input:
+
+維生素C
+
+Expected category:
+
+Chemistry / Nutrition
+
+⸻
+
+Input:
+
+台積電
+
+Expected category:
+
+Business / Semiconductor Industry
+
+⸻
+
+Input:
+
+AI
+
+Expected category:
+
+Technology / Artificial Intelligence
+
+⸻
+
+The generated suggestions should reflect the actual domain.
+
+No generic template substitution.
+
+⸻
+
+REQUIRED OUTPUT
+
+When a topic is entered:
+
+Generate:
+
+1. Topic Category
+2. Research Directions
+3. Suggested Report Titles
+
+Each title should be unique and domain-aware.
+
+Example:
+
+Input:
+
+牛排
+
+Possible outputs:
+
+* 台灣牛排產業發展現況與市場分析
+* 不同熟成方式對牛排風味之影響
+* 牛排消費文化與餐飲產業研究
+* 牛肉供應鏈與食品安全議題探討
+* 高級牛排市場之品牌策略分析
+
+NOT:
+
+* 牛排的生物特徵與生活習性研究
+
+⸻
+
+DEVELOPMENT CONSTRAINTS
+
+IMPORTANT
+
+Do NOT redesign the website.
+
+Do NOT modify report generation.
+
+Do NOT modify export systems.
+
+Do NOT modify PDF features.
+
+Do NOT modify DOCX features.
+
+Do NOT modify UI layout.
+
+Only improve topic understanding and suggestion generation.
+
+⸻
+
+COST CONTROL RULES
+
+Prefer extending existing code.
+
+Do not refactor working modules.
+
+Do not create new architecture.
+
+Do not rebuild pages.
+
+Keep changes localized.
+
+Minimize file modifications.
+
+Use the smallest possible implementation.
+
+⸻
+
+VALIDATION TEST
+
+The following inputs must produce obviously different results:
+
+牛
+
+牛排
+
+維生素C
+
+台積電
+
+人工智慧
+
+咖啡
+
+心理學
+
+You must show the generated categories and suggested report titles for each test case.
+
+Only finish when all test cases pass.
