@@ -1,0 +1,1085 @@
+You are working on an existing Replit project called Report Factory AI.
+
+You are a senior frontend engineer, product manager, and AI report-generator designer.
+
+Your task is to improve the existing app.
+Do not rebuild the entire project.
+Do not remove existing features.
+Do not change the overall visual identity unless necessary.
+Keep all user-facing website text in Traditional Chinese.
+
+The goal is to upgrade the current app from a simple template-based report outline generator into a more useful multi-style, multi-mode report generator for students, researchers, and project creators.
+
+⸻
+
+1. Current app context
+
+The current website already has:
+
+* A homepage hero section
+* “開始生成報告” button
+* “查看報告格式” button
+* Report topic input
+* Report type select
+* Report style select
+* Report length select
+* Generate report button
+* Loading state
+* Generated report result card
+* Sections such as summary, research background, research purpose, research questions, research hypothesis, literature review outline, research method, suggested charts, suggested images, research limitations, conclusion draft
+* Copy report button
+* Download Markdown button
+* Regenerate button
+* Clear content button
+* Report quality checklist
+
+Please keep all of the above features and improve them.
+
+⸻
+
+2. Main problems to fix
+
+The current app has these issues:
+
+1. When the user enters a very short topic, such as “鵝”, “AI”, “咖啡”, or “手機”, the generated content is too generic.
+2. The app often generates vague sentences such as:
+    * “X 是近年來受到廣泛關注的重要議題。”
+    * “本研究具有重要意義。”
+    * “未來值得深入探討。”
+3. Different topics are currently using almost the same template.
+4. The report result feels more like a report outline draft, not a real editable report.
+5. The form does not collect enough information to generate high-quality reports.
+6. Mobile layout needs improvement, especially spacing near the top when using Replit preview.
+7. The app should avoid fake citations or fake sources.
+
+⸻
+
+3. Important language rule
+
+All code comments, variable names, and internal logic may be in English.
+
+However, all text visible to users in the website must be in Traditional Chinese, including:
+
+* Labels
+* Buttons
+* Placeholder text
+* Generated report headings
+* Warning messages
+* Quality checklist items
+* Completion status cards
+* Topic expansion suggestions
+
+Do not translate the website UI into English.
+
+⸻
+
+4. Add new form fields
+
+Add the following fields to the report generation form.
+
+4.1 Target audience
+
+Field type: select
+
+Options in Traditional Chinese:
+
+* 國中生
+* 高中生
+* 大學生
+* 老師
+* 評審
+* 客戶
+* 公司主管
+* 一般讀者
+
+Default: 高中生
+
+⸻
+
+4.2 Report purpose
+
+Field type: select
+
+Options in Traditional Chinese:
+
+* 學校作業
+* 研究報告
+* 科展報告
+* 專題製作
+* 讀書心得
+* 實驗報告
+* 商業分析
+* 簡報講稿
+* 網站／AI／程式專案
+* 其他
+
+Default: 學校作業
+
+⸻
+
+4.3 Generation mode
+
+Field type: select
+
+Options in Traditional Chinese:
+
+* 報告架構
+* 完整報告
+* 簡報大綱
+* 資料需求表
+* 圖表與圖片建議
+
+Default: 報告架構
+
+Generation behavior:
+
+* 報告架構: Generate report structure, research questions, hypothesis, literature review direction, research method, chart suggestions, image suggestions, data requirements, and quality checklist.
+* 完整報告: Generate a more complete paragraph-style report. Do not only output bullet points.
+* 簡報大綱: Generate a slide-by-slide presentation outline.
+* 資料需求表: Generate a table of required data for completing the report.
+* 圖表與圖片建議: Generate only chart, image, and flowchart suggestions.
+
+⸻
+
+4.4 Source requirement
+
+Field type: select
+
+Options in Traditional Chinese:
+
+* 不需要
+* 需要，但先標示「資料來源待補」
+* 需要，並生成參考文獻格式
+
+Default: 需要，但先標示「資料來源待補」
+
+Important rule:
+
+If the project does not have real web search capability, do not generate fake URLs, fake authors, fake article titles, fake years, or fake citations.
+
+Instead, use Traditional Chinese placeholders such as:
+
+* 「資料來源待補」
+* 「此處需要補充官方資料或學術資料」
+* 「建議查詢政府網站、學術論文、期刊、出版社或可信機構資料」
+* 「來源待確認」
+
+⸻
+
+4.5 Citation format
+
+Field type: select
+
+Options in Traditional Chinese:
+
+* 無
+* APA
+* MLA
+* Chicago
+* 老師指定格式
+
+Default: APA
+
+⸻
+
+4.6 Chart suggestion requirement
+
+Field type: select
+
+Options in Traditional Chinese:
+
+* 需要
+* 不需要
+
+Default: 需要
+
+⸻
+
+4.7 Additional information
+
+Field type: textarea
+
+Label:
+
+「補充資料／老師要求／評分標準」
+
+Placeholder:
+
+「可貼上老師要求、評分標準、課堂資料、個人觀點、指定段落、參考資料或想加入的內容。」
+
+Important behavior:
+
+The generated report should prioritize and reflect this additional information when it is provided.
+Do not ignore it.
+
+⸻
+
+5. Add topic classification logic
+
+Create or improve a function similar to:
+
+detectTopicCategory(topic, reportType, purpose)
+
+It should classify the topic based on the user’s topic, report type, and report purpose.
+
+Support at least these categories:
+
+1. 生物／動物
+2. 科學實驗
+3. 社會議題
+4. 歷史／地理／公民
+5. 讀書心得
+6. 商業／產品分析
+7. AI／網站／程式專案
+8. 醫療／長照／社工／心理
+9. 一般學校報告
+
+The purpose of this function is to avoid using the same generic template for every topic.
+
+⸻
+
+6. Topic-specific generation rules
+
+Use different generation logic depending on the detected topic category.
+
+⸻
+
+6.1 Biology / animal topics
+
+Examples:
+
+* 鵝
+* 貓
+* 狗
+* 蚯蚓
+* 蝴蝶
+* 青蛙
+* 魚類
+* 蜜蜂
+
+Suggested structure:
+
+1. 主題基本介紹
+2. 生物分類與基本特徵
+3. 生活習性
+4. 棲息環境
+5. 與人類生活的關係
+6. 經濟、文化或生態價值
+7. 相關問題與討論
+8. 結論
+
+If the topic is “鵝”, the generated content should mention concrete details such as:
+
+* 鵝是常見家禽
+* 具有群居性
+* 警覺性高
+* 可作為肉品、蛋品、羽絨來源
+* 與農業、畜牧業、人類飲食有關
+* 可討論飼養管理、動物福利、疾病防治或產業價值
+
+Avoid writing:
+
+「鵝是近年來受到廣泛關注的重要議題。」
+
+Instead, write something more specific, such as:
+
+「鵝是人類長期飼養的家禽之一，常見於農業與畜牧環境中。牠不只具有食用價值，也因警覺性高、群居性明顯，而在人類生活與農村文化中具有特殊角色。」
+
+⸻
+
+6.2 Science experiment topics
+
+Examples:
+
+* 不同溫度對維生素 C 氧化速率之影響
+* 光照對植物生長的影響
+* 酵母菌發酵速率
+* 水溫對溶解速率的影響
+
+Suggested structure:
+
+1. 實驗名稱
+2. 實驗目的
+3. 實驗原理
+4. 實驗變因
+5. 實驗器材
+6. 實驗步驟
+7. 數據紀錄方式
+8. 預期結果
+9. 誤差來源
+10. 改進方法
+11. 結論
+
+Must include:
+
+* 操作變因
+* 應變變因
+* 控制變因
+* Observable or measurable results
+* Chart suggestions
+
+⸻
+
+6.3 Social issue topics
+
+Examples:
+
+* 少子化
+* 高齡化
+* 網路霸凌
+* 交通安全
+* 詐騙問題
+* 生成式 AI 對學生的影響
+
+Suggested structure:
+
+1. 議題背景
+2. 形成原因
+3. 現況分析
+4. 影響層面
+5. 案例討論
+6. 不同觀點
+7. 解決策略
+8. 個人看法
+9. 結論
+
+Important:
+
+* Do not only write slogans.
+* Include causes, impacts, and possible solutions.
+* Mark where statistics should be inserted.
+
+⸻
+
+6.4 History / geography / civics topics
+
+Examples:
+
+* 台南古蹟
+* 鄭成功
+* 台灣地形
+* 地方創生
+* 公民投票
+* 選舉制度
+
+Suggested structure:
+
+1. 主題背景
+2. 歷史脈絡或地理位置
+3. 重要事件或制度
+4. 現況
+5. 影響
+6. 爭議或討論
+7. 個人觀點
+8. 結論
+
+⸻
+
+6.5 Book reflection topics
+
+Examples:
+
+* 《陪他走更遠》讀書心得
+* 《陪家人走過憂鬱》心得
+* 《讓我照顧你》心得
+
+Suggested structure:
+
+1. 書名與作者
+2. 作者介紹
+3. 書籍大意
+4. 重要內容整理
+5. 印象最深的段落
+6. 個人心得
+7. 與生活經驗的連結
+8. 批判與反思
+9. 結論
+
+Important:
+
+* A book reflection should not only summarize the book.
+* Include personal feeling, reflection, and real-life connection.
+* The tone may be natural, but it should still have depth.
+
+⸻
+
+6.6 Business / product analysis topics
+
+Examples:
+
+* 報告生成器網站
+* 翡翠展示網站
+* AI 學習工具
+* 線上課程平台
+* 自動化簡報工具
+
+Suggested structure:
+
+1. 執行摘要
+2. 產品背景
+3. 目標客群
+4. 使用情境
+5. 競品分析
+6. 核心功能
+7. 商業模式
+8. 技術需求
+9. 成本與資源
+10. 風險分析
+11. 執行步驟
+12. 結論與建議
+
+⸻
+
+6.7 AI / website / programming project topics
+
+Examples:
+
+* 報告生成器網站
+* Website Factory
+* 本地 Ollama Bridge
+* AI 自動摘要工具
+* Python 成績計算器
+
+Suggested structure:
+
+1. 專案背景
+2. 使用者需求
+3. 核心功能
+4. 系統架構
+5. 技術選型
+6. 資料流程
+7. 開發步驟
+8. 測試方式
+9. 風險與限制
+10. 未來擴充
+11. 結論
+
+⸻
+
+6.8 Medical / long-term care / social work / psychology topics
+
+Examples:
+
+* 長照居家服務
+* 失智症照顧
+* 社工訪談
+* 青少年焦慮
+* 高齡化社會
+
+Suggested structure:
+
+1. 主題背景
+2. 服務對象或問題族群
+3. 現況說明
+4. 主要挑戰
+5. 相關制度或服務
+6. 案例分析
+7. 專業觀點
+8. 個人反思
+9. 結論與建議
+
+Important:
+
+* Use respectful and objective wording.
+* Do not make medical diagnoses.
+* If medical or psychological claims are involved, mark that professional sources are required.
+
+⸻
+
+7. Report style control
+
+Adjust tone based on the selected report style.
+
+7.1 高中生可提交
+
+Features:
+
+* Natural tone
+* Not too difficult
+* Not obviously AI-generated
+* Basic analysis
+* Suitable for submission to a teacher
+
+7.2 90 分以上學校報告
+
+Features:
+
+* Complete structure
+* Research questions
+* Research method
+* Chart suggestions
+* Research limitations
+* Conclusion and reflection
+* Suitable for formal grading
+
+7.3 學術研究風格
+
+Features:
+
+* Formal wording
+* Stronger literature review
+* Stronger research method
+* Limitations and future research
+* Suitable for projects, science fair, or academic use
+
+7.4 商業顧問風格
+
+Features:
+
+* Decision-oriented
+* Market, cost, risk, and execution focused
+* Conclusion should support action
+* Suitable for product planning and business analysis
+
+7.5 口語簡報風格
+
+Features:
+
+* Shorter sentences
+* Clear key points
+* Suitable for oral presentation
+* Can be converted into presentation script
+
+7.6 深度研究報告
+
+Features:
+
+* Detailed structure
+* Deeper analysis
+* Complete sections
+* Requires sources
+* Suitable for long-form reports
+
+⸻
+
+8. Report length control
+
+Control the depth and output length based on the selected report length.
+
+8.1 短版摘要
+
+Suggested length: 300–600 Chinese characters.
+
+Should include:
+
+* 摘要
+* 背景
+* 目的
+* 研究問題
+* 初步結論
+
+Do not output only a few vague sentences.
+
+8.2 一般報告
+
+Suggested length: 1200–2000 Chinese characters.
+
+Should include:
+
+* 摘要
+* 背景
+* 動機
+* 目的
+* 主要內容
+* 分析
+* 結論
+* 圖表建議
+
+8.3 完整報告
+
+Suggested length: 2500–5000 Chinese characters.
+
+Should include:
+
+* 封面資訊
+* 摘要
+* 研究背景
+* 研究動機
+* 研究目的
+* 文獻探討
+* 研究方法
+* 研究結果與分析
+* 討論
+* 結論
+* 研究限制
+* 未來建議
+* 參考文獻格式
+
+8.4 深度研究
+
+Suggested length: 5000+ Chinese characters.
+
+The app should remind the user that real sources, statistics, and references are required.
+
+⸻
+
+9. Short-topic warning and topic expansion
+
+Add logic:
+
+If the topic is shorter than 5 Chinese characters or too broad, such as:
+
+* 鵝
+* AI
+* 咖啡
+* 手機
+* 社工
+* 長照
+* 台南
+
+Show this message above the generated result:
+
+「你的主題較簡短，系統已先產生基礎版本。若要提高報告品質，建議補充研究方向、老師要求、資料來源或個人觀點。」
+
+Also provide 3–5 topic expansion suggestions.
+
+Example for topic “鵝”:
+
+1. 鵝的生物特徵與生活習性
+2. 鵝在農業與畜牧業中的價值
+3. 臺灣鵝肉產業現況分析
+4. 鵝的飼養管理與疾病防治
+5. 鵝與人類生活的關係
+
+⸻
+
+10. Add topic expansion feature
+
+Add a button:
+
+「幫我擴寫主題」
+
+Behavior:
+
+Based on the user’s short topic, generate 3–5 more report-ready topic titles.
+
+Example:
+
+Input:
+
+鵝
+
+Output:
+
+1. 鵝的生物特徵與生活習性研究
+2. 鵝在農業與畜牧業中的應用價值
+3. 臺灣鵝肉產業的現況與發展
+4. 鵝的飼養管理與動物福利問題
+5. 鵝與人類生活關係之探討
+
+The user should be able to click one suggestion and automatically fill it back into the report topic input field.
+
+⸻
+
+11. Add report completeness card
+
+Add a card above the generated result.
+
+It should display:
+
+1. Current version:
+    * 架構草稿
+    * 完整報告草稿
+    * 簡報大綱
+    * 資料需求表
+    * 圖表與圖片建議
+2. Completeness:
+    * 架構草稿：約 40%
+    * 短版摘要：約 50%
+    * 一般報告：約 65%
+    * 完整報告：約 80%
+    * 深度研究：約 85%，但需要真實資料來源補強
+3. Suggested additions:
+    * 資料來源
+    * 統計數據
+    * 案例
+    * 圖表資料
+    * 個人觀點
+    * 老師評分標準
+
+Example display text:
+
+目前版本：報告架構草稿
+完整度：約 40%
+建議補充：資料來源、案例、統計數據、個人觀點
+
+⸻
+
+12. Chart and image suggestion format
+
+If the user chooses that chart suggestions are needed, use this format:
+
+【建議圖表 1：標題】
+位置：第 X 章後
+用途：說明……
+內容：包含……
+
+【建議圖片 1：標題】
+位置：第 X 章後
+用途：說明……
+內容：包含……
+
+Example:
+
+【建議圖表 1：鵝的生物特徵整理表】
+位置：主題基本介紹後
+用途：快速整理鵝的分類、外型、習性與用途。
+內容：包含分類、體型、食性、群居性、主要用途。
+
+⸻
+
+13. Source and citation rules
+
+If the user requests sources:
+
+1. Do not invent fake URLs, authors, years, article titles, or references.
+2. If the app has no real web-search capability, display:
+    * 「資料來源待補」
+    * 「此處需要補充官方資料或學術資料」
+    * 「建議查詢政府網站、學術論文、期刊、出版社或可信機構資料」
+3. If APA is selected, provide a fill-in format:
+
+作者或機構名稱。（年份）。文章或資料標題。網站或出版單位。網址
+
+4. In the report body, mark:
+
+【此處建議加入資料來源】
+
+⸻
+
+14. Output mode formats
+
+14.1 If generation mode is 「完整報告」
+
+Output this structure:
+
+報告題目
+
+摘要
+
+一、研究背景
+
+二、研究動機
+
+三、研究目的
+
+四、文獻探討
+
+五、研究方法
+
+六、研究結果與分析
+
+七、討論
+
+八、結論
+
+九、研究限制與未來建議
+
+十、參考文獻
+
+If sources are missing, show:
+
+「此處需要補充真實資料來源，建議使用官方網站、政府資料、學術論文、期刊或可信機構資料。」
+
+⸻
+
+14.2 If generation mode is 「報告架構」
+
+Output this structure:
+
+報告題目
+
+摘要方向
+
+一、研究背景
+
+二、研究動機
+
+三、研究目的
+
+四、研究問題
+
+五、研究假設
+
+六、文獻探討大綱
+
+七、研究方法
+
+八、預計圖表
+
+九、預計圖片
+
+十、研究限制
+
+十一、結論草稿
+
+十二、資料需求表
+
+十三、品質檢查表
+
+⸻
+
+14.3 If generation mode is 「簡報大綱」
+
+Output:
+
+簡報題目
+
+第 1 頁：封面
+
+內容：
+
+第 2 頁：研究背景
+
+內容：
+
+第 3 頁：研究動機
+
+內容：
+
+第 4 頁：研究目的
+
+內容：
+
+第 5 頁：核心問題
+
+內容：
+
+第 6 頁：主要分析
+
+內容：
+
+第 7 頁：圖表頁
+
+內容：
+
+第 8 頁：討論
+
+內容：
+
+第 9 頁：結論
+
+內容：
+
+第 10 頁：參考資料
+
+內容：
+
+Also include visual suggestions for each slide.
+
+⸻
+
+14.4 If generation mode is 「資料需求表」
+
+Output a table:
+
+資料類型	需要內容	用途	優先程度
+主題背景資料			高
+統計數據			中
+文獻資料			高
+案例			中
+圖片			低
+圖表數據			中
+使用者個人觀點			高
+引用來源			高
+
+⸻
+
+14.5 If generation mode is 「圖表與圖片建議」
+
+Output:
+
+建議圖表
+
+【建議圖表 1：標題】
+位置：
+用途：
+內容：
+
+【建議圖表 2：標題】
+位置：
+用途：
+內容：
+
+建議圖片
+
+【建議圖片 1：標題】
+位置：
+用途：
+內容：
+
+【建議圖片 2：標題】
+位置：
+用途：
+內容：
+
+建議流程圖
+
+【建議流程圖 1：標題】
+位置：
+用途：
+流程：
+
+⸻
+
+15. Mobile UI improvements
+
+Improve mobile layout without redesigning the whole website.
+
+Requirements:
+
+1. Increase top padding of the generator section so headings are not hidden by the Replit preview banner or mobile browser top area.
+2. Keep cards from touching the screen edges.
+3. Keep form field height and font size consistent.
+4. Add enough spacing between buttons.
+5. Increase line-height in generated report sections for readability.
+6. Make collapsible sections easy to tap.
+7. Allow action buttons to wrap on mobile, but do not make them feel cramped.
+
+Suggested CSS:
+
+.generator-section {
+padding-top: 96px;
+}
+
+@media (max-width: 768px) {
+.generator-section {
+padding-top: 88px;
+}
+
+.report-card,
+.generator-card {
+margin-left: 16px;
+margin-right: 16px;
+}
+
+.action-buttons {
+gap: 12px;
+flex-wrap: wrap;
+}
+
+.action-buttons button {
+min-height: 48px;
+}
+
+.report-section {
+line-height: 1.8;
+}
+}
+
+Adapt the class names if the current project uses different class names.
+
+⸻
+
+16. Upgrade the quality checklist
+
+Make the quality checklist dynamic based on user selections.
+
+Basic checklist items:
+
+* 具備清楚的報告主題
+* 包含摘要或前言
+* 說明研究背景
+* 具備明確研究目的
+* 包含研究問題
+* 有研究方法或分析方式
+* 有結論
+* 可作為後續修改基礎
+
+If chart suggestions are required:
+
+* 已規劃圖表呈現
+* 已規劃圖片或流程圖
+
+If sources are required:
+
+* 已標示資料來源需求
+* 已提醒補充真實資料來源
+* 已提供參考文獻格式
+
+If generation mode is full report:
+
+* 段落完整
+* 內容具備分析
+* 結論不是單純重複前文
+* 有研究限制與未來建議
+
+⸻
+
+17. Testing cases
+
+After implementation, test the following cases.
+
+Test case 1
+
+Topic: 鵝
+Report type: 學校研究報告
+Target audience: 高中生
+Report style: 高中生可提交
+Report length: 短版摘要
+Generation mode: 報告架構
+Chart suggestions: 需要
+Sources: 需要，但先標示「資料來源待補」
+
+Expected result:
+
+* Must not only say “鵝是重要議題”
+* Should mention biological features, life habits, and human use value
+* Should include topic expansion suggestions
+* Should include source placeholder warnings
+* Should include chart suggestions
+
+⸻
+
+Test case 2
+
+Topic: 不同溫度對維生素 C 氧化速率之影響
+Report type: 實驗報告
+Target audience: 高中生
+Report style: 90 分以上學校報告
+Report length: 一般報告
+Generation mode: 報告架構
+
+Expected result:
+
+* Must include experiment purpose
+* Must include experiment principle
+* Must include independent variable, dependent variable, and controlled variables
+* Must include experiment steps
+* Must include suggested charts
+* Must include error sources and improvement methods
+
+⸻
+
+Test case 3
+
+Topic: 報告生成器網站
+Report type: 商業報告
+Target audience: 一般讀者
+Report style: 商業顧問風格
+Report length: 一般報告
+Generation mode: 完整報告
+
+Expected result:
+
+* Must include product background
+* Must include target users
+* Must include core features
+* Must include business model
+* Must include costs and risks
+* Must include execution steps
+* Must not look like a generic school research report
+
+⸻
+
+18. Final reporting requirement
+
+After editing, tell me:
+
+1. Which files were changed
+2. What was changed in each file
+3. How to test the updated app
+4. Whether any feature could not be completed
+5. Any potential bugs or limitations
+
+Start by inspecting the existing project structure, then make the changes carefully.
