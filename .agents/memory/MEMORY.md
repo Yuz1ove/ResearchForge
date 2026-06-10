@@ -1,1 +1,2 @@
 - [Report Factory generator](report-factory-generator.md) — block-based mock engine in generateReport.ts; swap point, no-fake-source rule, style/length must alter body, 3-place ContentBlock rule.
+- [Report Factory export](report-factory-export.md) — client-side export in exportReport.ts; PDF via browser print (CJK), docx lazy-loaded, escapeHtml the print window.

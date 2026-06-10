@@ -25,16 +25,19 @@ import {
   REPORT_STYLES,
   REPORT_LENGTHS,
 } from "@/lib/generateReport";
+import { buildPlainText, downloadTxt, downloadMarkdown, downloadDocx, printPdf } from "@/lib/exportReport";
 import {
   Wand2,
   Loader2,
   Copy,
-  Download,
   Trash2,
   RefreshCw,
   CheckCircle2,
   XCircle,
   FileText,
+  FileType,
+  FileDown,
+  Printer,
   Sparkles,
   Lightbulb,
   ChevronDown,
@@ -284,16 +287,36 @@ export function Generator() {
     toast({ title: "已複製到剪貼簿", description: "報告純文字已複製，可直接貼入文件。" });
   };
 
-  const handleDownload = () => {
+  const handleDownloadTxt = () => {
     if (!report) return;
-    const blob = new Blob([buildMarkdown(report, input)], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "report-draft.md";
-    a.click();
-    URL.revokeObjectURL(url);
-    toast({ title: "已下載 Markdown", description: "report-draft.md 已儲存到你的裝置。" });
+    downloadTxt(report, input);
+    toast({ title: "已下載 TXT", description: "純文字檔已儲存到你的裝置。" });
+  };
+
+  const handleDownloadMarkdown = () => {
+    if (!report) return;
+    downloadMarkdown(report, input);
+    toast({ title: "已下載 Markdown", description: "Markdown 檔已儲存到你的裝置。" });
+  };
+
+  const handleDownloadDocx = async () => {
+    if (!report) return;
+    try {
+      await downloadDocx(report, input);
+      toast({ title: "已下載 Word（DOCX）", description: "含封面、目錄、頁首頁尾的 Word 檔已儲存。" });
+    } catch {
+      toast({ title: "DOCX 產生失敗", description: "請稍後再試一次。", variant: "destructive" });
+    }
+  };
+
+  const handlePrintPdf = () => {
+    if (!report) return;
+    const ok = printPdf(report, input);
+    if (ok) {
+      toast({ title: "正在開啟列印視窗", description: "請在列印對話框選擇「另存為 PDF」。" });
+    } else {
+      toast({ title: "無法開啟列印視窗", description: "請允許本網站開啟彈出視窗後再試一次。", variant: "destructive" });
+    }
   };
 
   const handleClear = () => {
@@ -539,25 +562,41 @@ export function Generator() {
                 )}
 
                 {/* Action buttons */}
-                <div className="action-buttons report-card flex flex-wrap gap-3">
-                  <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleCopy} data-testid="button-copy">
-                    <Copy className="mr-2 h-4 w-4" /> 複製報告
-                  </Button>
-                  <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownload} data-testid="button-download">
-                    <Download className="mr-2 h-4 w-4" /> 下載 Markdown
-                  </Button>
-                  <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleGenerate} data-testid="button-regenerate">
-                    <RefreshCw className="mr-2 h-4 w-4" /> 重新生成
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="min-h-[44px] text-destructive hover:text-destructive"
-                    onClick={handleClear}
-                    data-testid="button-clear"
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" /> 清除內容
-                  </Button>
+                <div className="action-buttons report-card bg-card border border-border rounded-xl shadow-sm p-4 flex flex-col gap-3">
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-2">匯出文件</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" className="min-h-[44px]" onClick={handleDownloadDocx} data-testid="button-export-docx">
+                        <FileType className="mr-2 h-4 w-4" /> Word（DOCX）
+                      </Button>
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handlePrintPdf} data-testid="button-export-pdf">
+                        <Printer className="mr-2 h-4 w-4" /> PDF（列印）
+                      </Button>
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadMarkdown} data-testid="button-export-md">
+                        <FileDown className="mr-2 h-4 w-4" /> Markdown
+                      </Button>
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadTxt} data-testid="button-export-txt">
+                        <FileText className="mr-2 h-4 w-4" /> TXT
+                      </Button>
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleCopy} data-testid="button-copy">
+                        <Copy className="mr-2 h-4 w-4" /> 複製文字
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 border-t border-border pt-3">
+                    <Button size="sm" variant="ghost" className="min-h-[44px]" onClick={handleGenerate} data-testid="button-regenerate">
+                      <RefreshCw className="mr-2 h-4 w-4" /> 重新生成
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="min-h-[44px] text-destructive hover:text-destructive"
+                      onClick={handleClear}
+                      data-testid="button-clear"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" /> 清除內容
+                    </Button>
+                  </div>
                 </div>
 
                 {/* Sections */}
@@ -573,84 +612,4 @@ export function Generator() {
       </main>
     </div>
   );
-}
-
-// ─── Plain-text & Markdown builders ───────────────────────────────────────────
-
-function blockToLines(b: ContentBlock, md: boolean): string[] {
-  switch (b.type) {
-    case "paragraph":
-      return b.text ? [b.text] : [];
-    case "list":
-      return (b.items ?? []).map((i) => (md ? `- ${i}` : `• ${i}`));
-    case "note":
-      return b.text ? [md ? `> ${b.text}` : `※ ${b.text}`] : [];
-    case "suggestions":
-      return (b.suggestions ?? []).flatMap((s, i) => [
-        `【建議${b.suggestionKind} ${i + 1}：${s.title}】`,
-        `位置：${s.position}`,
-        `用途：${s.purpose}`,
-        `${b.suggestionKind === "流程圖" ? "流程" : "內容"}：${s.content}`,
-        "",
-      ]);
-    case "dataTable":
-      if (md) {
-        return [
-          "| 資料類型 | 需要內容 | 用途 | 優先程度 |",
-          "| --- | --- | --- | --- |",
-          ...(b.rows ?? []).map((r) => `| ${r.type} | ${r.need} | ${r.use} | ${r.priority} |`),
-        ];
-      }
-      return (b.rows ?? []).map((r) => `${r.type}｜${r.need}｜${r.use}｜優先：${r.priority}`);
-    case "quality":
-      return (b.checks ?? []).map((c) => (md ? `- [${c.passed ? "x" : " "}] ${c.label}` : `${c.passed ? "✓" : "✗"} ${c.label}`));
-    case "slides":
-      return (b.slides ?? []).flatMap((s) => [
-        `第 ${s.page} 頁：${s.title}`,
-        ...s.points.map((p) => (md ? `- ${p}` : `• ${p}`)),
-        `視覺建議：${s.visual}`,
-        "",
-      ]);
-    default:
-      return [];
-  }
-}
-
-function buildPlainText(report: GeneratedReport, input: ReportInput): string {
-  const today = new Date().toLocaleDateString("zh-TW");
-  const lines: string[] = [
-    report.meta.title,
-    `類型：${input.reportType}｜模式：${input.mode}｜風格：${input.style}｜對象：${input.targetAudience}｜${today}`,
-    `分類：${report.meta.category}｜目前版本：${report.meta.versionLabel}（完整度約 ${report.meta.completeness}%）`,
-    "",
-  ];
-  if (report.shortTopic) {
-    lines.push(`【提醒】${report.shortTopic.message}`, "建議延伸主題：", ...report.shortTopic.expansions.map((e, i) => `${i + 1}. ${e}`), "");
-  }
-  for (const section of report.sections) {
-    lines.push(`【${section.heading}】`);
-    for (const b of section.blocks) lines.push(...blockToLines(b, false));
-    lines.push("");
-  }
-  return lines.join("\n");
-}
-
-function buildMarkdown(report: GeneratedReport, input: ReportInput): string {
-  const today = new Date().toLocaleDateString("zh-TW");
-  const lines: string[] = [
-    `# ${report.meta.title}`,
-    `> 類型：${input.reportType} ｜ 模式：${input.mode} ｜ 風格：${input.style} ｜ 對象：${input.targetAudience} ｜ 日期：${today}`,
-    `>`,
-    `> 分類：${report.meta.category} ｜ 目前版本：${report.meta.versionLabel}（完整度約 ${report.meta.completeness}%）`,
-    "",
-  ];
-  if (report.shortTopic) {
-    lines.push(`> ⚠️ ${report.shortTopic.message}`, "", "**建議延伸主題：**", ...report.shortTopic.expansions.map((e, i) => `${i + 1}. ${e}`), "");
-  }
-  for (const section of report.sections) {
-    lines.push(`## ${section.heading}`);
-    for (const b of section.blocks) lines.push(...blockToLines(b, true));
-    lines.push("");
-  }
-  return lines.join("\n");
 }
