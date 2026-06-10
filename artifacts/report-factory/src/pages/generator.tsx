@@ -11,13 +11,17 @@ import {
   generateReport,
   expandTopic,
   isShortTopic,
+  detectTopicCategory,
+  academicToAudience,
+  academicToPurpose,
   ReportInput,
   GeneratedReport,
   ReportSection,
   ContentBlock,
+  TopicCategory,
   REPORT_TYPES,
-  TARGET_AUDIENCES,
-  REPORT_PURPOSES,
+  ACADEMIC_LEVELS,
+  TOPIC_CATEGORIES,
   GENERATION_MODES,
   SOURCE_REQUIREMENTS,
   CITATION_FORMATS,
@@ -25,7 +29,17 @@ import {
   REPORT_STYLES,
   REPORT_LENGTHS,
 } from "@/lib/generateReport";
-import { buildPlainText, downloadTxt, downloadMarkdown, downloadDocx, printPdf } from "@/lib/exportReport";
+import {
+  buildPlainText,
+  downloadTxt,
+  downloadMarkdown,
+  downloadDocx,
+  printPdf,
+  downloadJson,
+  downloadBlueprint,
+  downloadPromptPackage,
+} from "@/lib/exportReport";
+import { downloadProjectHandoff } from "@/lib/projectState";
 import {
   Wand2,
   Loader2,
@@ -42,6 +56,10 @@ import {
   Lightbulb,
   ChevronDown,
   ChevronUp,
+  FileJson,
+  ClipboardList,
+  MessageSquareText,
+  Archive,
 } from "lucide-react";
 
 // ─── Default form state ───────────────────────────────────────────────────────
@@ -49,8 +67,10 @@ import {
 const DEFAULT_INPUT: ReportInput = {
   topic: "",
   reportType: "學校研究報告",
+  academicLevel: "高中",
   targetAudience: "高中生",
   purpose: "學校作業",
+  domainOverride: "",
   mode: "報告架構",
   sourceRequirement: "需要，但先標示「資料來源待補」",
   citationFormat: "APA",
@@ -63,9 +83,8 @@ const DEFAULT_INPUT: ReportInput = {
 // ─── Field config (label + options + key) ─────────────────────────────────────
 
 const SELECT_FIELDS: { key: keyof ReportInput; label: string; options: readonly string[] }[] = [
-  { key: "reportType", label: "報告類型", options: REPORT_TYPES },
-  { key: "targetAudience", label: "目標讀者", options: TARGET_AUDIENCES },
-  { key: "purpose", label: "報告目的", options: REPORT_PURPOSES },
+  { key: "reportType", label: "研究類型", options: REPORT_TYPES },
+  { key: "academicLevel", label: "學術程度", options: ACADEMIC_LEVELS },
   { key: "mode", label: "生成模式", options: GENERATION_MODES },
   { key: "style", label: "報告風格", options: REPORT_STYLES },
   { key: "length", label: "報告長度", options: REPORT_LENGTHS },
@@ -236,8 +255,23 @@ export function Generator() {
   const [expansions, setExpansions] = useState<string[]>([]);
 
   const updateInput = (key: keyof ReportInput, value: string) => {
-    setInput((prev) => ({ ...prev, [key]: value }));
+    setInput((prev) => {
+      const next = { ...prev, [key]: value };
+      // Academic level is the single source of truth for reader + purpose.
+      if (key === "academicLevel") {
+        next.targetAudience = academicToAudience(value);
+        next.purpose = academicToPurpose(value);
+      }
+      return next;
+    });
   };
+
+  // Live AI domain detection (recomputed as topic / type / level change).
+  const derivedPurpose = academicToPurpose(input.academicLevel);
+  const detectedCategory: TopicCategory | null = input.topic.trim()
+    ? detectTopicCategory(input.topic.trim(), input.reportType, derivedPurpose)
+    : null;
+  const AUTO = "自動偵測";
 
   // ── Generate ────────────────────────────────────────────────────────────────
 
@@ -252,9 +286,17 @@ export function Generator() {
     }
     setIsGenerating(true);
     setReport(null);
+    // Academic level is the single source of truth: derive reader + purpose
+    // defensively here so generation stays consistent even if state drifts.
+    const effectiveInput: ReportInput = {
+      ...input,
+      targetAudience: academicToAudience(input.academicLevel),
+      purpose: academicToPurpose(input.academicLevel),
+    };
+    setInput(effectiveInput);
     // Simulate async — swap setTimeout for a real API call in the future.
     setTimeout(() => {
-      setReport(generateReport(input));
+      setReport(generateReport(effectiveInput));
       setIsGenerating(false);
     }, 1400);
   };
@@ -307,6 +349,29 @@ export function Generator() {
     } catch {
       toast({ title: "DOCX 產生失敗", description: "請稍後再試一次。", variant: "destructive" });
     }
+  };
+
+  const handleDownloadJson = () => {
+    if (!report) return;
+    downloadJson(report, input);
+    toast({ title: "已下載 JSON", description: "完整資料（JSON）已儲存，可供程式或其他工具使用。" });
+  };
+
+  const handleDownloadBlueprint = () => {
+    if (!report) return;
+    downloadBlueprint(report, input);
+    toast({ title: "已下載研究藍圖", description: "規劃藍圖（Markdown）已儲存。" });
+  };
+
+  const handleDownloadPrompt = () => {
+    if (!report) return;
+    downloadPromptPackage(report, input);
+    toast({ title: "已下載 AI 提示包", description: "可貼入其他 AI 以完成報告內容的提示已儲存。" });
+  };
+
+  const handleDownloadProjectHandoff = () => {
+    downloadProjectHandoff();
+    toast({ title: "已下載專案狀態", description: "專案能力與架構說明（Markdown）已儲存。" });
   };
 
   const handlePrintPdf = () => {
@@ -384,6 +449,40 @@ export function Generator() {
                     ))}
                   </div>
                 )}
+              </div>
+
+              {/* AI domain detection + manual override */}
+              <div className="space-y-2">
+                <Label htmlFor="domainOverride">AI 判定領域</Label>
+                <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                  {detectedCategory ? (
+                    <span className="text-foreground">
+                      系統判定：
+                      <span className="font-semibold text-primary">{detectedCategory}</span>
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">輸入主題後將自動判定領域</span>
+                  )}
+                </div>
+                <Select
+                  value={input.domainOverride || AUTO}
+                  onValueChange={(v) => updateInput("domainOverride", v === AUTO ? "" : v)}
+                >
+                  <SelectTrigger id="domainOverride" data-testid="select-domainOverride" className="h-11">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={AUTO}>{AUTO}（使用 AI 判定）</SelectItem>
+                    {TOPIC_CATEGORIES.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  若判定不正確，可在此手動指定領域，系統會依此產生對應架構。
+                </p>
               </div>
 
               {/* Selects */}
@@ -580,6 +679,23 @@ export function Generator() {
                       </Button>
                       <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleCopy} data-testid="button-copy">
                         <Copy className="mr-2 h-4 w-4" /> 複製文字
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="border-t border-border pt-3">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">規劃與交接</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadBlueprint} data-testid="button-export-blueprint">
+                        <ClipboardList className="mr-2 h-4 w-4" /> 研究藍圖
+                      </Button>
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadPrompt} data-testid="button-export-prompt">
+                        <MessageSquareText className="mr-2 h-4 w-4" /> AI 提示包
+                      </Button>
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadJson} data-testid="button-export-json">
+                        <FileJson className="mr-2 h-4 w-4" /> JSON
+                      </Button>
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadProjectHandoff} data-testid="button-export-handoff">
+                        <Archive className="mr-2 h-4 w-4" /> 匯出專案狀態
                       </Button>
                     </div>
                   </div>

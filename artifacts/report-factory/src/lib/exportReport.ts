@@ -121,6 +121,107 @@ export function downloadMarkdown(report: GeneratedReport, input: ReportInput) {
   triggerDownload(blob, `${safeFileName(input.topic)}.md`);
 }
 
+// ─── JSON export (machine-readable handoff of the full draft) ──────────────────
+
+export function buildJson(report: GeneratedReport, input: ReportInput): string {
+  return JSON.stringify(
+    {
+      exportedAt: new Date().toISOString(),
+      input,
+      meta: report.meta,
+      shortTopic: report.shortTopic ?? null,
+      sections: report.sections,
+    },
+    null,
+    2,
+  );
+}
+
+export function downloadJson(report: GeneratedReport, input: ReportInput) {
+  const blob = new Blob([buildJson(report, input)], { type: "application/json;charset=utf-8" });
+  triggerDownload(blob, `${safeFileName(input.topic)}.json`);
+}
+
+// ─── Research blueprint (Markdown plan, no fabricated content) ─────────────────
+
+/** buildBlueprint — a concise, copy-ready research plan derived from the draft.
+ *  It lists the planning skeleton (headings) and the data still to be gathered,
+ *  without inventing facts or sources. */
+export function buildBlueprint(report: GeneratedReport, input: ReportInput): string {
+  const today = new Date().toLocaleDateString("zh-TW");
+  const lines: string[] = [
+    `# 研究規劃藍圖：${report.meta.title}`,
+    "",
+    `- 主題：${input.topic}`,
+    `- 研究類型：${input.reportType}`,
+    `- 學術程度：${input.academicLevel}`,
+    `- 判定領域：${report.meta.category}`,
+    `- 產生日期：${today}`,
+    "",
+    "## 規劃章節",
+  ];
+  report.sections.forEach((s, i) => lines.push(`${i + 1}. ${s.heading}`));
+
+  // Surface every data-requirement row so the user knows what to collect.
+  const dataRows = report.sections
+    .flatMap((s) => s.blocks)
+    .filter((b) => b.type === "dataTable")
+    .flatMap((b) => b.rows ?? []);
+  if (dataRows.length > 0) {
+    lines.push("", "## 待蒐集資料", "| 資料類型 | 需要內容 | 用途 | 優先程度 |", "| --- | --- | --- | --- |");
+    dataRows.forEach((r) => lines.push(`| ${r.type} | ${r.need} | ${r.use} | ${r.priority} |`));
+  }
+
+  lines.push(
+    "",
+    "## 注意事項",
+    "- 本藍圖為規劃用途，內容中的事實、數據與引用需自行查證後補齊。",
+    "- 標示〔…〕或「資料來源待補」處，請填入實際查證後的資料。",
+  );
+  return lines.join("\n");
+}
+
+export function downloadBlueprint(report: GeneratedReport, input: ReportInput) {
+  const blob = new Blob([buildBlueprint(report, input)], { type: "text/markdown;charset=utf-8" });
+  triggerDownload(blob, `${safeFileName(input.topic)}-藍圖.md`);
+}
+
+// ─── Prompt package (ready-to-paste prompt for an external AI) ─────────────────
+
+/** buildPromptPackage — assembles a Traditional-Chinese prompt that a user can
+ *  paste into another AI to flesh out the planned report. It embeds the planned
+ *  structure and constraints, but asks the model to supply verified content. */
+export function buildPromptPackage(report: GeneratedReport, input: ReportInput): string {
+  const headings = report.sections.map((s, i) => `${i + 1}. ${s.heading}`).join("\n");
+  const lines: string[] = [
+    "你是一位專業的研究報告協作者，請使用繁體中文協助我完成下列報告。",
+    "",
+    "## 報告基本資訊",
+    `- 主題：${input.topic}`,
+    `- 研究類型：${input.reportType}`,
+    `- 學術程度：${input.academicLevel}`,
+    `- 判定領域：${report.meta.category}`,
+    `- 報告風格：${input.style}`,
+    `- 報告長度：${input.length}`,
+    input.additionalInfo.trim() ? `- 補充要求：${input.additionalInfo.trim()}` : "",
+    "",
+    "## 請依下列章節架構撰寫",
+    headings,
+    "",
+    "## 撰寫要求",
+    "1. 全程使用繁體中文。",
+    "2. 內容須正確、具體，並符合該領域的學術慣例。",
+    "3. 凡引用數據、研究或事實，請明確標註資料來源；若無法確定，請以「資料來源待補」標示，切勿杜撰。",
+    "4. 保持各章節邏輯連貫，並適度加入圖表或表格建議。",
+  ].filter((l) => l !== "");
+  return lines.join("\n");
+}
+
+export function downloadPromptPackage(report: GeneratedReport, input: ReportInput) {
+  const blob = new Blob([buildPromptPackage(report, input)], { type: "text/plain;charset=utf-8" });
+  triggerDownload(blob, `${safeFileName(input.topic)}-prompt.txt`);
+}
+
 // ─── DOCX export ──────────────────────────────────────────────────────────────
 
 function docxBlock(D: DocxModule, b: ContentBlock): InstanceType<DocxModule["Paragraph"]>[] {

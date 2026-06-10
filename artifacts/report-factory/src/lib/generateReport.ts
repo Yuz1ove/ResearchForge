@@ -53,10 +53,44 @@ export const REPORT_PURPOSES = [
 export const GENERATION_MODES = [
   "報告架構",
   "完整報告",
+  "Eric 研究模式",
   "簡報大綱",
   "資料需求表",
   "圖表與圖片建議",
 ] as const;
+
+// Academic level replaces the former "目標讀者 / 報告目的" pair (V3 PART 5).
+export const ACADEMIC_LEVELS = ["國中", "高中", "大學", "專業"] as const;
+
+/** academicToAudience — derive the reader framing (targetAudience) from the
+ *  selected academic level, so the engine keeps a single source of truth. */
+export function academicToAudience(level: string): string {
+  switch (level) {
+    case "國中":
+      return "國中生";
+    case "大學":
+      return "大學生";
+    case "專業":
+      return "評審";
+    case "高中":
+    default:
+      return "高中生";
+  }
+}
+
+/** academicToPurpose — a sensible default report purpose per academic level,
+ *  used when deriving ReportInput before generation. */
+export function academicToPurpose(level: string): string {
+  switch (level) {
+    case "大學":
+    case "專業":
+      return "研究報告";
+    case "國中":
+    case "高中":
+    default:
+      return "學校作業";
+  }
+}
 
 export const SOURCE_REQUIREMENTS = [
   "不需要",
@@ -84,8 +118,13 @@ export const REPORT_LENGTHS = ["短版摘要", "一般報告", "完整報告", "
 export interface ReportInput {
   topic: string;
   reportType: string;
+  /** V3: academic level (國中／高中／大學／專業). Drives tone and reader framing. */
+  academicLevel: string;
+  /** Derived from academicLevel; retained for engine/export compatibility. */
   targetAudience: string;
   purpose: string;
+  /** V3: when set to a TopicCategory, overrides AI domain detection. "" = auto. */
+  domainOverride: string;
   mode: string;
   sourceRequirement: string;
   citationFormat: string;
@@ -107,6 +146,22 @@ export type TopicCategory =
   | "食品／飲食文化"
   | "化學／化工"
   | "一般學校報告";
+
+/** All categories in display order — used by the UI domain-override dropdown and
+ *  to validate ReportInput.domainOverride. */
+export const TOPIC_CATEGORIES: readonly TopicCategory[] = [
+  "生物／動物",
+  "科學實驗",
+  "社會議題",
+  "歷史／地理／公民",
+  "讀書心得",
+  "商業／產品分析",
+  "AI／網站／程式專案",
+  "醫療／長照／社工／心理",
+  "食品／飲食文化",
+  "化學／化工",
+  "一般學校報告",
+];
 
 export interface SuggestionBlock {
   title: string;
@@ -231,6 +286,8 @@ export function detectTopicCategory(
     has(pp, ["飲食", "食品", "料理", "餐飲"]) ||
     has(rt, ["飲食", "食品", "料理"]) ||
     has(tt, [
+      // eggs as food (checked before bare animal keyword "雞")
+      "雞蛋", "鴨蛋", "鵝蛋", "鹹蛋", "皮蛋", "蛋類", "蛋品", "雞蛋營養",
       // animal-origin food compounds (checked before bare animal keywords)
       "牛排", "牛肉", "雞排", "雞肉", "豬排", "豬肉", "羊肉", "海鮮", "魚片", "魚排",
       // beverages
@@ -299,6 +356,8 @@ export function detectTopicCategory(
     has(tt, [
       "少子化", "高齡化", "霸凌", "詐騙", "交通安全", "環保", "污染", "性別", "平權",
       "貧富", "失業", "移工", "氣候變遷", "假訊息", "成癮", "公共", "權益",
+      // sustainability / SDGs
+      "SDG", "sdg", "永續發展", "永續", "ESG", "esg", "淨零", "碳中和", "聯合國永續",
     ]) ||
     (has(tt, ["影響"]) && has(tt, ["學生", "青少年", "社會", "兒童"]))
   ) {
@@ -577,6 +636,22 @@ const BIO_FACTS: Record<string, BioFact> = {
     issues:
       "可探討的議題包括：蚯蚓堆肥的操作與效益、土壤汙染對蚯蚓的影響、蚯蚓與土壤生態的關係。",
   },
+  蜘蛛: {
+    intro:
+      "蜘蛛是分布廣泛的陸生節肢動物，多數會吐絲結網，以捕食昆蟲為生，在自然界扮演重要的捕食者角色。",
+    classification:
+      "蜘蛛屬於節肢動物門蛛形綱蜘蛛目，身體分為頭胸部與腹部兩節，具有八隻腳（與昆蟲六足不同），無觸角與翅膀。",
+    habits:
+      "蜘蛛多數為肉食性，以絲腺吐絲結網或主動獵捕昆蟲；部分種類具毒腺以麻痺獵物，繁殖時雌蛛常以卵囊保護卵。",
+    habitat:
+      "蜘蛛廣泛分布於草叢、樹林、洞穴、住家牆角等環境，幾乎遍及全球各種陸域棲地。",
+    humanRelation:
+      "蜘蛛能捕食蚊蠅、蟑螂等害蟲，對農業與居家害蟲控制有益；少數種類（如台灣的赤背寡婦蛛）具醫療上需注意的毒性。",
+    value:
+      "生態上是重要的害蟲天敵，有助於維持昆蟲族群平衡；蛛絲的強韌特性也是仿生材料研究的重要對象。",
+    issues:
+      "可探討的議題包括：蜘蛛在害蟲生物防治的應用、蛛絲的仿生科技、人們對蜘蛛的恐懼與迷思釐清。",
+  },
 };
 
 function bioFallback(topic: string): BioFact {
@@ -588,6 +663,241 @@ function bioFallback(topic: string): BioFact {
     humanRelation: `〔建議補充「${topic}」與人類生活、農業或文化的關係。〕`,
     value: `〔建議補充「${topic}」的經濟、文化或生態價值。〕`,
     issues: `可探討「${topic}」相關的保育、利用或管理議題（建議補充具體面向）。`,
+  };
+}
+
+// ─── Food / culinary knowledge base (common-knowledge facts only) ────────────
+
+interface FoodFact {
+  intro: string;
+  nutrition: string;
+  source: string; // 來源／生產
+  processing: string; // 製程／加工／保存
+  safety: string; // 食品安全／品質
+  culture: string; // 飲食文化／市場
+  issues: string;
+}
+
+const FOOD_FACTS: Record<string, FoodFact> = {
+  雞蛋: {
+    intro:
+      "雞蛋是日常飲食中常見且重要的蛋白質來源，由蛋殼、蛋白與蛋黃三部分組成，營養豐富且烹調用途廣泛。",
+    nutrition:
+      "一顆雞蛋（約 50 公克）含有約 6～7 公克的優質蛋白質，並提供卵磷脂、維生素 A、D、B12 與鐵、硒等營養素；蛋黃含脂肪與膽固醇，蛋白則幾乎為純蛋白質。",
+    source:
+      "雞蛋主要來自蛋雞（如白色來亨雞、紅羽蛋雞）養殖，飼養方式包含格子籠、平飼與放牧；產地、飼料與飼養環境會影響蛋的品質與風味。",
+    processing:
+      "雞蛋採收後經清洗、依重量分級與冷藏保存；常見加工品包含液蛋、皮蛋、鹹蛋、滷蛋，以及美乃滋、蛋粉等蛋製品。",
+    safety:
+      "雞蛋的主要食安風險為沙門氏菌污染，應冷藏保存、避免食用破殼或不新鮮的蛋並充分加熱；新鮮度可用浮水測試或觀察氣室大小判斷。",
+    culture:
+      "雞蛋在台灣與各國飲食文化中應用廣泛（如荷包蛋、茶葉蛋、蛋餅、布丁、蛋糕）；近年蛋價、供應穩定與友善飼養等議題也受到關注。",
+    issues:
+      "可探討的議題包括：蛋價波動與供應穩定、禽流感對產量的影響、友善飼養與動物福利，以及膽固醇攝取的健康討論。",
+  },
+};
+
+function foodFallback(topic: string): FoodFact {
+  return {
+    intro: `「${topic}」是一種食品／飲食主題，本報告將從來源、營養、製程、安全到飲食文化進行整理。〔建議補充「${topic}」的基本介紹〕`,
+    nutrition: `〔建議補充「${topic}」的主要營養成分與含量（如蛋白質、脂肪、碳水化合物、維生素與礦物質）。〕`,
+    source: `〔建議補充「${topic}」的產地、原料來源或生產方式。〕`,
+    processing: `〔建議補充「${topic}」的製程、加工方式與保存方法。〕`,
+    safety: `〔建議補充「${topic}」的食品安全規範、衛生標準與品質控管重點。〕`,
+    culture: `〔建議補充「${topic}」的飲食文化背景、市場現況或消費趨勢。〕`,
+    issues: `可探討「${topic}」相關的食安、產業或健康議題（建議補充具體面向）。`,
+  };
+}
+
+function buildFood(topic: string): CategoryContent {
+  const f = FOOD_FACTS[topic.trim()] ?? foodFallback(topic);
+  return {
+    summaryDirection: `本報告以「${topic}」為對象，從食品來源、營養成分、製程與保存、食品安全，到飲食文化與市場現況，做系統性的整理與分析。`,
+    summary: `${f.intro}本報告整理「${topic}」的營養成分、來源與生產、製程與保存、食品安全，以及飲食文化與相關議題。`,
+    background: `${f.intro}${f.source}`,
+    motivation: `選擇「${topic}」作為主題，是希望透過系統性的資料整理，更完整地了解其營養價值、生產製程與在飲食生活中的角色。`,
+    purpose: [
+      `認識「${topic}」的營養成分與價值。`,
+      `了解「${topic}」的來源、生產與製程。`,
+      `探討「${topic}」的食品安全與品質管理。`,
+      `分析「${topic}」的飲食文化與市場現況。`,
+    ],
+    questions: [
+      `「${topic}」含有哪些主要營養成分？`,
+      `「${topic}」是如何生產與製作的？`,
+      `「${topic}」在食品安全上需要注意什麼？`,
+      `「${topic}」的飲食文化與市場現況為何？`,
+    ],
+    hypothesis: [],
+    literature: [
+      `「${topic}」的營養成分與健康相關資料`,
+      `「${topic}」的生產、製程與保存研究`,
+      `「${topic}」的食品安全規範與檢驗標準`,
+      `「${topic}」的飲食文化或市場趨勢報導`,
+    ],
+    method: `採用文獻整理與資料分析法：蒐集「${topic}」的營養標示、生產與製程資料、食品安全規範與市場報導，整理比較後進行分析。在製程與品質安全方面，${f.processing}此外，${f.safety}`,
+    analysis: `從飲食文化與市場面來看，${f.culture}綜合資料可了解「${topic}」在飲食生活與產業中的定位與發展。〔建議補充實際市場或消費數據，${SOURCE_NOTE}〕`,
+    discussion: `延伸討論「${topic}」的相關議題：${f.issues}`,
+    limitations: [
+      `本報告以二手資料整理為主，缺乏第一手的檢驗或實測數據。`,
+      `營養與品質會因品種、產地、製程與保存方式而有差異，難以一概而論。`,
+    ],
+    conclusion: `綜合以上，「${topic}」在營養、製程與飲食文化上各具特色，並與食品安全與產業發展密切相關；深入認識有助於做出更健康、安全的飲食選擇。`,
+    futureWork: [
+      `補充實際營養檢測或市場消費數據以強化分析。`,
+      `比較不同產地、品種或製程的「${topic}」品質差異。`,
+    ],
+    customSections: [
+      { heading: "一、營養成分", body: f.nutrition },
+      { heading: "二、來源與生產", body: f.source },
+    ],
+    charts: [
+      {
+        title: `${topic}營養成分表`,
+        position: "營養成分後",
+        purpose: `整理「${topic}」每單位的主要營養成分與含量。`,
+        content: `以表格列出蛋白質、脂肪、碳水化合物、維生素與礦物質等欄位（實際數值${SOURCE_NOTE}）。`,
+      },
+      {
+        title: `${topic}市場或消費趨勢圖`,
+        position: "現況與市場分析後",
+        purpose: `呈現「${topic}」的產量、消費量或價格變化趨勢。`,
+        content: `以折線圖或長條圖呈現（實際數據${SOURCE_NOTE}）。`,
+      },
+    ],
+    images: [
+      {
+        title: `${topic}的結構或外觀圖`,
+        position: "營養成分與價值後",
+        purpose: `標示「${topic}」的組成或外觀特徵。`,
+        content: "可使用標註式照片或示意圖。",
+      },
+    ],
+    flowcharts: [
+      {
+        title: `${topic}的生產或製程流程圖`,
+        position: "製程與品質安全後",
+        purpose: `說明「${topic}」從原料到成品（或上市）的主要流程。`,
+        content: "以箭頭串連各製程階段，並標示品質與安全管控點。",
+      },
+    ],
+  };
+}
+
+// ─── Chemistry knowledge base (common-knowledge facts only) ──────────────────
+
+interface ChemFact {
+  intro: string;
+  theory: string; // 化學結構與性質
+  reaction: string; // 反應／機制
+  experiment: string; // 實驗設計／測定
+  application: string; // 應用
+  safety: string; // 安全與注意
+  issues: string;
+}
+
+const CHEM_FACTS: Record<string, ChemFact> = {
+  維生素C: {
+    intro:
+      "維生素 C（又稱抗壞血酸，Ascorbic acid）是一種水溶性維生素，化學式為 C₆H₈O₆，是人體必需但無法自行合成的營養素。",
+    theory:
+      "維生素 C 分子含有烯二醇（enediol）結構，具有強還原性、易溶於水；在高溫、光照、氧氣與金屬離子存在下容易被氧化分解，是其不穩定的主因。",
+    reaction:
+      "維生素 C 透過提供電子（氧化還原反應）清除自由基，可將氧化型物質還原，自身則被氧化為去氫抗壞血酸（DHA）。",
+    experiment:
+      "常以碘滴定法或 2,6-二氯酚靛酚（DCPIP）滴定法測定維生素 C 含量：維生素 C 會還原碘／DCPIP 使其褪色，再依滴定體積換算濃度。",
+    application:
+      "維生素 C 廣泛作為食品抗氧化劑與營養強化劑，並參與膠原蛋白合成、促進非血基質鐵吸收與維持免疫功能等生理作用。",
+    safety:
+      "維生素 C 一般安全，但長期過量攝取可能造成腸胃不適或增加結石風險；滴定實驗中碘、DCPIP 等試劑需依規範操作並注意安全。",
+    issues:
+      "可探討的議題包括：不同溫度與烹調方式對維生素 C 保留率的影響、不同蔬果的維生素 C 含量比較，以及保存條件對含量的影響。",
+  },
+};
+
+function chemFallback(topic: string): ChemFact {
+  return {
+    intro: `「${topic}」是一個化學／化工相關主題，本報告將從化學結構與性質、反應機制、實驗設計到應用進行整理。〔建議補充「${topic}」的基本定義〕`,
+    theory: `〔建議補充「${topic}」的化學結構、分子式與主要物理化學性質。〕`,
+    reaction: `〔建議補充「${topic}」相關的化學反應式或作用機制。〕`,
+    experiment: `〔建議補充測定或驗證「${topic}」的實驗方法與設計。〕`,
+    application: `〔建議補充「${topic}」在生活、食品、醫藥或工業上的應用。〕`,
+    safety: `〔建議補充「${topic}」的安全性、危害性與操作注意事項。〕`,
+    issues: `可探討「${topic}」相關的科學或應用議題（建議補充具體面向）。`,
+  };
+}
+
+function buildChemistry(topic: string): CategoryContent {
+  const f = CHEM_FACTS[topic.trim()] ?? chemFallback(topic);
+  return {
+    summaryDirection: `本報告以「${topic}」為對象，從化學結構與性質、反應機制、實驗測定方法，到實際應用與相關議題，做系統性的整理與分析。`,
+    summary: `${f.intro}本報告整理「${topic}」的化學結構與性質、反應機制、實驗設計與測定方法，以及主要應用與相關議題。`,
+    background: f.intro,
+    motivation: `選擇「${topic}」作為主題，是希望透過化學原理與實驗的整理，更完整地理解其性質、反應與在生活或產業中的應用。`,
+    purpose: [
+      `認識「${topic}」的化學結構與基本性質。`,
+      `了解「${topic}」相關的反應與作用機制。`,
+      `掌握測定或驗證「${topic}」的實驗方法。`,
+      `探討「${topic}」的應用領域與相關議題。`,
+    ],
+    questions: [
+      `「${topic}」具有哪些化學結構與性質？`,
+      `「${topic}」涉及哪些反應或作用機制？`,
+      `如何透過實驗測定或驗證「${topic}」？`,
+      `「${topic}」有哪些重要的應用？`,
+    ],
+    hypothesis: [
+      `「${topic}」的化學性質決定了其反應行為與應用方式。`,
+      `在控制條件下，「${topic}」的測定結果具有可重現性。`,
+    ],
+    literature: [
+      `「${topic}」的化學結構與性質資料`,
+      `「${topic}」相關反應與機制的研究`,
+      `「${topic}」的測定方法與實驗設計`,
+      `「${topic}」在食品、醫藥或工業上的應用`,
+    ],
+    method: f.experiment,
+    analysis: `依測定結果可比較不同條件下「${topic}」的含量或反應變化，並對照理論預期評估其性質。〔此處需填入實際實驗或測定數據〕`,
+    discussion: `討論「${topic}」結果與理論的一致性、可能的誤差來源，以及延伸議題：${f.issues}`,
+    limitations: [
+      `本報告以文獻整理為主，部分數據需由實際實驗取得。`,
+      `測定結果會受試劑純度、操作與環境條件影響而有誤差。`,
+    ],
+    conclusion: `綜合以上，「${topic}」的化學性質、反應機制與應用彼此呼應；理解其原理有助於在實驗、食品或產業情境中正確應用。`,
+    futureWork: [
+      `設計並執行實際實驗以取得量化數據。`,
+      `比較不同條件（溫度、濃度、時間）對「${topic}」的影響。`,
+    ],
+    customSections: [
+      { heading: "一、化學結構與性質", body: f.theory },
+      { heading: "二、反應與作用機制", body: f.reaction },
+      { heading: "三、主要應用", body: f.application },
+      { heading: "四、安全與注意事項", body: f.safety },
+    ],
+    charts: [
+      {
+        title: `${topic}測定數據圖`,
+        position: "結果與分析後",
+        purpose: `呈現不同條件下「${topic}」的測定結果或變化趨勢。`,
+        content: `以折線圖或長條圖呈現（實際數據由實驗取得）。`,
+      },
+    ],
+    images: [
+      {
+        title: `${topic}的分子結構圖`,
+        position: "化學原理與性質後",
+        purpose: `標示「${topic}」的分子結構與官能基。`,
+        content: "可使用結構式或分子模型示意圖。",
+      },
+    ],
+    flowcharts: [
+      {
+        title: `${topic}的實驗流程圖`,
+        position: "實驗設計後",
+        purpose: `說明測定「${topic}」的實驗操作順序。`,
+        content: "以流程圖整理取樣、滴定（或反應）與計算步驟。",
+      },
+    ],
   };
 }
 
@@ -1323,6 +1633,10 @@ function buildCategoryContent(topic: string, category: TopicCategory): CategoryC
       return buildTechProject(topic);
     case "醫療／長照／社工／心理":
       return buildHealthcare(topic);
+    case "食品／飲食文化":
+      return buildFood(topic);
+    case "化學／化工":
+      return buildChemistry(topic);
     default:
       return buildGeneral(topic);
   }
@@ -1342,6 +1656,11 @@ export type StructureKind =
   | "book"
   | "tech"
   | "care"
+  | "biology"
+  | "chemistry"
+  | "food"
+  | "social"
+  | "history"
   | "analytical";
 
 /**
@@ -1375,6 +1694,14 @@ function selectStructure(category: TopicCategory, reportType: string, purpose: s
   ) {
     return "care";
   }
+  // Domain-specific knowledge frameworks (V3 PART 3). These run after the
+  // reportType-driven overrides above so a 科展 biology topic still maps to
+  // "experiment", but a 學校研究報告 biology topic gets the biology spine.
+  if (category === "生物／動物") return "biology";
+  if (category === "化學／化工") return "chemistry";
+  if (category === "食品／飲食文化") return "food";
+  if (category === "社會議題") return "social";
+  if (category === "歷史／地理／公民") return "history";
   return "analytical";
 }
 
@@ -1395,6 +1722,8 @@ function buildDomainSpine(kind: StructureKind, input: ReportInput, content: Cate
   const t = input.topic;
   const p = (text: string): ContentBlock => ({ type: "paragraph", text });
   const l = (items: string[]): ContentBlock => ({ type: "list", items });
+  const sectionsAsParas = (cs: CustomSection[]): ContentBlock[] =>
+    cs.map((c) => ({ type: "paragraph", text: `${c.heading}：${c.body}` }) as ContentBlock);
 
   let raw: ReportSection[];
 
@@ -1519,14 +1848,67 @@ function buildDomainSpine(kind: StructureKind, input: ReportInput, content: Cate
         { heading: "反思與建議", blocks: [p(content.conclusion), l(content.futureWork)] },
       ];
       break;
-    default: // analytical — 社會議題 / 歷史地理 / 食品飲食 / 化學化工 / 一般
+    case "biology":
+      raw = [
+        { heading: "研究背景", blocks: [p(content.background)] },
+        {
+          heading: "文獻探討",
+          blocks: [
+            p(`整理與「${t}」相關的分類、特徵與既有研究方向：`),
+            l(content.literature),
+            ...(needsSource(input) ? [{ type: "note", text: INSERT_SOURCE_NOTE } as ContentBlock] : []),
+          ],
+        },
+        { heading: "生物特徵與生態", blocks: sectionsAsParas(content.customSections) },
+        { heading: "研究方法", blocks: [p(content.method)] },
+        { heading: "分析與討論", blocks: [p(content.analysis), p(content.discussion)] },
+        { heading: "結論", blocks: [p(content.conclusion)] },
+      ];
+      break;
+    case "chemistry":
+      raw = [
+        { heading: "研究背景", blocks: [p(content.background)] },
+        { heading: "化學原理與性質", blocks: sectionsAsParas(content.customSections) },
+        { heading: "實驗設計", blocks: [p(content.method)] },
+        { heading: "結果與分析", blocks: [p(content.analysis)] },
+        { heading: "討論", blocks: [p(content.discussion)] },
+        { heading: "結論", blocks: [p(content.conclusion)] },
+      ];
+      break;
+    case "food":
+      raw = [
+        { heading: "食品背景與來源", blocks: [p(content.background)] },
+        { heading: "營養成分與價值", blocks: sectionsAsParas(content.customSections) },
+        { heading: "製程與品質安全", blocks: [p(content.method)] },
+        { heading: "現況與市場分析", blocks: [p(content.analysis)] },
+        { heading: "飲食文化與討論", blocks: [p(content.discussion)] },
+        { heading: "結論與建議", blocks: [p(content.conclusion), l(content.futureWork)] },
+      ];
+      break;
+    case "social":
+      raw = [
+        { heading: "社會背景", blocks: [p(content.background)] },
+        { heading: "現況分析", blocks: [p(content.analysis)] },
+        { heading: "問題分析（成因與影響）", blocks: sectionsAsParas(content.customSections) },
+        { heading: "案例與多元觀點", blocks: [p(content.discussion)] },
+        { heading: "解決建議", blocks: [l(content.futureWork)] },
+        { heading: "結論與個人觀點", blocks: [p(content.conclusion)] },
+      ];
+      break;
+    case "history":
+      raw = [
+        { heading: "主題背景", blocks: [p(content.background)] },
+        { heading: "歷史脈絡與重要面向", blocks: sectionsAsParas(content.customSections) },
+        { heading: "現況與影響", blocks: [p(content.analysis)] },
+        { heading: "討論與爭議", blocks: [p(content.discussion)] },
+        { heading: "結論與省思", blocks: [p(content.conclusion)] },
+      ];
+      break;
+    default: // analytical — 一般學校報告
       raw = [
         { heading: "背景與重要性", blocks: [p(content.background)] },
         { heading: "現況分析", blocks: [p(content.analysis)] },
-        {
-          heading: "主要面向探討",
-          blocks: content.customSections.map((c) => ({ type: "paragraph", text: `${c.heading}：${c.body}` }) as ContentBlock),
-        },
+        { heading: "主要面向探討", blocks: sectionsAsParas(content.customSections) },
         { heading: "案例與討論", blocks: [p(content.discussion)] },
         { heading: "結論與觀點", blocks: [p(content.conclusion)] },
       ];
@@ -1667,17 +2049,102 @@ function buildReferenceBlocks(input: ReportInput): ContentBlock[] {
 
 // ─── Data requirement rows ───────────────────────────────────────────────────
 
-function buildDataRows(topic: string): DataRequirementRow[] {
-  return [
+function buildDataRows(topic: string, kind: StructureKind): DataRequirementRow[] {
+  // Common opening + closing rows; domain-specific middle rows make each report's
+  // data-collection table genuinely different per topic domain (V3 acceptance).
+  const wrap = (specific: DataRequirementRow[]): DataRequirementRow[] => [
     { type: "主題背景資料", need: `「${topic}」的定義、基本介紹與重要性`, use: "建立報告的背景與前言", priority: "高" },
-    { type: "統計數據", need: "相關的數量、比例或趨勢數據", use: "佐證現況與分析", priority: "中" },
-    { type: "文獻資料", need: "書籍、論文、期刊或官方文件", use: "支持論點、撰寫文獻探討", priority: "高" },
-    { type: "案例", need: "國內外相關實例", use: "具體說明與比較", priority: "中" },
-    { type: "圖片", need: "實景、示意或構造圖片", use: "輔助說明、提升可讀性", priority: "低" },
-    { type: "圖表數據", need: "可繪製圖表的原始數據", use: "製作圖表呈現結果", priority: "中" },
+    ...specific,
     { type: "使用者個人觀點", need: "個人看法、反思或經驗", use: "提升報告深度與獨特性", priority: "高" },
     { type: "引用來源", need: "可信的出處與連結", use: "撰寫參考文獻、避免抄襲", priority: "高" },
   ];
+
+  switch (kind) {
+    case "biology":
+      return wrap([
+        { type: "物種分類資料", need: `「${topic}」的門綱目科分類與形態特徵`, use: "撰寫生物分類與特徵", priority: "高" },
+        { type: "生態與習性資料", need: "食性、繁殖、棲地與行為觀察", use: "支持習性與棲息環境分析", priority: "高" },
+        { type: "圖鑑／照片", need: "外型構造圖與棲地照片", use: "標註特徵、輔助辨識", priority: "中" },
+        { type: "族群／分布數據", need: "數量、分布或產量統計", use: "繪製比較圖、量化分析", priority: "中" },
+      ]);
+    case "chemistry":
+      return wrap([
+        { type: "物質基本資料", need: `「${topic}」的化學式、結構與物理化學性質`, use: "撰寫化學原理與性質", priority: "高" },
+        { type: "反應與機制資料", need: "相關化學反應式與作用機制", use: "解釋原理與實驗依據", priority: "高" },
+        { type: "實驗測定數據", need: "可重現的量測數據（濃度、含量等）", use: "結果分析與圖表", priority: "高" },
+        { type: "安全資料（SDS）", need: "危害性、保存與操作注意事項", use: "實驗安全與討論", priority: "中" },
+      ]);
+    case "food":
+      return wrap([
+        { type: "營養成分資料", need: `「${topic}」的營養標示與成分含量`, use: "撰寫營養與成分", priority: "高" },
+        { type: "生產／來源資料", need: "產地、原料來源或製程流程", use: "說明來源與製程", priority: "中" },
+        { type: "食品安全規範", need: "衛生標準、保存與檢驗法規", use: "安全與品質分析", priority: "高" },
+        { type: "市場／消費數據", need: "產量、消費量或價格趨勢", use: "現況與市場分析、圖表", priority: "中" },
+      ]);
+    case "social":
+      return wrap([
+        { type: "官方統計數據", need: `「${topic}」的政府或機構統計`, use: "佐證現況與影響", priority: "高" },
+        { type: "成因相關研究", need: "學術研究或調查報告", use: "問題分析", priority: "高" },
+        { type: "國內外案例", need: "相關政策或事件案例", use: "案例探討與比較", priority: "中" },
+        { type: "多元觀點資料", need: "不同立場的論述與報導", use: "呈現多元觀點與討論", priority: "中" },
+      ]);
+    case "history":
+      return wrap([
+        { type: "史料／檔案", need: `「${topic}」的史料、地圖或制度文件`, use: "建立歷史脈絡與背景", priority: "高" },
+        { type: "重要事件年表", need: "關鍵年代、人物與事件", use: "整理發展脈絡與時間軸", priority: "高" },
+        { type: "現況與影響資料", need: "保存、運作或影響的現況", use: "現況與影響分析", priority: "中" },
+        { type: "不同詮釋觀點", need: "學界或社會的不同解讀", use: "討論與爭議", priority: "中" },
+      ]);
+    case "business":
+      return wrap([
+        { type: "市場規模數據", need: `「${topic}」所屬市場規模與成長率`, use: "市場分析", priority: "高" },
+        { type: "競品資料", need: "主要競品功能、定價與市占", use: "競品分析與比較表", priority: "高" },
+        { type: "財務／成本數據", need: "成本結構、營收或獲利估算", use: "商業模式與風險評估", priority: "中" },
+        { type: "產業趨勢報告", need: "產業鏈與趨勢分析", use: "產業概況與未來展望", priority: "中" },
+      ]);
+    case "market":
+      return wrap([
+        { type: "市場規模與區隔", need: "整體規模與客群區隔數據", use: "市場概況與客群分析", priority: "高" },
+        { type: "消費行為調查", need: "問卷或調查資料", use: "客群分析", priority: "高" },
+        { type: "競爭者資料", need: "競爭者定位與市占", use: "競爭態勢分析", priority: "中" },
+        { type: "趨勢數據", need: "歷年趨勢與預測", use: "市場趨勢與機會點", priority: "中" },
+      ]);
+    case "tech":
+      return wrap([
+        { type: "需求規格", need: `「${topic}」的使用者需求與功能規格`, use: "問題定義與系統設計", priority: "高" },
+        { type: "技術文件", need: "框架、API 與函式庫官方文件", use: "技術背景與選型", priority: "高" },
+        { type: "架構參考", need: "類似系統設計與最佳實務", use: "系統設計", priority: "中" },
+        { type: "測試資料", need: "測試案例與效能指標", use: "評估與測試", priority: "中" },
+      ]);
+    case "experiment":
+      return wrap([
+        { type: "科學原理資料", need: `「${topic}」相關原理與定義`, use: "實驗原理與文獻探討", priority: "高" },
+        { type: "實驗數據", need: "多次量測的原始數據", use: "結果分析與圖表", priority: "高" },
+        { type: "器材與方法", need: "器材規格與操作步驟", use: "實驗方法與重現性", priority: "中" },
+        { type: "誤差分析資料", need: "誤差來源與對照組數據", use: "討論與改進", priority: "中" },
+      ]);
+    case "care":
+      return wrap([
+        { type: "官方統計與政策", need: `「${topic}」的統計與相關制度`, use: "背景與制度資源", priority: "高" },
+        { type: "專業研究與實務", need: "學術研究或實務報告", use: "現況與挑戰分析", priority: "高" },
+        { type: "服務模式案例", need: "服務模式與案例整理", use: "案例與專業觀點", priority: "中" },
+        { type: "服務對象需求", need: "需求調查或訪談（不做醫療診斷）", use: "服務對象與需求", priority: "中" },
+      ]);
+    case "book":
+      return wrap([
+        { type: "書籍基本資料", need: `《${topic}》的作者、出版資訊與章節架構`, use: "內容摘要", priority: "高" },
+        { type: "重點段落摘錄", need: "印象深刻的觀點與引文", use: "重點觀念與反思", priority: "高" },
+        { type: "個人經驗連結", need: "與自身生活或學習的連結", use: "個人啟發", priority: "中" },
+        { type: "延伸資料", need: "相關書評或補充資料", use: "批判與應用", priority: "低" },
+      ]);
+    default:
+      return wrap([
+        { type: "統計數據", need: "相關的數量、比例或趨勢數據", use: "佐證現況與分析", priority: "中" },
+        { type: "文獻資料", need: "書籍、論文、期刊或官方文件", use: "支持論點、撰寫文獻探討", priority: "高" },
+        { type: "案例", need: "國內外相關實例", use: "具體說明與比較", priority: "中" },
+        { type: "圖表數據", need: "可繪製圖表的原始數據", use: "製作圖表呈現結果", priority: "中" },
+      ]);
+  }
 }
 
 // ─── Quality checklist ───────────────────────────────────────────────────────
@@ -1811,7 +2278,7 @@ function buildStructureSections(
     });
   }
 
-  sections.push({ heading: "資料需求表", blocks: [{ type: "dataTable", rows: buildDataRows(input.topic) }] });
+  sections.push({ heading: "資料需求表", blocks: [{ type: "dataTable", rows: buildDataRows(input.topic, kind) }] });
 
   const refBlocks = buildReferenceBlocks(input);
   if (refBlocks.length > 0) sections.push({ heading: "參考資料與來源", blocks: refBlocks });
@@ -1863,13 +2330,13 @@ function buildSlideSections(input: ReportInput, content: CategoryContent): Repor
   return [{ heading: "簡報大綱", blocks: [{ type: "slides", slides }] }];
 }
 
-function buildDataTableSections(input: ReportInput): ReportSection[] {
+function buildDataTableSections(input: ReportInput, kind: StructureKind): ReportSection[] {
   return [
     {
       heading: "資料需求表",
       blocks: [
         { type: "paragraph", text: `以下整理完成「${input.topic}」報告所需蒐集的資料、用途與優先程度，請依此逐項補齊。` },
-        { type: "dataTable", rows: buildDataRows(input.topic) },
+        { type: "dataTable", rows: buildDataRows(input.topic, kind) },
         ...(needsSource(input) ? [{ type: "note", text: SOURCE_NOTE } as ContentBlock] : []),
       ],
     },
@@ -1884,6 +2351,133 @@ function buildChartImageSections(input: ReportInput, content: CategoryContent): 
   ];
 }
 
+// ─── Research planner (Eric 研究模式 / Phase F) ───────────────────────────────
+
+export type ResearchIntent =
+  | "探究原理"
+  | "比較分析"
+  | "現況調查"
+  | "實作開發"
+  | "文獻回顧"
+  | "心得反思";
+
+/** detectIntent — infer the research intent behind a topic, used to frame the
+ *  planning blueprint. Pure heuristic on topic + report type. */
+export function detectIntent(input: ReportInput): ResearchIntent {
+  const t = input.topic;
+  const rt = input.reportType;
+  if (has(rt, ["讀書心得"]) || has(t, ["心得", "讀後"])) return "心得反思";
+  if (has(rt, ["網站", "程式", "AI"]) || has(t, ["系統", "app", "平台", "開發", "程式", "網站"])) {
+    return "實作開發";
+  }
+  if (has(rt, ["實驗", "科展"]) || has(t, ["氧化", "速率", "變因", "測定", "對", "影響"])) {
+    return "探究原理";
+  }
+  if (has(t, ["比較", "差異", "vs", "優劣", "競品"])) return "比較分析";
+  if (has(rt, ["市場", "商業", "社會議題"]) || has(t, ["現況", "趨勢", "市場", "議題", "永續"])) {
+    return "現況調查";
+  }
+  return "文獻回顧";
+}
+
+const INTENT_NOTE: Record<ResearchIntent, string> = {
+  探究原理: "此主題偏向探究現象背後的原理或變因關係，建議以假設與驗證為核心。",
+  比較分析: "此主題偏向比較不同對象或方案，建議建立明確的比較面向與標準。",
+  現況調查: "此主題偏向描述現況與趨勢，建議蒐集統計數據與多元觀點。",
+  實作開發: "此主題偏向實作或專案，建議以需求、設計、實作與測試為主軸。",
+  文獻回顧: "此主題偏向整理既有知識，建議以系統性的文獻整理與分類為主。",
+  心得反思: "此主題偏向個人理解與反思，建議聚焦重點觀念與個人連結。",
+};
+
+/** frameworkLabel — human-readable name for the chosen structure skeleton. */
+export function frameworkLabel(kind: StructureKind): string {
+  const m: Record<StructureKind, string> = {
+    experiment: "科學實驗架構",
+    business: "商業分析架構",
+    market: "市場研究架構",
+    book: "讀書心得架構",
+    tech: "資訊專案架構",
+    care: "照護／社工架構",
+    biology: "生物學研究架構",
+    chemistry: "化學研究架構",
+    food: "食品科學架構",
+    social: "社會議題架構",
+    history: "史地公民架構",
+    analytical: "一般分析架構",
+  };
+  return m[kind];
+}
+
+/** firstText — pull the first readable line out of a section for the outline. */
+function firstText(section: ReportSection): string {
+  for (const b of section.blocks) {
+    if (b.type === "paragraph" && b.text) return b.text;
+    if (b.type === "list" && b.items && b.items.length > 0) return b.items[0];
+  }
+  return "〔請補充本段內容〕";
+}
+
+/**
+ * buildEricSections — the research-planning blueprint (Topic → Domain → Intent →
+ * Framework → Questions → Evidence → Report). Reuses the same domain content and
+ * spine so the plan matches what 報告架構／完整報告 would produce.
+ */
+function buildEricSections(
+  input: ReportInput,
+  content: CategoryContent,
+  kind: StructureKind,
+  category: TopicCategory,
+): ReportSection[] {
+  const t = input.topic;
+  const intent = detectIntent(input);
+  const spine = buildDomainSpine(kind, input, content);
+
+  const raw: ReportSection[] = [
+    {
+      heading: "研究領域與研究意圖",
+      blocks: [
+        {
+          type: "paragraph",
+          text: `主題：「${t}」。系統判定領域：${category}；採用架構：${frameworkLabel(kind)}；研究意圖：${intent}。`,
+        },
+        { type: "note", text: INTENT_NOTE[intent] },
+      ],
+    },
+    { heading: "研究問題", blocks: [{ type: "list", items: content.questions }] },
+    { heading: "研究目的", blocks: [{ type: "list", items: content.purpose }] },
+    ...(content.hypothesis.length > 0
+      ? [{ heading: "研究假設", blocks: [{ type: "list", items: content.hypothesis } as ContentBlock] }]
+      : []),
+    {
+      heading: "文獻探討方向",
+      blocks: [
+        { type: "paragraph", text: `建議從以下方向蒐集與「${t}」相關的文獻：` },
+        { type: "list", items: content.literature },
+        ...(needsSource(input) ? [{ type: "note", text: INSERT_SOURCE_NOTE } as ContentBlock] : []),
+      ],
+    },
+    {
+      heading: "建議研究架構（章節）",
+      blocks: [{ type: "list", items: spine.map((s) => s.heading) }],
+    },
+    { heading: "建議圖表", blocks: [suggestionsBlock("圖表", content.charts)] },
+    {
+      heading: "建議資料表格",
+      blocks: [
+        { type: "paragraph", text: "完成本研究建議蒐集的資料、用途與優先程度：" },
+        { type: "dataTable", rows: buildDataRows(t, kind) },
+      ],
+    },
+    { heading: "建議流程圖", blocks: [suggestionsBlock("流程圖", content.flowcharts)] },
+    {
+      heading: "報告初稿大綱",
+      blocks: spine.map((s) => ({ type: "paragraph", text: `${s.heading}｜${firstText(s)}` }) as ContentBlock),
+    },
+  ];
+
+  return numbered(raw);
+}
+
 // ─── Completeness ────────────────────────────────────────────────────────────
 
 function computeMeta(input: ReportInput, category: TopicCategory, content: CategoryContent): ReportMeta {
@@ -1892,6 +2486,7 @@ function computeMeta(input: ReportInput, category: TopicCategory, content: Categ
   const modeBase: Record<string, { label: string; base: number }> = {
     報告架構: { label: "報告架構草稿", base: 40 },
     完整報告: { label: "完整報告草稿", base: 80 },
+    "Eric 研究模式": { label: "研究規劃藍圖", base: 60 },
     簡報大綱: { label: "簡報大綱", base: 55 },
     資料需求表: { label: "資料需求表", base: 35 },
     圖表與圖片建議: { label: "圖表與圖片建議", base: 45 },
@@ -1928,7 +2523,12 @@ function computeMeta(input: ReportInput, category: TopicCategory, content: Categ
  */
 export function generateReport(input: ReportInput): GeneratedReport {
   const topic = input.topic.trim();
-  const category = detectTopicCategory(topic, input.reportType, input.purpose);
+  // V3: an explicit domain override (set in the UI) wins over AI detection.
+  const override = input.domainOverride?.trim();
+  const category: TopicCategory =
+    override && (TOPIC_CATEGORIES as readonly string[]).includes(override)
+      ? (override as TopicCategory)
+      : detectTopicCategory(topic, input.reportType, input.purpose);
   const content = buildCategoryContent(topic, category);
   const kind = selectStructure(category, input.reportType, input.purpose);
   const meta = computeMeta(input, category, content);
@@ -1938,11 +2538,14 @@ export function generateReport(input: ReportInput): GeneratedReport {
     case "完整報告":
       sections = buildFullSections(input, content, kind);
       break;
+    case "Eric 研究模式":
+      sections = buildEricSections(input, content, kind, category);
+      break;
     case "簡報大綱":
       sections = buildSlideSections(input, content);
       break;
     case "資料需求表":
-      sections = buildDataTableSections(input);
+      sections = buildDataTableSections(input, kind);
       break;
     case "圖表與圖片建議":
       sections = buildChartImageSections(input, content);

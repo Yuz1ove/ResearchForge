@@ -29,3 +29,11 @@ The whole generator lives in `artifacts/report-factory/src/lib/generateReport.ts
 
 ## Verifying logic without the browser
 - Run pure engine cases with `npx tsx` using an **absolute** import path to the lib (relative `./src/...` fails from /tmp). Fast way to confirm category detection + per-mode/style/length output before screenshotting.
+
+## V3 — full domain coverage + research planner + domain override
+- `StructureKind` now also has `biology|chemistry|food|social|history`; `TopicCategory`/`TOPIC_CATEGORIES` cover 11 domains. **Adding a StructureKind requires updating BOTH `frameworkLabel` (a Record over all kinds — compile error if missed) AND a `buildDomainSpine` case.** Adding a TopicCategory requires updating `TOPIC_CATEGORIES` + `selectStructure` mapping.
+- **Detection ORDER matters in `detectTopicCategory`:** food terms (incl. 雞蛋) must be checked BEFORE biology (蛋→蛋白質/雞→animal would mis-route), and social terms (SDGs/永續/ESG) checked explicitly. Canonical regression topics: 雞蛋→food, 維生素C→chemistry, 台積電→business, Python→tech, SDGs→social, 蜘蛛→biology — each must give distinct spine AND distinct `buildDataRows(topic, kind)` set.
+- `buildDataRows` signature is `(topic, kind)` — domain-aware; data-requirement rows differ per kind. `buildDataTableSections(input, kind)` threads kind through.
+- Eric 研究模式 (mode "Eric 研究模式"): `buildEricSections(input, content, kind, category)` reuses the same `content`+spine to emit a planning blueprint (領域意圖→問題→目的→假設→文獻方向→架構→圖表→表格→流程圖→初稿大綱). Uses `detectIntent(input)` + `frameworkLabel(kind)`. computeMeta label = 研究規劃藍圖. It is excluded from `applyStyleAndLength`/quality post-processing.
+- **academicLevel is the single source of truth** for reader+purpose: `academicToAudience`/`academicToPurpose` derive `targetAudience`/`purpose`. UI dropped the 目標讀者/報告目的 selects; `updateInput` re-derives on academicLevel change AND `handleGenerate` re-derives defensively. `domainOverride` (a valid TopicCategory) overrides detection in `generateReport`; UI shows live "AI 判定領域" + override Select (sentinel "自動偵測" ↔ "").
+- Project handoff lib: `src/lib/projectState.ts` (`buildProjectHandoff`/`downloadProjectHandoff`) renders capabilities from live constants. Repo docs live in `artifacts/report-factory/handoff/` (PROJECT_STATUS, SYSTEM_ARCHITECTURE, CHANGELOG, CODEX_HANDOFF).
