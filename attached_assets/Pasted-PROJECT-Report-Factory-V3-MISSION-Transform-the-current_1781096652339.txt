@@ -1,0 +1,514 @@
+PROJECT:
+Report Factory V3
+
+MISSION:
+
+Transform the current template-based report generator into a true AI Research Report Factory.
+
+Current issue:
+
+The system only injects user topics into static templates.
+
+Example:
+
+Input:
+雞蛋
+
+Output:
+系統架構
+技術規劃
+開發流程
+測試方法
+
+This is incorrect.
+
+The system must first understand the topic and then select the proper research framework.
+
+==================================================
+PART 1
+RESEARCH INTELLIGENCE ENGINE
+==================================================
+
+Build a new AI reasoning layer.
+
+Workflow:
+
+User Topic
+
+↓
+
+Topic Understanding
+
+↓
+
+Domain Classification
+
+↓
+
+Framework Selection
+
+↓
+
+Research Planning
+
+↓
+
+Report Generation
+
+==================================================
+PART 2
+TOPIC CLASSIFICATION SYSTEM
+==================================================
+
+Create automatic domain classification.
+
+Supported domains:
+
+Biology
+
+Chemistry
+
+Physics
+
+Medicine
+
+Agriculture
+
+Food Science
+
+Environmental Science
+
+Mathematics
+
+Computer Science
+
+Artificial Intelligence
+
+Engineering
+
+Business
+
+Economics
+
+Marketing
+
+Education
+
+Psychology
+
+Social Science
+
+History
+
+Geography
+
+Literature
+
+Law
+
+Political Science
+
+General Academic
+
+When user enters a topic:
+
+AI must classify the topic.
+
+Example:
+
+雞蛋
+
+→ Food Science
+→ Agriculture
+→ Biology
+
+維生素C
+
+→ Chemistry
+→ Biology
+
+Python
+
+→ Computer Science
+
+SDGs
+
+→ Social Science
+
+OpenAI
+
+→ Artificial Intelligence
+
+Display result:
+
+AI判定領域：
+
+Food Science
+
+(User can modify)
+
+==================================================
+PART 3
+FRAMEWORK ROUTER
+==================================================
+
+Each domain must use different report frameworks.
+
+Biology Framework
+
+1. Background
+2. Literature Review
+3. Biological Mechanism
+4. Research Method
+5. Analysis
+6. Conclusion
+
+Chemistry Framework
+
+1. Background
+2. Chemical Theory
+3. Experimental Design
+4. Results
+5. Discussion
+6. Conclusion
+
+Social Science Framework
+
+1. Social Background
+2. Current Situation
+3. Problem Analysis
+4. Case Studies
+5. Recommendations
+6. Conclusion
+
+Computer Science Framework
+
+1. Technical Background
+2. Technology Overview
+3. Architecture
+4. Implementation
+5. Evaluation
+6. Future Work
+
+Business Framework
+
+1. Market Background
+2. Industry Analysis
+3. Competitive Analysis
+4. Strategy
+5. Risk Assessment
+6. Conclusion
+
+NEVER use software-development sections
+for biology, chemistry, food, medicine topics.
+
+==================================================
+PART 4
+ERIC REPORT FACTORY MODE
+==================================================
+
+Add new mode:
+
+Eric Research Mode
+
+Workflow:
+
+Topic
+
+↓
+
+Research Questions
+
+↓
+
+Research Objectives
+
+↓
+
+Research Hypotheses
+
+↓
+
+Literature Directions
+
+↓
+
+Research Framework
+
+↓
+
+Suggested Figures
+
+↓
+
+Suggested Tables
+
+↓
+
+Suggested Flowcharts
+
+↓
+
+Report Draft
+
+Output example:
+
+Research Questions
+
+1.
+Does temperature affect Vitamin C oxidation rate?
+
+2.
+How large is the difference between temperature groups?
+
+Research Hypothesis
+
+Higher temperatures accelerate Vitamin C oxidation.
+
+==================================================
+PART 5
+NEW FORM FIELDS
+==================================================
+
+Replace current fields.
+
+Remove:
+
+Target Reader
+
+Report Purpose
+
+Add:
+
+Academic Level
+
+Middle School
+
+High School
+
+University
+
+Professional
+
+Research Type
+
+Literature Review
+
+Experimental Research
+
+Comparative Study
+
+Case Study
+
+Technical Research
+
+Business Analysis
+
+Scientific Research
+
+Reading Report
+
+Project Report
+
+AI Domain
+
+(auto detect)
+
+==================================================
+PART 6
+REPORT QUALITY ENGINE
+==================================================
+
+Add report quality standards.
+
+Every generated report must include:
+
+Research Questions
+
+Research Objectives
+
+Research Significance
+
+Literature Directions
+
+Methodology
+
+Suggested Figures
+
+Suggested Tables
+
+Limitations
+
+Future Research
+
+References Section
+
+==================================================
+PART 7
+PROMPT SAFETY RULES
+==================================================
+
+NEVER generate:
+
+System Architecture
+
+Prototype Design
+
+Development Timeline
+
+Technical Stack
+
+unless domain is:
+
+Computer Science
+Engineering
+AI
+
+NEVER use IT report templates
+for Biology, Chemistry, Agriculture,
+Food Science, Medicine topics.
+
+==================================================
+PART 8
+EXPORT CENTER
+==================================================
+
+Create export options:
+
+Markdown
+
+DOCX
+
+PDF
+
+JSON
+
+Research Blueprint
+
+Prompt Package
+
+==================================================
+PART 9
+PROJECT MEMORY SYSTEM
+==================================================
+
+Create a project export button.
+
+Button name:
+
+Export Project State
+
+Generate:
+
+1.
+Current Architecture
+
+2.
+Database Schema
+
+3.
+Prompt System
+
+4.
+Implemented Features
+
+5.
+Completed Tasks
+
+6.
+Pending Tasks
+
+7.
+Known Bugs
+
+8.
+Improvement Roadmap
+
+9.
+Next Session Handoff
+
+Output format:
+
+PROJECT_HANDOFF.md
+
+==================================================
+PART 10
+CODEX HANDOFF PACKAGE
+==================================================
+
+Generate automatically:
+
+/handoff
+
+PROJECT_HANDOFF.md
+
+ARCHITECTURE.md
+
+DATABASE_SCHEMA.md
+
+PROMPT_SYSTEM.md
+
+FEATURE_STATUS.md
+
+BUG_REPORT.md
+
+ROADMAP.md
+
+NEXT_ACTIONS.md
+
+All files must be downloadable.
+
+Goal:
+
+A new Codex session should be able to continue development immediately without needing previous chat history.
+
+==================================================
+FINAL REQUIREMENT
+==================================================
+
+Do not perform partial updates.
+
+Refactor the whole Report Factory architecture.
+
+Priority:
+
+1.
+Topic Understanding
+
+2.
+Framework Routing
+
+3.
+Eric Research Mode
+
+4.
+Project Export System
+
+5.
+Codex Handoff Package
+
+Success Criteria:
+
+Input:
+雞蛋
+
+Output:
+Food Science Research Report
+
+Input:
+維生素C
+
+Output:
+Chemistry/Biology Research Report
+
+Input:
+Python
+
+Output:
+Computer Science Report
+
+No static templates.
+
+No blind keyword replacement.
+
+Must behave like a real research planning system.
