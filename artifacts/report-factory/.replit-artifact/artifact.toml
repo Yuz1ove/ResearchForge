@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Report Factory AI"
+version = "1.0.0"
+id = "artifacts/report-factory"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22067
+
+[services.development]
+run = "pnpm --filter @workspace/report-factory run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/report-factory", "run", "build" ]
+publicDir = "artifacts/report-factory/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22067"
+BASE_PATH = "/"
