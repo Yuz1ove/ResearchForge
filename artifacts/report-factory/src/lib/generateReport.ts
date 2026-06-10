@@ -1328,6 +1328,213 @@ function buildCategoryContent(topic: string, category: TopicCategory): CategoryC
   }
 }
 
+// ─── Domain structure engine (Phase A) ───────────────────────────────────────
+// The report skeleton is chosen from the topic domain + requested report type,
+// instead of forcing one science-experiment spine onto every report. The
+// per-category content builders already produce the raw fields (background,
+// analysis, literature, …); this layer only decides which sections appear, in
+// what order, and under which domain-appropriate headings.
+
+export type StructureKind =
+  | "experiment"
+  | "business"
+  | "market"
+  | "book"
+  | "tech"
+  | "care"
+  | "analytical";
+
+/**
+ * selectStructure — pick the section skeleton. reportType / purpose are stronger
+ * signals than the detected category: a biology topic written as a 科展報告 is an
+ * experiment, but the same topic as a 學校研究報告 is analytical (so it should NOT
+ * get hypotheses / control groups).
+ */
+function selectStructure(category: TopicCategory, reportType: string, purpose: string): StructureKind {
+  if (has(reportType, ["科展", "實驗"]) || has(purpose, ["科展", "實驗"]) || category === "科學實驗") {
+    return "experiment";
+  }
+  if (has(reportType, ["市場研究"]) || has(purpose, ["市場研究", "市場分析"])) return "market";
+  if (has(reportType, ["讀書心得"]) || has(purpose, ["讀書心得"]) || category === "讀書心得") {
+    return "book";
+  }
+  if (has(reportType, ["商業"]) || has(purpose, ["商業分析"]) || category === "商業／產品分析") {
+    return "business";
+  }
+  if (
+    category === "AI／網站／程式專案" ||
+    has(reportType, ["網站", "ＡＩ", "AI", "程式"]) ||
+    has(purpose, ["網站", "AI", "程式"])
+  ) {
+    return "tech";
+  }
+  if (
+    category === "醫療／長照／社工／心理" ||
+    has(reportType, ["醫療", "長照", "社工", "社會工作", "心理", "照護", "照顧"]) ||
+    has(purpose, ["醫療", "長照", "社工", "心理", "照護"])
+  ) {
+    return "care";
+  }
+  return "analytical";
+}
+
+const CJK_NUM = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二", "十三", "十四", "十五"];
+
+/** numbered — apply 一、二、… prefixes after conditional sections are resolved. */
+function numbered(items: ReportSection[]): ReportSection[] {
+  return items.map((s, i) => ({ ...s, heading: `${CJK_NUM[i] ?? String(i + 1)}、${s.heading}` }));
+}
+
+/**
+ * buildDomainSpine — the ordered body sections for the chosen structure. Headings
+ * are bare here; numbering is applied last so conditional sections (e.g. an empty
+ * hypothesis list) don't leave gaps. Bodies reuse existing CategoryContent fields
+ * and never fabricate data — unknowns use 〔…〕 / 資料來源待補 placeholders.
+ */
+function buildDomainSpine(kind: StructureKind, input: ReportInput, content: CategoryContent): ReportSection[] {
+  const t = input.topic;
+  const p = (text: string): ContentBlock => ({ type: "paragraph", text });
+  const l = (items: string[]): ContentBlock => ({ type: "list", items });
+
+  let raw: ReportSection[];
+
+  switch (kind) {
+    case "experiment":
+      raw = [
+        { heading: "研究背景", blocks: [p(content.background)] },
+        { heading: "研究動機", blocks: [p(content.motivation)] },
+        { heading: "研究目的", blocks: [l(content.purpose)] },
+        { heading: "研究問題", blocks: [l(content.questions)] },
+        ...(content.hypothesis.length > 0 ? [{ heading: "研究假設", blocks: [l(content.hypothesis)] }] : []),
+        {
+          heading: "文獻探討",
+          blocks: [
+            p(`整理與「${t}」相關的科學原理、定義與既有研究方向：`),
+            l(content.literature),
+            ...(needsSource(input) ? [{ type: "note", text: INSERT_SOURCE_NOTE } as ContentBlock] : []),
+          ],
+        },
+        { heading: "研究方法", blocks: [p(content.method)] },
+        { heading: "研究結果與分析", blocks: [p(content.analysis)] },
+        { heading: "討論", blocks: [p(content.discussion)] },
+        { heading: "研究限制", blocks: [l(content.limitations)] },
+        { heading: "結論", blocks: [p(content.conclusion)] },
+      ];
+      break;
+    case "business":
+      raw = [
+        {
+          heading: "產業概況",
+          blocks: [p(`說明「${t}」所處產業的範圍、規模與發展階段，以及目前的市場成熟度與主要參與者。〔建議補充產業數據，${SOURCE_NOTE}〕`)],
+        },
+        {
+          heading: "市場分析",
+          blocks: [p(`分析「${t}」面對的市場需求、規模與成長性，以及主要的目標客群與使用情境。`), l(content.literature)],
+        },
+        { heading: "競品分析", blocks: [p(content.analysis)] },
+        {
+          heading: "SWOT 分析",
+          blocks: [
+            p(`以 SWOT 架構評估「${t}」的內部條件與外部環境：`),
+            l([
+              `優勢（Strengths）：〔填入「${t}」的內部優勢〕`,
+              "劣勢（Weaknesses）：〔填入內部不足或限制〕",
+              "機會（Opportunities）：〔填入外部市場機會〕",
+              "威脅（Threats）：〔填入外部競爭或風險〕",
+            ]),
+          ],
+        },
+        {
+          heading: "商業模式",
+          blocks: [p(`說明「${t}」的價值主張、收入來源與成本結構（如訂閱、廣告、抽成或銷售），以及關鍵資源與通路。`)],
+        },
+        { heading: "風險評估", blocks: [l(content.limitations)] },
+        { heading: "未來展望", blocks: [p(content.conclusion), l(content.futureWork)] },
+      ];
+      break;
+    case "market":
+      raw = [
+        {
+          heading: "市場概況",
+          blocks: [p(`說明「${t}」所在市場的整體規模、結構與發展階段。〔建議補充市場數據，${SOURCE_NOTE}〕`)],
+        },
+        {
+          heading: "客群分析",
+          blocks: [p(`描述「${t}」的主要客群輪廓、需求與消費行為，並區分不同的客群區隔。`), l(content.purpose)],
+        },
+        { heading: "競爭態勢", blocks: [p(content.analysis)] },
+        { heading: "市場趨勢", blocks: [l(content.literature)] },
+        {
+          heading: "機會點",
+          blocks: [p(`綜合市場與競爭分析，找出「${t}」可切入的市場缺口與成長機會。`)],
+        },
+        { heading: "建議", blocks: [p(content.conclusion), l(content.futureWork)] },
+      ];
+      break;
+    case "book":
+      raw = [
+        {
+          heading: "內容摘要",
+          blocks: [p(`概述「${t}」的主要內容、章節脈絡與作者想傳達的核心訊息。`)],
+        },
+        { heading: "重點觀念", blocks: [l(content.purpose)] },
+        { heading: "批判與反思", blocks: [p(content.discussion)] },
+        {
+          heading: "個人啟發",
+          blocks: [p(`說明閱讀「${t}」後，在想法、價值觀或行為上的改變與收穫。`)],
+        },
+        {
+          heading: "應用與行動",
+          blocks: [p(`說明如何將「${t}」的觀念實際運用在學習、生活或工作中。`), l(content.futureWork)],
+        },
+        { heading: "結論", blocks: [p(content.conclusion)] },
+      ];
+      break;
+    case "tech":
+      raw = [
+        {
+          heading: "問題定義",
+          blocks: [p(`說明「${t}」要解決的問題、目標使用者與專案範圍。`), l(content.questions)],
+        },
+        { heading: "技術背景", blocks: [l(content.literature)] },
+        {
+          heading: "系統設計",
+          blocks: [p(`描述「${t}」的整體架構，包含前端、後端、資料庫與外部服務之間的關係，以及主要功能模組。`)],
+        },
+        { heading: "實作規劃", blocks: [p(content.method)] },
+        {
+          heading: "評估與測試",
+          blocks: [p(`說明如何驗證「${t}」的正確性與效能，包含單元測試、整合測試與使用者測試。`)],
+        },
+        { heading: "未來發展", blocks: [p(content.conclusion), l(content.futureWork)] },
+      ];
+      break;
+    case "care":
+      raw = [
+        { heading: "背景與重要性", blocks: [p(content.background)] },
+        { heading: "服務對象與需求", blocks: [l(content.purpose)] },
+        { heading: "現況與挑戰", blocks: [p(content.analysis)] },
+        { heading: "相關制度與資源", blocks: [l(content.literature)] },
+        { heading: "案例與專業觀點", blocks: [p(content.discussion)] },
+        { heading: "反思與建議", blocks: [p(content.conclusion), l(content.futureWork)] },
+      ];
+      break;
+    default: // analytical — 社會議題 / 歷史地理 / 食品飲食 / 化學化工 / 一般
+      raw = [
+        { heading: "背景與重要性", blocks: [p(content.background)] },
+        { heading: "現況分析", blocks: [p(content.analysis)] },
+        {
+          heading: "主要面向探討",
+          blocks: content.customSections.map((c) => ({ type: "paragraph", text: `${c.heading}：${c.body}` }) as ContentBlock),
+        },
+        { heading: "案例與討論", blocks: [p(content.discussion)] },
+        { heading: "結論與觀點", blocks: [p(content.conclusion)] },
+      ];
+  }
+
+  return numbered(raw);
+}
+
 // ─── Style & length tone helpers ─────────────────────────────────────────────
 
 function styleNote(style: string, audience: string): string {
@@ -1582,40 +1789,29 @@ function applyStyleAndLength(sections: ReportSection[], input: ReportInput): Rep
 
 // ─── Mode builders ───────────────────────────────────────────────────────────
 
-function buildStructureSections(input: ReportInput, content: CategoryContent): ReportSection[] {
+function buildStructureSections(
+  input: ReportInput,
+  content: CategoryContent,
+  kind: StructureKind,
+): ReportSection[] {
   const sections: ReportSection[] = [];
   const addInfo = additionalInfoSection(input);
 
   sections.push({ heading: "摘要方向", blocks: [{ type: "paragraph", text: content.summaryDirection }] });
   if (addInfo) sections.push(addInfo);
-  sections.push({ heading: "一、研究背景", blocks: [{ type: "paragraph", text: content.background }] });
-  sections.push({ heading: "二、研究動機", blocks: [{ type: "paragraph", text: content.motivation }] });
-  sections.push({ heading: "三、研究目的", blocks: [{ type: "list", items: content.purpose }] });
-  sections.push({ heading: "四、研究問題", blocks: [{ type: "list", items: content.questions }] });
-  if (content.hypothesis.length > 0) {
-    sections.push({ heading: "五、研究假設", blocks: [{ type: "list", items: content.hypothesis }] });
-  }
-  sections.push({
-    heading: "六、報告大綱（依主題類型）",
-    blocks: content.customSections.map((c) => ({ type: "paragraph", text: `${c.heading}：${c.body}` } as ContentBlock)),
-  });
-  sections.push({ heading: "七、文獻探討大綱", blocks: [{ type: "list", items: content.literature }] });
-  sections.push({
-    heading: "八、研究方法",
-    blocks: [{ type: "paragraph", text: content.method }],
-  });
+
+  // Domain-aware body skeleton (replaces the former fixed experiment spine).
+  sections.push(...buildDomainSpine(kind, input, content));
 
   if (input.chartRequirement === "需要") {
-    sections.push({ heading: "九、預計圖表", blocks: [suggestionsBlock("圖表", content.charts)] });
+    sections.push({ heading: "預計圖表", blocks: [suggestionsBlock("圖表", content.charts)] });
     sections.push({
-      heading: "十、預計圖片",
+      heading: "預計圖片與流程圖",
       blocks: [suggestionsBlock("圖片", content.images), suggestionsBlock("流程圖", content.flowcharts)],
     });
   }
 
-  sections.push({ heading: "十一、研究限制", blocks: [{ type: "list", items: content.limitations }] });
-  sections.push({ heading: "十二、結論草稿", blocks: [{ type: "paragraph", text: content.conclusion }] });
-  sections.push({ heading: "十三、資料需求表", blocks: [{ type: "dataTable", rows: buildDataRows(input.topic) }] });
+  sections.push({ heading: "資料需求表", blocks: [{ type: "dataTable", rows: buildDataRows(input.topic) }] });
 
   const refBlocks = buildReferenceBlocks(input);
   if (refBlocks.length > 0) sections.push({ heading: "參考資料與來源", blocks: refBlocks });
@@ -1623,50 +1819,27 @@ function buildStructureSections(input: ReportInput, content: CategoryContent): R
   return sections;
 }
 
-function buildFullSections(input: ReportInput, content: CategoryContent): ReportSection[] {
+function buildFullSections(
+  input: ReportInput,
+  content: CategoryContent,
+  kind: StructureKind,
+): ReportSection[] {
   const sections: ReportSection[] = [];
   const addInfo = additionalInfoSection(input);
 
   sections.push({ heading: "摘要", blocks: [{ type: "paragraph", text: content.summary }] });
   if (addInfo) sections.push(addInfo);
-  sections.push({ heading: "一、研究背景", blocks: [{ type: "paragraph", text: content.background }] });
-  sections.push({ heading: "二、研究動機", blocks: [{ type: "paragraph", text: content.motivation }] });
-  sections.push({
-    heading: "三、研究目的",
-    blocks: [{ type: "paragraph", text: `本報告主要目的如下：` }, { type: "list", items: content.purpose }],
-  });
-  sections.push({
-    heading: "四、文獻探討",
-    blocks: [
-      { type: "paragraph", text: `本報告蒐集並整理與「${input.topic}」相關的資料，方向包含：` },
-      { type: "list", items: content.literature },
-      ...(needsSource(input) ? [{ type: "note", text: INSERT_SOURCE_NOTE } as ContentBlock] : []),
-    ],
-  });
-  sections.push({ heading: "五、研究方法", blocks: [{ type: "paragraph", text: content.method }] });
-  sections.push({
-    heading: "六、研究結果與分析",
-    blocks: [
-      { type: "paragraph", text: content.analysis },
-      ...content.customSections.map((c) => ({ type: "paragraph", text: `${c.heading}：${c.body}` } as ContentBlock)),
-      ...(input.chartRequirement === "需要" ? [suggestionsBlock("圖表", content.charts)] : []),
-    ],
-  });
-  sections.push({ heading: "七、討論", blocks: [{ type: "paragraph", text: content.discussion }] });
-  sections.push({ heading: "八、結論", blocks: [{ type: "paragraph", text: content.conclusion }] });
-  sections.push({
-    heading: "九、研究限制與未來建議",
-    blocks: [
-      { type: "paragraph", text: "研究限制：" },
-      { type: "list", items: content.limitations },
-      { type: "paragraph", text: "未來建議：" },
-      { type: "list", items: content.futureWork },
-    ],
-  });
+
+  // Domain-aware body skeleton (replaces the former fixed experiment spine).
+  sections.push(...buildDomainSpine(kind, input, content));
+
+  if (input.chartRequirement === "需要") {
+    sections.push({ heading: "圖表建議", blocks: [suggestionsBlock("圖表", content.charts)] });
+  }
 
   const refBlocks = buildReferenceBlocks(input);
   sections.push({
-    heading: "十、參考文獻",
+    heading: "參考文獻",
     blocks: refBlocks.length > 0 ? refBlocks : [{ type: "note", text: "未要求資料來源；如需提交正式報告，建議補充真實參考文獻。" }],
   });
 
@@ -1757,12 +1930,13 @@ export function generateReport(input: ReportInput): GeneratedReport {
   const topic = input.topic.trim();
   const category = detectTopicCategory(topic, input.reportType, input.purpose);
   const content = buildCategoryContent(topic, category);
+  const kind = selectStructure(category, input.reportType, input.purpose);
   const meta = computeMeta(input, category, content);
 
   let sections: ReportSection[];
   switch (input.mode) {
     case "完整報告":
-      sections = buildFullSections(input, content);
+      sections = buildFullSections(input, content, kind);
       break;
     case "簡報大綱":
       sections = buildSlideSections(input, content);
@@ -1774,7 +1948,7 @@ export function generateReport(input: ReportInput): GeneratedReport {
       sections = buildChartImageSections(input, content);
       break;
     default:
-      sections = buildStructureSections(input, content);
+      sections = buildStructureSections(input, content, kind);
   }
 
   // Style + length materially shape narrative output (summary lead, trimming,
