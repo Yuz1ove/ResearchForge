@@ -7,54 +7,54 @@ import { Check } from "lucide-react";
 export function Pricing() {
   const tiers = [
     {
-      name: "Free",
+      name: "免費版",
       price: "$0",
-      period: "forever",
-      description: "For individuals trying out the platform.",
+      period: "永久免費",
+      description: "適合個人試用平台功能。",
       features: [
-        "10 reports per month",
-        "Standard templates",
-        "Up to 1,000 words per report",
-        "Markdown export only",
-        "Standard support"
+        "每月 10 份報告",
+        "標準報告範本",
+        "每份報告最多 1,000 字",
+        "僅支援 Markdown 匯出",
+        "標準客戶支援"
       ],
-      cta: "Try for free",
+      cta: "免費開始使用",
       href: "/generator",
       popular: false
     },
     {
-      name: "Pro",
+      name: "專業版",
       price: "$49",
-      period: "per user / month",
-      description: "For consultants and analysts who need more power.",
+      period: "每位使用者 / 月",
+      description: "適合需要更強大功能的顧問與分析師。",
       features: [
-        "Unlimited reports",
-        "All premium templates",
-        "Up to 5,000 words per report",
-        "PDF, DOCX, and Markdown export",
-        "Custom branding & logos",
-        "Chart generation suggestions",
-        "Priority email support"
+        "無限報告生成",
+        "所有進階範本",
+        "每份報告最多 5,000 字",
+        "PDF、DOCX 及 Markdown 匯出",
+        "自訂品牌與企業識別",
+        "圖表生成建議",
+        "優先電子郵件支援"
       ],
-      cta: "Start 14-day trial",
+      cta: "開始 14 天試用",
       href: "/generator",
       popular: true
     },
     {
-      name: "Enterprise",
-      price: "Custom",
+      name: "企業版",
+      price: "客製報價",
       period: "",
-      description: "For teams requiring security and compliance.",
+      description: "適合需要安全合規的企業團隊。",
       features: [
-        "Everything in Pro",
-        "Custom company templates",
-        "SSO / SAML integration",
-        "Zero data retention policy",
-        "Dedicated account manager",
-        "API access",
-        "Custom SLAs"
+        "包含專業版所有功能",
+        "客製化企業範本",
+        "SSO / SAML 整合",
+        "零數據留存政策",
+        "專屬客戶成功經理",
+        "API 存取權限",
+        "客製化 SLA 協議"
       ],
-      cta: "Contact sales",
+      cta: "聯絡銷售團隊",
       href: "#",
       popular: false
     }
@@ -63,12 +63,12 @@ export function Pricing() {
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <Navbar />
-      
+
       <main className="flex-1">
         <section className="py-20 pb-10">
           <div className="container mx-auto px-4 text-center max-w-3xl">
-            <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-6">Simple, transparent pricing</h1>
-            <p className="text-xl text-muted-foreground">Start for free, upgrade when you need more power. Cancel anytime.</p>
+            <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-6">簡單透明的定價</h1>
+            <p className="text-xl text-muted-foreground">免費開始，需要更多時再升級。隨時可以取消。</p>
           </div>
         </section>
 
@@ -76,30 +76,30 @@ export function Pricing() {
           <div className="container mx-auto px-4 max-w-6xl">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-stretch">
               {tiers.map((tier, i) => (
-                <div 
-                  key={i} 
+                <div
+                  key={i}
                   className={`relative flex flex-col p-8 rounded-2xl border ${
-                    tier.popular 
-                      ? "border-primary shadow-lg scale-100 md:scale-105 z-10 bg-card" 
+                    tier.popular
+                      ? "border-primary shadow-lg scale-100 md:scale-105 z-10 bg-card"
                       : "border-border bg-card/50"
                   }`}
                 >
                   {tier.popular && (
                     <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-primary text-primary-foreground px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider">
-                      Most Popular
+                      最受歡迎
                     </div>
                   )}
-                  
+
                   <div className="mb-8">
                     <h3 className="text-2xl font-bold mb-2">{tier.name}</h3>
                     <p className="text-muted-foreground text-sm h-10">{tier.description}</p>
                   </div>
-                  
+
                   <div className="mb-8">
                     <span className="text-5xl font-extrabold">{tier.price}</span>
                     {tier.period && <span className="text-muted-foreground ml-2">{tier.period}</span>}
                   </div>
-                  
+
                   <ul className="space-y-4 mb-8 flex-1">
                     {tier.features.map((feature, j) => (
                       <li key={j} className="flex items-start gap-3 text-sm">
@@ -108,10 +108,10 @@ export function Pricing() {
                       </li>
                     ))}
                   </ul>
-                  
-                  <Link href={tier.href} data-testid={`button-pricing-${tier.name.toLowerCase()}`}>
-                    <Button 
-                      className="w-full h-12 text-base" 
+
+                  <Link href={tier.href} data-testid={`button-pricing-${i}`}>
+                    <Button
+                      className="w-full h-12 text-base"
                       variant={tier.popular ? "default" : "outline"}
                     >
                       {tier.cta}

@@ -8,10 +8,10 @@ export function Navbar() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const navLinks = [
-    { href: "/", label: "Home" },
-    { href: "/features", label: "Features" },
-    { href: "/pricing", label: "Pricing" },
-    { href: "/faq", label: "FAQ" },
+    { href: "/", label: "首頁" },
+    { href: "/features", label: "功能介紹" },
+    { href: "/pricing", label: "定價方案" },
+    { href: "/faq", label: "常見問題" },
   ];
 
   return (
@@ -26,7 +26,6 @@ export function Navbar() {
           </Link>
         </div>
 
-        {/* Desktop Nav */}
         <div className="hidden md:flex items-center gap-6">
           {navLinks.map((link) => (
             <Link
@@ -35,19 +34,18 @@ export function Navbar() {
               className={`text-sm font-medium transition-colors hover:text-primary ${
                 location === link.href ? "text-foreground" : "text-muted-foreground"
               }`}
-              data-testid={`link-nav-${link.label.toLowerCase()}`}
+              data-testid={`link-nav-${link.label}`}
             >
               {link.label}
             </Link>
           ))}
           <div className="flex items-center gap-4 ml-4 pl-4 border-l border-border">
             <Link href="/generator" data-testid="link-nav-try-free">
-              <Button>Try Free</Button>
+              <Button>免費試用</Button>
             </Link>
           </div>
         </div>
 
-        {/* Mobile Nav Toggle */}
         <button
           className="md:hidden p-2 text-foreground"
           onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -57,7 +55,6 @@ export function Navbar() {
         </button>
       </div>
 
-      {/* Mobile Nav Menu */}
       {isMobileMenuOpen && (
         <div className="md:hidden border-t border-border bg-background">
           <div className="container mx-auto px-4 py-4 flex flex-col gap-4">
@@ -69,13 +66,13 @@ export function Navbar() {
                   location === link.href ? "text-foreground" : "text-muted-foreground"
                 }`}
                 onClick={() => setIsMobileMenuOpen(false)}
-                data-testid={`link-mobile-nav-${link.label.toLowerCase()}`}
+                data-testid={`link-mobile-nav-${link.label}`}
               >
                 {link.label}
               </Link>
             ))}
             <Link href="/generator" onClick={() => setIsMobileMenuOpen(false)} data-testid="link-mobile-nav-try-free">
-              <Button className="w-full">Try Free</Button>
+              <Button className="w-full">免費試用</Button>
             </Link>
           </div>
         </div>

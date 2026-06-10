@@ -14,34 +14,34 @@ export function Footer() {
               <span className="font-bold text-lg tracking-tight">Report Factory AI</span>
             </Link>
             <p className="text-sidebar-foreground/70 text-sm max-w-xs">
-              The professional standard for AI-generated business reports. Precise, data-forward, and built for consultants.
+              AI 商業報告生成的專業標準。精準、以數據為核心，專為顧問與分析師打造。
             </p>
           </div>
-          
+
           <div>
-            <h3 className="font-semibold mb-4 text-sidebar-foreground">Product</h3>
+            <h3 className="font-semibold mb-4 text-sidebar-foreground">產品</h3>
             <ul className="space-y-2 text-sm text-sidebar-foreground/70">
-              <li><Link href="/features" className="hover:text-primary transition-colors" data-testid="link-footer-features">Features</Link></li>
-              <li><Link href="/pricing" className="hover:text-primary transition-colors" data-testid="link-footer-pricing">Pricing</Link></li>
-              <li><Link href="/faq" className="hover:text-primary transition-colors" data-testid="link-footer-faq">FAQ</Link></li>
-              <li><Link href="/generator" className="hover:text-primary transition-colors" data-testid="link-footer-generator">Try Generator</Link></li>
+              <li><Link href="/features" className="hover:text-primary transition-colors" data-testid="link-footer-features">功能介紹</Link></li>
+              <li><Link href="/pricing" className="hover:text-primary transition-colors" data-testid="link-footer-pricing">定價方案</Link></li>
+              <li><Link href="/faq" className="hover:text-primary transition-colors" data-testid="link-footer-faq">常見問題</Link></li>
+              <li><Link href="/generator" className="hover:text-primary transition-colors" data-testid="link-footer-generator">立即試用</Link></li>
             </ul>
           </div>
-          
+
           <div>
-            <h3 className="font-semibold mb-4 text-sidebar-foreground">Legal</h3>
+            <h3 className="font-semibold mb-4 text-sidebar-foreground">法律</h3>
             <ul className="space-y-2 text-sm text-sidebar-foreground/70">
-              <li><a href="#" className="hover:text-primary transition-colors" data-testid="link-footer-terms">Terms of Service</a></li>
-              <li><a href="#" className="hover:text-primary transition-colors" data-testid="link-footer-privacy">Privacy Policy</a></li>
-              <li><a href="#" className="hover:text-primary transition-colors" data-testid="link-footer-contact">Contact Us</a></li>
+              <li><a href="#" className="hover:text-primary transition-colors" data-testid="link-footer-terms">服務條款</a></li>
+              <li><a href="#" className="hover:text-primary transition-colors" data-testid="link-footer-privacy">隱私政策</a></li>
+              <li><a href="#" className="hover:text-primary transition-colors" data-testid="link-footer-contact">聯絡我們</a></li>
             </ul>
           </div>
         </div>
-        
+
         <div className="border-t border-sidebar-border mt-12 pt-8 flex flex-col md:flex-row items-center justify-between text-sm text-sidebar-foreground/50">
-          <p>&copy; {new Date().getFullYear()} Report Factory AI. All rights reserved.</p>
+          <p>&copy; {new Date().getFullYear()} Report Factory AI. 保留所有權利。</p>
           <div className="flex items-center gap-4 mt-4 md:mt-0">
-            <span>Built for professionals</span>
+            <span>專為專業人士打造</span>
           </div>
         </div>
       </div>
