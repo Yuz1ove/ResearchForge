@@ -1,0 +1,498 @@
+REPORT FACTORY AI - PRODUCT REFOCUS V3
+
+You are now acting as a Senior Product Architect, AI Systems Designer, UX Strategist, and Cost-Conscious Lead Engineer.
+
+This project is no longer in prototype stage.
+
+The objective is NOT to add more features.
+
+The objective is to transform Report Factory AI from a template generator into a useful report-generation product.
+
+⸻
+
+CRITICAL RULE
+
+Before making any code changes:
+
+Analyze the current system.
+
+Identify what already works.
+
+Reuse existing modules whenever possible.
+
+DO NOT rewrite working systems.
+
+DO NOT rebuild pages.
+
+DO NOT redesign UI.
+
+DO NOT refactor code merely for cleanliness.
+
+DO NOT introduce large architectural changes unless absolutely required.
+
+The goal is maximum product improvement with minimum code changes and minimum credit consumption.
+
+⸻
+
+CURRENT PRODUCT STATUS
+
+Current score:
+
+20~30 / 100
+
+Reason:
+
+The UI is acceptable.
+
+The export system is progressing.
+
+Topic classification is improving.
+
+However the generated content remains template-driven and lacks intelligence.
+
+⸻
+
+PRIMARY PRODUCT PROBLEMS
+
+Problem 1
+
+Topic expansion is still template-based.
+
+Example:
+
+Input:
+
+牛排
+
+Output:
+
+Food-related suggestions
+
+This is acceptable.
+
+However:
+
+The suggestions are still generated through category templates.
+
+The system is not demonstrating real topic understanding.
+
+Goal:
+
+Improve topic intelligence while preserving current implementation whenever possible.
+
+⸻
+
+Problem 2
+
+Content Architecture Engine is fundamentally flawed.
+
+Current behavior:
+
+股票
+
+↓
+
+Research report
+
+↓
+
+Scientific experiment structure
+
+↓
+
+Variables
+
+Hypothesis
+
+Control group
+
+etc.
+
+This is incorrect.
+
+The report structure should depend on the topic domain.
+
+⸻
+
+REQUIRED CONTENT ARCHITECTURE ENGINE
+
+The system must select report structures dynamically.
+
+Example:
+
+Science Fair Report
+
+Structure:
+
+Research Motivation
+
+Research Questions
+
+Hypothesis
+
+Methodology
+
+Results
+
+Discussion
+
+Conclusion
+
+⸻
+
+Business Report
+
+Structure:
+
+Industry Overview
+
+Market Analysis
+
+Competitor Analysis
+
+SWOT
+
+Business Model
+
+Risk Assessment
+
+Future Outlook
+
+⸻
+
+Book Review
+
+Structure:
+
+Summary
+
+Key Ideas
+
+Critical Reflection
+
+Personal Insights
+
+Applications
+
+Conclusion
+
+⸻
+
+Market Research
+
+Structure:
+
+Market Overview
+
+Customer Segments
+
+Competitive Landscape
+
+Trends
+
+Opportunities
+
+Recommendations
+
+⸻
+
+Technology / AI Report
+
+Structure:
+
+Problem Definition
+
+Technology Background
+
+System Design
+
+Implementation
+
+Evaluation
+
+Future Development
+
+⸻
+
+The architecture engine should choose the correct structure automatically based on topic and report type.
+
+This is currently the most important improvement.
+
+⸻
+
+Problem 3
+
+Depth Levels Are Fake
+
+Current system:
+
+High School
+
+90-point Report
+
+Deep Research
+
+generate nearly identical outputs.
+
+This must be fixed.
+
+⸻
+
+REQUIRED DEPTH SYSTEM
+
+Level 1
+
+Submission Ready
+
+Simple structure
+
+Short explanations
+
+Approx 800~1500 words
+
+⸻
+
+Level 2
+
+High Scoring Report
+
+More analysis
+
+More references
+
+Approx 2000~3000 words
+
+⸻
+
+Level 3
+
+Academic Style
+
+Formal language
+
+Citation-heavy
+
+Literature review
+
+Approx 3000~5000 words
+
+⸻
+
+Level 4
+
+Deep Research
+
+Cross-source comparison
+
+Critical analysis
+
+Limitations
+
+Future research
+
+Approx 5000+ words
+
+⸻
+
+The generated structure and content must visibly differ.
+
+Not merely wording changes.
+
+⸻
+
+Problem 4
+
+Too Many Report Styles
+
+Current style system is unnecessarily complex.
+
+Reduce and simplify.
+
+Keep only:
+
+1. Submission Ready
+2. High Scoring Report
+3. Academic Style
+4. Business Consulting Style
+5. Deep Research
+
+No additional styles unless they provide meaningful differences.
+
+⸻
+
+Problem 5
+
+Search Integration Is Missing
+
+Current reports rely primarily on templates.
+
+This causes shallow content.
+
+Design a future-ready search architecture.
+
+DO NOT fully implement expensive APIs yet.
+
+Instead:
+
+Create a lightweight search abstraction layer.
+
+The layer should support future integration with:
+
+* Tavily
+* Google Search
+* SerpAPI
+* Academic sources
+
+without requiring future rewrites.
+
+Only prepare the architecture.
+
+Do not spend credits implementing multiple providers right now.
+
+⸻
+
+Problem 6
+
+Citation System
+
+Current reports often display:
+
+[Please add source]
+
+This is not acceptable.
+
+Design a proper citation pipeline.
+
+Support:
+
+APA
+
+MLA
+
+Harvard
+
+Keep implementation minimal.
+
+Reuse existing code where possible.
+
+⸻
+
+Problem 7
+
+Chart System Is Weak
+
+Current behavior:
+
+Recommend charts.
+
+Goal:
+
+Produce chart-ready output.
+
+Examples:
+
+Table specifications
+
+Chart specifications
+
+Mermaid diagrams
+
+Flowcharts
+
+Data schemas
+
+The user should be able to generate charts directly.
+
+Do not implement image generation.
+
+Only create structured chart outputs.
+
+⸻
+
+Problem 8
+
+Topic Suggestions Are Too Generic
+
+Current examples:
+
+市場機會分析
+
+競爭分析
+
+商業模式
+
+These are generic.
+
+Suggestions should become domain-aware.
+
+Example:
+
+台積電
+
+↓
+
+Advanced semiconductor manufacturing
+
+Geopolitical risk
+
+Foundry competition
+
+AI chip demand
+
+Process node leadership
+
+etc.
+
+⸻
+
+COST CONTROL REQUIREMENTS
+
+Extremely important.
+
+Before changing code:
+
+Search for reusable logic.
+
+Extend existing systems.
+
+Avoid creating new pages.
+
+Avoid new frameworks.
+
+Avoid large refactors.
+
+Avoid file proliferation.
+
+Prefer modifying existing modules.
+
+Prefer adding small focused functions.
+
+Prefer local improvements.
+
+⸻
+
+DELIVERABLES
+
+Before implementing:
+
+Provide a Product Audit Report.
+
+Include:
+
+1. Existing modules
+2. What should remain unchanged
+3. What should be extended
+4. What should be removed
+5. Estimated implementation order
+6. Estimated risk level
+7. Estimated credit cost
+
+Only after presenting the audit should implementation begin.
+
+Do not immediately start rewriting code.
+
+Analyze first.
+
+Think carefully.
+
+Optimize for product quality and credit efficiency.
