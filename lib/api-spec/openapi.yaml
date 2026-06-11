@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: sources
+    description: Source retrieval operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,43 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /search-sources:
+    post:
+      operationId: searchSources
+      tags: [sources]
+      summary: Search sources
+      description: Searches Crossref and Semantic Scholar for academic/web sources related to a research topic.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchSourcesRequest"
+      responses:
+        "200":
+          description: Source search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceSearchResult"
+        "400":
+          description: Invalid search request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Source provider failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "504":
+          description: Source provider timeout
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +72,85 @@ components:
           type: string
       required:
         - status
-
+    SearchSourcesRequest:
+      type: object
+      properties:
+        query:
+          type: string
+          minLength: 1
+      required:
+        - query
+    SourceReviewState:
+      type: string
+      enum:
+        - pending
+        - accepted
+        - rejected
+    SourceRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        authors:
+          type: array
+          items:
+            type: string
+        year:
+          type: integer
+          nullable: true
+        abstract:
+          type: string
+          nullable: true
+        doi:
+          type: string
+          nullable: true
+        url:
+          type: string
+          nullable: true
+        sourceType:
+          type: string
+          enum:
+            - Crossref
+            - Semantic Scholar
+        reviewState:
+          $ref: "#/components/schemas/SourceReviewState"
+        publisher:
+          type: string
+          nullable: true
+        containerTitle:
+          type: string
+          nullable: true
+        accessedAt:
+          type: string
+          nullable: true
+      required:
+        - id
+        - title
+        - authors
+        - year
+        - abstract
+        - doi
+        - url
+        - sourceType
+        - reviewState
+        - publisher
+        - containerTitle
+        - accessedAt
+    SourceSearchResult:
+      type: object
+      properties:
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceRecord"
+      required:
+        - sources
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+        - message

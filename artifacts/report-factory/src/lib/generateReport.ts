@@ -12,24 +12,30 @@
 // All code/comments are English; all user-facing strings are Traditional Chinese.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import {
+  buildBibliography,
+  sourceHasIncompleteMetadata,
+  type BibliographyEntry,
+  type SourceRecord,
+} from "./sourceRecords";
+
 // ─── Form option lists (single source of truth, imported by the UI) ──────────
 
 export const REPORT_TYPES = [
-  "學校研究報告",
-  "科展報告",
-  "實驗報告",
+  "研究報告",
+  "心得報告",
   "專題報告",
-  "讀書心得報告",
+  "實驗報告",
   "商業報告",
-  "市場研究報告",
-  "社會議題報告",
-  "網站／AI／程式報告",
+  "商業／產品分析報告",
+  "讀書報告",
+  "其他",
 ] as const;
 
 export const TARGET_AUDIENCES = [
-  "國中生",
-  "高中生",
-  "大學生",
+  "國中",
+  "高中",
+  "大學",
   "老師",
   "評審",
   "客戶",
@@ -51,12 +57,14 @@ export const REPORT_PURPOSES = [
 ] as const;
 
 export const GENERATION_MODES = [
-  "報告架構",
-  "完整報告",
+  "先建立報告架構",
+  "直接生成完整報告",
+  "只生成資料需求表",
+  "只生成圖表與圖片建議",
+  "只生成品質檢查表",
+  "只重寫指定章節",
   "Eric 研究模式",
   "簡報大綱",
-  "資料需求表",
-  "圖表與圖片建議",
 ] as const;
 
 // Academic level replaces the former "目標讀者 / 報告目的" pair (V3 PART 5).
@@ -67,14 +75,14 @@ export const ACADEMIC_LEVELS = ["國中", "高中", "大學", "專業"] as const
 export function academicToAudience(level: string): string {
   switch (level) {
     case "國中":
-      return "國中生";
+      return "國中";
     case "大學":
-      return "大學生";
+      return "大學";
     case "專業":
       return "評審";
     case "高中":
     default:
-      return "高中生";
+      return "高中";
   }
 }
 
@@ -98,20 +106,24 @@ export const SOURCE_REQUIREMENTS = [
   "需要，並生成參考文獻格式",
 ] as const;
 
-export const CITATION_FORMATS = ["無", "APA", "MLA", "Chicago", "老師指定格式"] as const;
+export const CITATION_FORMATS = ["不需要", "APA", "MLA", "Chicago", "其他"] as const;
 
 export const CHART_REQUIREMENTS = ["需要", "不需要"] as const;
 
 export const REPORT_STYLES = [
-  "高中生可提交",
-  "90 分以上學校報告",
+  "高中生自然報告風格",
+  "90 分以上學校報告風格",
   "學術研究風格",
   "商業顧問風格",
   "口語簡報風格",
-  "深度研究報告",
+  "深度研究報告風格",
 ] as const;
 
 export const REPORT_LENGTHS = ["短版摘要", "一般報告", "完整報告", "深度研究"] as const;
+
+export const FORMAL_TONE_OPTIONS = ["需要", "不需要"] as const;
+export const CONVERSATIONAL_TONE_OPTIONS = ["不需要", "需要"] as const;
+export const OUTPUT_LANGUAGES = ["繁體中文", "英文", "日文", "其他"] as const;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -131,7 +143,17 @@ export interface ReportInput {
   chartRequirement: string;
   style: string;
   length: string;
+  wordCount: string;
+  formalTone: string;
+  conversationalTone: string;
+  specifiedStructure: string;
+  rubric: string;
+  personalStyle: string;
+  supplementalMaterials: string;
+  outputLanguage: string;
+  rewriteSection: string;
   additionalInfo: string;
+  acceptedSources: SourceRecord[];
 }
 
 export type TopicCategory =
@@ -180,6 +202,7 @@ export interface DataRequirementRow {
 export interface QualityCheck {
   label: string;
   passed: boolean;
+  reason?: string;
 }
 
 export interface SlideItem {
@@ -220,6 +243,8 @@ export interface ReportMeta {
   versionLabel: string;
   completeness: number;
   suggestedAdditions: string[];
+  acceptedSources: SourceRecord[];
+  bibliography: BibliographyEntry[];
 }
 
 export interface GeneratedReport {
@@ -249,6 +274,64 @@ function wantsReferences(input: ReportInput): boolean {
   return input.sourceRequirement === "需要，並生成參考文獻格式";
 }
 
+function hasAcceptedSources(input: ReportInput): boolean {
+  return input.acceptedSources.some((source) => source.reviewState === "accepted");
+}
+
+function hasUserSources(input: ReportInput): boolean {
+  if (hasAcceptedSources(input)) return true;
+  const text = `${input.supplementalMaterials}\n${input.additionalInfo}`;
+  return /https?:\/\/|doi|DOI|作者|出版社|政府|期刊|論文|資料來源|參考/.test(text);
+}
+
+function userMaterialLines(input: ReportInput): string[] {
+  const lines: string[] = [];
+  if (input.wordCount.trim()) lines.push(`字數需求：${input.wordCount.trim()}`);
+  if (input.specifiedStructure.trim()) lines.push(`指定段落架構：${input.specifiedStructure.trim()}`);
+  if (input.rubric.trim()) lines.push(`評分標準或檢核表：${input.rubric.trim()}`);
+  if (input.personalStyle.trim()) lines.push(`個人寫作風格要求：${input.personalStyle.trim()}`);
+  if (input.supplementalMaterials.trim()) lines.push(`使用者補充資料或參考來源：${input.supplementalMaterials.trim()}`);
+  if (input.rewriteSection.trim()) lines.push(`指定重寫章節：${input.rewriteSection.trim()}`);
+  if (input.additionalInfo.trim()) lines.push(`其他補充資料：${input.additionalInfo.trim()}`);
+  return lines;
+}
+
+type NormalizedMode =
+  | "structure"
+  | "full"
+  | "data"
+  | "charts"
+  | "quality"
+  | "rewrite"
+  | "eric"
+  | "slides";
+
+function normalizeMode(mode: string): NormalizedMode {
+  switch (mode) {
+    case "直接生成完整報告":
+    case "完整報告":
+      return "full";
+    case "只生成資料需求表":
+    case "資料需求表":
+      return "data";
+    case "只生成圖表與圖片建議":
+    case "圖表與圖片建議":
+      return "charts";
+    case "只生成品質檢查表":
+      return "quality";
+    case "只重寫指定章節":
+      return "rewrite";
+    case "Eric 研究模式":
+      return "eric";
+    case "簡報大綱":
+      return "slides";
+    case "先建立報告架構":
+    case "報告架構":
+    default:
+      return "structure";
+  }
+}
+
 // ─── Topic category detection ────────────────────────────────────────────────
 
 export function detectTopicCategory(
@@ -265,7 +348,7 @@ export function detectTopicCategory(
   if (
     /[《〈].+[》〉]/.test(tt) ||
     has(tt, ["心得", "讀後", "讀書"]) ||
-    has(rt, ["讀書心得"]) ||
+    has(rt, ["讀書心得", "讀書", "心得"]) ||
     has(pp, ["讀書心得"])
   ) {
     return "讀書心得";
@@ -1674,7 +1757,7 @@ function selectStructure(category: TopicCategory, reportType: string, purpose: s
     return "experiment";
   }
   if (has(reportType, ["市場研究"]) || has(purpose, ["市場研究", "市場分析"])) return "market";
-  if (has(reportType, ["讀書心得"]) || has(purpose, ["讀書心得"]) || category === "讀書心得") {
+  if (has(reportType, ["讀書心得", "讀書", "心得"]) || has(purpose, ["讀書心得", "讀書", "心得"]) || category === "讀書心得") {
     return "book";
   }
   if (has(reportType, ["商業"]) || has(purpose, ["商業分析"]) || category === "商業／產品分析") {
@@ -1730,41 +1813,48 @@ function buildDomainSpine(kind: StructureKind, input: ReportInput, content: Cate
   switch (kind) {
     case "experiment":
       raw = [
-        { heading: "研究背景", blocks: [p(content.background)] },
-        { heading: "研究動機", blocks: [p(content.motivation)] },
-        { heading: "研究目的", blocks: [l(content.purpose)] },
-        { heading: "研究問題", blocks: [l(content.questions)] },
-        ...(content.hypothesis.length > 0 ? [{ heading: "研究假設", blocks: [l(content.hypothesis)] }] : []),
+        { heading: "實驗名稱", blocks: [p(t)] },
+        { heading: "實驗目的", blocks: [l(content.purpose)] },
         {
-          heading: "文獻探討",
+          heading: "實驗原理",
           blocks: [
             p(`整理與「${t}」相關的科學原理、定義與既有研究方向：`),
             l(content.literature),
             ...(needsSource(input) ? [{ type: "note", text: INSERT_SOURCE_NOTE } as ContentBlock] : []),
           ],
         },
-        { heading: "研究方法", blocks: [p(content.method)] },
-        { heading: "研究結果與分析", blocks: [p(content.analysis)] },
+        { heading: "實驗器材", blocks: [p(`列出進行「${t}」所需的器材、材料、試劑與量測工具。此處需要補充資料。`)] },
+        {
+          heading: "實驗變因",
+          blocks: [
+            l([
+              "操作變因：請填入本實驗主動改變的條件。",
+              "應變變因：請填入觀察或量測的結果。",
+              "控制變因：請列出需固定的條件。",
+            ]),
+          ],
+        },
+        { heading: "實驗步驟", blocks: [p(content.method)] },
+        { heading: "實驗結果", blocks: [p("此處需要補充實際觀察結果與原始紀錄。")] },
+        { heading: "數據整理", blocks: [p(content.analysis)] },
+        { heading: "圖表分析", blocks: [suggestionsBlock("圖表", content.charts)] },
         { heading: "討論", blocks: [p(content.discussion)] },
-        { heading: "研究限制", blocks: [l(content.limitations)] },
         { heading: "結論", blocks: [p(content.conclusion)] },
+        { heading: "誤差來源", blocks: [l(content.limitations)] },
+        { heading: "改進方法", blocks: [l(content.futureWork)] },
       ];
       break;
     case "business":
       raw = [
-        {
-          heading: "產業概況",
-          blocks: [p(`說明「${t}」所處產業的範圍、規模與發展階段，以及目前的市場成熟度與主要參與者。〔建議補充產業數據，${SOURCE_NOTE}〕`)],
-        },
-        {
-          heading: "市場分析",
-          blocks: [p(`分析「${t}」面對的市場需求、規模與成長性，以及主要的目標客群與使用情境。`), l(content.literature)],
-        },
+        { heading: "執行摘要", blocks: [p(content.summary)] },
+        { heading: "研究背景", blocks: [p(content.background)] },
+        { heading: "市場現況", blocks: [p(`說明「${t}」所處市場的範圍、規模、成長性與主要參與者。〔建議補充市場數據，${SOURCE_NOTE}〕`)] },
+        { heading: "目標客群", blocks: [p(`描述「${t}」的主要使用者、需求、使用情境與決策者。`), l(content.purpose)] },
         { heading: "競品分析", blocks: [p(content.analysis)] },
         {
-          heading: "SWOT 分析",
+          heading: "產品定位",
           blocks: [
-            p(`以 SWOT 架構評估「${t}」的內部條件與外部環境：`),
+            p(`以 SWOT 與價值主張評估「${t}」的差異化定位：`),
             l([
               `優勢（Strengths）：〔填入「${t}」的內部優勢〕`,
               "劣勢（Weaknesses）：〔填入內部不足或限制〕",
@@ -1773,12 +1863,15 @@ function buildDomainSpine(kind: StructureKind, input: ReportInput, content: Cate
             ]),
           ],
         },
+        { heading: "商業模式", blocks: [p(`說明「${t}」的價值主張、收入來源、成本結構、通路與關鍵資源。`)] },
+        { heading: "成本與資源需求", blocks: [p("列出人力、時間、技術、營運與預算需求。此處需要補充資料。")] },
+        { heading: "風險分析", blocks: [l(content.limitations)] },
+        { heading: "執行步驟", blocks: [l(content.futureWork)] },
         {
-          heading: "商業模式",
-          blocks: [p(`說明「${t}」的價值主張、收入來源與成本結構（如訂閱、廣告、抽成或銷售），以及關鍵資源與通路。`)],
+          heading: "預期效益",
+          blocks: [p(`說明「${t}」預期帶來的效率、品質、營收、品牌或決策效益。實際效益需以後續數據驗證。`)],
         },
-        { heading: "風險評估", blocks: [l(content.limitations)] },
-        { heading: "未來展望", blocks: [p(content.conclusion), l(content.futureWork)] },
+        { heading: "結論與建議", blocks: [p(content.conclusion)] },
       ];
       break;
     case "market":
@@ -1802,20 +1895,14 @@ function buildDomainSpine(kind: StructureKind, input: ReportInput, content: Cate
       break;
     case "book":
       raw = [
-        {
-          heading: "內容摘要",
-          blocks: [p(`概述「${t}」的主要內容、章節脈絡與作者想傳達的核心訊息。`)],
-        },
-        { heading: "重點觀念", blocks: [l(content.purpose)] },
-        { heading: "批判與反思", blocks: [p(content.discussion)] },
-        {
-          heading: "個人啟發",
-          blocks: [p(`說明閱讀「${t}」後，在想法、價值觀或行為上的改變與收穫。`)],
-        },
-        {
-          heading: "應用與行動",
-          blocks: [p(`說明如何將「${t}」的觀念實際運用在學習、生活或工作中。`), l(content.futureWork)],
-        },
+        { heading: "書名與作者", blocks: [p(`書名或主題：${t}。作者、出版社與出版年份：此處需要補充資料。`)] },
+        { heading: "作者介紹", blocks: [p("請根據書籍或可信來源補充作者背景，不要捏造作者生平。")] },
+        { heading: "書籍大意", blocks: [p(`概述「${t}」的主要內容、章節脈絡與作者想傳達的核心訊息。`)] },
+        { heading: "重要內容整理", blocks: [l(content.purpose)] },
+        { heading: "印象最深的段落", blocks: [p("請摘錄或描述印象最深的段落，並說明原因。若未提供原文，請標示此處需要補充資料。")] },
+        { heading: "個人心得", blocks: [p(content.discussion)] },
+        { heading: "與生活經驗的連結", blocks: [p(`說明「${t}」如何連結到個人的學習、家庭、同儕互動或生活經驗。`)] },
+        { heading: "批判與反思", blocks: [p("提出自己同意與不同意的地方，避免只做情節摘要。")] },
         { heading: "結論", blocks: [p(content.conclusion)] },
       ];
       break;
@@ -1921,11 +2008,14 @@ function buildDomainSpine(kind: StructureKind, input: ReportInput, content: Cate
 
 function styleNote(style: string, audience: string): string {
   const map: Record<string, string> = {
+    高中生自然報告風格: `語氣自然、用詞淺顯，適合${audience}閱讀並可直接提交給老師。`,
     高中生可提交: `語氣自然、用詞淺顯，適合${audience}閱讀並可直接提交給老師。`,
+    "90 分以上學校報告風格": `結構完整、含研究問題、方法、圖表與研究限制，適合正式評分。`,
     "90 分以上學校報告": `結構完整、含研究問題、方法、圖表與研究限制，適合正式評分。`,
     學術研究風格: `用詞正式、加強文獻探討與研究方法，並含限制與未來研究。`,
     商業顧問風格: `以決策為導向，聚焦市場、成本、風險與執行，結論可支持行動。`,
     口語簡報風格: `句子簡短、重點清楚，適合口頭報告，可轉為簡報講稿。`,
+    深度研究報告風格: `結構詳盡、分析深入，並需要真實資料來源補強。`,
     深度研究報告: `結構詳盡、分析深入，並需要真實資料來源補強。`,
   };
   return map[style] ?? `語氣設定為「${style}」。`;
@@ -1937,11 +2027,14 @@ function styleNote(style: string, audience: string): string {
  */
 function styleLead(style: string): string {
   const map: Record<string, string> = {
+    高中生自然報告風格: "（以高中生自然報告風格撰寫，保留個人理解與清楚說明。）",
     高中生可提交: "（以淺顯、口語化的方式說明，方便理解與直接提交。）",
+    "90 分以上學校報告風格": "（以嚴謹、完整的學術結構撰寫，強調研究問題、方法與限制。）",
     "90 分以上學校報告": "（以嚴謹、完整的學術結構撰寫，強調研究問題、方法與限制。）",
     學術研究風格: "（採正式學術語氣，加重文獻探討、研究方法與理論依據。）",
     商業顧問風格: "（以決策導向撰寫，聚焦市場、成本、風險與可執行建議。）",
     口語簡報風格: "（以精簡、條列式重點呈現，適合口頭報告與簡報講稿。）",
+    深度研究報告風格: "（以深入分析撰寫，延伸比較、數據與多元觀點。）",
     深度研究報告: "（以深入分析撰寫，延伸比較、數據與多元觀點。）",
   };
   return map[style] ?? "";
@@ -2009,22 +2102,50 @@ function citationTemplate(format: string): string {
       return "作者。〈文章標題〉。《網站或出版單位名稱》，年份，網址。";
     case "Chicago":
       return "作者。「文章標題。」網站或出版單位名稱。年份。網址。";
-    case "老師指定格式":
-      return "請依老師指定的引用格式填寫（格式範例待老師提供）。";
+    case "其他":
+      return "請依老師或單位指定格式填寫（格式範例待補）。";
     default:
       return "";
   }
 }
 
 function buildReferenceBlocks(input: ReportInput): ContentBlock[] {
-  if (!needsSource(input)) return [];
+  const bibliography = buildBibliography(input.acceptedSources, input.citationFormat || "APA");
+  if (!needsSource(input) && bibliography.length === 0) return [];
+
+  if (bibliography.length > 0) {
+    const incompleteCount = bibliography.filter((entry) => entry.incomplete).length;
+    return [
+      {
+        type: "paragraph",
+        text: `參考文獻格式（${input.citationFormat === "不需要" ? "APA" : input.citationFormat || "APA"}）：`,
+      },
+      {
+        type: "list",
+        items: bibliography.map((entry) => entry.text),
+      },
+      ...(incompleteCount > 0
+        ? [
+            {
+              type: "note",
+              text: `${incompleteCount} 筆已接受來源的 metadata 不完整；已標示 incomplete，請補齊作者、年份、標題或 DOI／網址後再正式提交。`,
+            } as ContentBlock,
+          ]
+        : []),
+      {
+        type: "paragraph",
+        text: "資料來源可信度分級：A＝政府、官方、學術論文；B＝大學、研究機構、出版社；C＝新聞媒體、專業網站；D＝部落格、論壇、未知來源。",
+      },
+    ];
+  }
+
   const blocks: ContentBlock[] = [
     {
       type: "note",
       text: "此處需要補充真實資料來源，建議使用官方網站、政府資料、學術論文、期刊或可信機構資料。為避免錯誤，本系統不自動產生來源，請自行查證後填入。",
     },
   ];
-  if (wantsReferences(input) && input.citationFormat !== "無") {
+  if (wantsReferences(input) && input.citationFormat !== "不需要") {
     blocks.push({
       type: "paragraph",
       text: `參考文獻格式（${input.citationFormat}）：`,
@@ -2044,6 +2165,10 @@ function buildReferenceBlocks(input: ReportInput): ContentBlock[] {
       items: ["資料來源待補", "此處需要補充官方資料或學術資料", "建議查詢政府網站、學術論文、期刊、出版社或可信機構資料"],
     });
   }
+  blocks.push({
+    type: "paragraph",
+    text: "資料來源可信度分級：A＝政府、官方、學術論文；B＝大學、研究機構、出版社；C＝新聞媒體、專業網站；D＝部落格、論壇、未知來源。",
+  });
   return blocks;
 }
 
@@ -2150,42 +2275,63 @@ function buildDataRows(topic: string, kind: StructureKind): DataRequirementRow[]
 // ─── Quality checklist ───────────────────────────────────────────────────────
 
 function buildQualityChecks(input: ReportInput, content: CategoryContent): QualityCheck[] {
-  const checks: QualityCheck[] = [
-    { label: "具備清楚的報告主題", passed: chars(input.topic) > 0 },
-    { label: "包含摘要或前言", passed: true },
-    { label: "說明研究背景", passed: content.background.length > 0 },
-    { label: "具備明確研究目的", passed: content.purpose.length > 0 },
-    { label: "包含研究問題", passed: content.questions.length > 0 },
-    { label: "有研究方法或分析方式", passed: content.method.length > 0 },
-    { label: "有結論", passed: content.conclusion.length > 0 },
-    { label: "可作為後續修改基礎", passed: true },
+  const sourcesReady = !needsSource(input) || hasUserSources(input);
+  const chartsReady = input.chartRequirement !== "需要" || content.charts.length > 0 || content.images.length > 0 || content.flowcharts.length > 0;
+  const wordCountReady = !input.wordCount.trim() || normalizeMode(input.mode) !== "structure";
+  const readerReady = Boolean(input.targetAudience || input.academicLevel);
+
+  return [
+    {
+      label: "是否符合主題",
+      passed: chars(input.topic) > 0,
+      reason: chars(input.topic) > 0 ? undefined : "尚未輸入主題。",
+    },
+    {
+      label: "是否架構清楚",
+      passed: content.customSections.length > 0,
+      reason: content.customSections.length > 0 ? undefined : "尚未建立可用章節架構。",
+    },
+    {
+      label: "是否有研究深度",
+      passed: content.questions.length > 0 && content.method.length > 0,
+      reason: content.questions.length > 0 && content.method.length > 0 ? undefined : "需要補充研究問題或方法。",
+    },
+    {
+      label: "是否有資料來源",
+      passed: sourcesReady,
+      reason: sourcesReady ? undefined : "使用者尚未提供真實來源；目前只能標示資料來源待補。",
+    },
+    {
+      label: "是否有圖表建議",
+      passed: chartsReady,
+      reason: chartsReady ? undefined : "已選擇需要圖表，但目前缺少可用圖表或圖片建議。",
+    },
+    {
+      label: "是否有結論與反思",
+      passed: content.conclusion.length > 0 && (content.futureWork.length > 0 || content.discussion.length > 0),
+      reason: content.conclusion.length > 0 ? undefined : "尚未形成結論。",
+    },
+    {
+      label: "是否語氣一致",
+      passed: Boolean(input.style),
+      reason: input.style ? undefined : "尚未指定報告風格。",
+    },
+    {
+      label: "是否有錯字或格式錯誤",
+      passed: false,
+      reason: "目前為本地模擬生成，仍需人工校對錯字、格式與專有名詞。",
+    },
+    {
+      label: "是否符合指定字數",
+      passed: wordCountReady,
+      reason: wordCountReady ? undefined : "架構模式尚未撰寫完整正文，無法保證字數。",
+    },
+    {
+      label: "是否符合指定讀者程度",
+      passed: readerReady,
+      reason: readerReady ? undefined : "尚未指定使用對象或學術程度。",
+    },
   ];
-
-  if (input.chartRequirement === "需要") {
-    checks.push({ label: "已規劃圖表呈現", passed: content.charts.length > 0 });
-    checks.push({ label: "已規劃圖片或流程圖", passed: content.images.length > 0 || content.flowcharts.length > 0 });
-  }
-
-  if (needsSource(input)) {
-    checks.push({ label: "已標示資料來源需求", passed: true });
-    checks.push({ label: "已提醒補充真實資料來源", passed: true });
-    checks.push({ label: "已提供參考文獻格式", passed: wantsReferences(input) && input.citationFormat !== "無" });
-  }
-
-  if (input.mode === "完整報告") {
-    checks.push({ label: "段落完整", passed: true });
-    checks.push({ label: "內容具備分析", passed: content.analysis.length > 0 });
-    checks.push({ label: "結論不是單純重複前文", passed: true });
-    checks.push({ label: "有研究限制與未來建議", passed: content.limitations.length > 0 && content.futureWork.length > 0 });
-  }
-
-  if (input.additionalInfo.trim()) {
-    checks.push({ label: "已納入老師要求／補充資料", passed: true });
-  } else {
-    checks.push({ label: "已納入老師要求／補充資料", passed: false });
-  }
-
-  return checks;
 }
 
 // ─── Suggestion block helper ─────────────────────────────────────────────────
@@ -2195,12 +2341,13 @@ function suggestionsBlock(kind: "圖表" | "圖片" | "流程圖", list: Suggest
 }
 
 function additionalInfoSection(input: ReportInput): ReportSection | null {
-  if (!input.additionalInfo.trim()) return null;
+  const lines = userMaterialLines(input);
+  if (lines.length === 0) return null;
   return {
-    heading: "補充資料重點（已優先納入）",
+    heading: "使用者需求與補充資料（已優先納入）",
     blocks: [
-      { type: "note", text: "以下為你提供的補充資料／老師要求／評分標準，已在本報告中優先納入並反映：" },
-      { type: "paragraph", text: input.additionalInfo.trim() },
+      { type: "note", text: "以下為你提供的字數、架構、評分標準、寫作風格與來源資料，後續撰寫需逐項對應。" },
+      { type: "list", items: lines },
       { type: "note", text: "撰寫時請確認上述每一項要求都已對應到報告的相關段落。" },
     ],
   };
@@ -2256,6 +2403,105 @@ function applyStyleAndLength(sections: ReportSection[], input: ReportInput): Rep
 
 // ─── Mode builders ───────────────────────────────────────────────────────────
 
+function buildFiveStepSection(input: ReportInput, content: CategoryContent, kind: StructureKind): ReportSection {
+  return {
+    heading: "五步驟生成流程",
+    blocks: [
+      {
+        type: "list",
+        items: [
+          `Step 1：需求確認｜主題「${input.topic}」、類型「${input.reportType}」、對象「${input.targetAudience}」、風格「${input.style}」。`,
+          `Step 2：報告架構設計｜採用「${frameworkLabel(kind)}」，先建立章節與研究問題，不直接硬寫全文。`,
+          `Step 3：資料需求表｜列出必要資料、可信來源與圖表數據；缺資料處標示「此處需要補充資料」。`,
+          `Step 4：正式撰寫｜使用確認後的架構與真實來源撰寫正文；目前模式為「${input.mode}」。`,
+          `Step 5：品質檢查｜完成後逐項檢查主題、架構、資料來源、圖表、結論、語氣、字數與讀者程度。`,
+        ],
+      },
+      {
+        type: "note",
+        text:
+          normalizeMode(input.mode) === "full"
+            ? "你選擇直接生成完整報告，因此系統會同時輸出正文草稿與檢查提醒。"
+            : "目前先輸出規劃與資料需求，避免在資料不足時直接產生不可靠的完整報告。",
+      },
+    ],
+  };
+}
+
+function buildSourceSafetySection(input: ReportInput): ReportSection {
+  const hasSources = hasUserSources(input);
+  return {
+    heading: "資料來源與引用安全規則",
+    blocks: [
+      {
+        type: "note",
+        text: "本工具只會把你接受的搜尋結果或你貼上的來源線索納入引用規劃；未接受或遭拒絕的來源不得進入參考文獻。若 metadata 不完整，系統不得捏造作者、年份、文章名稱或網址。",
+      },
+      {
+        type: "list",
+        items: [
+          hasSources ? "已偵測到已接受來源或使用者貼上的來源線索；仍需逐一人工查證。" : "目前沒有可驗證來源，只能輸出「資料來源待補」「來源待確認」「此處需要補充資料」。",
+          "APA、MLA、Chicago 或其他引用格式只能根據使用者提供的來源格式化，不可假造來源。",
+          "每個重要事實若沒有來源，請標示「此處需要補充資料」。",
+          "可信度 A：政府、官方、學術論文；B：大學、研究機構、出版社；C：新聞媒體、專業網站；D：部落格、論壇、未知來源。",
+        ],
+      },
+    ],
+  };
+}
+
+function buildQualityOnlySections(input: ReportInput, content: CategoryContent): ReportSection[] {
+  return [
+    {
+      heading: "品質檢查表",
+      blocks: [{ type: "quality", checks: buildQualityChecks(input, content) }],
+    },
+    buildSourceSafetySection(input),
+  ];
+}
+
+function buildRewriteSections(input: ReportInput, content: CategoryContent, kind: StructureKind): ReportSection[] {
+  const target = input.rewriteSection.trim() || "尚未指定章節";
+  return [
+    {
+      heading: "指定章節重寫規劃",
+      blocks: [
+        {
+          type: "paragraph",
+          text: `重寫目標：${target}。請先貼上原章節內容或在補充資料區提供要改寫的段落；若沒有原文，系統只能提供重寫方向，不會假裝已完成改寫。`,
+        },
+        {
+          type: "list",
+          items: [
+            `維持主題「${input.topic}」與架構「${frameworkLabel(kind)}」。`,
+            `語氣依「${input.style}」調整。`,
+            "補足缺少的資料來源標示，沒有來源的事實需標示「此處需要補充資料」。",
+            "改寫後保留個人寫作風格與評分標準要求。",
+          ],
+        },
+      ],
+    },
+    {
+      heading: "可直接使用的重寫提示",
+      blocks: [
+        {
+          type: "paragraph",
+          text: [
+            `請將下列章節改寫為「${input.style}」，輸出語言為「${input.outputLanguage || "繁體中文"}」。`,
+            `報告主題：${input.topic}`,
+            `指定章節：${target}`,
+            `字數需求：${input.wordCount || "未指定"}`,
+            `評分標準：${input.rubric || "未提供"}`,
+            `原文或補充資料：${input.supplementalMaterials || input.additionalInfo || "此處需要補充資料"}`,
+            "請勿新增未提供的作者、年份、文章名稱或網址；缺來源處標示「來源待確認」。",
+          ].join("\n"),
+        },
+      ],
+    },
+    buildSourceSafetySection(input),
+  ];
+}
+
 function buildStructureSections(
   input: ReportInput,
   content: CategoryContent,
@@ -2264,6 +2510,7 @@ function buildStructureSections(
   const sections: ReportSection[] = [];
   const addInfo = additionalInfoSection(input);
 
+  sections.push(buildFiveStepSection(input, content, kind));
   sections.push({ heading: "摘要方向", blocks: [{ type: "paragraph", text: content.summaryDirection }] });
   if (addInfo) sections.push(addInfo);
 
@@ -2282,6 +2529,7 @@ function buildStructureSections(
 
   const refBlocks = buildReferenceBlocks(input);
   if (refBlocks.length > 0) sections.push({ heading: "參考資料與來源", blocks: refBlocks });
+  sections.push(buildSourceSafetySection(input));
 
   return sections;
 }
@@ -2294,6 +2542,7 @@ function buildFullSections(
   const sections: ReportSection[] = [];
   const addInfo = additionalInfoSection(input);
 
+  sections.push(buildFiveStepSection(input, content, kind));
   sections.push({ heading: "摘要", blocks: [{ type: "paragraph", text: content.summary }] });
   if (addInfo) sections.push(addInfo);
 
@@ -2309,12 +2558,14 @@ function buildFullSections(
     heading: "參考文獻",
     blocks: refBlocks.length > 0 ? refBlocks : [{ type: "note", text: "未要求資料來源；如需提交正式報告，建議補充真實參考文獻。" }],
   });
+  sections.push(buildSourceSafetySection(input));
 
   return sections;
 }
 
 function buildSlideSections(input: ReportInput, content: CategoryContent): ReportSection[] {
   const t = input.topic;
+  const bibliography = buildBibliography(input.acceptedSources, input.citationFormat || "APA");
   const slides: SlideItem[] = [
     { page: 1, title: "封面", points: [`題目：${t}`, `報告類型：${input.reportType}`, `對象：${input.targetAudience}`], visual: "封面圖或主題代表圖片" },
     { page: 2, title: "研究背景", points: [content.background], visual: "背景情境圖或概念圖" },
@@ -2325,7 +2576,16 @@ function buildSlideSections(input: ReportInput, content: CategoryContent): Repor
     { page: 7, title: "圖表頁", points: content.charts.map((c) => `${c.title}：${c.purpose}`), visual: "對應圖表" },
     { page: 8, title: "討論", points: [content.discussion], visual: "對照或比較圖" },
     { page: 9, title: "結論", points: [content.conclusion], visual: "重點總結圖示" },
-    { page: 10, title: "參考資料", points: needsSource(input) ? ["資料來源待補", "建議補充真實官方或學術資料"] : ["（本次未要求資料來源）"], visual: "參考資料列表" },
+    {
+      page: 10,
+      title: "參考資料",
+      points: bibliography.length
+        ? bibliography.map((entry) => entry.text)
+        : needsSource(input)
+          ? ["資料來源待補", "建議補充真實官方或學術資料"]
+          : ["（本次未要求資料來源）"],
+      visual: "參考資料列表",
+    },
   ];
   return [{ heading: "簡報大綱", blocks: [{ type: "slides", slides }] }];
 }
@@ -2482,28 +2742,34 @@ function buildEricSections(
 
 function computeMeta(input: ReportInput, category: TopicCategory, content: CategoryContent): ReportMeta {
   const ls = lengthSpec(input.length);
+  const mode = normalizeMode(input.mode);
 
-  const modeBase: Record<string, { label: string; base: number }> = {
-    報告架構: { label: "報告架構草稿", base: 40 },
-    完整報告: { label: "完整報告草稿", base: 80 },
-    "Eric 研究模式": { label: "研究規劃藍圖", base: 60 },
-    簡報大綱: { label: "簡報大綱", base: 55 },
-    資料需求表: { label: "資料需求表", base: 35 },
-    圖表與圖片建議: { label: "圖表與圖片建議", base: 45 },
+  const modeBase: Record<NormalizedMode, { label: string; base: number }> = {
+    structure: { label: "五步驟報告架構草稿", base: 45 },
+    full: { label: "完整報告草稿", base: 80 },
+    data: { label: "資料需求表", base: 35 },
+    charts: { label: "圖表與圖片建議", base: 45 },
+    quality: { label: "品質檢查表", base: 30 },
+    rewrite: { label: "指定章節重寫規劃", base: 42 },
+    eric: { label: "研究規劃藍圖", base: 60 },
+    slides: { label: "簡報大綱", base: 55 },
   };
-  const m = modeBase[input.mode] ?? modeBase["報告架構"];
+  const m = modeBase[mode];
 
   // Combine mode base with a small nudge from length and additional info.
   let completeness = Math.round((m.base + ls.completeness) / 2);
-  if (input.additionalInfo.trim()) completeness += 5;
+  if (userMaterialLines(input).length > 0) completeness += 5;
+  if (hasAcceptedSources(input)) completeness += 6;
+  if (input.acceptedSources.some((source) => sourceHasIncompleteMetadata(source))) completeness -= 3;
   if (input.chartRequirement === "需要") completeness += 2;
   // Without real sources we cap below "finished".
-  completeness = Math.min(completeness, 88);
+  completeness = Math.min(completeness, hasAcceptedSources(input) ? 92 : 88);
 
   const suggested: string[] = [];
   if (needsSource(input)) suggested.push("資料來源");
   suggested.push("統計數據", "案例", "圖表資料");
-  if (!input.additionalInfo.trim()) suggested.push("個人觀點", "老師評分標準");
+  if (!input.personalStyle.trim()) suggested.push("個人觀點");
+  if (!input.rubric.trim()) suggested.push("老師評分標準");
 
   return {
     title: `《${input.topic}》${input.reportType}`,
@@ -2511,6 +2777,8 @@ function computeMeta(input: ReportInput, category: TopicCategory, content: Categ
     versionLabel: m.label,
     completeness,
     suggestedAdditions: suggested,
+    acceptedSources: input.acceptedSources,
+    bibliography: buildBibliography(input.acceptedSources, input.citationFormat || "APA"),
   };
 }
 
@@ -2523,48 +2791,58 @@ function computeMeta(input: ReportInput, category: TopicCategory, content: Categ
  */
 export function generateReport(input: ReportInput): GeneratedReport {
   const topic = input.topic.trim();
+  const mode = normalizeMode(input.mode);
+  const safeInput: ReportInput = isShortTopic(topic) && mode === "full"
+    ? { ...input, mode: "先建立報告架構" }
+    : input;
   // V3: an explicit domain override (set in the UI) wins over AI detection.
-  const override = input.domainOverride?.trim();
+  const override = safeInput.domainOverride?.trim();
   const category: TopicCategory =
     override && (TOPIC_CATEGORIES as readonly string[]).includes(override)
       ? (override as TopicCategory)
-      : detectTopicCategory(topic, input.reportType, input.purpose);
+      : detectTopicCategory(topic, safeInput.reportType, safeInput.purpose);
   const content = buildCategoryContent(topic, category);
-  const kind = selectStructure(category, input.reportType, input.purpose);
-  const meta = computeMeta(input, category, content);
+  const kind = selectStructure(category, safeInput.reportType, safeInput.purpose);
+  const meta = computeMeta(safeInput, category, content);
 
   let sections: ReportSection[];
-  switch (input.mode) {
-    case "完整報告":
-      sections = buildFullSections(input, content, kind);
+  switch (normalizeMode(safeInput.mode)) {
+    case "full":
+      sections = buildFullSections(safeInput, content, kind);
       break;
-    case "Eric 研究模式":
-      sections = buildEricSections(input, content, kind, category);
+    case "eric":
+      sections = buildEricSections(safeInput, content, kind, category);
       break;
-    case "簡報大綱":
-      sections = buildSlideSections(input, content);
+    case "slides":
+      sections = buildSlideSections(safeInput, content);
       break;
-    case "資料需求表":
-      sections = buildDataTableSections(input, kind);
+    case "data":
+      sections = buildDataTableSections(safeInput, kind);
       break;
-    case "圖表與圖片建議":
-      sections = buildChartImageSections(input, content);
+    case "charts":
+      sections = buildChartImageSections(safeInput, content);
+      break;
+    case "quality":
+      sections = buildQualityOnlySections(safeInput, content);
+      break;
+    case "rewrite":
+      sections = buildRewriteSections(safeInput, content, kind);
       break;
     default:
-      sections = buildStructureSections(input, content, kind);
+      sections = buildStructureSections(safeInput, content, kind);
   }
 
   // Style + length materially shape narrative output (summary lead, trimming,
   // deep-research prompts). Skip pure-table/suggestion modes that have no summary.
-  if (input.mode === "報告架構" || input.mode === "完整報告" || input.mode === "簡報大綱") {
-    sections = applyStyleAndLength(sections, input);
+  if (["structure", "full", "slides"].includes(normalizeMode(safeInput.mode))) {
+    sections = applyStyleAndLength(sections, safeInput);
   }
 
   // Quality checklist is appended for narrative modes.
-  if (input.mode === "報告架構" || input.mode === "完整報告") {
+  if (["structure", "full"].includes(normalizeMode(safeInput.mode))) {
     sections.push({
       heading: "報告品質檢查表",
-      blocks: [{ type: "quality", checks: buildQualityChecks(input, content) }],
+      blocks: [{ type: "quality", checks: buildQualityChecks(safeInput, content) }],
     });
   }
 
@@ -2572,7 +2850,7 @@ export function generateReport(input: ReportInput): GeneratedReport {
   sections.push({
     heading: "寫作風格提醒",
     blocks: [
-      { type: "note", text: `${styleNote(input.style, input.targetAudience)}${lengthSpec(input.length).remind ? "（深度研究需補充真實資料來源、統計與參考文獻。）" : ""}` },
+      { type: "note", text: `${styleNote(safeInput.style, safeInput.targetAudience)}${lengthSpec(safeInput.length).remind ? "（深度研究需補充真實資料來源、統計與參考文獻。）" : ""}` },
     ],
   });
 
@@ -2581,7 +2859,9 @@ export function generateReport(input: ReportInput): GeneratedReport {
   if (isShortTopic(topic)) {
     report.shortTopic = {
       message:
-        "你的主題較簡短，系統已先產生基礎版本。若要提高報告品質，建議補充研究方向、老師要求、資料來源或個人觀點。",
+        mode === "full"
+          ? "你的主題較簡短，系統已改為先建立研究方向、報告架構與資料需求表，避免在資料不足時硬寫完整報告。"
+          : "你的主題較簡短，系統已先產生基礎版本。若要提高報告品質，建議補充研究方向、老師要求、資料來源或個人觀點。",
       expansions: expandTopic(topic, category),
     };
   }

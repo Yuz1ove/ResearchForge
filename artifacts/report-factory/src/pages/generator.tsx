@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { searchSources, type SourceRecord } from "@workspace/api-client-react";
 import {
   generateReport,
   expandTopic,
@@ -20,6 +21,7 @@ import {
   ContentBlock,
   TopicCategory,
   REPORT_TYPES,
+  TARGET_AUDIENCES,
   ACADEMIC_LEVELS,
   TOPIC_CATEGORIES,
   GENERATION_MODES,
@@ -28,7 +30,21 @@ import {
   CHART_REQUIREMENTS,
   REPORT_STYLES,
   REPORT_LENGTHS,
+  FORMAL_TONE_OPTIONS,
+  CONVERSATIONAL_TONE_OPTIONS,
+  OUTPUT_LANGUAGES,
 } from "@/lib/generateReport";
+import {
+  acceptedSourceRecords,
+  buildExportReadinessWarnings,
+  dedupeSourceRecords,
+  formatSourceAuthors,
+  normalizeSourceForReview,
+  rejectedSourceRecords,
+  sourceHasIncompleteMetadata,
+  sourceRecordKey,
+  type SourceReviewState,
+} from "@/lib/sourceRecords";
 import {
   buildPlainText,
   downloadTxt,
@@ -60,38 +76,83 @@ import {
   ClipboardList,
   MessageSquareText,
   Archive,
+  Search,
+  ExternalLink,
 } from "lucide-react";
 
 // ─── Default form state ───────────────────────────────────────────────────────
 
+type ReportInputStringKey = {
+  [K in keyof ReportInput]: ReportInput[K] extends string ? K : never;
+}[keyof ReportInput];
+
 const DEFAULT_INPUT: ReportInput = {
   topic: "",
-  reportType: "學校研究報告",
+  reportType: "研究報告",
   academicLevel: "高中",
-  targetAudience: "高中生",
+  targetAudience: "高中",
   purpose: "學校作業",
   domainOverride: "",
-  mode: "報告架構",
+  mode: "先建立報告架構",
   sourceRequirement: "需要，但先標示「資料來源待補」",
   citationFormat: "APA",
   chartRequirement: "需要",
-  style: "高中生可提交",
+  style: "高中生自然報告風格",
   length: "一般報告",
+  wordCount: "",
+  formalTone: "不需要",
+  conversationalTone: "不需要",
+  specifiedStructure: "",
+  rubric: "",
+  personalStyle: "",
+  supplementalMaterials: "",
+  outputLanguage: "繁體中文",
+  rewriteSection: "",
   additionalInfo: "",
+  acceptedSources: [],
 };
 
 // ─── Field config (label + options + key) ─────────────────────────────────────
 
-const SELECT_FIELDS: { key: keyof ReportInput; label: string; options: readonly string[] }[] = [
-  { key: "reportType", label: "研究類型", options: REPORT_TYPES },
-  { key: "academicLevel", label: "學術程度", options: ACADEMIC_LEVELS },
+const SELECT_FIELDS: { key: ReportInputStringKey; label: string; options: readonly string[] }[] = [
+  { key: "reportType", label: "報告類型", options: REPORT_TYPES },
+  { key: "targetAudience", label: "使用對象", options: TARGET_AUDIENCES },
   { key: "mode", label: "生成模式", options: GENERATION_MODES },
   { key: "style", label: "報告風格", options: REPORT_STYLES },
   { key: "length", label: "報告長度", options: REPORT_LENGTHS },
+  { key: "academicLevel", label: "學術程度", options: ACADEMIC_LEVELS },
+  { key: "formalTone", label: "正式學術語氣", options: FORMAL_TONE_OPTIONS },
+  { key: "conversationalTone", label: "口語化", options: CONVERSATIONAL_TONE_OPTIONS },
   { key: "chartRequirement", label: "圖表建議需求", options: CHART_REQUIREMENTS },
   { key: "sourceRequirement", label: "資料來源需求", options: SOURCE_REQUIREMENTS },
   { key: "citationFormat", label: "引用格式", options: CITATION_FORMATS },
+  { key: "outputLanguage", label: "輸出語言", options: OUTPUT_LANGUAGES },
 ];
+
+const TEXT_FIELDS: { key: ReportInputStringKey; label: string; placeholder: string }[] = [
+  { key: "wordCount", label: "字數需求", placeholder: "例如：1200 字、3000 字、8 頁" },
+  { key: "rewriteSection", label: "重寫指定章節", placeholder: "例如：第三章、討論、結論" },
+];
+
+const TEXTAREA_FIELDS: { key: ReportInputStringKey; label: string; placeholder: string; minHeight: string }[] = [
+  { key: "specifiedStructure", label: "指定段落架構", placeholder: "例如：前言、研究方法、結果、討論、結論", minHeight: "min-h-[88px]" },
+  { key: "rubric", label: "評分標準或檢核表", placeholder: "貼上老師提供的 rubric、評分標準或檢核項目。", minHeight: "min-h-[96px]" },
+  { key: "personalStyle", label: "個人寫作風格要求", placeholder: "例如：自然高中生語氣、保留個人反思、避免太像論文。", minHeight: "min-h-[88px]" },
+  { key: "supplementalMaterials", label: "使用者補充資料或參考來源貼上區", placeholder: "貼上課堂資料、書籍資訊、網址、作者、年份、引用來源或原始數據。", minHeight: "min-h-[120px]" },
+  { key: "additionalInfo", label: "其他補充資料", placeholder: "可貼上老師要求、課堂資料、個人觀點或想加入的內容。", minHeight: "min-h-[96px]" },
+];
+
+function sourceErrorMessage(error: unknown): string {
+  if (error && typeof error === "object" && "data" in error) {
+    const data = (error as { data?: unknown }).data;
+    if (data && typeof data === "object" && "message" in data) {
+      const message = (data as { message?: unknown }).message;
+      if (typeof message === "string" && message.trim()) return message;
+    }
+  }
+
+  return "來源搜尋暫時無法使用，請稍後再試。";
+}
 
 // ─── Block renderer ───────────────────────────────────────────────────────────
 
@@ -183,6 +244,7 @@ function BlockView({ block }: { block: ContentBlock }) {
                 <XCircle className="h-4 w-4 text-muted-foreground shrink-0" />
               )}
               <span className={c.passed ? "text-foreground" : "text-muted-foreground"}>{c.label}</span>
+              {!c.passed && c.reason ? <span className="text-muted-foreground">：{c.reason}</span> : null}
             </div>
           ))}
         </div>
@@ -244,6 +306,249 @@ function SectionView({ section }: { section: ReportSection }) {
   );
 }
 
+function SourceSearchPanel({
+  sources,
+  acceptedCount,
+  rejectedCount,
+  status,
+  message,
+  isSearching,
+  hasTopic,
+  onSearch,
+  onReview,
+  onEdit,
+}: {
+  sources: SourceRecord[];
+  acceptedCount: number;
+  rejectedCount: number;
+  status: "idle" | "loading" | "done" | "empty" | "error";
+  message: string;
+  isSearching: boolean;
+  hasTopic: boolean;
+  onSearch: () => void;
+  onReview: (sourceId: string, reviewState: SourceReviewState) => void;
+  onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
+}) {
+  return (
+    <div className="mb-4 space-y-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold text-foreground">研究來源</h2>
+          <p className="text-sm text-muted-foreground">
+            從 Crossref 與 Semantic Scholar 搜尋真實來源；接受的來源會進入參考文獻，拒絕的來源不會匯出。
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={acceptedCount ? "default" : "outline"}>已接受 {acceptedCount} 筆</Badge>
+          <Badge variant={rejectedCount ? "secondary" : "outline"}>已拒絕 {rejectedCount} 筆</Badge>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="min-h-[40px]"
+            onClick={onSearch}
+            disabled={isSearching || !hasTopic}
+            data-testid="button-search-sources-panel"
+          >
+            {isSearching ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 搜尋中
+              </>
+            ) : (
+              <>
+                <Search className="mr-2 h-4 w-4" /> 搜尋來源
+              </>
+            )}
+          </Button>
+        </div>
+      </div>
+
+      {status === "idle" && (
+        <div className="rounded-lg border border-dashed border-border bg-card/60 px-4 py-5 text-sm text-muted-foreground">
+          輸入研究主題後，可先搜尋學術與網路來源，再選取準備使用的資料。
+        </div>
+      )}
+
+      {status === "loading" && (
+        <div className="rounded-lg border border-border bg-card p-4 space-y-3" data-testid="sources-loading">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            正在搜尋 Crossref 與 Semantic Scholar...
+          </div>
+          {[1, 2, 3].map((item) => (
+            <div key={item} className="animate-pulse rounded-md border border-border p-3 space-y-2">
+              <div className="h-4 w-3/4 rounded bg-muted" />
+              <div className="h-3 w-1/2 rounded bg-muted" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {status === "empty" && (
+        <div className="rounded-lg border border-border bg-card px-4 py-5 text-sm text-muted-foreground" data-testid="sources-empty">
+          {message || "目前沒有找到符合此主題的來源。"}
+        </div>
+      )}
+
+      {status === "error" && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-5 text-sm text-destructive" data-testid="sources-error">
+          {message || "來源搜尋失敗，請稍後再試。"}
+        </div>
+      )}
+
+      {sources.length > 0 && (
+        <div className="grid grid-cols-1 gap-3" data-testid="sources-list">
+          {sources.map((source) => {
+            const key = source.id || sourceRecordKey(source);
+            const accepted = source.reviewState === "accepted";
+            const rejected = source.reviewState === "rejected";
+            const incomplete = sourceHasIncompleteMetadata(source);
+
+            return (
+              <article
+                key={key}
+                className={`rounded-lg border bg-card p-4 transition-colors ${
+                  accepted
+                    ? "border-green-500 shadow-sm"
+                    : rejected
+                      ? "border-border bg-muted/30 opacity-75"
+                      : "border-border"
+                }`}
+                data-testid={`source-card-${source.sourceType}`}
+              >
+                <div className="min-w-0 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={source.sourceType === "Crossref" ? "secondary" : "outline"}>{source.sourceType}</Badge>
+                      <Badge variant={accepted ? "default" : rejected ? "secondary" : "outline"}>
+                        {accepted ? "已接受" : rejected ? "已拒絕" : "待審核"}
+                      </Badge>
+                      {incomplete && <Badge variant="outline">metadata 不完整</Badge>}
+                    </div>
+                    {source.url && (
+                      <a
+                        href={source.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex min-h-[32px] items-center rounded-md px-2 text-xs font-medium text-primary hover:underline"
+                      >
+                        開啟連結 <ExternalLink className="ml-1 h-3.5 w-3.5" />
+                      </a>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="space-y-1 md:col-span-2">
+                      <Label htmlFor={`${key}-title`} className="text-xs">標題</Label>
+                      <Input
+                        id={`${key}-title`}
+                        value={source.title}
+                        onChange={(event) => onEdit(key, { title: event.target.value })}
+                        className="h-10"
+                      />
+                    </div>
+                    <div className="space-y-1 md:col-span-2">
+                      <Label htmlFor={`${key}-authors`} className="text-xs">作者</Label>
+                      <Input
+                        id={`${key}-authors`}
+                        value={source.authors.join("、")}
+                        placeholder="以頓號或逗號分隔多位作者"
+                        onChange={(event) => onEdit(key, { authors: event.target.value.split(/[、,]/).map((author) => author.trim()).filter(Boolean) })}
+                        className="h-10"
+                      />
+                      <p className="text-xs text-muted-foreground">顯示：{formatSourceAuthors(source.authors)}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor={`${key}-year`} className="text-xs">年份</Label>
+                      <Input
+                        id={`${key}-year`}
+                        value={source.year ?? ""}
+                        inputMode="numeric"
+                        placeholder="年份待確認"
+                        onChange={(event) => {
+                          const value = event.target.value.trim();
+                          onEdit(key, { year: value ? Number(value) : null });
+                        }}
+                        className="h-10"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor={`${key}-container`} className="text-xs">期刊／會議／出處</Label>
+                      <Input
+                        id={`${key}-container`}
+                        value={source.containerTitle ?? ""}
+                        onChange={(event) => onEdit(key, { containerTitle: event.target.value })}
+                        className="h-10"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor={`${key}-publisher`} className="text-xs">出版者</Label>
+                      <Input
+                        id={`${key}-publisher`}
+                        value={source.publisher ?? ""}
+                        onChange={(event) => onEdit(key, { publisher: event.target.value })}
+                        className="h-10"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor={`${key}-doi`} className="text-xs">DOI</Label>
+                      <Input
+                        id={`${key}-doi`}
+                        value={source.doi ?? ""}
+                        onChange={(event) => onEdit(key, { doi: event.target.value })}
+                        className="h-10"
+                      />
+                    </div>
+                    <div className="space-y-1 md:col-span-2">
+                      <Label htmlFor={`${key}-url`} className="text-xs">URL</Label>
+                      <Input
+                        id={`${key}-url`}
+                        value={source.url ?? ""}
+                        onChange={(event) => onEdit(key, { url: event.target.value })}
+                        className="h-10"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={accepted ? "secondary" : "default"}
+                      className="min-h-[36px]"
+                      onClick={() => onReview(key, "accepted")}
+                    >
+                      <CheckCircle2 className="mr-2 h-4 w-4" /> 接受
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={rejected ? "secondary" : "outline"}
+                      className="min-h-[36px]"
+                      onClick={() => onReview(key, "rejected")}
+                    >
+                      <XCircle className="mr-2 h-4 w-4" /> 拒絕
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="min-h-[36px]"
+                      onClick={() => onReview(key, "pending")}
+                    >
+                      標為待審
+                    </Button>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export function Generator() {
@@ -252,9 +557,14 @@ export function Generator() {
   const [input, setInput] = useState<ReportInput>(DEFAULT_INPUT);
   const [report, setReport] = useState<GeneratedReport | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generateStatus, setGenerateStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [expansions, setExpansions] = useState<string[]>([]);
+  const [sources, setSources] = useState<SourceRecord[]>([]);
+  const [isSearchingSources, setIsSearchingSources] = useState(false);
+  const [sourceSearchStatus, setSourceSearchStatus] = useState<"idle" | "loading" | "done" | "empty" | "error">("idle");
+  const [sourceSearchMessage, setSourceSearchMessage] = useState("");
 
-  const updateInput = (key: keyof ReportInput, value: string) => {
+  const updateInput = (key: ReportInputStringKey, value: string) => {
     setInput((prev) => {
       const next = { ...prev, [key]: value };
       // Academic level is the single source of truth for reader + purpose.
@@ -272,11 +582,72 @@ export function Generator() {
     ? detectTopicCategory(input.topic.trim(), input.reportType, derivedPurpose)
     : null;
   const AUTO = "自動偵測";
+  const acceptedSources = acceptedSourceRecords(sources);
+  const rejectedSources = rejectedSourceRecords(sources);
+  const reportInput = report ? { ...input, acceptedSources: report.meta.acceptedSources } : input;
+
+  // ── Source search ──────────────────────────────────────────────────────────
+
+  const handleSearchSources = async () => {
+    const query = input.topic.trim();
+    if (!query) {
+      setSourceSearchStatus("error");
+      setSourceSearchMessage("請先輸入研究主題。");
+      toast({
+        title: "請先輸入主題",
+        description: "輸入研究主題後，才能搜尋 Crossref 與 Semantic Scholar 來源。",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsSearchingSources(true);
+    setSourceSearchStatus("loading");
+    setSourceSearchMessage("");
+    setSources([]);
+
+    try {
+      const result = await searchSources({ query });
+      setSources(dedupeSourceRecords(result.sources.map(normalizeSourceForReview)));
+      if (result.sources.length) {
+        setSourceSearchStatus("done");
+        toast({ title: "已找到來源", description: `共找到 ${result.sources.length} 筆可選來源。` });
+      } else {
+        setSourceSearchStatus("empty");
+        setSourceSearchMessage("目前沒有找到符合此主題的來源，請換更具體的關鍵字再試一次。");
+      }
+    } catch (error) {
+      setSourceSearchStatus("error");
+      setSourceSearchMessage(sourceErrorMessage(error));
+      toast({
+        title: "來源搜尋失敗",
+        description: sourceErrorMessage(error),
+        variant: "destructive",
+      });
+    } finally {
+      setIsSearchingSources(false);
+    }
+  };
+
+  const updateSourceRecord = (sourceId: string, patch: Partial<SourceRecord>) => {
+    setSources((current) =>
+      current.map((source) => {
+        const key = source.id || sourceRecordKey(source);
+        if (key !== sourceId) return source;
+        return normalizeSourceForReview({ ...source, ...patch, id: key });
+      }),
+    );
+  };
+
+  const updateSourceReview = (sourceId: string, reviewState: SourceReviewState) => {
+    updateSourceRecord(sourceId, { reviewState });
+  };
 
   // ── Generate ────────────────────────────────────────────────────────────────
 
   const handleGenerate = () => {
     if (!input.topic.trim()) {
+      setGenerateStatus("error");
       toast({
         title: "請填寫報告主題",
         description: "主題欄位不能為空，請輸入你的報告主題後再生成。",
@@ -285,19 +656,28 @@ export function Generator() {
       return;
     }
     setIsGenerating(true);
+    setGenerateStatus("loading");
     setReport(null);
     // Academic level is the single source of truth: derive reader + purpose
     // defensively here so generation stays consistent even if state drifts.
     const effectiveInput: ReportInput = {
       ...input,
-      targetAudience: academicToAudience(input.academicLevel),
+      targetAudience: input.targetAudience || academicToAudience(input.academicLevel),
       purpose: academicToPurpose(input.academicLevel),
+      acceptedSources,
     };
     setInput(effectiveInput);
     // Simulate async — swap setTimeout for a real API call in the future.
     setTimeout(() => {
-      setReport(generateReport(effectiveInput));
-      setIsGenerating(false);
+      try {
+        setReport(generateReport(effectiveInput));
+        setGenerateStatus("done");
+      } catch {
+        setGenerateStatus("error");
+        toast({ title: "生成失敗", description: "請確認輸入內容後再試一次。", variant: "destructive" });
+      } finally {
+        setIsGenerating(false);
+      }
     }, 1400);
   };
 
@@ -323,28 +703,41 @@ export function Generator() {
 
   // ── Copy / download / clear ───────────────────────────────────────────────────
 
+  const warnExportReadiness = (currentReport: GeneratedReport) => {
+    const warnings = buildExportReadinessWarnings(currentReport);
+    if (warnings.length === 0) return;
+
+    toast({
+      title: "引用準備度提醒",
+      description: warnings.map((warning) => warning.message).join(" "),
+    });
+  };
+
   const handleCopy = () => {
     if (!report) return;
-    navigator.clipboard.writeText(buildPlainText(report, input));
+    navigator.clipboard.writeText(buildPlainText(report, reportInput));
     toast({ title: "已複製到剪貼簿", description: "報告純文字已複製，可直接貼入文件。" });
   };
 
   const handleDownloadTxt = () => {
     if (!report) return;
-    downloadTxt(report, input);
+    warnExportReadiness(report);
+    downloadTxt(report, reportInput);
     toast({ title: "已下載 TXT", description: "純文字檔已儲存到你的裝置。" });
   };
 
   const handleDownloadMarkdown = () => {
     if (!report) return;
-    downloadMarkdown(report, input);
+    warnExportReadiness(report);
+    downloadMarkdown(report, reportInput);
     toast({ title: "已下載 Markdown", description: "Markdown 檔已儲存到你的裝置。" });
   };
 
   const handleDownloadDocx = async () => {
     if (!report) return;
+    warnExportReadiness(report);
     try {
-      await downloadDocx(report, input);
+      await downloadDocx(report, reportInput);
       toast({ title: "已下載 Word（DOCX）", description: "含封面、目錄、頁首頁尾的 Word 檔已儲存。" });
     } catch {
       toast({ title: "DOCX 產生失敗", description: "請稍後再試一次。", variant: "destructive" });
@@ -353,19 +746,20 @@ export function Generator() {
 
   const handleDownloadJson = () => {
     if (!report) return;
-    downloadJson(report, input);
+    warnExportReadiness(report);
+    downloadJson(report, reportInput);
     toast({ title: "已下載 JSON", description: "完整資料（JSON）已儲存，可供程式或其他工具使用。" });
   };
 
   const handleDownloadBlueprint = () => {
     if (!report) return;
-    downloadBlueprint(report, input);
+    downloadBlueprint(report, reportInput);
     toast({ title: "已下載研究藍圖", description: "規劃藍圖（Markdown）已儲存。" });
   };
 
   const handleDownloadPrompt = () => {
     if (!report) return;
-    downloadPromptPackage(report, input);
+    downloadPromptPackage(report, reportInput);
     toast({ title: "已下載 AI 提示包", description: "可貼入其他 AI 以完成報告內容的提示已儲存。" });
   };
 
@@ -376,7 +770,8 @@ export function Generator() {
 
   const handlePrintPdf = () => {
     if (!report) return;
-    const ok = printPdf(report, input);
+    warnExportReadiness(report);
+    const ok = printPdf(report, reportInput);
     if (ok) {
       toast({ title: "正在開啟列印視窗", description: "請在列印對話框選擇「另存為 PDF」。" });
     } else {
@@ -388,9 +783,23 @@ export function Generator() {
     setInput(DEFAULT_INPUT);
     setReport(null);
     setExpansions([]);
+    setSources([]);
+    setSourceSearchStatus("idle");
+    setSourceSearchMessage("");
+    setGenerateStatus("idle");
   };
 
   const shortTopicHint = input.topic.trim() && isShortTopic(input.topic) && !report;
+  const hasTopic = Boolean(input.topic.trim());
+  const generateButtonLabel = !hasTopic
+    ? "尚未輸入主題"
+    : isGenerating
+      ? "生成中..."
+      : generateStatus === "error"
+        ? "生成錯誤"
+        : report
+          ? "完成，可重新生成"
+          : "生成報告草稿";
 
   return (
     <div className="min-h-screen flex flex-col bg-muted/20">
@@ -432,6 +841,25 @@ export function Generator() {
                   data-testid="button-expand-topic"
                 >
                   <Sparkles className="mr-2 h-4 w-4" /> 幫我擴寫主題
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={handleSearchSources}
+                  disabled={isSearchingSources || !hasTopic}
+                  data-testid="button-search-sources"
+                >
+                  {isSearchingSources ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 搜尋來源中...
+                    </>
+                  ) : (
+                    <>
+                      <Search className="mr-2 h-4 w-4" /> 搜尋真實來源
+                    </>
+                  )}
                 </Button>
 
                 {expansions.length > 0 && (
@@ -486,6 +914,8 @@ export function Generator() {
               </div>
 
               {/* Selects */}
+              <div className="border-t border-border pt-4 space-y-4">
+                <p className="text-xs font-semibold text-muted-foreground">報告設定</p>
               {SELECT_FIELDS.map((f) => (
                 <div key={f.key} className="space-y-2">
                   <Label htmlFor={f.key}>{f.label}</Label>
@@ -503,34 +933,60 @@ export function Generator() {
                   </Select>
                 </div>
               ))}
+              </div>
 
-              {/* Additional info */}
-              <div className="space-y-2">
-                <Label htmlFor="additionalInfo">補充資料／老師要求／評分標準</Label>
-                <Textarea
-                  id="additionalInfo"
-                  placeholder="可貼上老師要求、評分標準、課堂資料、個人觀點、指定段落、參考資料或想加入的內容。"
-                  value={input.additionalInfo}
-                  onChange={(e) => updateInput("additionalInfo", e.target.value)}
-                  data-testid="input-additional"
-                  className="min-h-[96px] resize-y"
-                />
+              <div className="border-t border-border pt-4 space-y-4">
+                <p className="text-xs font-semibold text-muted-foreground">內容需求</p>
+                {TEXT_FIELDS.map((f) => (
+                  <div key={f.key} className="space-y-2">
+                    <Label htmlFor={f.key}>{f.label}</Label>
+                    <Input
+                      id={f.key}
+                      placeholder={f.placeholder}
+                      value={input[f.key]}
+                      onChange={(e) => updateInput(f.key, e.target.value)}
+                      data-testid={`input-${f.key}`}
+                      className="h-11"
+                    />
+                  </div>
+                ))}
+                {TEXTAREA_FIELDS.map((f) => (
+                  <div key={f.key} className="space-y-2">
+                    <Label htmlFor={f.key}>{f.label}</Label>
+                    <Textarea
+                      id={f.key}
+                      placeholder={f.placeholder}
+                      value={input[f.key]}
+                      onChange={(e) => updateInput(f.key, e.target.value)}
+                      data-testid={`input-${f.key}`}
+                      className={`${f.minHeight} resize-y`}
+                    />
+                  </div>
+                ))}
               </div>
 
               <Button
                 size="lg"
                 className="w-full h-12 text-base"
                 onClick={handleGenerate}
-                disabled={isGenerating}
+                disabled={isGenerating || !hasTopic}
                 data-testid="button-generate"
               >
                 {isGenerating ? (
                   <>
-                    <Loader2 className="mr-2 h-5 w-5 animate-spin" /> 生成中...
+                    <Loader2 className="mr-2 h-5 w-5 animate-spin" /> {generateButtonLabel}
+                  </>
+                ) : generateStatus === "error" ? (
+                  <>
+                    <XCircle className="mr-2 h-5 w-5" /> {generateButtonLabel}
+                  </>
+                ) : report ? (
+                  <>
+                    <CheckCircle2 className="mr-2 h-5 w-5" /> {generateButtonLabel}
                   </>
                 ) : (
                   <>
-                    <Wand2 className="mr-2 h-5 w-5" /> 生成報告草稿
+                    <Wand2 className="mr-2 h-5 w-5" /> {generateButtonLabel}
                   </>
                 )}
               </Button>
@@ -551,6 +1007,18 @@ export function Generator() {
 
           {/* ── Result panel ───────────────────────────────────────────────── */}
           <div className="flex-1 min-h-[600px]">
+            <SourceSearchPanel
+              sources={sources}
+              acceptedCount={acceptedSources.length}
+              rejectedCount={rejectedSources.length}
+              status={sourceSearchStatus}
+              message={sourceSearchMessage}
+              isSearching={isSearchingSources}
+              hasTopic={hasTopic}
+              onSearch={handleSearchSources}
+              onReview={updateSourceReview}
+              onEdit={updateSourceRecord}
+            />
 
             {/* Short-topic hint (before generating) */}
             {shortTopicHint && (
@@ -634,6 +1102,23 @@ export function Generator() {
                     <p className="text-xs text-muted-foreground">
                       建議補充：{report.meta.suggestedAdditions.join("、")}
                     </p>
+                  </div>
+                  <div className="mt-4 rounded-lg border border-border bg-background p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                      <p className="text-sm font-medium text-foreground">已接受來源</p>
+                      <Badge variant={report.meta.acceptedSources.length ? "default" : "outline"}>
+                        {report.meta.acceptedSources.length} 筆
+                      </Badge>
+                    </div>
+                    {report.meta.bibliography.length ? (
+                      <ol className="space-y-1 text-xs leading-relaxed text-muted-foreground list-decimal pl-5">
+                        {report.meta.bibliography.map((entry) => (
+                          <li key={entry.sourceId}>{entry.text}</li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">尚未有接受來源；參考文獻會保留待補提醒。</p>
+                    )}
                   </div>
                 </div>
 
