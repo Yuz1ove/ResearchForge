@@ -10,7 +10,7 @@ import {
 export function FAQ() {
   const faqs = [
     {
-      q: "Report Factory AI 如何生成報告內容？",
+      q: "ResearchForge 如何生成報告內容？",
       a: "我們使用針對商業與財務文件微調的大型語言模型。當您提交參考資料與設定後，模型會將您的數據整合至所選結構中，同時維持您要求的語氣與讀者設定。"
     },
     {
@@ -52,7 +52,7 @@ export function FAQ() {
           <div className="container mx-auto px-4 max-w-3xl">
             <div className="text-center mb-12">
               <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">常見問題</h1>
-              <p className="text-xl text-muted-foreground">關於 Report Factory AI，您需要知道的一切。</p>
+              <p className="text-xl text-muted-foreground">關於 ResearchForge，您需要知道的一切。</p>
             </div>
 
             <Accordion type="single" collapsible className="w-full">

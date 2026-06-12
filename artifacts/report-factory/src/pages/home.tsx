@@ -57,7 +57,7 @@ export function Home() {
             </div>
 
             <h1 className="text-4xl md:text-6xl font-bold tracking-tight text-foreground mb-6 leading-tight">
-              Report Factory AI
+              ResearchForge
             </h1>
             <p className="text-xl md:text-2xl text-muted-foreground mb-4 font-medium">
               輸入主題，快速生成結構完整、格式清楚、<br className="hidden md:block" />
@@ -86,7 +86,7 @@ export function Home() {
         <section className="py-20 bg-muted/30 border-y border-border">
           <div className="container mx-auto px-4 max-w-6xl">
             <div className="text-center mb-14">
-              <h2 className="text-3xl md:text-4xl font-bold mb-3">為什麼選擇 Report Factory AI？</h2>
+              <h2 className="text-3xl md:text-4xl font-bold mb-3">為什麼選擇 ResearchForge？</h2>
               <p className="text-muted-foreground max-w-xl mx-auto">
                 不只是填表單——幫你建立完整研究架構，節省從零開始的時間。
               </p>

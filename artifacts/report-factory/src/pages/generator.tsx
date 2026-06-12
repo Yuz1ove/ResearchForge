@@ -20,19 +20,7 @@ import {
   ReportSection,
   ContentBlock,
   TopicCategory,
-  REPORT_TYPES,
-  TARGET_AUDIENCES,
-  ACADEMIC_LEVELS,
   TOPIC_CATEGORIES,
-  GENERATION_MODES,
-  SOURCE_REQUIREMENTS,
-  CITATION_FORMATS,
-  CHART_REQUIREMENTS,
-  REPORT_STYLES,
-  REPORT_LENGTHS,
-  FORMAL_TONE_OPTIONS,
-  CONVERSATIONAL_TONE_OPTIONS,
-  OUTPUT_LANGUAGES,
 } from "@/lib/generateReport";
 import {
   acceptedSourceRecords,
@@ -112,35 +100,136 @@ const DEFAULT_INPUT: ReportInput = {
   acceptedSources: [],
 };
 
-// ─── Field config (label + options + key) ─────────────────────────────────────
+// ─── Field config (visible labels map to stable internal generator values) ───
 
-const SELECT_FIELDS: { key: ReportInputStringKey; label: string; options: readonly string[] }[] = [
-  { key: "reportType", label: "報告類型", options: REPORT_TYPES },
-  { key: "targetAudience", label: "使用對象", options: TARGET_AUDIENCES },
-  { key: "mode", label: "生成模式", options: GENERATION_MODES },
-  { key: "style", label: "報告風格", options: REPORT_STYLES },
-  { key: "length", label: "報告長度", options: REPORT_LENGTHS },
-  { key: "academicLevel", label: "學術程度", options: ACADEMIC_LEVELS },
-  { key: "formalTone", label: "正式學術語氣", options: FORMAL_TONE_OPTIONS },
-  { key: "conversationalTone", label: "口語化", options: CONVERSATIONAL_TONE_OPTIONS },
-  { key: "chartRequirement", label: "圖表建議需求", options: CHART_REQUIREMENTS },
-  { key: "sourceRequirement", label: "資料來源需求", options: SOURCE_REQUIREMENTS },
-  { key: "citationFormat", label: "引用格式", options: CITATION_FORMATS },
-  { key: "outputLanguage", label: "輸出語言", options: OUTPUT_LANGUAGES },
+type SelectOption = { label: string; value: string };
+
+const MAIN_SELECT_FIELDS: { key: ReportInputStringKey; label: string; options: SelectOption[] }[] = [
+  {
+    key: "reportType",
+    label: "報告類型",
+    options: [
+      { label: "研究報告", value: "研究報告" },
+      { label: "讀書心得", value: "讀書心得" },
+      { label: "專題報告", value: "專題報告" },
+      { label: "實驗報告", value: "實驗報告" },
+      { label: "簡報大綱", value: "簡報大綱" },
+      { label: "自訂", value: "其他" },
+    ],
+  },
+  {
+    key: "targetAudience",
+    label: "使用對象",
+    options: [
+      { label: "國中", value: "國中" },
+      { label: "高中", value: "高中" },
+      { label: "一般", value: "一般讀者" },
+    ],
+  },
+  {
+    key: "mode",
+    label: "生成模式",
+    options: [
+      { label: "建立架構", value: "先建立報告架構" },
+      { label: "完整報告", value: "直接生成完整報告" },
+      { label: "資料需求表", value: "只生成資料需求表" },
+    ],
+  },
+  {
+    key: "sourceRequirement",
+    label: "資料來源",
+    options: [
+      { label: "自動搜尋", value: "需要，並生成參考文獻格式" },
+      { label: "自行提供", value: "需要，但先標示「資料來源待補」" },
+    ],
+  },
 ];
 
-const TEXT_FIELDS: { key: ReportInputStringKey; label: string; placeholder: string }[] = [
+const ADVANCED_SELECT_FIELDS: { key: ReportInputStringKey; label: string; options: SelectOption[] }[] = [
+  {
+    key: "style",
+    label: "寫作風格",
+    options: [
+      { label: "自然學校報告", value: "高中生自然報告風格" },
+      { label: "高分學校報告", value: "90 分以上學校報告風格" },
+      { label: "學術研究", value: "學術研究風格" },
+      { label: "商業顧問", value: "商業顧問風格" },
+      { label: "口語簡報", value: "口語簡報風格" },
+      { label: "深度研究", value: "深度研究報告風格" },
+    ],
+  },
+  {
+    key: "length",
+    label: "報告長度",
+    options: [
+      { label: "短版摘要", value: "短版摘要" },
+      { label: "一般報告", value: "一般報告" },
+      { label: "完整報告", value: "完整報告" },
+      { label: "深度研究", value: "深度研究" },
+    ],
+  },
+  {
+    key: "citationFormat",
+    label: "引用格式",
+    options: [
+      { label: "APA", value: "APA" },
+      { label: "MLA", value: "MLA" },
+      { label: "芝加哥格式", value: "Chicago" },
+      { label: "自訂", value: "其他" },
+      { label: "不使用", value: "不需要" },
+    ],
+  },
+  {
+    key: "chartRequirement",
+    label: "圖表建議",
+    options: [
+      { label: "加入", value: "需要" },
+      { label: "不加入", value: "不需要" },
+    ],
+  },
+  {
+    key: "outputLanguage",
+    label: "輸出語言",
+    options: [
+      { label: "繁體中文", value: "繁體中文" },
+      { label: "英文", value: "英文" },
+      { label: "日文", value: "日文" },
+      { label: "其他", value: "其他" },
+    ],
+  },
+];
+
+const ADVANCED_TEXT_FIELDS: { key: ReportInputStringKey; label: string; placeholder: string }[] = [
   { key: "wordCount", label: "字數需求", placeholder: "例如：1200 字、3000 字、8 頁" },
-  { key: "rewriteSection", label: "重寫指定章節", placeholder: "例如：第三章、討論、結論" },
 ];
 
-const TEXTAREA_FIELDS: { key: ReportInputStringKey; label: string; placeholder: string; minHeight: string }[] = [
-  { key: "specifiedStructure", label: "指定段落架構", placeholder: "例如：前言、研究方法、結果、討論、結論", minHeight: "min-h-[88px]" },
-  { key: "rubric", label: "評分標準或檢核表", placeholder: "貼上老師提供的 rubric、評分標準或檢核項目。", minHeight: "min-h-[96px]" },
-  { key: "personalStyle", label: "個人寫作風格要求", placeholder: "例如：自然高中生語氣、保留個人反思、避免太像論文。", minHeight: "min-h-[88px]" },
-  { key: "supplementalMaterials", label: "使用者補充資料或參考來源貼上區", placeholder: "貼上課堂資料、書籍資訊、網址、作者、年份、引用來源或原始數據。", minHeight: "min-h-[120px]" },
-  { key: "additionalInfo", label: "其他補充資料", placeholder: "可貼上老師要求、課堂資料、個人觀點或想加入的內容。", minHeight: "min-h-[96px]" },
+const ADVANCED_TEXTAREA_FIELDS: { key: ReportInputStringKey; label: string; placeholder: string; minHeight: string }[] = [
+  { key: "specifiedStructure", label: "指定架構", placeholder: "例如：前言、研究方法、結果、討論、結論", minHeight: "min-h-[88px]" },
+  { key: "rubric", label: "評分標準", placeholder: "貼上老師提供的評分標準或檢核項目。", minHeight: "min-h-[96px]" },
+  { key: "personalStyle", label: "個人語氣", placeholder: "例如：自然高中生語氣、保留個人反思、避免太像論文。", minHeight: "min-h-[88px]" },
+  { key: "supplementalMaterials", label: "自行提供資料", placeholder: "貼上課堂資料、書籍資訊、網址、作者、年份、引用來源或原始數據。", minHeight: "min-h-[120px]" },
+  { key: "additionalInfo", label: "其他補充", placeholder: "可貼上老師要求、課堂資料、個人觀點或想加入的內容。", minHeight: "min-h-[96px]" },
 ];
+
+function audienceToAcademicLevel(audience: string): string {
+  switch (audience) {
+    case "國中":
+      return "國中";
+    case "大學":
+      return "大學";
+    case "一般讀者":
+      return "專業";
+    case "高中":
+    default:
+      return "高中";
+  }
+}
+
+function displayOptionLabel(key: ReportInputStringKey, value: string): string {
+  const fields = [...MAIN_SELECT_FIELDS, ...ADVANCED_SELECT_FIELDS];
+  const option = fields.find((field) => field.key === key)?.options.find((item) => item.value === value);
+  return option?.label ?? value;
+}
 
 function sourceErrorMessage(error: unknown): string {
   if (error && typeof error === "object" && "data" in error) {
@@ -563,6 +652,7 @@ export function Generator() {
   const [isSearchingSources, setIsSearchingSources] = useState(false);
   const [sourceSearchStatus, setSourceSearchStatus] = useState<"idle" | "loading" | "done" | "empty" | "error">("idle");
   const [sourceSearchMessage, setSourceSearchMessage] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const updateInput = (key: ReportInputStringKey, value: string) => {
     setInput((prev) => {
@@ -571,6 +661,10 @@ export function Generator() {
       if (key === "academicLevel") {
         next.targetAudience = academicToAudience(value);
         next.purpose = academicToPurpose(value);
+      }
+      if (key === "targetAudience") {
+        next.academicLevel = audienceToAcademicLevel(value);
+        next.purpose = academicToPurpose(next.academicLevel);
       }
       return next;
     });
@@ -791,6 +885,7 @@ export function Generator() {
 
   const shortTopicHint = input.topic.trim() && isShortTopic(input.topic) && !report;
   const hasTopic = Boolean(input.topic.trim());
+  const autoSearchEnabled = input.sourceRequirement === "需要，並生成參考文獻格式";
   const generateButtonLabel = !hasTopic
     ? "尚未輸入主題"
     : isGenerating
@@ -819,14 +914,14 @@ export function Generator() {
           <div className="w-full lg:w-80 xl:w-96 shrink-0">
             <div className="generator-card bg-card border border-border rounded-xl shadow-sm p-6 flex flex-col gap-5 lg:sticky lg:top-24">
 
-              {/* Topic */}
+              {/* Main fields */}
               <div className="space-y-2">
                 <Label htmlFor="topic">
                   報告主題 <span className="text-destructive">*</span>
                 </Label>
                 <Input
                   id="topic"
-                  placeholder="例如：不同溫度對維生素C氧化速率之影響"
+                  placeholder="例如：豬在農業生產與生態系統中的角色與價值"
                   value={input.topic}
                   onChange={(e) => updateInput("topic", e.target.value)}
                   data-testid="input-topic"
@@ -840,31 +935,12 @@ export function Generator() {
                   onClick={handleExpand}
                   data-testid="button-expand-topic"
                 >
-                  <Sparkles className="mr-2 h-4 w-4" /> 幫我擴寫主題
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="w-full"
-                  onClick={handleSearchSources}
-                  disabled={isSearchingSources || !hasTopic}
-                  data-testid="button-search-sources"
-                >
-                  {isSearchingSources ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 搜尋來源中...
-                    </>
-                  ) : (
-                    <>
-                      <Search className="mr-2 h-4 w-4" /> 搜尋真實來源
-                    </>
-                  )}
+                  <Sparkles className="mr-2 h-4 w-4" /> 擴寫主題
                 </Button>
 
                 {expansions.length > 0 && (
                   <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2">
-                    <p className="text-xs text-muted-foreground">點選一個建議題目即可套用：</p>
+                    <p className="text-xs text-muted-foreground">選擇建議主題：</p>
                     {expansions.map((title, i) => (
                       <button
                         key={i}
@@ -879,90 +955,143 @@ export function Generator() {
                 )}
               </div>
 
-              {/* AI domain detection + manual override */}
-              <div className="space-y-2">
-                <Label htmlFor="domainOverride">AI 判定領域</Label>
-                <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
-                  {detectedCategory ? (
-                    <span className="text-foreground">
-                      系統判定：
-                      <span className="font-semibold text-primary">{detectedCategory}</span>
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground">輸入主題後將自動判定領域</span>
-                  )}
-                </div>
-                <Select
-                  value={input.domainOverride || AUTO}
-                  onValueChange={(v) => updateInput("domainOverride", v === AUTO ? "" : v)}
+              <div className="border-t border-border pt-4 space-y-4">
+                <p className="text-xs font-semibold text-muted-foreground">核心設定</p>
+                {MAIN_SELECT_FIELDS.map((f) => (
+                  <div key={f.key} className="space-y-2">
+                    <Label htmlFor={f.key}>{f.label}</Label>
+                    <Select value={input[f.key]} onValueChange={(v) => updateInput(f.key, v)}>
+                      <SelectTrigger id={f.key} data-testid={`select-${f.key}`} className="h-11">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {f.options.map((o) => (
+                          <SelectItem key={o.value} value={o.value}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ))}
+                {autoSearchEnabled && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={handleSearchSources}
+                    disabled={isSearchingSources || !hasTopic}
+                    data-testid="button-search-sources"
+                  >
+                    {isSearchingSources ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 搜尋來源中...
+                      </>
+                    ) : (
+                      <>
+                        <Search className="mr-2 h-4 w-4" /> 搜尋來源
+                      </>
+                    )}
+                  </Button>
+                )}
+              </div>
+
+              <div className="border-t border-border pt-4 space-y-4">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between text-left"
+                  onClick={() => setAdvancedOpen((open) => !open)}
+                  aria-expanded={advancedOpen}
+                  data-testid="button-advanced-settings"
                 >
-                  <SelectTrigger id="domainOverride" data-testid="select-domainOverride" className="h-11">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={AUTO}>{AUTO}（使用 AI 判定）</SelectItem>
-                    {TOPIC_CATEGORIES.map((c) => (
-                      <SelectItem key={c} value={c}>
-                        {c}
-                      </SelectItem>
+                  <span className="text-xs font-semibold text-muted-foreground">進階設定</span>
+                  {advancedOpen ? (
+                    <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </button>
+
+                {advancedOpen && (
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="domainOverride">主題領域</Label>
+                      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                        {detectedCategory ? (
+                          <span className="text-foreground">
+                            系統判定：
+                            <span className="ml-1 font-semibold text-primary">{detectedCategory}</span>
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">輸入主題後會自動判定領域。</span>
+                        )}
+                      </div>
+                      <Select
+                        value={input.domainOverride || AUTO}
+                        onValueChange={(v) => updateInput("domainOverride", v === AUTO ? "" : v)}
+                      >
+                        <SelectTrigger id="domainOverride" data-testid="select-domainOverride" className="h-11">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={AUTO}>自動判定</SelectItem>
+                          {TOPIC_CATEGORIES.map((c) => (
+                            <SelectItem key={c} value={c}>
+                              {c}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {ADVANCED_SELECT_FIELDS.map((f) => (
+                      <div key={f.key} className="space-y-2">
+                        <Label htmlFor={f.key}>{f.label}</Label>
+                        <Select value={input[f.key]} onValueChange={(v) => updateInput(f.key, v)}>
+                          <SelectTrigger id={f.key} data-testid={`select-${f.key}`} className="h-11">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {f.options.map((o) => (
+                              <SelectItem key={o.value} value={o.value}>
+                                {o.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  若判定不正確，可在此手動指定領域，系統會依此產生對應架構。
-                </p>
-              </div>
 
-              {/* Selects */}
-              <div className="border-t border-border pt-4 space-y-4">
-                <p className="text-xs font-semibold text-muted-foreground">報告設定</p>
-              {SELECT_FIELDS.map((f) => (
-                <div key={f.key} className="space-y-2">
-                  <Label htmlFor={f.key}>{f.label}</Label>
-                  <Select value={input[f.key]} onValueChange={(v) => updateInput(f.key, v)}>
-                    <SelectTrigger id={f.key} data-testid={`select-${f.key}`} className="h-11">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {f.options.map((o) => (
-                        <SelectItem key={o} value={o}>
-                          {o}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              ))}
-              </div>
+                    {ADVANCED_TEXT_FIELDS.map((f) => (
+                      <div key={f.key} className="space-y-2">
+                        <Label htmlFor={f.key}>{f.label}</Label>
+                        <Input
+                          id={f.key}
+                          placeholder={f.placeholder}
+                          value={input[f.key]}
+                          onChange={(e) => updateInput(f.key, e.target.value)}
+                          data-testid={`input-${f.key}`}
+                          className="h-11"
+                        />
+                      </div>
+                    ))}
 
-              <div className="border-t border-border pt-4 space-y-4">
-                <p className="text-xs font-semibold text-muted-foreground">內容需求</p>
-                {TEXT_FIELDS.map((f) => (
-                  <div key={f.key} className="space-y-2">
-                    <Label htmlFor={f.key}>{f.label}</Label>
-                    <Input
-                      id={f.key}
-                      placeholder={f.placeholder}
-                      value={input[f.key]}
-                      onChange={(e) => updateInput(f.key, e.target.value)}
-                      data-testid={`input-${f.key}`}
-                      className="h-11"
-                    />
+                    {ADVANCED_TEXTAREA_FIELDS.map((f) => (
+                      <div key={f.key} className="space-y-2">
+                        <Label htmlFor={f.key}>{f.label}</Label>
+                        <Textarea
+                          id={f.key}
+                          placeholder={f.placeholder}
+                          value={input[f.key]}
+                          onChange={(e) => updateInput(f.key, e.target.value)}
+                          data-testid={`input-${f.key}`}
+                          className={`${f.minHeight} resize-y`}
+                        />
+                      </div>
+                    ))}
                   </div>
-                ))}
-                {TEXTAREA_FIELDS.map((f) => (
-                  <div key={f.key} className="space-y-2">
-                    <Label htmlFor={f.key}>{f.label}</Label>
-                    <Textarea
-                      id={f.key}
-                      placeholder={f.placeholder}
-                      value={input[f.key]}
-                      onChange={(e) => updateInput(f.key, e.target.value)}
-                      data-testid={`input-${f.key}`}
-                      className={`${f.minHeight} resize-y`}
-                    />
-                  </div>
-                ))}
+                )}
               </div>
 
               <Button
@@ -1007,18 +1136,20 @@ export function Generator() {
 
           {/* ── Result panel ───────────────────────────────────────────────── */}
           <div className="flex-1 min-h-[600px]">
-            <SourceSearchPanel
-              sources={sources}
-              acceptedCount={acceptedSources.length}
-              rejectedCount={rejectedSources.length}
-              status={sourceSearchStatus}
-              message={sourceSearchMessage}
-              isSearching={isSearchingSources}
-              hasTopic={hasTopic}
-              onSearch={handleSearchSources}
-              onReview={updateSourceReview}
-              onEdit={updateSourceRecord}
-            />
+            {(autoSearchEnabled || sources.length > 0 || sourceSearchStatus !== "idle") && (
+              <SourceSearchPanel
+                sources={sources}
+                acceptedCount={acceptedSources.length}
+                rejectedCount={rejectedSources.length}
+                status={sourceSearchStatus}
+                message={sourceSearchMessage}
+                isSearching={isSearchingSources}
+                hasTopic={hasTopic}
+                onSearch={handleSearchSources}
+                onReview={updateSourceReview}
+                onEdit={updateSourceRecord}
+              />
+            )}
 
             {/* Short-topic hint (before generating) */}
             {shortTopicHint && (
@@ -1075,11 +1206,11 @@ export function Generator() {
                   <h2 className="text-xl font-bold text-foreground mb-3">{report.meta.title}</h2>
                   <div className="flex flex-wrap gap-2 mb-4">
                     <Badge variant="default">{report.meta.category}</Badge>
-                    <Badge variant="secondary">{input.mode}</Badge>
-                    <Badge variant="secondary">{input.style}</Badge>
-                    <Badge variant="secondary">{input.length}</Badge>
+                    <Badge variant="secondary">{displayOptionLabel("mode", input.mode)}</Badge>
+                    <Badge variant="secondary">{displayOptionLabel("style", input.style)}</Badge>
+                    <Badge variant="secondary">{displayOptionLabel("length", input.length)}</Badge>
                     <Badge variant="outline" className="text-muted-foreground">
-                      {input.targetAudience}
+                      {displayOptionLabel("targetAudience", input.targetAudience)}
                     </Badge>
                   </div>
 

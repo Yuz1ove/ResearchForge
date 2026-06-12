@@ -22,7 +22,7 @@ export function Navbar() {
             <div className="bg-primary text-primary-foreground p-1.5 rounded-md">
               <BarChart className="h-5 w-5" />
             </div>
-            <span className="font-bold text-lg tracking-tight">Report Factory AI</span>
+            <span className="font-bold text-lg tracking-tight">ResearchForge</span>
           </Link>
         </div>
 

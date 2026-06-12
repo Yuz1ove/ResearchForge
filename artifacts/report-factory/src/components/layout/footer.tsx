@@ -11,7 +11,7 @@ export function Footer() {
               <div className="bg-primary text-primary-foreground p-1.5 rounded-md">
                 <BarChart className="h-5 w-5" />
               </div>
-              <span className="font-bold text-lg tracking-tight">Report Factory AI</span>
+              <span className="font-bold text-lg tracking-tight">ResearchForge</span>
             </Link>
             <p className="text-sidebar-foreground/70 text-sm max-w-xs">
               AI 商業報告生成的專業標準。精準、以數據為核心，專為顧問與分析師打造。
@@ -39,7 +39,7 @@ export function Footer() {
         </div>
 
         <div className="border-t border-sidebar-border mt-12 pt-8 flex flex-col md:flex-row items-center justify-between text-sm text-sidebar-foreground/50">
-          <p>&copy; {new Date().getFullYear()} Report Factory AI. 保留所有權利。</p>
+          <p>&copy; {new Date().getFullYear()} ResearchForge. 保留所有權利。</p>
           <div className="flex items-center gap-4 mt-4 md:mt-0">
             <span>專為專業人士打造</span>
           </div>
