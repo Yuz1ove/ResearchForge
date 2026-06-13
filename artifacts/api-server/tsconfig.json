@@ -4,7 +4,8 @@
     "incremental": true,
     "tsBuildInfoFile": ".tsbuildinfo",
     "outDir": "dist",
-    "rootDir": "src",
+    "allowImportingTsExtensions": true,
+    "lib": ["esnext", "dom"],
     "types": ["node"]
   },
   "include": ["src"],

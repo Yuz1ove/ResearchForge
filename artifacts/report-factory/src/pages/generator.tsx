@@ -84,6 +84,7 @@ type ReportInputStringKey = NonNullable<{
 }[keyof ReportInput]>;
 
 type ExportFormat = "docx" | "pdf" | "markdown" | "html" | "txt" | "json" | "blueprint" | "prompt" | "handoff";
+type GenerationMessage = { tone: "success" | "fallback" | "error"; text: string };
 
 const DEFAULT_INPUT: ReportInput = {
   topic: "",
@@ -252,6 +253,103 @@ function sourceErrorMessage(error: unknown): string {
   }
 
   return "來源搜尋暫時無法使用，請稍後再試。";
+}
+
+function shouldUseResearchWritingFlow(input: ReportInput): boolean {
+  return input.mode === "先建立報告架構" && ["研究報告", "專題報告", "實驗報告"].includes(input.reportType);
+}
+
+function generateClientReport(input: ReportInput): GeneratedReport {
+  if (shouldUseResearchWritingFlow(input)) {
+    return runResearchWritingFlowSync({
+      topic: input.topic,
+      reportType: input.reportType,
+      requirements: input.additionalInfo,
+      sources: input.acceptedSources,
+    }).report;
+  }
+
+  return generateReport(input);
+}
+
+function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function fallbackDocxFilename(topic: string): string {
+  const date = new Date();
+  const dateStamp = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+  const safeTopic = topic
+    .trim()
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\\/:*?"<>|\n\r\u0000-\u001f]+/g, "")
+    .replace(/[. ]+$/, "")
+    .slice(0, 40)
+    .replace(/[. ]+$/, "");
+
+  return `ResearchForge-${safeTopic || "report-draft"}-${dateStamp}.docx`;
+}
+
+function filenameFromContentDisposition(header: string | null, fallback: string): string {
+  if (!header) return fallback;
+
+  const encodedMatch = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1]);
+    } catch {
+      return fallback;
+    }
+  }
+
+  const quotedMatch = header.match(/filename="([^"]+)"/i);
+  return quotedMatch?.[1] || fallback;
+}
+
+async function backendGenerationErrorMessage(response: Response): Promise<string> {
+  const data = await response.json().catch(() => null);
+  if (data && typeof data === "object" && "message" in data) {
+    const message = (data as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+
+  return `後端回應 ${response.status}，請稍後再試。`;
+}
+
+async function requestBackendDocx(input: ReportInput): Promise<void> {
+  const response = await fetch("/api/generate-report", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      topic: input.topic,
+      reportType: input.reportType || "研究報告",
+      format: "docx",
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await backendGenerationErrorMessage(response));
+  }
+
+  const blob = await response.blob();
+  if (blob.size === 0) {
+    throw new Error("後端沒有回傳可下載的 DOCX 檔案。");
+  }
+
+  const filename = filenameFromContentDisposition(
+    response.headers.get("Content-Disposition"),
+    fallbackDocxFilename(input.topic),
+  );
+  triggerBlobDownload(blob, filename);
 }
 
 // ─── Block renderer ───────────────────────────────────────────────────────────
@@ -714,6 +812,7 @@ export function Generator() {
   const [report, setReport] = useState<GeneratedReport | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateStatus, setGenerateStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [generationMessage, setGenerationMessage] = useState<GenerationMessage | null>(null);
   const [expansions, setExpansions] = useState<string[]>([]);
   const [sources, setSources] = useState<SourceRecord[]>([]);
   const [isSearchingSources, setIsSearchingSources] = useState(false);
@@ -829,6 +928,7 @@ export function Generator() {
     const query = input.topic.trim();
     if (!query) {
       setGenerateStatus("error");
+      setGenerationMessage({ tone: "error", text: "主題欄位不能為空，請輸入報告主題後再生成。" });
       toast({
         title: "請填寫報告主題",
         description: "主題欄位不能為空，請輸入你的報告主題後再生成。",
@@ -839,47 +939,60 @@ export function Generator() {
     const preflightResult = preflight ?? runSearchPreflight({ topic: query, reportType: input.reportType });
     setIsGenerating(true);
     setGenerateStatus("loading");
+    setGenerationMessage(null);
     setReport(null);
-    let sourcePool = sources;
-    if (autoSearchEnabled && sources.length === 0) {
-      const searchedSources = await runSourceSearch(query, preflightResult);
-      if (searchedSources) sourcePool = searchedSources;
-    }
 
-    const acceptedAtGenerate = acceptedSourceRecords(sourcePool);
-    // Academic level is the single source of truth: derive reader + purpose
-    // defensively here so generation stays consistent even if state drifts.
-    const effectiveInput: ReportInput = {
-      ...input,
-      targetAudience: input.targetAudience || academicToAudience(input.academicLevel),
-      purpose: academicToPurpose(input.academicLevel),
-      acceptedSources: acceptedAtGenerate,
-      searchPreflight: preflightResult,
-    };
-    setInput(effectiveInput);
-    // Simulate async — swap setTimeout for a real API call in the future.
-    setTimeout(() => {
-      try {
-        const shouldUseResearchWritingFlow =
-          effectiveInput.mode === "先建立報告架構" &&
-          ["研究報告", "專題報告", "實驗報告"].includes(effectiveInput.reportType);
-        const nextReport = shouldUseResearchWritingFlow
-          ? runResearchWritingFlowSync({
-              topic: effectiveInput.topic,
-              reportType: effectiveInput.reportType,
-              requirements: effectiveInput.additionalInfo,
-              sources: effectiveInput.acceptedSources,
-            }).report
-          : generateReport(effectiveInput);
-        setReport(nextReport);
-        setGenerateStatus("done");
-      } catch {
-        setGenerateStatus("error");
-        toast({ title: "生成失敗", description: "請確認輸入內容後再試一次。", variant: "destructive" });
-      } finally {
-        setIsGenerating(false);
+    try {
+      let sourcePool = sources;
+      if (autoSearchEnabled && sources.length === 0) {
+        const searchedSources = await runSourceSearch(query, preflightResult);
+        if (searchedSources) sourcePool = searchedSources;
       }
-    }, 1400);
+
+      const acceptedAtGenerate = acceptedSourceRecords(sourcePool);
+      // Academic level is the single source of truth: derive reader + purpose
+      // defensively here so generation stays consistent even if state drifts.
+      const effectiveInput: ReportInput = {
+        ...input,
+        targetAudience: input.targetAudience || academicToAudience(input.academicLevel),
+        purpose: academicToPurpose(input.academicLevel),
+        acceptedSources: acceptedAtGenerate,
+        searchPreflight: preflightResult,
+      };
+      setInput(effectiveInput);
+
+      if (shouldUseResearchWritingFlow(effectiveInput)) {
+        try {
+          await requestBackendDocx(effectiveInput);
+          setGenerationMessage({
+            tone: "success",
+            text: "後端 API 已產生 DOCX，並已開始下載；下方同步顯示可預覽的報告草稿。",
+          });
+          toast({ title: "已由後端產生 DOCX", description: "Word 文件已開始下載。" });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "後端生成暫時無法使用。";
+          setGenerationMessage({
+            tone: "fallback",
+            text: `後端生成暫時失敗，已改用本機生成 fallback。原因：${message}`,
+          });
+          toast({
+            title: "已改用本機生成",
+            description: "後端 DOCX 生成失敗，但仍保留原本前端流程產生草稿。",
+            variant: "destructive",
+          });
+        }
+      }
+
+      const nextReport = generateClientReport(effectiveInput);
+      setReport(nextReport);
+      setGenerateStatus("done");
+    } catch {
+      setGenerateStatus("error");
+      setGenerationMessage({ tone: "error", text: "生成失敗，請確認輸入內容後再試一次。" });
+      toast({ title: "生成失敗", description: "請確認輸入內容後再試一次。", variant: "destructive" });
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   // ── Expand topic ──────────────────────────────────────────────────────────────
@@ -1015,6 +1128,7 @@ export function Generator() {
     setSourceSearchStatus("idle");
     setSourceSearchMessage("");
     setGenerateStatus("idle");
+    setGenerationMessage(null);
   };
 
   const shortTopicHint = input.topic.trim() && isShortTopic(input.topic) && !report;
@@ -1285,6 +1399,21 @@ export function Generator() {
                 onReview={updateSourceReview}
                 onEdit={updateSourceRecord}
               />
+            )}
+
+            {generationMessage && (
+              <div
+                className={`report-card mb-4 rounded-lg border px-4 py-3 text-sm leading-relaxed ${
+                  generationMessage.tone === "success"
+                    ? "border-green-200 bg-green-50 text-green-800"
+                    : generationMessage.tone === "fallback"
+                      ? "border-amber-200 bg-amber-50 text-amber-800"
+                      : "border-destructive/30 bg-destructive/5 text-destructive"
+                }`}
+                data-testid="generation-message"
+              >
+                {generationMessage.text}
+              </div>
             )}
 
             {/* Short-topic hint (before generating) */}
