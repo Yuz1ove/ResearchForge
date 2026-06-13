@@ -85,6 +85,20 @@ type ReportInputStringKey = NonNullable<{
 
 type ExportFormat = "docx" | "pdf" | "markdown" | "html" | "txt" | "json" | "blueprint" | "prompt" | "handoff";
 type GenerationMessage = { tone: "success" | "fallback" | "error"; text: string };
+type BackendGenerateReportErrorCode =
+  | "MISSING_TOPIC"
+  | "UNSUPPORTED_FORMAT"
+  | "GENERATION_FAILURE"
+  | "UNEXPECTED_SERVER_ERROR";
+type BackendGenerateReportErrorPayload = {
+  ok?: false;
+  error?: {
+    code?: unknown;
+    message?: unknown;
+  };
+  message?: unknown;
+  code?: unknown;
+};
 
 const DEFAULT_INPUT: ReportInput = {
   topic: "",
@@ -288,13 +302,23 @@ function fallbackDocxFilename(topic: string): string {
     String(date.getMonth() + 1).padStart(2, "0"),
     String(date.getDate()).padStart(2, "0"),
   ].join("-");
-  const safeTopic = topic
+  const safeTopic = Array.from(
+    topic
+      .normalize("NFKC")
+      .trim()
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\\/:*?"<>|\n\r\u0000-\u001f\u007f]+/g, "-")
+      .replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/gi, "")
+      .replace(/\s+/g, "-")
+      .replace(/\.\.+/g, ".")
+      .replace(/-+/g, "-")
+      .replace(/^[. -]+/, "")
+      .replace(/[. -]+$/, ""),
+  )
+    .slice(0, 48)
+    .join("")
     .trim()
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\\/:*?"<>|\n\r\u0000-\u001f]+/g, "")
-    .replace(/[. ]+$/, "")
-    .slice(0, 40)
-    .replace(/[. ]+$/, "");
+    .replace(/[. -]+$/, "");
 
   return `ResearchForge-${safeTopic || "report-draft"}-${dateStamp}.docx`;
 }
@@ -315,17 +339,39 @@ function filenameFromContentDisposition(header: string | null, fallback: string)
   return quotedMatch?.[1] || fallback;
 }
 
+const BACKEND_GENERATE_REPORT_ERROR_MESSAGES: Record<BackendGenerateReportErrorCode, string> = {
+  MISSING_TOPIC: "請輸入報告主題。",
+  UNSUPPORTED_FORMAT: "目前只支援 DOCX 格式。",
+  GENERATION_FAILURE: "後端 DOCX 生成失敗。",
+  UNEXPECTED_SERVER_ERROR: "後端服務發生未預期錯誤。",
+};
+
 async function backendGenerationErrorMessage(response: Response): Promise<string> {
-  const data = await response.json().catch(() => null);
-  if (data && typeof data === "object" && "message" in data) {
-    const message = (data as { message?: unknown }).message;
-    if (typeof message === "string" && message.trim()) return message;
+  const data = await response.json().catch(() => null) as BackendGenerateReportErrorPayload | null;
+  if (data && typeof data === "object") {
+    const structuredError = data.error;
+    const code = typeof structuredError?.code === "string"
+      ? structuredError.code
+      : typeof data.code === "string"
+        ? data.code
+        : "";
+    const message = typeof structuredError?.message === "string"
+      ? structuredError.message.trim()
+      : typeof data.message === "string"
+        ? data.message.trim()
+        : "";
+
+    if (code && code in BACKEND_GENERATE_REPORT_ERROR_MESSAGES) {
+      return `${BACKEND_GENERATE_REPORT_ERROR_MESSAGES[code as BackendGenerateReportErrorCode]}（${code}）`;
+    }
+
+    if (message) return message;
   }
 
   return `後端回應 ${response.status}，請稍後再試。`;
 }
 
-async function requestBackendDocx(input: ReportInput): Promise<void> {
+async function requestBackendDocx(input: ReportInput): Promise<{ filename: string }> {
   const response = await fetch("/api/generate-report", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -350,6 +396,7 @@ async function requestBackendDocx(input: ReportInput): Promise<void> {
     fallbackDocxFilename(input.topic),
   );
   triggerBlobDownload(blob, filename);
+  return { filename };
 }
 
 // ─── Block renderer ───────────────────────────────────────────────────────────
@@ -963,21 +1010,21 @@ export function Generator() {
 
       if (shouldUseResearchWritingFlow(effectiveInput)) {
         try {
-          await requestBackendDocx(effectiveInput);
+          const backendDocx = await requestBackendDocx(effectiveInput);
           setGenerationMessage({
             tone: "success",
-            text: "後端 API 已產生 DOCX，並已開始下載；下方同步顯示可預覽的報告草稿。",
+            text: `後端 API 已產生 DOCX（${backendDocx.filename}），下載已開始；下方同步顯示可預覽的報告草稿。`,
           });
           toast({ title: "已由後端產生 DOCX", description: "Word 文件已開始下載。" });
         } catch (error) {
           const message = error instanceof Error ? error.message : "後端生成暫時無法使用。";
           setGenerationMessage({
             tone: "fallback",
-            text: `後端生成暫時失敗，已改用本機生成 fallback。原因：${message}`,
+            text: `後端 DOCX 生成未完成，已保留本機生成草稿與手動匯出。原因：${message}`,
           });
           toast({
             title: "已改用本機生成",
-            description: "後端 DOCX 生成失敗，但仍保留原本前端流程產生草稿。",
+            description: message,
             variant: "destructive",
           });
         }
