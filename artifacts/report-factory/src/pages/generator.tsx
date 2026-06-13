@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Navbar } from "@/components/layout/navbar";
+import { ReportGenerationLoading } from "@/components/report/report-generation-loading";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,6 +23,12 @@ import {
   TopicCategory,
   TOPIC_CATEGORIES,
 } from "@/lib/generateReport";
+import { generatedReportToReportDocument, runDocxExportForReportDocument, runResearchWritingFlowSync } from "@/reportFactory/runResearchWritingFlow";
+import {
+  buildPreflightSearchQuery,
+  runSearchPreflight,
+  type SearchPreflightResult,
+} from "@/lib/searchPreflight";
 import {
   acceptedSourceRecords,
   buildExportReadinessWarnings,
@@ -37,6 +44,7 @@ import {
   buildPlainText,
   downloadTxt,
   downloadMarkdown,
+  downloadHtml,
   downloadDocx,
   printPdf,
   downloadJson,
@@ -55,6 +63,7 @@ import {
   FileText,
   FileType,
   FileDown,
+  FileCode,
   Printer,
   Sparkles,
   Lightbulb,
@@ -70,9 +79,11 @@ import {
 
 // ─── Default form state ───────────────────────────────────────────────────────
 
-type ReportInputStringKey = {
+type ReportInputStringKey = NonNullable<{
   [K in keyof ReportInput]: ReportInput[K] extends string ? K : never;
-}[keyof ReportInput];
+}[keyof ReportInput]>;
+
+type ExportFormat = "docx" | "pdf" | "markdown" | "html" | "txt" | "json" | "blueprint" | "prompt" | "handoff";
 
 const DEFAULT_INPUT: ReportInput = {
   topic: "",
@@ -638,6 +649,62 @@ function SourceSearchPanel({
   );
 }
 
+function PreflightPills({ items }: { items: string[] }) {
+  if (items.length === 0) return <span className="text-xs text-muted-foreground">-</span>;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map((item) => (
+        <Badge key={item} variant="outline" className="max-w-full whitespace-normal break-words text-left">
+          {item}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+function PreflightDebugPanel({ preflight }: { preflight: SearchPreflightResult }) {
+  return (
+    <div className="report-card mb-4 rounded-lg border border-border bg-card p-4" data-testid="preflight-debug-panel">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-base font-semibold text-foreground">Preflight Filter Debug</h2>
+          <p className="text-xs text-muted-foreground">只傳入最相關 guidance，不傳完整 100 份 JSON 給生成流程。</p>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <Badge variant="secondary">{preflight.matched_case_id}</Badge>
+          <Badge variant="outline">{preflight.predicted_report_type}</Badge>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-muted-foreground">domains</p>
+          <PreflightPills items={preflight.domains} />
+        </div>
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-muted-foreground">recommended_keywords</p>
+          <PreflightPills items={preflight.recommended_keywords} />
+        </div>
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-muted-foreground">preferred_source_types</p>
+          <PreflightPills items={preflight.preferred_source_types} />
+        </div>
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-muted-foreground">avoid_source_types</p>
+          <PreflightPills items={preflight.avoid_source_types} />
+        </div>
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-muted-foreground">common_failure_modes</p>
+          <ul className="space-y-1 text-xs leading-relaxed text-muted-foreground">
+            {preflight.common_failure_modes.map((mode) => (
+              <li key={mode}>- {mode}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export function Generator() {
@@ -653,6 +720,7 @@ export function Generator() {
   const [sourceSearchStatus, setSourceSearchStatus] = useState<"idle" | "loading" | "done" | "empty" | "error">("idle");
   const [sourceSearchMessage, setSourceSearchMessage] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
 
   const updateInput = (key: ReportInputStringKey, value: string) => {
     setInput((prev) => {
@@ -672,6 +740,11 @@ export function Generator() {
 
   // Live AI domain detection (recomputed as topic / type / level change).
   const derivedPurpose = academicToPurpose(input.academicLevel);
+  const hasTopic = Boolean(input.topic.trim());
+  const preflight = useMemo(
+    () => (hasTopic ? runSearchPreflight({ topic: input.topic.trim(), reportType: input.reportType }) : null),
+    [hasTopic, input.reportType, input.topic],
+  );
   const detectedCategory: TopicCategory | null = input.topic.trim()
     ? detectTopicCategory(input.topic.trim(), input.reportType, derivedPurpose)
     : null;
@@ -681,6 +754,43 @@ export function Generator() {
   const reportInput = report ? { ...input, acceptedSources: report.meta.acceptedSources } : input;
 
   // ── Source search ──────────────────────────────────────────────────────────
+
+  const runSourceSearch = async (
+    topic: string,
+    preflightResult: SearchPreflightResult,
+  ): Promise<SourceRecord[] | null> => {
+    const searchQuery = buildPreflightSearchQuery(topic, preflightResult);
+
+    setIsSearchingSources(true);
+    setSourceSearchStatus("loading");
+    setSourceSearchMessage("");
+    setSources([]);
+
+    try {
+      const result = await searchSources({ query: searchQuery });
+      const normalizedSources = dedupeSourceRecords(result.sources.map(normalizeSourceForReview));
+      setSources(normalizedSources);
+      if (result.sources.length) {
+        setSourceSearchStatus("done");
+        toast({ title: "已找到來源", description: `已套用 preflight 搜尋策略，共找到 ${result.sources.length} 筆可選來源。` });
+      } else {
+        setSourceSearchStatus("empty");
+        setSourceSearchMessage("目前沒有找到符合此主題的來源，請換更具體的關鍵字再試一次。");
+      }
+      return normalizedSources;
+    } catch (error) {
+      setSourceSearchStatus("error");
+      setSourceSearchMessage(sourceErrorMessage(error));
+      toast({
+        title: "來源搜尋失敗",
+        description: sourceErrorMessage(error),
+        variant: "destructive",
+      });
+      return null;
+    } finally {
+      setIsSearchingSources(false);
+    }
+  };
 
   const handleSearchSources = async () => {
     const query = input.topic.trim();
@@ -695,32 +805,8 @@ export function Generator() {
       return;
     }
 
-    setIsSearchingSources(true);
-    setSourceSearchStatus("loading");
-    setSourceSearchMessage("");
-    setSources([]);
-
-    try {
-      const result = await searchSources({ query });
-      setSources(dedupeSourceRecords(result.sources.map(normalizeSourceForReview)));
-      if (result.sources.length) {
-        setSourceSearchStatus("done");
-        toast({ title: "已找到來源", description: `共找到 ${result.sources.length} 筆可選來源。` });
-      } else {
-        setSourceSearchStatus("empty");
-        setSourceSearchMessage("目前沒有找到符合此主題的來源，請換更具體的關鍵字再試一次。");
-      }
-    } catch (error) {
-      setSourceSearchStatus("error");
-      setSourceSearchMessage(sourceErrorMessage(error));
-      toast({
-        title: "來源搜尋失敗",
-        description: sourceErrorMessage(error),
-        variant: "destructive",
-      });
-    } finally {
-      setIsSearchingSources(false);
-    }
+    const preflightResult = preflight ?? runSearchPreflight({ topic: query, reportType: input.reportType });
+    await runSourceSearch(query, preflightResult);
   };
 
   const updateSourceRecord = (sourceId: string, patch: Partial<SourceRecord>) => {
@@ -739,8 +825,9 @@ export function Generator() {
 
   // ── Generate ────────────────────────────────────────────────────────────────
 
-  const handleGenerate = () => {
-    if (!input.topic.trim()) {
+  const handleGenerate = async () => {
+    const query = input.topic.trim();
+    if (!query) {
       setGenerateStatus("error");
       toast({
         title: "請填寫報告主題",
@@ -749,22 +836,42 @@ export function Generator() {
       });
       return;
     }
+    const preflightResult = preflight ?? runSearchPreflight({ topic: query, reportType: input.reportType });
     setIsGenerating(true);
     setGenerateStatus("loading");
     setReport(null);
+    let sourcePool = sources;
+    if (autoSearchEnabled && sources.length === 0) {
+      const searchedSources = await runSourceSearch(query, preflightResult);
+      if (searchedSources) sourcePool = searchedSources;
+    }
+
+    const acceptedAtGenerate = acceptedSourceRecords(sourcePool);
     // Academic level is the single source of truth: derive reader + purpose
     // defensively here so generation stays consistent even if state drifts.
     const effectiveInput: ReportInput = {
       ...input,
       targetAudience: input.targetAudience || academicToAudience(input.academicLevel),
       purpose: academicToPurpose(input.academicLevel),
-      acceptedSources,
+      acceptedSources: acceptedAtGenerate,
+      searchPreflight: preflightResult,
     };
     setInput(effectiveInput);
     // Simulate async — swap setTimeout for a real API call in the future.
     setTimeout(() => {
       try {
-        setReport(generateReport(effectiveInput));
+        const shouldUseResearchWritingFlow =
+          effectiveInput.mode === "先建立報告架構" &&
+          ["研究報告", "專題報告", "實驗報告"].includes(effectiveInput.reportType);
+        const nextReport = shouldUseResearchWritingFlow
+          ? runResearchWritingFlowSync({
+              topic: effectiveInput.topic,
+              reportType: effectiveInput.reportType,
+              requirements: effectiveInput.additionalInfo,
+              sources: effectiveInput.acceptedSources,
+            }).report
+          : generateReport(effectiveInput);
+        setReport(nextReport);
         setGenerateStatus("done");
       } catch {
         setGenerateStatus("error");
@@ -807,6 +914,29 @@ export function Generator() {
     });
   };
 
+  const runReportExport = async (
+    format: ExportFormat,
+    action: (currentReport: GeneratedReport) => void | Promise<void>,
+    successTitle: string,
+    successDescription: string,
+    errorTitle = "匯出失敗",
+    errorDescription = "請稍後再試一次。",
+    shouldWarn = true,
+  ) => {
+    if (!report || exportingFormat) return;
+    const currentReport = report;
+    setExportingFormat(format);
+    try {
+      if (shouldWarn) warnExportReadiness(currentReport);
+      await action(currentReport);
+      toast({ title: successTitle, description: successDescription });
+    } catch {
+      toast({ title: errorTitle, description: errorDescription, variant: "destructive" });
+    } finally {
+      setExportingFormat(null);
+    }
+  };
+
   const handleCopy = () => {
     if (!report) return;
     navigator.clipboard.writeText(buildPlainText(report, reportInput));
@@ -814,63 +944,67 @@ export function Generator() {
   };
 
   const handleDownloadTxt = () => {
-    if (!report) return;
-    warnExportReadiness(report);
-    downloadTxt(report, reportInput);
-    toast({ title: "已下載 TXT", description: "純文字檔已儲存到你的裝置。" });
+    void runReportExport("txt", (currentReport) => downloadTxt(currentReport, reportInput), "已下載 TXT", "純文字檔已儲存到你的裝置。");
   };
 
   const handleDownloadMarkdown = () => {
-    if (!report) return;
-    warnExportReadiness(report);
-    downloadMarkdown(report, reportInput);
-    toast({ title: "已下載 Markdown", description: "Markdown 檔已儲存到你的裝置。" });
+    void runReportExport("markdown", (currentReport) => downloadMarkdown(currentReport, reportInput), "已下載 Markdown", "Markdown 檔已儲存到你的裝置。");
+  };
+
+  const handleDownloadHtml = () => {
+    void runReportExport("html", (currentReport) => downloadHtml(currentReport, reportInput), "已下載 HTML", "HTML 檔已儲存到你的裝置。");
   };
 
   const handleDownloadDocx = async () => {
-    if (!report) return;
-    warnExportReadiness(report);
-    try {
-      await downloadDocx(report, reportInput);
-      toast({ title: "已下載 Word（DOCX）", description: "含封面、目錄、頁首頁尾的 Word 檔已儲存。" });
-    } catch {
-      toast({ title: "DOCX 產生失敗", description: "請稍後再試一次。", variant: "destructive" });
-    }
+    await runReportExport(
+      "docx",
+      async (currentReport) => {
+        const document = generatedReportToReportDocument(currentReport, reportInput);
+        await runDocxExportForReportDocument(document);
+      },
+      "已下載 DOCX",
+      "Word 文件已儲存到你的裝置。",
+      "DOCX 產生失敗",
+    );
   };
 
   const handleDownloadJson = () => {
-    if (!report) return;
-    warnExportReadiness(report);
-    downloadJson(report, reportInput);
-    toast({ title: "已下載 JSON", description: "完整資料（JSON）已儲存，可供程式或其他工具使用。" });
+    void runReportExport("json", (currentReport) => downloadJson(currentReport, reportInput), "已下載 JSON", "完整資料（JSON）已儲存，可供程式或其他工具使用。");
   };
 
   const handleDownloadBlueprint = () => {
-    if (!report) return;
-    downloadBlueprint(report, reportInput);
-    toast({ title: "已下載研究藍圖", description: "規劃藍圖（Markdown）已儲存。" });
+    void runReportExport("blueprint", (currentReport) => downloadBlueprint(currentReport, reportInput), "已下載研究藍圖", "規劃藍圖（Markdown）已儲存。", undefined, undefined, false);
   };
 
   const handleDownloadPrompt = () => {
-    if (!report) return;
-    downloadPromptPackage(report, reportInput);
-    toast({ title: "已下載 AI 提示包", description: "可貼入其他 AI 以完成報告內容的提示已儲存。" });
+    void runReportExport("prompt", (currentReport) => downloadPromptPackage(currentReport, reportInput), "已下載 AI 提示包", "可貼入其他 AI 以完成報告內容的提示已儲存。", undefined, undefined, false);
   };
 
   const handleDownloadProjectHandoff = () => {
-    downloadProjectHandoff();
-    toast({ title: "已下載專案狀態", description: "專案能力與架構說明（Markdown）已儲存。" });
+    if (exportingFormat) return;
+    setExportingFormat("handoff");
+    try {
+      downloadProjectHandoff();
+      toast({ title: "已下載專案狀態", description: "專案能力與架構說明（Markdown）已儲存。" });
+    } catch {
+      toast({ title: "專案狀態匯出失敗", description: "請稍後再試一次。", variant: "destructive" });
+    } finally {
+      setExportingFormat(null);
+    }
   };
 
   const handlePrintPdf = () => {
-    if (!report) return;
-    warnExportReadiness(report);
-    const ok = printPdf(report, reportInput);
-    if (ok) {
-      toast({ title: "正在開啟列印視窗", description: "請在列印對話框選擇「另存為 PDF」。" });
-    } else {
-      toast({ title: "無法開啟列印視窗", description: "請允許本網站開啟彈出視窗後再試一次。", variant: "destructive" });
-    }
+    void runReportExport(
+      "pdf",
+      (currentReport) => {
+        const ok = printPdf(currentReport, reportInput);
+        if (!ok) throw new Error("print window blocked");
+      },
+      "正在開啟列印視窗",
+      "請在列印對話框選擇「另存為 PDF」。",
+      "無法開啟列印視窗",
+      "請允許本網站開啟彈出視窗後再試一次。",
+    );
   };
 
   const handleClear = () => {
@@ -884,8 +1018,8 @@ export function Generator() {
   };
 
   const shortTopicHint = input.topic.trim() && isShortTopic(input.topic) && !report;
-  const hasTopic = Boolean(input.topic.trim());
   const autoSearchEnabled = input.sourceRequirement === "需要，並生成參考文獻格式";
+  const isExporting = exportingFormat !== null;
   const generateButtonLabel = !hasTopic
     ? "尚未輸入主題"
     : isGenerating
@@ -1136,6 +1270,8 @@ export function Generator() {
 
           {/* ── Result panel ───────────────────────────────────────────────── */}
           <div className="flex-1 min-h-[600px]">
+            {preflight && <PreflightDebugPanel preflight={preflight} />}
+
             {(autoSearchEnabled || sources.length > 0 || sourceSearchStatus !== "idle") && (
               <SourceSearchPanel
                 sources={sources}
@@ -1178,23 +1314,7 @@ export function Generator() {
 
             {/* Loading skeleton */}
             {isGenerating && (
-              <div className="report-card bg-card border border-border rounded-xl p-6 flex flex-col gap-4 animate-pulse">
-                <div className="h-7 bg-muted rounded w-2/3" />
-                <div className="flex gap-2">
-                  <div className="h-6 bg-muted rounded w-20" />
-                  <div className="h-6 bg-muted rounded w-16" />
-                  <div className="h-6 bg-muted rounded w-24" />
-                </div>
-                {[1, 2, 3, 4].map((n) => (
-                  <div key={n} className="border border-border rounded-lg overflow-hidden">
-                    <div className="h-10 bg-muted/60" />
-                    <div className="p-4 space-y-2">
-                      <div className="h-4 bg-muted rounded w-full" />
-                      <div className="h-4 bg-muted rounded w-5/6" />
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <ReportGenerationLoading />
             )}
 
             {/* Report output */}
@@ -1281,19 +1401,27 @@ export function Generator() {
                   <div>
                     <p className="text-xs font-medium text-muted-foreground mb-2">匯出文件</p>
                     <div className="flex flex-wrap gap-2">
-                      <Button size="sm" className="min-h-[44px]" onClick={handleDownloadDocx} data-testid="button-export-docx">
-                        <FileType className="mr-2 h-4 w-4" /> Word（DOCX）
+                      <Button size="sm" className="min-h-[44px]" onClick={handleDownloadDocx} disabled={isExporting} data-testid="button-export-docx">
+                        {exportingFormat === "docx" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileType className="mr-2 h-4 w-4" />}
+                        {exportingFormat === "docx" ? "DOCX 產生中" : "DOCX"}
                       </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handlePrintPdf} data-testid="button-export-pdf">
-                        <Printer className="mr-2 h-4 w-4" /> PDF（列印）
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handlePrintPdf} disabled={isExporting} data-testid="button-export-pdf">
+                        {exportingFormat === "pdf" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Printer className="mr-2 h-4 w-4" />}
+                        {exportingFormat === "pdf" ? "PDF 準備中" : "PDF"}
                       </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadMarkdown} data-testid="button-export-md">
-                        <FileDown className="mr-2 h-4 w-4" /> Markdown
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadMarkdown} disabled={isExporting} data-testid="button-export-md">
+                        {exportingFormat === "markdown" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileDown className="mr-2 h-4 w-4" />}
+                        Markdown
                       </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadTxt} data-testid="button-export-txt">
-                        <FileText className="mr-2 h-4 w-4" /> TXT
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadHtml} disabled={isExporting} data-testid="button-export-html">
+                        {exportingFormat === "html" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileCode className="mr-2 h-4 w-4" />}
+                        HTML
                       </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleCopy} data-testid="button-copy">
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadTxt} disabled={isExporting} data-testid="button-export-txt">
+                        {exportingFormat === "txt" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+                        TXT
+                      </Button>
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleCopy} disabled={isExporting} data-testid="button-copy">
                         <Copy className="mr-2 h-4 w-4" /> 複製文字
                       </Button>
                     </div>
@@ -1301,17 +1429,21 @@ export function Generator() {
                   <div className="border-t border-border pt-3">
                     <p className="text-xs font-medium text-muted-foreground mb-2">規劃與交接</p>
                     <div className="flex flex-wrap gap-2">
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadBlueprint} data-testid="button-export-blueprint">
-                        <ClipboardList className="mr-2 h-4 w-4" /> 研究藍圖
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadBlueprint} disabled={isExporting} data-testid="button-export-blueprint">
+                        {exportingFormat === "blueprint" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ClipboardList className="mr-2 h-4 w-4" />}
+                        研究藍圖
                       </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadPrompt} data-testid="button-export-prompt">
-                        <MessageSquareText className="mr-2 h-4 w-4" /> AI 提示包
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadPrompt} disabled={isExporting} data-testid="button-export-prompt">
+                        {exportingFormat === "prompt" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MessageSquareText className="mr-2 h-4 w-4" />}
+                        AI 提示包
                       </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadJson} data-testid="button-export-json">
-                        <FileJson className="mr-2 h-4 w-4" /> JSON
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadJson} disabled={isExporting} data-testid="button-export-json">
+                        {exportingFormat === "json" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileJson className="mr-2 h-4 w-4" />}
+                        JSON
                       </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadProjectHandoff} data-testid="button-export-handoff">
-                        <Archive className="mr-2 h-4 w-4" /> 匯出專案狀態
+                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadProjectHandoff} disabled={isExporting} data-testid="button-export-handoff">
+                        {exportingFormat === "handoff" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Archive className="mr-2 h-4 w-4" />}
+                        匯出專案狀態
                       </Button>
                     </div>
                   </div>

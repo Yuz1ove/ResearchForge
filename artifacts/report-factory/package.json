@@ -8,7 +8,8 @@
     "build": "vite build --config vite.config.ts",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --experimental-strip-types --test src/lib/sourceRecords.test.ts"
+    "test": "node --experimental-strip-types --test src/lib/sourceRecords.test.ts src/lib/searchPreflight.test.ts src/reportFactory/runResearchWritingFlow.test.ts",
+    "demo:orchestrator": "node --experimental-strip-types src/orchestrator/testCases.ts"
   },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -75,5 +76,8 @@
     "vite": "catalog:",
     "wouter": "^3.3.5",
     "zod": "catalog:"
+  },
+  "dependencies": {
+    "lottie-react": "^2.4.1"
   }
 }

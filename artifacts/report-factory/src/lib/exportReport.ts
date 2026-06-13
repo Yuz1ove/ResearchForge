@@ -90,6 +90,8 @@ export function buildMarkdown(report: GeneratedReport, input: ReportInput): stri
 
 // ─── Download helpers ─────────────────────────────────────────────────────────
 
+type ExportExtension = "txt" | "md" | "html" | "json" | "docx";
+
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -98,6 +100,13 @@ function triggerDownload(blob: Blob, filename: string) {
   a.click();
   // Defer revoke so the browser has time to start the download (avoids edge-case timing issues).
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportDateStamp(date = new Date()): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
 function safeFileName(topic: string): string {
@@ -111,14 +120,19 @@ function safeFileName(topic: string): string {
   return base || "report-draft";
 }
 
+function exportFileName(input: ReportInput, ext: ExportExtension, suffix?: string): string {
+  const parts = ["ResearchForge", safeFileName(input.topic), suffix, exportDateStamp()].filter(Boolean);
+  return `${parts.join("-")}.${ext}`;
+}
+
 export function downloadTxt(report: GeneratedReport, input: ReportInput) {
   const blob = new Blob([buildPlainText(report, input)], { type: "text/plain;charset=utf-8" });
-  triggerDownload(blob, `${safeFileName(input.topic)}.txt`);
+  triggerDownload(blob, exportFileName(input, "txt"));
 }
 
 export function downloadMarkdown(report: GeneratedReport, input: ReportInput) {
   const blob = new Blob([buildMarkdown(report, input)], { type: "text/markdown;charset=utf-8" });
-  triggerDownload(blob, `${safeFileName(input.topic)}.md`);
+  triggerDownload(blob, exportFileName(input, "md"));
 }
 
 // ─── JSON export (machine-readable handoff of the full draft) ──────────────────
@@ -139,7 +153,7 @@ export function buildJson(report: GeneratedReport, input: ReportInput): string {
 
 export function downloadJson(report: GeneratedReport, input: ReportInput) {
   const blob = new Blob([buildJson(report, input)], { type: "application/json;charset=utf-8" });
-  triggerDownload(blob, `${safeFileName(input.topic)}.json`);
+  triggerDownload(blob, exportFileName(input, "json"));
 }
 
 // ─── Research blueprint (Markdown plan, no fabricated content) ─────────────────
@@ -149,6 +163,7 @@ export function downloadJson(report: GeneratedReport, input: ReportInput) {
  *  without inventing facts or sources. */
 export function buildBlueprint(report: GeneratedReport, input: ReportInput): string {
   const today = new Date().toLocaleDateString("zh-TW");
+  const preflight = input.searchPreflight;
   const lines: string[] = [
     `# 研究規劃藍圖：${report.meta.title}`,
     "",
@@ -161,6 +176,22 @@ export function buildBlueprint(report: GeneratedReport, input: ReportInput): str
     "## 規劃章節",
   ];
   report.sections.forEach((s, i) => lines.push(`${i + 1}. ${s.heading}`));
+
+  if (preflight) {
+    lines.push(
+      "",
+      "## 搜尋前初階濾網",
+      `- 匹配案例：${preflight.guidance_cases.map((item) => item.matched_case_id).join("、")}`,
+      `- 預期報告類型：${preflight.predicted_report_type}`,
+      `- 搜尋／報告策略：${preflight.report_strategy}`,
+      `- 主題 domains：${preflight.domains.join("、")}`,
+      `- 建議搜尋關鍵詞：${preflight.recommended_keywords.join("、")}`,
+      `- 優先來源類型：${preflight.preferred_source_types.join("、")}`,
+      `- 應降權或避免來源：${preflight.avoid_source_types.join("、")}`,
+      `- 常見錯誤模式：${preflight.common_failure_modes.join("；")}`,
+      `- 證據要求：${preflight.evidence_requirements.join("；")}`,
+    );
+  }
 
   // Surface every data-requirement row so the user knows what to collect.
   const dataRows = report.sections
@@ -183,7 +214,7 @@ export function buildBlueprint(report: GeneratedReport, input: ReportInput): str
 
 export function downloadBlueprint(report: GeneratedReport, input: ReportInput) {
   const blob = new Blob([buildBlueprint(report, input)], { type: "text/markdown;charset=utf-8" });
-  triggerDownload(blob, `${safeFileName(input.topic)}-藍圖.md`);
+  triggerDownload(blob, exportFileName(input, "md", "藍圖"));
 }
 
 // ─── Prompt package (ready-to-paste prompt for an external AI) ─────────────────
@@ -193,6 +224,27 @@ export function downloadBlueprint(report: GeneratedReport, input: ReportInput) {
  *  structure and constraints, but asks the model to supply verified content. */
 export function buildPromptPackage(report: GeneratedReport, input: ReportInput): string {
   const headings = report.sections.map((s, i) => `${i + 1}. ${s.heading}`).join("\n");
+  const preflight = input.searchPreflight;
+  const preflightLines = preflight
+    ? [
+        "## 搜尋前初階濾網",
+        `- 匹配案例：${preflight.guidance_cases.map((item) => item.matched_case_id).join("、")}`,
+        `- 預期報告類型：${preflight.predicted_report_type}`,
+        `- 搜尋／報告策略：${preflight.report_strategy}`,
+        `- 預期意圖：${preflight.intent}`,
+        `- 是否為軟體專案：${preflight.isSoftwareProject ? "是" : "否"}`,
+        `- 主題 domains：${preflight.domains.join("、")}`,
+        `- 建議搜尋關鍵詞：${preflight.recommended_keywords.join("、")}`,
+        `- 優先來源類型：${preflight.preferred_source_types.join("、")}`,
+        `- 應降權或避免來源：${preflight.avoid_source_types.join("、")}`,
+        `- 常見錯誤模式：${preflight.common_failure_modes.join("；")}`,
+        `- 證據要求：${preflight.evidence_requirements.join("；")}`,
+        preflight.safety_and_ethics_notes.length
+          ? `- 倫理提醒：${preflight.safety_and_ethics_notes.join("；")}`
+          : "",
+        "",
+      ]
+    : [];
   const lines: string[] = [
     "你是一位專業的研究報告協作者，請使用繁體中文協助我完成下列報告。",
     "",
@@ -205,6 +257,7 @@ export function buildPromptPackage(report: GeneratedReport, input: ReportInput):
     `- 報告長度：${input.length}`,
     input.additionalInfo.trim() ? `- 補充要求：${input.additionalInfo.trim()}` : "",
     "",
+    ...preflightLines,
     "## 請依下列章節架構撰寫",
     headings,
     "",
@@ -219,7 +272,7 @@ export function buildPromptPackage(report: GeneratedReport, input: ReportInput):
 
 export function downloadPromptPackage(report: GeneratedReport, input: ReportInput) {
   const blob = new Blob([buildPromptPackage(report, input)], { type: "text/plain;charset=utf-8" });
-  triggerDownload(blob, `${safeFileName(input.topic)}-prompt.txt`);
+  triggerDownload(blob, exportFileName(input, "txt", "prompt"));
 }
 
 // ─── DOCX export ──────────────────────────────────────────────────────────────
@@ -252,6 +305,9 @@ function docxBlock(D: DocxModule, b: ContentBlock): InstanceType<DocxModule["Par
         new Paragraph({ children: [new TextRun(`${b.suggestionKind === "流程圖" ? "流程" : "內容"}：${s.content}`)], spacing: { after: 120 } }),
       ]);
 
+    case "dataTable":
+      return blockToLines(b, false).map((line) => new Paragraph({ children: [new TextRun(line)], spacing: { after: 80, line: 300 } }));
+
     case "quality":
       return (b.checks ?? []).map(
         (c) => new Paragraph({ children: [new TextRun(`${c.passed ? "✓" : "✗"} ${c.label}`)], bullet: { level: 0 }, spacing: { after: 60 } }),
@@ -269,82 +325,25 @@ function docxBlock(D: DocxModule, b: ContentBlock): InstanceType<DocxModule["Par
   }
 }
 
-function docxDataTable(D: DocxModule, b: ContentBlock): (InstanceType<DocxModule["Table"]> | InstanceType<DocxModule["Paragraph"]>)[] {
-  if (b.type !== "dataTable" || !b.rows?.length) return [];
-  const { Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle } = D;
-  const headerCells = ["資料類型", "需要內容", "用途", "優先程度"].map(
-    (h) =>
-      new TableCell({
-        children: [new Paragraph({ children: [new TextRun({ text: h, bold: true })] })],
-        shading: { fill: "f1f5f9" },
-      }),
-  );
-  const rows = [
-    new TableRow({ children: headerCells, tableHeader: true }),
-    ...b.rows.map(
-      (r) =>
-        new TableRow({
-          children: [r.type, r.need, r.use, r.priority].map(
-            (v) => new TableCell({ children: [new Paragraph({ children: [new TextRun(String(v))] })] }),
-          ),
-        }),
-    ),
-  ];
-  return [
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      rows,
-      borders: {
-        top: { style: BorderStyle.SINGLE, size: 1, color: "cbd5e1" },
-        bottom: { style: BorderStyle.SINGLE, size: 1, color: "cbd5e1" },
-        left: { style: BorderStyle.SINGLE, size: 1, color: "cbd5e1" },
-        right: { style: BorderStyle.SINGLE, size: 1, color: "cbd5e1" },
-        insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: "e2e8f0" },
-        insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "e2e8f0" },
-      },
-    }),
-    new Paragraph({ children: [], spacing: { after: 120 } }),
-  ];
-}
-
 export async function downloadDocx(report: GeneratedReport, input: ReportInput) {
   const D = await import("docx");
-  const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, PageNumber, Header, Footer, TableOfContents, PageBreak } = D;
+  const { Document, Packer, Paragraph, TextRun, HeadingLevel } = D;
   const today = new Date().toLocaleDateString("zh-TW");
 
   type P = InstanceType<DocxModule["Paragraph"]>;
-  type T = InstanceType<DocxModule["Table"]>;
 
-  const cover: P[] = [
-    new Paragraph({ children: [], spacing: { before: 2400 } }),
+  const body: P[] = [
     new Paragraph({
       heading: HeadingLevel.TITLE,
-      alignment: AlignmentType.CENTER,
-      children: [new TextRun({ text: report.meta.title, bold: true, size: 56 })],
-      spacing: { after: 300 },
+      children: [new TextRun({ text: report.meta.title, bold: true })],
+      spacing: { after: 240 },
     }),
+    new Paragraph({ children: [new TextRun(metaLine(input, today))], spacing: { after: 100 } }),
     new Paragraph({
-      alignment: AlignmentType.CENTER,
-      children: [new TextRun({ text: metaLine(input, today), size: 24, color: "475569" })],
-      spacing: { after: 120 },
+      children: [new TextRun(`分類：${report.meta.category}｜目前版本：${report.meta.versionLabel}（完整度約 ${report.meta.completeness}%）`)],
+      spacing: { after: 220 },
     }),
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      children: [
-        new TextRun({
-          text: `分類：${report.meta.category}　｜　目前版本：${report.meta.versionLabel}（完整度約 ${report.meta.completeness}%）`,
-          size: 24,
-          color: "475569",
-        }),
-      ],
-    }),
-    new Paragraph({ children: [new PageBreak()] }),
   ];
-
-  const toc: P[] = [new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun("目錄")] })];
-  const tocField = new TableOfContents("目錄", { hyperlink: true, headingStyleRange: "1-2" });
-
-  const body: (P | T)[] = [];
   if (report.shortTopic) {
     body.push(
       new Paragraph({ children: [new TextRun({ text: `提醒：${report.shortTopic.message}`, italics: true, color: "8a6d00" })], spacing: { after: 120 } }),
@@ -352,40 +351,28 @@ export async function downloadDocx(report: GeneratedReport, input: ReportInput) 
   }
   for (const section of report.sections) {
     body.push(new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun(section.heading)], spacing: { before: 240, after: 120 } }));
-    for (const b of section.blocks) {
-      if (b.type === "dataTable") body.push(...docxDataTable(D, b));
-      else body.push(...docxBlock(D, b));
-    }
+    for (const b of section.blocks) body.push(...docxBlock(D, b));
+  }
+
+  const hasReferenceSection = report.sections.some((section) => /參考|來源/.test(section.heading));
+  if (!hasReferenceSection && report.meta.bibliography.length > 0) {
+    body.push(new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun("參考資料與來源")], spacing: { before: 240, after: 120 } }));
+    body.push(...report.meta.bibliography.map((entry) => new Paragraph({ children: [new TextRun(entry.text)], bullet: { level: 0 }, spacing: { after: 80, line: 300 } })));
   }
 
   const doc = new Document({
-    creator: "Report Factory AI",
+    creator: "ResearchForge",
     title: report.meta.title,
     styles: { default: { document: { run: { size: 22 } } } },
     sections: [
       {
-        headers: {
-          default: new Header({
-            children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: report.meta.title, size: 18, color: "94a3b8" })] })],
-          }),
-        },
-        footers: {
-          default: new Footer({
-            children: [
-              new Paragraph({
-                alignment: AlignmentType.CENTER,
-                children: [new TextRun({ children: ["第 ", PageNumber.CURRENT, " 頁／共 ", PageNumber.TOTAL_PAGES, " 頁"], size: 18, color: "94a3b8" })],
-              }),
-            ],
-          }),
-        },
-        children: [...cover, ...toc, tocField, new Paragraph({ children: [new PageBreak()] }), ...body],
+        children: body,
       },
     ],
   });
 
   const blob = await Packer.toBlob(doc);
-  triggerDownload(blob, `${safeFileName(input.topic)}.docx`);
+  triggerDownload(blob, exportFileName(input, "docx"));
 }
 
 // ─── Print-to-PDF (browser print engine, reliable for Traditional Chinese) ────
@@ -439,8 +426,9 @@ function blockToHtml(b: ContentBlock): string {
   }
 }
 
-function buildPrintHtml(report: GeneratedReport, input: ReportInput): string {
+function buildHtmlDocument(report: GeneratedReport, input: ReportInput, autoPrint: boolean): string {
   const today = new Date().toLocaleDateString("zh-TW");
+  const documentTitle = `ResearchForge-${safeFileName(input.topic)}-${exportDateStamp()}`;
   const sectionsHtml = report.sections
     .map((s) => `<section><h2>${escapeHtml(s.heading)}</h2>${s.blocks.map(blockToHtml).join("")}</section>`)
     .join("");
@@ -449,7 +437,7 @@ function buildPrintHtml(report: GeneratedReport, input: ReportInput): string {
     : "";
 
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8" />
-<title>${escapeHtml(report.meta.title)}</title>
+<title>${escapeHtml(documentTitle)}</title>
 <style>
   @page { margin: 22mm 18mm; }
   * { box-sizing: border-box; }
@@ -480,15 +468,24 @@ function buildPrintHtml(report: GeneratedReport, input: ReportInput): string {
   </div>
   ${shortTopicHtml}
   ${sectionsHtml}
-  <script>window.addEventListener("load", function(){ setTimeout(function(){ window.print(); }, 300); });</script>
+  ${autoPrint ? `<script>window.addEventListener("load", function(){ setTimeout(function(){ window.print(); }, 300); });</script>` : ""}
 </body></html>`;
+}
+
+export function buildHtml(report: GeneratedReport, input: ReportInput): string {
+  return buildHtmlDocument(report, input, false);
+}
+
+export function downloadHtml(report: GeneratedReport, input: ReportInput) {
+  const blob = new Blob([buildHtml(report, input)], { type: "text/html;charset=utf-8" });
+  triggerDownload(blob, exportFileName(input, "html"));
 }
 
 export function printPdf(report: GeneratedReport, input: ReportInput): boolean {
   const win = window.open("", "_blank");
   if (!win) return false;
   win.document.open();
-  win.document.write(buildPrintHtml(report, input));
+  win.document.write(buildHtmlDocument(report, input, true));
   win.document.close();
   return true;
 }

@@ -18,6 +18,7 @@ import {
   type BibliographyEntry,
   type SourceRecord,
 } from "./sourceRecords";
+import type { SearchPreflightResult } from "./searchPreflight";
 
 // ─── Form option lists (single source of truth, imported by the UI) ──────────
 
@@ -154,6 +155,7 @@ export interface ReportInput {
   rewriteSection: string;
   additionalInfo: string;
   acceptedSources: SourceRecord[];
+  searchPreflight?: SearchPreflightResult | null;
 }
 
 export type TopicCategory =
@@ -2353,6 +2355,43 @@ function additionalInfoSection(input: ReportInput): ReportSection | null {
   };
 }
 
+function buildSearchPreflightSection(input: ReportInput): ReportSection | null {
+  const preflight = input.searchPreflight;
+  if (!preflight) return null;
+
+  const guidanceIds = preflight.guidance_cases.map((item) => item.matched_case_id);
+  const ethics = preflight.safety_and_ethics_notes.length
+    ? preflight.safety_and_ethics_notes
+    : ["此主題未提供額外倫理提醒；仍需遵守來源查證與學術誠信。"];
+
+  return {
+    heading: "搜尋前初階濾網",
+    blocks: [
+      {
+        type: "note",
+        text: "此區只使用最相關的 1-3 筆 search tuning guidance；不含未驗證統計、研究結果或事實數字。",
+      },
+      {
+        type: "list",
+        items: [
+          `匹配案例：${guidanceIds.join("、")}`,
+          `預期報告類型：${preflight.predicted_report_type}`,
+          `搜尋／報告策略：${preflight.report_strategy}`,
+          `預期意圖：${preflight.intent}`,
+          `是否為軟體專案：${preflight.isSoftwareProject ? "是" : "否"}`,
+          `主題 domains：${preflight.domains.join("、")}`,
+          `建議搜尋關鍵詞：${preflight.recommended_keywords.join("、")}`,
+          `優先來源類型：${preflight.preferred_source_types.join("、")}`,
+          `應降權或避免來源：${preflight.avoid_source_types.join("、")}`,
+        ],
+      },
+      { type: "note", text: `常見錯誤模式：${preflight.common_failure_modes.join("；")}` },
+      { type: "note", text: `證據要求：${preflight.evidence_requirements.join("；")}` },
+      { type: "note", text: `倫理提醒：${ethics.join("；")}` },
+    ],
+  };
+}
+
 /**
  * applyStyleAndLength — post-process generated sections so the chosen style and
  * length materially change the output: a tone-setting lead is prepended to the
@@ -2430,6 +2469,14 @@ function buildFiveStepSection(input: ReportInput, content: CategoryContent, kind
 
 function buildSourceSafetySection(input: ReportInput): ReportSection {
   const hasSources = hasUserSources(input);
+  const preflight = input.searchPreflight;
+  const preflightEvidenceRules = preflight?.evidence_requirements.slice(0, 3) ?? [
+    "不得生成無來源的百分比、金額、樣本數、排名、效果量、產量或風險倍數。",
+    "所有數字型主張必須由可信來源支持；無法驗證時需保守改寫或標示待查證。",
+  ];
+  const avoidSourceRule = preflight?.avoid_source_types.length
+    ? `本主題應降權或避免：${preflight.avoid_source_types.join("、")}。`
+    : "低可信、無作者、無日期、無可追溯連結的來源應降權或排除。";
   return {
     heading: "資料來源與引用安全規則",
     blocks: [
@@ -2444,6 +2491,8 @@ function buildSourceSafetySection(input: ReportInput): ReportSection {
           "APA、MLA、Chicago 或其他引用格式只能根據使用者提供的來源格式化，不可假造來源。",
           "每個重要事實若沒有來源，請標示「此處需要補充資料」。",
           "可信度 A：政府、官方、學術論文；B：大學、研究機構、出版社；C：新聞媒體、專業網站；D：部落格、論壇、未知來源。",
+          avoidSourceRule,
+          ...preflightEvidenceRules,
         ],
       },
     ],
@@ -2830,6 +2879,11 @@ export function generateReport(input: ReportInput): GeneratedReport {
       break;
     default:
       sections = buildStructureSections(safeInput, content, kind);
+  }
+
+  const preflightSection = buildSearchPreflightSection(safeInput);
+  if (preflightSection) {
+    sections = [sections[0], preflightSection, ...sections.slice(1)];
   }
 
   // Style + length materially shape narrative output (summary lead, trimming,
