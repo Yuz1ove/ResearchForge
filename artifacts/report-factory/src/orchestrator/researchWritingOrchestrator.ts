@@ -535,9 +535,16 @@ function getMatchedDomainRules(domains: string[]): DomainRule[] {
 function extractContextVariables(input: NormalizedInput): string[] {
   const contextSignals = ["高中生", "國中生", "大學生", "學生", "校園", "台灣", "夜市"];
   const text = searchableText(input);
-  return unique([input.audience, ...contextSignals.filter((signal) => text.includes(normalizeText(signal)))])
+  const matchedSignals = contextSignals.filter((signal) => text.includes(normalizeText(signal)));
+  const contextVariables = unique([...matchedSignals, input.audience])
     .map(cleanVariableName)
     .filter((signal) => signal && signal !== "一般讀者");
+
+  if (contextVariables.some((signal) => ["高中生", "國中生", "大學生"].includes(signal))) {
+    return contextVariables.filter((signal) => !["高中", "國中", "大學", "學生"].includes(signal));
+  }
+
+  return contextVariables;
 }
 
 function extractExploratoryAspects(topic: string): string[] {
@@ -574,7 +581,9 @@ function splitVariablePhrase(value: string): string[] {
 
 function removeAudiencePrefix(value: string, audience: string): string {
   const cleanedAudience = cleanVariableName(audience);
-  const contextPrefixes = unique([cleanedAudience, "高中生", "國中生", "大學生", "學生"]).filter(Boolean);
+  const contextPrefixes = unique([cleanedAudience, "高中生", "國中生", "大學生", "學生"])
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
   const matchedPrefix = contextPrefixes.find((prefix) => value.startsWith(prefix) && value.length > prefix.length + 1);
   return matchedPrefix ? cleanVariableName(value.slice(matchedPrefix.length)) : value;
 }
