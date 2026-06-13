@@ -1,0 +1,79 @@
+{
+  "case_id": "academic_report_search_case_036",
+  "case_number": 36,
+  "language": "zh-Hant",
+  "input_for_report_generator": {
+    "topic": "地方創生政策對青年返鄉意願與地方經濟之影響",
+    "reportType": "研究報告"
+  },
+  "expected_classification": {
+    "intent": "academic_report",
+    "isSoftwareProject": false,
+    "domains": [
+      "urban_studies",
+      "transportation",
+      "public_policy",
+      "community_development"
+    ],
+    "reportStrategy": "academic_research_report"
+  },
+  "search_guidance": {
+    "search_intent": "find_academic_and_official_sources",
+    "recommended_keywords": [
+      "地方創生政策對青年返鄉意願與地方經濟之影響",
+      "地方創生政策對青年返鄉意願與地方經濟之影響 文獻回顧",
+      "地方創生政策對青年返鄉意願與地方經濟之影響 實證研究",
+      "地方創生政策對青年返鄉意願與地方經濟之影響 研究方法",
+      "urban studies public policy community impact",
+      "transportation accessibility quality of life",
+      "urban planning social impact"
+    ],
+    "preferred_source_types": [
+      "peer_reviewed_journal",
+      "systematic_review",
+      "meta_analysis",
+      "official_report",
+      "government_statistics",
+      "university_or_research_institution_publication"
+    ],
+    "avoid_source_types": [
+      "uncited_blog",
+      "marketing_article",
+      "content_farm",
+      "social_media_as_core_evidence",
+      "sensational_news",
+      "ai_generated_article_without_sources"
+    ],
+    "source_priority_rules": [
+      "正式期刊、官方統計與研究機構資料優先。",
+      "預印本、工作論文與會議論文可作為輔助，但必須標示來源層級。",
+      "新聞可用於背景脈絡，不可作為核心學術證據。",
+      "社群討論只能作為觀察材料，不可作為主要證據。",
+      "來源若無作者、日期、出版單位或可追溯連結，應降權或排除。"
+    ]
+  },
+  "evaluation_focus": [
+    "是否判斷為都市、交通或公共政策研究。",
+    "是否區分空間設計、使用行為、經濟效益與居民感受。",
+    "是否呈現多方利害關係人觀點。",
+    "是否避免由單一案例推出普遍結論。"
+  ],
+  "common_failure_modes": [
+    "生成無來源流量、房價、事故或營收數字。",
+    "只採用政府、業者或居民單方觀點。",
+    "忽略地理尺度與族群差異。",
+    "政策建議超過證據強度。"
+  ],
+  "evidence_requirements": [
+    "不得生成無來源的百分比、金額、樣本數、排名、效果量、產量或風險倍數。",
+    "所有數字型主張必須由搜尋結果中的可信來源支持。",
+    "若資料無法驗證，最終報告應改寫為保守描述或標示為待查證。",
+    "不得把預期結果、研究假設或文獻推估寫成已完成研究結果。",
+    "引用統合分析、綜述或大型資料時，不得超出其研究對象、地區與方法限制推論。",
+    "參考文獻需核對作者、年份、題名、期刊、卷期、頁碼、DOI或正式連結。"
+  ],
+  "safety_and_ethics_notes": [
+    "涉及公共政策或地方社群時，需呈現多方利害關係人觀點。",
+    "政策建議需與證據強度相符，不可由薄弱證據推出強政策。"
+  ]
+}

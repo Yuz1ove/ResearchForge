@@ -1,0 +1,81 @@
+{
+  "case_id": "academic_report_search_case_039",
+  "case_number": 39,
+  "language": "zh-Hant",
+  "input_for_report_generator": {
+    "topic": "社區防詐宣導對高齡者風險辨識能力之影響",
+    "reportType": "研究報告"
+  },
+  "expected_classification": {
+    "intent": "academic_report",
+    "isSoftwareProject": false,
+    "domains": [
+      "social_work",
+      "public_health",
+      "gerontology",
+      "community_care"
+    ],
+    "reportStrategy": "academic_research_report"
+  },
+  "search_guidance": {
+    "search_intent": "find_academic_and_official_sources",
+    "recommended_keywords": [
+      "社區防詐宣導對高齡者風險辨識能力之影響",
+      "社區防詐宣導對高齡者風險辨識能力之影響 文獻回顧",
+      "社區防詐宣導對高齡者風險辨識能力之影響 實證研究",
+      "社區防詐宣導對高齡者風險辨識能力之影響 研究方法",
+      "community care quality of life caregiver burden",
+      "older adults social participation public health",
+      "social work community intervention evaluation"
+    ],
+    "preferred_source_types": [
+      "peer_reviewed_journal",
+      "systematic_review",
+      "meta_analysis",
+      "official_report",
+      "government_statistics",
+      "university_or_research_institution_publication"
+    ],
+    "avoid_source_types": [
+      "uncited_blog",
+      "marketing_article",
+      "content_farm",
+      "social_media_as_core_evidence",
+      "sensational_news",
+      "ai_generated_article_without_sources"
+    ],
+    "source_priority_rules": [
+      "正式期刊、官方統計與研究機構資料優先。",
+      "預印本、工作論文與會議論文可作為輔助，但必須標示來源層級。",
+      "新聞可用於背景脈絡，不可作為核心學術證據。",
+      "社群討論只能作為觀察材料，不可作為主要證據。",
+      "來源若無作者、日期、出版單位或可追溯連結，應降權或排除。"
+    ]
+  },
+  "evaluation_focus": [
+    "是否判斷為社會工作、長照或公共衛生研究。",
+    "是否區分服務使用、生活品質、照顧壓力與社會支持。",
+    "是否避免個案故事化或過度醫療化。",
+    "是否注意健康資料與弱勢族群倫理。"
+  ],
+  "common_failure_modes": [
+    "把服務使用寫成必然改善。",
+    "無來源服務成效或人口數字。",
+    "忽略照顧者與服務使用者差異。",
+    "政策建議缺乏證據支持。"
+  ],
+  "evidence_requirements": [
+    "不得生成無來源的百分比、金額、樣本數、排名、效果量、產量或風險倍數。",
+    "所有數字型主張必須由搜尋結果中的可信來源支持。",
+    "若資料無法驗證，最終報告應改寫為保守描述或標示為待查證。",
+    "不得把預期結果、研究假設或文獻推估寫成已完成研究結果。",
+    "引用統合分析、綜述或大型資料時，不得超出其研究對象、地區與方法限制推論。",
+    "參考文獻需核對作者、年份、題名、期刊、卷期、頁碼、DOI或正式連結。"
+  ],
+  "safety_and_ethics_notes": [
+    "涉及健康或醫療風險時，不得提供診斷或治療建議。",
+    "健康相關主張需優先引用正式醫學期刊、公共衛生機構或官方資料。",
+    "涉及公共政策或地方社群時，需呈現多方利害關係人觀點。",
+    "政策建議需與證據強度相符，不可由薄弱證據推出強政策。"
+  ]
+}

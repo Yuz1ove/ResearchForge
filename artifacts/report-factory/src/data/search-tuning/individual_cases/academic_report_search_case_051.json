@@ -1,0 +1,81 @@
+{
+  "case_id": "academic_report_search_case_051",
+  "case_number": 51,
+  "language": "zh-Hant",
+  "input_for_report_generator": {
+    "topic": "搜尋引擎來源排序對 AI 報告生成可信度之影響",
+    "reportType": "研究報告"
+  },
+  "expected_classification": {
+    "intent": "academic_report",
+    "isSoftwareProject": false,
+    "domains": [
+      "artificial_intelligence",
+      "information_retrieval",
+      "education_technology",
+      "source_evaluation"
+    ],
+    "reportStrategy": "academic_research_report"
+  },
+  "search_guidance": {
+    "search_intent": "find_academic_and_official_sources",
+    "recommended_keywords": [
+      "搜尋引擎來源排序對 AI 報告生成可信度之影響",
+      "搜尋引擎來源排序對 AI 報告生成可信度之影響 文獻回顧",
+      "搜尋引擎來源排序對 AI 報告生成可信度之影響 實證研究",
+      "搜尋引擎來源排序對 AI 報告生成可信度之影響 研究方法",
+      "retrieval augmented generation citation quality",
+      "AI source verification education",
+      "LLM factuality information retrieval"
+    ],
+    "preferred_source_types": [
+      "peer_reviewed_journal",
+      "systematic_review",
+      "meta_analysis",
+      "official_report",
+      "government_statistics",
+      "university_or_research_institution_publication"
+    ],
+    "avoid_source_types": [
+      "uncited_blog",
+      "marketing_article",
+      "content_farm",
+      "social_media_as_core_evidence",
+      "sensational_news",
+      "ai_generated_article_without_sources"
+    ],
+    "source_priority_rules": [
+      "正式期刊、官方統計與研究機構資料優先。",
+      "預印本、工作論文與會議論文可作為輔助，但必須標示來源層級。",
+      "新聞可用於背景脈絡，不可作為核心學術證據。",
+      "社群討論只能作為觀察材料，不可作為主要證據。",
+      "來源若無作者、日期、出版單位或可追溯連結，應降權或排除。"
+    ]
+  },
+  "evaluation_focus": [
+    "是否判斷為AI、資訊檢索或教育科技研究，而非單純軟體專案。",
+    "是否區分搜尋、檢索、生成、引用與人工審查。",
+    "是否能要求來源層級與引用檢查。",
+    "是否避免聲稱AI能完全消除錯誤。"
+  ],
+  "common_failure_modes": [
+    "把工具功能寫成研究成效。",
+    "無來源生成錯誤率或準確率。",
+    "忽略檢索品質與引用幻覺。",
+    "把AI輸出當成事實來源。"
+  ],
+  "evidence_requirements": [
+    "不得生成無來源的百分比、金額、樣本數、排名、效果量、產量或風險倍數。",
+    "所有數字型主張必須由搜尋結果中的可信來源支持。",
+    "若資料無法驗證，最終報告應改寫為保守描述或標示為待查證。",
+    "不得把預期結果、研究假設或文獻推估寫成已完成研究結果。",
+    "引用統合分析、綜述或大型資料時，不得超出其研究對象、地區與方法限制推論。",
+    "參考文獻需核對作者、年份、題名、期刊、卷期、頁碼、DOI或正式連結。"
+  ],
+  "safety_and_ethics_notes": [
+    "涉及AI工具時，需區分工具功能、學習效果、引用可信度與學術誠信。",
+    "不得把AI輸出當作未經查證的事實來源。",
+    "涉及未成年學生時，需注意家長同意、學生退出權、匿名化與資料最小化。",
+    "學習表現、心理量表或行為資料不得用於個別標籤化。"
+  ]
+}

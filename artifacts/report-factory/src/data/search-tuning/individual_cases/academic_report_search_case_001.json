@@ -1,0 +1,76 @@
+{
+  "case_id": "academic_report_search_case_001",
+  "case_number": 1,
+  "language": "zh-Hant",
+  "input_for_report_generator": {
+    "topic": "豬在農業生產與生態系統中的角色與價值之研究",
+    "reportType": "研究報告"
+  },
+  "expected_classification": {
+    "intent": "academic_report",
+    "isSoftwareProject": false,
+    "domains": [
+      "agriculture",
+      "ecology",
+      "sustainability",
+      "food_systems"
+    ],
+    "reportStrategy": "academic_research_report"
+  },
+  "search_guidance": {
+    "search_intent": "find_academic_and_official_sources",
+    "recommended_keywords": [
+      "豬在農業生產與生態系統中的角色與價值之研究",
+      "豬在農業生產與生態系統中的角色與價值之研究 文獻回顧",
+      "豬在農業生產與生態系統中的角色與價值之研究 實證研究",
+      "豬在農業生產與生態系統中的角色與價值之研究 研究方法",
+      "agriculture ecology research",
+      "sustainable food systems",
+      "ecosystem services agriculture"
+    ],
+    "preferred_source_types": [
+      "peer_reviewed_journal",
+      "systematic_review",
+      "meta_analysis",
+      "official_report",
+      "government_statistics",
+      "university_or_research_institution_publication"
+    ],
+    "avoid_source_types": [
+      "uncited_blog",
+      "marketing_article",
+      "content_farm",
+      "social_media_as_core_evidence",
+      "sensational_news",
+      "ai_generated_article_without_sources"
+    ],
+    "source_priority_rules": [
+      "正式期刊、官方統計與研究機構資料優先。",
+      "預印本、工作論文與會議論文可作為輔助，但必須標示來源層級。",
+      "新聞可用於背景脈絡，不可作為核心學術證據。",
+      "社群討論只能作為觀察材料，不可作為主要證據。",
+      "來源若無作者、日期、出版單位或可追溯連結，應降權或排除。"
+    ]
+  },
+  "evaluation_focus": [
+    "是否判斷為農業、生態或食物系統研究，而非一般介紹文。",
+    "是否區分生產、環境衝擊、資源循環與管理策略。",
+    "是否避免生成無來源產量、排放、營收或比例。",
+    "是否優先搜尋正式農業、生態與官方資料。"
+  ],
+  "common_failure_modes": [
+    "把主題寫成百科介紹或宣導文。",
+    "自行生成產量、排放、營收或比例。",
+    "將單一地區案例直接推論到所有地區。",
+    "忽略生態風險或管理成本。"
+  ],
+  "evidence_requirements": [
+    "不得生成無來源的百分比、金額、樣本數、排名、效果量、產量或風險倍數。",
+    "所有數字型主張必須由搜尋結果中的可信來源支持。",
+    "若資料無法驗證，最終報告應改寫為保守描述或標示為待查證。",
+    "不得把預期結果、研究假設或文獻推估寫成已完成研究結果。",
+    "引用統合分析、綜述或大型資料時，不得超出其研究對象、地區與方法限制推論。",
+    "參考文獻需核對作者、年份、題名、期刊、卷期、頁碼、DOI或正式連結。"
+  ],
+  "safety_and_ethics_notes": []
+}

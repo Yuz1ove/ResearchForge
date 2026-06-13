@@ -1,0 +1,20 @@
+{
+  "schema_name": "report_search_tuning_test_case_v1",
+  "language": "zh-Hant",
+  "purpose": "用於調教報告生成器之搜尋引擎模組，協助系統判斷搜尋意圖、領域、關鍵詞、來源品質與常見錯誤模式。",
+  "strict_policy": {
+    "no_unverified_data": true,
+    "contains_factual_statistics": false,
+    "description": "本資料集不提供任何未驗證統計數據、百分比、金額、產量、效果量或研究結果。所有案例僅提供搜尋與評測指引。"
+  },
+  "required_fields": [
+    "case_id",
+    "input_for_report_generator",
+    "expected_classification",
+    "search_guidance",
+    "evaluation_focus",
+    "common_failure_modes",
+    "evidence_requirements",
+    "safety_and_ethics_notes"
+  ]
+}

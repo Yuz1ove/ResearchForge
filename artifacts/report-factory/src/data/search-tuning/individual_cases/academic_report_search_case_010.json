@@ -1,0 +1,79 @@
+{
+  "case_id": "academic_report_search_case_010",
+  "case_number": 10,
+  "language": "zh-Hant",
+  "input_for_report_generator": {
+    "topic": "外來入侵種對台灣濕地生態系之影響",
+    "reportType": "研究報告"
+  },
+  "expected_classification": {
+    "intent": "academic_report",
+    "isSoftwareProject": false,
+    "domains": [
+      "environmental_science",
+      "climate_change",
+      "ecology",
+      "public_policy"
+    ],
+    "reportStrategy": "academic_research_report"
+  },
+  "search_guidance": {
+    "search_intent": "find_academic_and_official_sources",
+    "recommended_keywords": [
+      "外來入侵種對台灣濕地生態系之影響",
+      "外來入侵種對台灣濕地生態系之影響 文獻回顧",
+      "外來入侵種對台灣濕地生態系之影響 實證研究",
+      "外來入侵種對台灣濕地生態系之影響 研究方法",
+      "environmental science review",
+      "climate adaptation research",
+      "environmental impact assessment"
+    ],
+    "preferred_source_types": [
+      "peer_reviewed_journal",
+      "systematic_review",
+      "meta_analysis",
+      "official_report",
+      "government_statistics",
+      "university_or_research_institution_publication"
+    ],
+    "avoid_source_types": [
+      "uncited_blog",
+      "marketing_article",
+      "content_farm",
+      "social_media_as_core_evidence",
+      "sensational_news",
+      "ai_generated_article_without_sources"
+    ],
+    "source_priority_rules": [
+      "正式期刊、官方統計與研究機構資料優先。",
+      "預印本、工作論文與會議論文可作為輔助，但必須標示來源層級。",
+      "新聞可用於背景脈絡，不可作為核心學術證據。",
+      "社群討論只能作為觀察材料，不可作為主要證據。",
+      "來源若無作者、日期、出版單位或可追溯連結，應降權或排除。"
+    ]
+  },
+  "evaluation_focus": [
+    "是否判斷為環境科學研究，而非環保宣導文。",
+    "是否區分環境變項、暴露途徑、影響對象與限制。",
+    "是否避免誇大因果或健康風險。",
+    "是否優先搜尋期刊、官方環境資料與研究機構報告。"
+  ],
+  "common_failure_modes": [
+    "把相關性寫成因果。",
+    "生成無來源污染濃度或環境損失數字。",
+    "以新聞或社群文章作為核心證據。",
+    "忽略地區、時間尺度與測量方法差異。"
+  ],
+  "evidence_requirements": [
+    "不得生成無來源的百分比、金額、樣本數、排名、效果量、產量或風險倍數。",
+    "所有數字型主張必須由搜尋結果中的可信來源支持。",
+    "若資料無法驗證，最終報告應改寫為保守描述或標示為待查證。",
+    "不得把預期結果、研究假設或文獻推估寫成已完成研究結果。",
+    "引用統合分析、綜述或大型資料時，不得超出其研究對象、地區與方法限制推論。",
+    "參考文獻需核對作者、年份、題名、期刊、卷期、頁碼、DOI或正式連結。"
+  ],
+  "safety_and_ethics_notes": [
+    "涉及公共政策或地方社群時，需呈現多方利害關係人觀點。",
+    "政策建議需與證據強度相符，不可由薄弱證據推出強政策。"
+  ]
+}

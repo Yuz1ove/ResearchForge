@@ -1,0 +1,37 @@
+{
+  "file_type": "dataset_manifest",
+  "dataset_name": "report_search_tuning_test_cases_100_v1",
+  "created_at": "2026-06-12T03:08:33",
+  "total_cases": 100,
+  "files": [
+    {
+      "path": "report_search_tuning_test_cases_100.json",
+      "description": "100份完整search tuning test case，單一JSON檔"
+    },
+    {
+      "path": "report_search_tuning_schema.json",
+      "description": "資料欄位與使用規則"
+    },
+    {
+      "path": "validation_report.json",
+      "description": "基本驗證結果"
+    },
+    {
+      "path": "individual_cases/",
+      "description": "100份單獨case JSON"
+    }
+  ],
+  "coverage_summary": [
+    "農業生態",
+    "環境科學",
+    "教育研究",
+    "心理健康",
+    "媒體研究",
+    "AI與資訊檢索",
+    "台灣文化",
+    "都市交通",
+    "社會工作",
+    "藝術文化"
+  ],
+  "data_integrity_note": "此資料包避免產生未驗證事實數據；所有數字型主張皆由 evidence_requirements 要求後續搜尋查證。"
+}

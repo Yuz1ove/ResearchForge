@@ -1,0 +1,19 @@
+{
+  "file_type": "validation_report",
+  "dataset": "report_search_tuning_test_cases_100_v1",
+  "checks": {
+    "case_count_is_100": true,
+    "all_cases_have_input_for_report_generator": true,
+    "all_cases_have_search_guidance": true,
+    "all_cases_have_evaluation_focus": true,
+    "all_cases_have_common_failure_modes": true,
+    "all_cases_marked_non_software_project": true,
+    "contains_factual_statistics": false,
+    "contains_generated_research_results": false
+  },
+  "notes": [
+    "recommended_keywords 為搜尋語句建議，不是事實主張。",
+    "本資料集不包含報告正文、研究結果、百分比或統計值。",
+    "若未來加入已審查報告，應另建 review_json 類型。"
+  ]
+}
