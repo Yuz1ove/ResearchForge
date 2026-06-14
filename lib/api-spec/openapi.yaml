@@ -194,6 +194,24 @@ components:
       properties:
         ok:
           type: boolean
+        topic:
+          type: string
+        searchIntent:
+          $ref: "#/components/schemas/SearchIntentSummary"
+        queries:
+          $ref: "#/components/schemas/SearchIntentQuerySet"
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceRecord"
+        provider_status:
+          type: array
+          items:
+            $ref: "#/components/schemas/KeywordSourceGroup"
+        warnings:
+          type: array
+          items:
+            type: string
         llm_status:
           type: string
           enum:
@@ -212,6 +230,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SourceRecord"
+        planner:
+          $ref: "#/components/schemas/SearchIntentPlan"
+        relevance_debug:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchRelevanceDebug"
       required:
         - sources
     KeywordExpansionResult:
@@ -268,6 +292,251 @@ components:
         - reasoning_notes
         - fallback_used
         - llm_status
+    SearchIntentSummary:
+      type: object
+      properties:
+        primaryConcepts:
+          type: array
+          items:
+            type: string
+        contextConcepts:
+          type: array
+          items:
+            type: string
+        outcomeConcepts:
+          type: array
+          items:
+            type: string
+        populationConcepts:
+          type: array
+          items:
+            type: string
+        lowWeightTerms:
+          type: array
+          items:
+            type: string
+        mustHaveTerms:
+          type: array
+          items:
+            type: string
+        plannerStatus:
+          type: string
+          enum:
+            - llm
+            - rule_fallback
+            - skipped
+            - failed
+        fallbackUsed:
+          type: boolean
+      required:
+        - primaryConcepts
+        - contextConcepts
+        - outcomeConcepts
+        - populationConcepts
+        - lowWeightTerms
+        - mustHaveTerms
+        - plannerStatus
+        - fallbackUsed
+    SearchIntentQuerySet:
+      type: object
+      properties:
+        chinese:
+          type: array
+          items:
+            type: string
+        english:
+          type: array
+          items:
+            type: string
+        highPrecision:
+          type: array
+          items:
+            type: string
+        broad:
+          type: array
+          items:
+            type: string
+      required:
+        - chinese
+        - english
+        - highPrecision
+        - broad
+    SearchIntentSourceSearchResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        topic:
+          type: string
+        searchIntent:
+          $ref: "#/components/schemas/SearchIntentSummary"
+        queries:
+          $ref: "#/components/schemas/SearchIntentQuerySet"
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceRecord"
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceRecord"
+        provider_status:
+          type: array
+          items:
+            $ref: "#/components/schemas/KeywordSourceGroup"
+        warnings:
+          type: array
+          items:
+            type: string
+        planner:
+          $ref: "#/components/schemas/SearchIntentPlan"
+        relevance_debug:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchRelevanceDebug"
+        llm_status:
+          type: string
+          enum:
+            - success
+            - timeout
+            - quota_exceeded
+            - failed
+            - skipped
+        keyword_expansion:
+          $ref: "#/components/schemas/KeywordExpansionResult"
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/KeywordSourceGroup"
+      required:
+        - ok
+        - topic
+        - searchIntent
+        - queries
+        - results
+        - sources
+        - provider_status
+        - warnings
+        - planner
+        - llm_status
+        - keyword_expansion
+        - groups
+    SearchIntentPlan:
+      type: object
+      properties:
+        normalizedTopic:
+          type: string
+        primaryConcepts:
+          type: array
+          items:
+            type: string
+        contextConcepts:
+          type: array
+          items:
+            type: string
+        outcomeConcepts:
+          type: array
+          items:
+            type: string
+        populationConcepts:
+          type: array
+          items:
+            type: string
+        lowWeightTerms:
+          type: array
+          items:
+            type: string
+        mustHaveTerms:
+          type: array
+          items:
+            type: string
+        shouldHaveTerms:
+          type: array
+          items:
+            type: string
+        penaltyTerms:
+          type: array
+          items:
+            type: string
+        negativeTerms:
+          type: array
+          items:
+            type: string
+        chineseQueries:
+          type: array
+          items:
+            type: string
+        englishQueries:
+          type: array
+          items:
+            type: string
+        reasoningNotes:
+          type: array
+          items:
+            type: string
+        plannerStatus:
+          type: string
+          enum:
+            - llm
+            - rule_fallback
+            - skipped
+            - failed
+        fallbackUsed:
+          type: boolean
+      required:
+        - normalizedTopic
+        - primaryConcepts
+        - contextConcepts
+        - outcomeConcepts
+        - populationConcepts
+        - lowWeightTerms
+        - mustHaveTerms
+        - shouldHaveTerms
+        - penaltyTerms
+        - negativeTerms
+        - chineseQueries
+        - englishQueries
+        - reasoningNotes
+        - plannerStatus
+        - fallbackUsed
+    SearchRelevanceDebug:
+      type: object
+      properties:
+        sourceId:
+          type: string
+        title:
+          type: string
+        score:
+          type: number
+        matchedPrimaryConcepts:
+          type: array
+          items:
+            type: string
+        matchedMustHaveTerms:
+          type: array
+          items:
+            type: string
+        matchedContextConcepts:
+          type: array
+          items:
+            type: string
+        matchedOutcomeConcepts:
+          type: array
+          items:
+            type: string
+        penalties:
+          type: array
+          items:
+            type: string
+      required:
+        - sourceId
+        - title
+        - score
+        - matchedPrimaryConcepts
+        - matchedMustHaveTerms
+        - matchedContextConcepts
+        - matchedOutcomeConcepts
+        - penalties
     KeywordSourceGroup:
       type: object
       properties:

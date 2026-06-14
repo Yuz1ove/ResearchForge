@@ -32,21 +32,21 @@ export interface SearchKeywordsRequest {
   language?: string;
 }
 
-export type SourceReviewState =
-  (typeof SourceReviewState)[keyof typeof SourceReviewState];
+export type SourceReviewState = typeof SourceReviewState[keyof typeof SourceReviewState];
+
 
 export const SourceReviewState = {
-  pending: "pending",
-  accepted: "accepted",
-  rejected: "rejected",
+  pending: 'pending',
+  accepted: 'accepted',
+  rejected: 'rejected',
 } as const;
 
-export type SourceRecordSourceType =
-  (typeof SourceRecordSourceType)[keyof typeof SourceRecordSourceType];
+export type SourceRecordSourceType = typeof SourceRecordSourceType[keyof typeof SourceRecordSourceType];
+
 
 export const SourceRecordSourceType = {
-  Crossref: "Crossref",
-  Semantic_Scholar: "Semantic Scholar",
+  Crossref: 'Crossref',
+  Semantic_Scholar: 'Semantic Scholar',
 } as const;
 
 export interface SourceRecord {
@@ -64,26 +64,71 @@ export interface SourceRecord {
   accessedAt: string | null;
 }
 
-export type SourceSearchResultLlmStatus =
-  (typeof SourceSearchResultLlmStatus)[keyof typeof SourceSearchResultLlmStatus];
+export type SourceSearchResultLlmStatus = typeof SourceSearchResultLlmStatus[keyof typeof SourceSearchResultLlmStatus];
+
 
 export const SourceSearchResultLlmStatus = {
-  success: "success",
-  timeout: "timeout",
-  quota_exceeded: "quota_exceeded",
-  failed: "failed",
-  skipped: "skipped",
+  success: 'success',
+  timeout: 'timeout',
+  quota_exceeded: 'quota_exceeded',
+  failed: 'failed',
+  skipped: 'skipped',
 } as const;
 
-export type KeywordExpansionResultLlmStatus =
-  (typeof KeywordExpansionResultLlmStatus)[keyof typeof KeywordExpansionResultLlmStatus];
+export type SearchIntentSummaryPlannerStatus = typeof SearchIntentSummaryPlannerStatus[keyof typeof SearchIntentSummaryPlannerStatus];
+
+
+export const SearchIntentSummaryPlannerStatus = {
+  llm: 'llm',
+  rule_fallback: 'rule_fallback',
+  skipped: 'skipped',
+  failed: 'failed',
+} as const;
+
+export interface SearchIntentSummary {
+  primaryConcepts: string[];
+  contextConcepts: string[];
+  outcomeConcepts: string[];
+  populationConcepts: string[];
+  lowWeightTerms: string[];
+  mustHaveTerms: string[];
+  plannerStatus: SearchIntentSummaryPlannerStatus;
+  fallbackUsed: boolean;
+}
+
+export interface SearchIntentQuerySet {
+  chinese: string[];
+  english: string[];
+  highPrecision: string[];
+  broad: string[];
+}
+
+export type KeywordSourceGroupProvider = typeof KeywordSourceGroupProvider[keyof typeof KeywordSourceGroupProvider];
+
+
+export const KeywordSourceGroupProvider = {
+  Crossref: 'Crossref',
+  Semantic_Scholar: 'Semantic Scholar',
+} as const;
+
+export interface KeywordSourceGroup {
+  ok: boolean;
+  provider: KeywordSourceGroupProvider;
+  query: string;
+  results: SourceRecord[];
+  error_type: string | null;
+  error_message: string | null;
+}
+
+export type KeywordExpansionResultLlmStatus = typeof KeywordExpansionResultLlmStatus[keyof typeof KeywordExpansionResultLlmStatus];
+
 
 export const KeywordExpansionResultLlmStatus = {
-  success: "success",
-  timeout: "timeout",
-  quota_exceeded: "quota_exceeded",
-  failed: "failed",
-  skipped: "skipped",
+  success: 'success',
+  timeout: 'timeout',
+  quota_exceeded: 'quota_exceeded',
+  failed: 'failed',
+  skipped: 'skipped',
 } as const;
 
 export interface KeywordExpansionResult {
@@ -99,40 +144,97 @@ export interface KeywordExpansionResult {
   llm_status: KeywordExpansionResultLlmStatus;
 }
 
-export type KeywordSourceGroupProvider =
-  (typeof KeywordSourceGroupProvider)[keyof typeof KeywordSourceGroupProvider];
+export type SearchIntentPlanPlannerStatus = typeof SearchIntentPlanPlannerStatus[keyof typeof SearchIntentPlanPlannerStatus];
 
-export const KeywordSourceGroupProvider = {
-  Crossref: "Crossref",
-  Semantic_Scholar: "Semantic Scholar",
+
+export const SearchIntentPlanPlannerStatus = {
+  llm: 'llm',
+  rule_fallback: 'rule_fallback',
+  skipped: 'skipped',
+  failed: 'failed',
 } as const;
 
-export interface KeywordSourceGroup {
-  ok: boolean;
-  provider: KeywordSourceGroupProvider;
-  query: string;
-  results: SourceRecord[];
-  error_type: string | null;
-  error_message: string | null;
+export interface SearchIntentPlan {
+  normalizedTopic: string;
+  primaryConcepts: string[];
+  contextConcepts: string[];
+  outcomeConcepts: string[];
+  populationConcepts: string[];
+  lowWeightTerms: string[];
+  mustHaveTerms: string[];
+  shouldHaveTerms: string[];
+  penaltyTerms: string[];
+  negativeTerms: string[];
+  chineseQueries: string[];
+  englishQueries: string[];
+  reasoningNotes: string[];
+  plannerStatus: SearchIntentPlanPlannerStatus;
+  fallbackUsed: boolean;
+}
+
+export interface SearchRelevanceDebug {
+  sourceId: string;
+  title: string;
+  score: number;
+  matchedPrimaryConcepts: string[];
+  matchedMustHaveTerms: string[];
+  matchedContextConcepts: string[];
+  matchedOutcomeConcepts: string[];
+  penalties: string[];
 }
 
 export interface SourceSearchResult {
   ok?: boolean;
+  topic?: string;
+  searchIntent?: SearchIntentSummary;
+  queries?: SearchIntentQuerySet;
+  results?: SourceRecord[];
+  provider_status?: KeywordSourceGroup[];
+  warnings?: string[];
   llm_status?: SourceSearchResultLlmStatus;
   keyword_expansion?: KeywordExpansionResult;
   groups?: KeywordSourceGroup[];
   sources: SourceRecord[];
+  planner?: SearchIntentPlan;
+  relevance_debug?: SearchRelevanceDebug[];
 }
 
-export type KeywordSourceSearchResultLlmStatus =
-  (typeof KeywordSourceSearchResultLlmStatus)[keyof typeof KeywordSourceSearchResultLlmStatus];
+export type SearchIntentSourceSearchResultLlmStatus = typeof SearchIntentSourceSearchResultLlmStatus[keyof typeof SearchIntentSourceSearchResultLlmStatus];
+
+
+export const SearchIntentSourceSearchResultLlmStatus = {
+  success: 'success',
+  timeout: 'timeout',
+  quota_exceeded: 'quota_exceeded',
+  failed: 'failed',
+  skipped: 'skipped',
+} as const;
+
+export interface SearchIntentSourceSearchResult {
+  ok: boolean;
+  topic: string;
+  searchIntent: SearchIntentSummary;
+  queries: SearchIntentQuerySet;
+  results: SourceRecord[];
+  sources: SourceRecord[];
+  provider_status: KeywordSourceGroup[];
+  warnings: string[];
+  planner: SearchIntentPlan;
+  relevance_debug?: SearchRelevanceDebug[];
+  llm_status: SearchIntentSourceSearchResultLlmStatus;
+  keyword_expansion: KeywordExpansionResult;
+  groups: KeywordSourceGroup[];
+}
+
+export type KeywordSourceSearchResultLlmStatus = typeof KeywordSourceSearchResultLlmStatus[keyof typeof KeywordSourceSearchResultLlmStatus];
+
 
 export const KeywordSourceSearchResultLlmStatus = {
-  success: "success",
-  timeout: "timeout",
-  quota_exceeded: "quota_exceeded",
-  failed: "failed",
-  skipped: "skipped",
+  success: 'success',
+  timeout: 'timeout',
+  quota_exceeded: 'quota_exceeded',
+  failed: 'failed',
+  skipped: 'skipped',
 } as const;
 
 export interface KeywordSourceSearchResult {

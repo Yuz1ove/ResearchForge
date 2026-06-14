@@ -27,7 +27,12 @@ import {
   runSearchPreflight,
   type SearchPreflightResult,
 } from "@/lib/searchPreflight";
-import { preflightDebugLabel, type PreflightDebugLabelKey } from "@/lib/zhTwLabels";
+import {
+  preflightDebugLabel,
+  searchIntentDebugLabel,
+  type PreflightDebugLabelKey,
+  type SearchIntentDebugLabelKey,
+} from "@/lib/zhTwLabels";
 import {
   acceptedSourceRecords,
   buildExportReadinessWarnings,
@@ -86,6 +91,9 @@ type KeywordSearchDebugState = {
   llmStatusLabel: string;
   queries: string[];
   providerErrors: string[];
+  searchIntent: SourceSearchResult["searchIntent"] | null;
+  intentQueries: SourceSearchResult["queries"] | null;
+  warnings: string[];
 };
 
 const DEFAULT_INPUT: ReportInput = {
@@ -258,7 +266,7 @@ function sourceErrorMessage(error: unknown): string {
 }
 
 function keywordSearchDebugFromResult(result: SourceSearchResult): KeywordSearchDebugState | null {
-  if (!result.keyword_expansion || !result.llm_status || !result.groups) return null;
+  if (!result.keyword_expansion && !result.searchIntent && !result.queries) return null;
 
   const llmStatusLabelMap: Record<string, string> = {
     success: "成功",
@@ -267,23 +275,96 @@ function keywordSearchDebugFromResult(result: SourceSearchResult): KeywordSearch
     failed: "失敗",
     skipped: "略過",
   };
+  const plannerStatusLabelMap: Record<string, string> = {
+    llm: "LLM 規劃",
+    rule_fallback: "規則備援",
+    skipped: "未設定 LLM",
+    failed: "規劃失敗",
+  };
+  const llmStatus = result.llm_status ?? result.searchIntent?.plannerStatus ?? "skipped";
 
   return {
-    fallbackUsed: result.keyword_expansion.fallback_used,
-    llmStatus: result.llm_status,
-    llmStatusLabel: llmStatusLabelMap[result.llm_status] ?? result.llm_status,
-    queries: result.keyword_expansion.search_queries,
-    providerErrors: result.groups
+    fallbackUsed: result.searchIntent?.fallbackUsed ?? result.keyword_expansion?.fallback_used ?? false,
+    llmStatus,
+    llmStatusLabel: result.searchIntent?.plannerStatus
+      ? plannerStatusLabelMap[result.searchIntent.plannerStatus] ?? result.searchIntent.plannerStatus
+      : llmStatusLabelMap[llmStatus] ?? llmStatus,
+    queries: result.keyword_expansion?.search_queries
+      ?? [
+        ...(result.queries?.highPrecision ?? []),
+        ...(result.queries?.english ?? []),
+        ...(result.queries?.chinese ?? []),
+      ],
+    providerErrors: (result.provider_status ?? result.groups ?? [])
       .filter((group) => !group.ok)
       .map((group) => {
         const detail = [group.error_type, group.error_message].filter(Boolean).join("：");
         return `${group.provider} / ${group.query}${detail ? ` - ${detail}` : ""}`;
       }),
+    searchIntent: result.searchIntent ?? null,
+    intentQueries: result.queries ?? null,
+    warnings: result.warnings ?? [],
   };
 }
 
 function hasProviderFailures(result: SourceSearchResult): boolean {
-  return result.groups?.some((group) => !group.ok) ?? false;
+  return (result.provider_status ?? result.groups)?.some((group) => !group.ok) ?? false;
+}
+
+function SearchIntentFieldLabel({ field }: { field: SearchIntentDebugLabelKey }) {
+  return (
+    <p className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
+      <span>{searchIntentDebugLabel(field)}</span>
+      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-muted-foreground">{field}</code>
+    </p>
+  );
+}
+
+function SearchIntentDebugPanel({ debug }: { debug: KeywordSearchDebugState }) {
+  if (!debug.searchIntent) return null;
+
+  return (
+    <div className="mb-3 rounded-md border border-border bg-muted/20 p-3" data-testid="search-intent-debug">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="font-medium text-foreground">{searchIntentDebugLabel("searchIntent")}</span>
+        <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">searchIntent</code>
+        <Badge variant="outline">
+          {searchIntentDebugLabel("plannerStatus")}：{debug.llmStatusLabel}
+        </Badge>
+        <Badge variant={debug.searchIntent.fallbackUsed ? "secondary" : "outline"}>
+          {searchIntentDebugLabel("fallbackUsed")}：{debug.searchIntent.fallbackUsed ? "是" : "否"}
+        </Badge>
+      </div>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div className="space-y-1">
+          <SearchIntentFieldLabel field="primaryConcepts" />
+          <PreflightPills items={debug.searchIntent.primaryConcepts} />
+        </div>
+        <div className="space-y-1">
+          <SearchIntentFieldLabel field="contextConcepts" />
+          <PreflightPills items={debug.searchIntent.contextConcepts} />
+        </div>
+        <div className="space-y-1">
+          <SearchIntentFieldLabel field="outcomeConcepts" />
+          <PreflightPills items={debug.searchIntent.outcomeConcepts} />
+        </div>
+        <div className="space-y-1">
+          <SearchIntentFieldLabel field="mustHaveTerms" />
+          <PreflightPills items={debug.searchIntent.mustHaveTerms} />
+        </div>
+        <div className="space-y-1 md:col-span-2">
+          <SearchIntentFieldLabel field="lowWeightTerms" />
+          <PreflightPills items={debug.searchIntent.lowWeightTerms} />
+        </div>
+      </div>
+      {debug.intentQueries && (
+        <div className="mt-3 space-y-1">
+          <p className="text-xs font-medium text-muted-foreground">高精度查詢 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">queries.highPrecision</code></p>
+          <PreflightPills items={debug.intentQueries.highPrecision.slice(0, 6)} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── Block renderer ───────────────────────────────────────────────────────────
@@ -534,16 +615,27 @@ function SourceSearchPanel({
         <div className="rounded-lg border border-border bg-card px-4 py-3 text-xs text-muted-foreground" data-testid="keyword-search-debug">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <span className="font-medium text-foreground">關鍵詞搜尋除錯</span>
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">/api/search-keywords</code>
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">/api/search-sources</code>
             <Badge variant="outline">LLM：{keywordDebug.llmStatusLabel}</Badge>
             <Badge variant={keywordDebug.fallbackUsed ? "secondary" : "outline"}>
               {keywordDebug.fallbackUsed ? "已使用備援關鍵詞" : "LLM 關鍵詞可用"}
             </Badge>
           </div>
+          <SearchIntentDebugPanel debug={keywordDebug} />
           <div className="space-y-1">
             <p>查詢關鍵詞</p>
             <PreflightPills items={keywordDebug.queries.slice(0, 6)} />
           </div>
+          {keywordDebug.warnings.length > 0 && (
+            <div className="mt-2 space-y-1">
+              <p>搜尋提醒</p>
+              <ul className="space-y-1">
+                {keywordDebug.warnings.slice(0, 4).map((warning) => (
+                  <li key={warning}>- {warning}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {keywordDebug.providerErrors.length > 0 && (
             <div className="mt-2 space-y-1">
               <p>Provider 回應狀態</p>
@@ -882,6 +974,9 @@ export function Generator() {
           llmStatusLabel: "略過",
           queries: [searchQuery],
           providerErrors: [`/api/search-sources topic - ${sourceErrorMessage(error)}`],
+          searchIntent: null,
+          intentQueries: null,
+          warnings: [],
         });
         if (normalizedSources.length) {
           setSourceSearchStatus("done");
