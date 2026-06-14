@@ -63,6 +63,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /search-keywords:
+    post:
+      operationId: searchKeywords
+      tags: [sources]
+      summary: Expand source-search keywords and search providers
+      description: Generates LLM-assisted or deterministic fallback search keywords, then searches source providers grouped by query and provider.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchKeywordsRequest"
+      responses:
+        "200":
+          description: Keyword expansion and grouped source search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeywordSourceSearchResult"
+        "400":
+          description: Invalid keyword search request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -80,6 +105,22 @@ components:
           minLength: 1
       required:
         - query
+    SearchKeywordsRequest:
+      type: object
+      properties:
+        topic:
+          type: string
+          minLength: 1
+        reportType:
+          type: string
+        audience:
+          type: string
+        sourceMode:
+          type: string
+        language:
+          type: string
+      required:
+        - topic
     SourceReviewState:
       type: string
       enum:
@@ -146,6 +187,118 @@ components:
           items:
             $ref: "#/components/schemas/SourceRecord"
       required:
+        - sources
+    KeywordExpansionResult:
+      type: object
+      properties:
+        normalized_topic:
+          type: string
+        domains:
+          type: array
+          items:
+            type: string
+        search_queries:
+          type: array
+          items:
+            type: string
+        english_queries:
+          type: array
+          items:
+            type: string
+        chinese_queries:
+          type: array
+          items:
+            type: string
+        preferred_source_types:
+          type: array
+          items:
+            type: string
+        avoid_source_types:
+          type: array
+          items:
+            type: string
+        reasoning_notes:
+          type: array
+          items:
+            type: string
+        fallback_used:
+          type: boolean
+        llm_status:
+          type: string
+          enum:
+            - success
+            - timeout
+            - quota_exceeded
+            - failed
+            - skipped
+      required:
+        - normalized_topic
+        - domains
+        - search_queries
+        - english_queries
+        - chinese_queries
+        - preferred_source_types
+        - avoid_source_types
+        - reasoning_notes
+        - fallback_used
+        - llm_status
+    KeywordSourceGroup:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        provider:
+          type: string
+          enum:
+            - Crossref
+            - Semantic Scholar
+        query:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceRecord"
+        error_type:
+          type: string
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+      required:
+        - ok
+        - provider
+        - query
+        - results
+        - error_type
+        - error_message
+    KeywordSourceSearchResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        llm_status:
+          type: string
+          enum:
+            - success
+            - timeout
+            - quota_exceeded
+            - failed
+            - skipped
+        keyword_expansion:
+          $ref: "#/components/schemas/KeywordExpansionResult"
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/KeywordSourceGroup"
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceRecord"
+      required:
+        - ok
+        - llm_status
+        - keyword_expansion
+        - groups
         - sources
     ErrorResponse:
       type: object

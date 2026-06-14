@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Navbar } from "@/components/layout/navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { searchSources, type SourceRecord } from "@workspace/api-client-react";
+import { searchKeywords, searchSources, type KeywordSourceSearchResult, type SourceRecord } from "@workspace/api-client-react";
 import {
   generateReport,
   expandTopic,
@@ -22,6 +22,12 @@ import {
   TopicCategory,
   TOPIC_CATEGORIES,
 } from "@/lib/generateReport";
+import {
+  buildPreflightSearchQuery,
+  runSearchPreflight,
+  type SearchPreflightResult,
+} from "@/lib/searchPreflight";
+import { preflightDebugLabel, type PreflightDebugLabelKey } from "@/lib/zhTwLabels";
 import {
   acceptedSourceRecords,
   buildExportReadinessWarnings,
@@ -73,6 +79,14 @@ import {
 type ReportInputStringKey = {
   [K in keyof ReportInput]: ReportInput[K] extends string ? K : never;
 }[keyof ReportInput];
+
+type KeywordSearchDebugState = {
+  fallbackUsed: boolean;
+  llmStatus: string;
+  llmStatusLabel: string;
+  queries: string[];
+  providerErrors: string[];
+};
 
 const DEFAULT_INPUT: ReportInput = {
   topic: "",
@@ -243,6 +257,29 @@ function sourceErrorMessage(error: unknown): string {
   return "來源搜尋暫時無法使用，請稍後再試。";
 }
 
+function keywordSearchDebugFromResult(result: KeywordSourceSearchResult): KeywordSearchDebugState {
+  const llmStatusLabelMap: Record<string, string> = {
+    success: "成功",
+    timeout: "逾時",
+    quota_exceeded: "額度已滿",
+    failed: "失敗",
+    skipped: "略過",
+  };
+
+  return {
+    fallbackUsed: result.keyword_expansion.fallback_used,
+    llmStatus: result.llm_status,
+    llmStatusLabel: llmStatusLabelMap[result.llm_status] ?? result.llm_status,
+    queries: result.keyword_expansion.search_queries,
+    providerErrors: result.groups
+      .filter((group) => !group.ok)
+      .map((group) => {
+        const detail = [group.error_type, group.error_message].filter(Boolean).join("：");
+        return `${group.provider} / ${group.query}${detail ? ` - ${detail}` : ""}`;
+      }),
+  };
+}
+
 // ─── Block renderer ───────────────────────────────────────────────────────────
 
 function BlockView({ block }: { block: ContentBlock }) {
@@ -401,6 +438,7 @@ function SourceSearchPanel({
   rejectedCount,
   status,
   message,
+  keywordDebug,
   isSearching,
   hasTopic,
   onSearch,
@@ -412,6 +450,7 @@ function SourceSearchPanel({
   rejectedCount: number;
   status: "idle" | "loading" | "done" | "empty" | "error";
   message: string;
+  keywordDebug: KeywordSearchDebugState | null;
   isSearching: boolean;
   hasTopic: boolean;
   onSearch: () => void;
@@ -462,7 +501,7 @@ function SourceSearchPanel({
         <div className="rounded-lg border border-border bg-card p-4 space-y-3" data-testid="sources-loading">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            正在搜尋 Crossref 與 Semantic Scholar...
+            正在擴展關鍵詞並搜尋 Crossref 與 Semantic Scholar...
           </div>
           {[1, 2, 3].map((item) => (
             <div key={item} className="animate-pulse rounded-md border border-border p-3 space-y-2">
@@ -482,6 +521,33 @@ function SourceSearchPanel({
       {status === "error" && (
         <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-5 text-sm text-destructive" data-testid="sources-error">
           {message || "來源搜尋失敗，請稍後再試。"}
+        </div>
+      )}
+
+      {keywordDebug && status !== "idle" && (
+        <div className="rounded-lg border border-border bg-card px-4 py-3 text-xs text-muted-foreground" data-testid="keyword-search-debug">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="font-medium text-foreground">關鍵詞搜尋除錯</span>
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">/api/search-keywords</code>
+            <Badge variant="outline">LLM：{keywordDebug.llmStatusLabel}</Badge>
+            <Badge variant={keywordDebug.fallbackUsed ? "secondary" : "outline"}>
+              {keywordDebug.fallbackUsed ? "已使用備援關鍵詞" : "LLM 關鍵詞可用"}
+            </Badge>
+          </div>
+          <div className="space-y-1">
+            <p>查詢關鍵詞</p>
+            <PreflightPills items={keywordDebug.queries.slice(0, 6)} />
+          </div>
+          {keywordDebug.providerErrors.length > 0 && (
+            <div className="mt-2 space-y-1">
+              <p>Provider 回應狀態</p>
+              <ul className="space-y-1">
+                {keywordDebug.providerErrors.slice(0, 4).map((error) => (
+                  <li key={error}>- {error}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
 
@@ -512,7 +578,7 @@ function SourceSearchPanel({
                       <Badge variant={accepted ? "default" : rejected ? "secondary" : "outline"}>
                         {accepted ? "已接受" : rejected ? "已拒絕" : "待審核"}
                       </Badge>
-                      {incomplete && <Badge variant="outline">metadata 不完整</Badge>}
+                      {incomplete && <Badge variant="outline">來源資料不完整</Badge>}
                     </div>
                     {source.url && (
                       <a
@@ -638,6 +704,71 @@ function SourceSearchPanel({
   );
 }
 
+function PreflightPills({ items }: { items: string[] }) {
+  if (items.length === 0) return <span className="text-xs text-muted-foreground">-</span>;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map((item) => (
+        <Badge key={item} variant="outline" className="max-w-full whitespace-normal break-words text-left">
+          {item}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+function PreflightFieldLabel({ field }: { field: PreflightDebugLabelKey }) {
+  return (
+    <p className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
+      <span>{preflightDebugLabel(field)}</span>
+      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-muted-foreground">{field}</code>
+    </p>
+  );
+}
+
+function PreflightDebugPanel({ preflight }: { preflight: SearchPreflightResult }) {
+  return (
+    <div className="report-card mb-4 rounded-lg border border-border bg-card p-4" data-testid="preflight-debug-panel">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-base font-semibold text-foreground">搜尋前檢查除錯面板</h2>
+          <p className="text-xs text-muted-foreground">只傳入最相關的搜尋指引，不傳完整大型測試資料給生成流程。</p>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <Badge variant="secondary">{preflight.matched_case_id}</Badge>
+          <Badge variant="outline">{preflight.predicted_report_type}</Badge>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+        <div className="space-y-1">
+          <PreflightFieldLabel field="domains" />
+          <PreflightPills items={preflight.domains} />
+        </div>
+        <div className="space-y-1">
+          <PreflightFieldLabel field="recommended_keywords" />
+          <PreflightPills items={preflight.recommended_keywords} />
+        </div>
+        <div className="space-y-1">
+          <PreflightFieldLabel field="preferred_source_types" />
+          <PreflightPills items={preflight.preferred_source_types} />
+        </div>
+        <div className="space-y-1">
+          <PreflightFieldLabel field="avoid_source_types" />
+          <PreflightPills items={preflight.avoid_source_types} />
+        </div>
+        <div className="space-y-1">
+          <PreflightFieldLabel field="common_failure_modes" />
+          <ul className="space-y-1 text-xs leading-relaxed text-muted-foreground">
+            {preflight.common_failure_modes.map((mode) => (
+              <li key={mode}>- {mode}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export function Generator() {
@@ -652,6 +783,7 @@ export function Generator() {
   const [isSearchingSources, setIsSearchingSources] = useState(false);
   const [sourceSearchStatus, setSourceSearchStatus] = useState<"idle" | "loading" | "done" | "empty" | "error">("idle");
   const [sourceSearchMessage, setSourceSearchMessage] = useState("");
+  const [keywordSearchDebug, setKeywordSearchDebug] = useState<KeywordSearchDebugState | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const updateInput = (key: ReportInputStringKey, value: string) => {
@@ -672,6 +804,11 @@ export function Generator() {
 
   // Live AI domain detection (recomputed as topic / type / level change).
   const derivedPurpose = academicToPurpose(input.academicLevel);
+  const hasTopic = Boolean(input.topic.trim());
+  const preflight = useMemo(
+    () => (hasTopic ? runSearchPreflight({ topic: input.topic.trim(), reportType: input.reportType }) : null),
+    [hasTopic, input.reportType, input.topic],
+  );
   const detectedCategory: TopicCategory | null = input.topic.trim()
     ? detectTopicCategory(input.topic.trim(), input.reportType, derivedPurpose)
     : null;
@@ -683,8 +820,8 @@ export function Generator() {
   // ── Source search ──────────────────────────────────────────────────────────
 
   const handleSearchSources = async () => {
-    const query = input.topic.trim();
-    if (!query) {
+    const topic = input.topic.trim();
+    if (!topic) {
       setSourceSearchStatus("error");
       setSourceSearchMessage("請先輸入研究主題。");
       toast({
@@ -698,26 +835,64 @@ export function Generator() {
     setIsSearchingSources(true);
     setSourceSearchStatus("loading");
     setSourceSearchMessage("");
+    setKeywordSearchDebug(null);
     setSources([]);
 
     try {
-      const result = await searchSources({ query });
-      setSources(dedupeSourceRecords(result.sources.map(normalizeSourceForReview)));
+      const result = await searchKeywords({
+        topic,
+        reportType: input.reportType,
+        audience: input.targetAudience || input.academicLevel,
+        sourceMode: input.sourceRequirement,
+        language: input.outputLanguage,
+      });
+      const normalizedSources = dedupeSourceRecords(result.sources.map(normalizeSourceForReview));
+      setSources(normalizedSources);
+      setKeywordSearchDebug(keywordSearchDebugFromResult(result));
       if (result.sources.length) {
         setSourceSearchStatus("done");
-        toast({ title: "已找到來源", description: `共找到 ${result.sources.length} 筆可選來源。` });
+        toast({
+          title: "已找到來源",
+          description: `已套用關鍵詞搜尋策略，共找到 ${result.sources.length} 筆可選來源。`,
+        });
       } else {
         setSourceSearchStatus("empty");
-        setSourceSearchMessage("目前沒有找到符合此主題的來源，請換更具體的關鍵字再試一次。");
+        setSourceSearchMessage("已產生搜尋關鍵詞，但目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。");
       }
     } catch (error) {
-      setSourceSearchStatus("error");
-      setSourceSearchMessage(sourceErrorMessage(error));
-      toast({
-        title: "來源搜尋失敗",
-        description: sourceErrorMessage(error),
-        variant: "destructive",
-      });
+      const preflightResult = preflight ?? runSearchPreflight({ topic, reportType: input.reportType });
+      const searchQuery = buildPreflightSearchQuery(topic, preflightResult);
+
+      try {
+        const result = await searchSources({ query: searchQuery });
+        const normalizedSources = dedupeSourceRecords(result.sources.map(normalizeSourceForReview));
+        setSources(normalizedSources);
+        setKeywordSearchDebug({
+          fallbackUsed: true,
+          llmStatus: "skipped",
+          llmStatusLabel: "略過",
+          queries: [searchQuery],
+          providerErrors: [`/api/search-keywords - ${sourceErrorMessage(error)}`],
+        });
+        if (result.sources.length) {
+          setSourceSearchStatus("done");
+          toast({
+            title: "已找到來源",
+            description: `關鍵詞搜尋端點暫不可用，已改用既有搜尋，共找到 ${result.sources.length} 筆可選來源。`,
+          });
+        } else {
+          setSourceSearchStatus("empty");
+          setSourceSearchMessage("目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。");
+        }
+      } catch (fallbackError) {
+        setSourceSearchStatus("error");
+        setSourceSearchMessage(sourceErrorMessage(fallbackError));
+        toast({
+          title: "來源搜尋失敗",
+          description: sourceErrorMessage(fallbackError),
+          variant: "destructive",
+        });
+      }
     } finally {
       setIsSearchingSources(false);
     }
@@ -880,11 +1055,11 @@ export function Generator() {
     setSources([]);
     setSourceSearchStatus("idle");
     setSourceSearchMessage("");
+    setKeywordSearchDebug(null);
     setGenerateStatus("idle");
   };
 
   const shortTopicHint = input.topic.trim() && isShortTopic(input.topic) && !report;
-  const hasTopic = Boolean(input.topic.trim());
   const autoSearchEnabled = input.sourceRequirement === "需要，並生成參考文獻格式";
   const generateButtonLabel = !hasTopic
     ? "尚未輸入主題"
@@ -1143,6 +1318,7 @@ export function Generator() {
                 rejectedCount={rejectedSources.length}
                 status={sourceSearchStatus}
                 message={sourceSearchMessage}
+                keywordDebug={keywordSearchDebug}
                 isSearching={isSearchingSources}
                 hasTopic={hasTopic}
                 onSearch={handleSearchSources}
@@ -1150,6 +1326,8 @@ export function Generator() {
                 onEdit={updateSourceRecord}
               />
             )}
+
+            {preflight && <PreflightDebugPanel preflight={preflight} />}
 
             {/* Short-topic hint (before generating) */}
             {shortTopicHint && (

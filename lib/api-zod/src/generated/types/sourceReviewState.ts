@@ -10,7 +10,7 @@ export type SourceReviewState = typeof SourceReviewState[keyof typeof SourceRevi
 
 
 export const SourceReviewState = {
-  Pending: 'pending',
-  Accepted: 'accepted',
-  Rejected: 'rejected',
+  pending: 'pending',
+  accepted: 'accepted',
+  rejected: 'rejected',
 } as const;

@@ -14,24 +14,33 @@ export interface SearchSourcesRequest {
   query: string;
 }
 
-export type SourceSourceType = typeof SourceSourceType[keyof typeof SourceSourceType];
-
-
-export const SourceSourceType = {
-  Crossref: 'Crossref',
-  Semantic_Scholar: 'Semantic Scholar',
-} as const;
+export interface SearchKeywordsRequest {
+  /** @minLength 1 */
+  topic: string;
+  reportType?: string;
+  audience?: string;
+  sourceMode?: string;
+  language?: string;
+}
 
 export type SourceReviewState = typeof SourceReviewState[keyof typeof SourceReviewState];
 
 
 export const SourceReviewState = {
-  Pending: 'pending',
-  Accepted: 'accepted',
-  Rejected: 'rejected',
+  pending: 'pending',
+  accepted: 'accepted',
+  rejected: 'rejected',
 } as const;
 
-export interface Source {
+export type SourceRecordSourceType = typeof SourceRecordSourceType[keyof typeof SourceRecordSourceType];
+
+
+export const SourceRecordSourceType = {
+  Crossref: 'Crossref',
+  Semantic_Scholar: 'Semantic Scholar',
+} as const;
+
+export interface SourceRecord {
   id: string;
   title: string;
   authors: string[];
@@ -39,17 +48,75 @@ export interface Source {
   abstract: string | null;
   doi: string | null;
   url: string | null;
-  sourceType: SourceSourceType;
+  sourceType: SourceRecordSourceType;
   reviewState: SourceReviewState;
   publisher: string | null;
   containerTitle: string | null;
   accessedAt: string | null;
 }
 
-export type SourceRecord = Source;
-
 export interface SourceSearchResult {
-  sources: Source[];
+  sources: SourceRecord[];
+}
+
+export type KeywordExpansionResultLlmStatus = typeof KeywordExpansionResultLlmStatus[keyof typeof KeywordExpansionResultLlmStatus];
+
+
+export const KeywordExpansionResultLlmStatus = {
+  success: 'success',
+  timeout: 'timeout',
+  quota_exceeded: 'quota_exceeded',
+  failed: 'failed',
+  skipped: 'skipped',
+} as const;
+
+export interface KeywordExpansionResult {
+  normalized_topic: string;
+  domains: string[];
+  search_queries: string[];
+  english_queries: string[];
+  chinese_queries: string[];
+  preferred_source_types: string[];
+  avoid_source_types: string[];
+  reasoning_notes: string[];
+  fallback_used: boolean;
+  llm_status: KeywordExpansionResultLlmStatus;
+}
+
+export type KeywordSourceGroupProvider = typeof KeywordSourceGroupProvider[keyof typeof KeywordSourceGroupProvider];
+
+
+export const KeywordSourceGroupProvider = {
+  Crossref: 'Crossref',
+  Semantic_Scholar: 'Semantic Scholar',
+} as const;
+
+export interface KeywordSourceGroup {
+  ok: boolean;
+  provider: KeywordSourceGroupProvider;
+  query: string;
+  results: SourceRecord[];
+  error_type: string | null;
+  error_message: string | null;
+}
+
+export type KeywordSourceSearchResultLlmStatus = typeof KeywordSourceSearchResultLlmStatus[keyof typeof KeywordSourceSearchResultLlmStatus];
+
+
+export const KeywordSourceSearchResultLlmStatus = {
+  success: 'success',
+  timeout: 'timeout',
+  quota_exceeded: 'quota_exceeded',
+  failed: 'failed',
+  skipped: 'skipped',
+} as const;
+
+export interface KeywordSourceSearchResult {
+  ok: boolean;
+  llm_status: KeywordSourceSearchResultLlmStatus;
+  keyword_expansion: KeywordExpansionResult;
+  groups: KeywordSourceGroup[];
+  sources: SourceRecord[];
 }
 
 export interface ErrorResponse {
