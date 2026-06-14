@@ -6,10 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type SourceSourceType = typeof SourceSourceType[keyof typeof SourceSourceType];
+export type KeywordSourceGroupProvider = typeof KeywordSourceGroupProvider[keyof typeof KeywordSourceGroupProvider];
 
 
-export const SourceSourceType = {
+export const KeywordSourceGroupProvider = {
   Crossref: 'Crossref',
   Semantic_Scholar: 'Semantic Scholar',
 } as const;

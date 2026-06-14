@@ -5,10 +5,10 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { SourceSourceType } from './sourceSourceType';
+import type { SourceRecordSourceType } from './sourceRecordSourceType';
 import type { SourceReviewState } from './sourceReviewState';
 
-export interface Source {
+export interface SourceRecord {
   id: string;
   title: string;
   authors: string[];
@@ -16,7 +16,7 @@ export interface Source {
   abstract: string | null;
   doi: string | null;
   url: string | null;
-  sourceType: SourceSourceType;
+  sourceType: SourceRecordSourceType;
   reviewState: SourceReviewState;
   publisher: string | null;
   containerTitle: string | null;

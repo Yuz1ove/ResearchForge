@@ -4,7 +4,10 @@ import {
   dedupeSources,
   normalizeCrossrefWork,
   normalizeSemanticScholarPaper,
+  searchSourceProvider,
+  searchSources,
 } from "./source-retrieval";
+import { getSourceProviderConfigs } from "./source-provider-config";
 
 test("normalizes Crossref works into the unified Source shape", () => {
   const source = normalizeCrossrefWork({
@@ -108,4 +111,101 @@ test("dedupes sources by DOI before URL or title", () => {
 
   assert.equal(sources.length, 1);
   assert.equal(sources[0]?.sourceType, "Crossref");
+});
+
+test("returns structured provider failure instead of throwing", async () => {
+  const configs = getSourceProviderConfigs();
+  const result = await searchSourceProvider("Crossref", "student attention", {
+    providerConfigs: {
+      Crossref: {
+        ...configs.Crossref,
+        endpoint: "https://example.test/works",
+        timeoutMs: 50,
+        queryLimit: 1,
+      },
+    },
+    fetchImpl: async () => new Response(JSON.stringify({ message: "failure" }), { status: 500 }),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.provider, "Crossref");
+  assert.equal(result.query, "student attention");
+  assert.equal(result.error_type, "api-failure");
+  assert.match(result.error_message ?? "", /HTTP 500/);
+  assert.deepEqual(result.results, []);
+});
+
+test("returns structured provider timeout instead of throwing", async () => {
+  const configs = getSourceProviderConfigs();
+  const timeoutFetch = async (_input: string | URL, init?: RequestInit): Promise<Response> => {
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      });
+    });
+  };
+
+  const result = await searchSourceProvider("Semantic Scholar", "sleep quality", {
+    providerConfigs: {
+      "Semantic Scholar": {
+        ...configs["Semantic Scholar"],
+        endpoint: "https://example.test/paper/search",
+        timeoutMs: 5,
+        queryLimit: 1,
+      },
+    },
+    fetchImpl: timeoutFetch,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.provider, "Semantic Scholar");
+  assert.equal(result.error_type, "timeout");
+  assert.match(result.error_message ?? "", /timed out/);
+  assert.deepEqual(result.results, []);
+});
+
+test("returns deduped partial results when one provider succeeds and another fails", async () => {
+  const configs = getSourceProviderConfigs();
+  const sources = await searchSources("student sleep quality", {
+    providerConfigs: {
+      Crossref: {
+        ...configs.Crossref,
+        endpoint: "https://example.test/works",
+        timeoutMs: 50,
+        queryLimit: 1,
+      },
+      "Semantic Scholar": {
+        ...configs["Semantic Scholar"],
+        endpoint: "https://example.test/paper/search",
+        timeoutMs: 50,
+        queryLimit: 1,
+      },
+    },
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.includes("paper/search")) {
+        return new Response(JSON.stringify({ message: "semantic failure" }), { status: 503 });
+      }
+
+      return new Response(JSON.stringify({
+        message: {
+          items: [
+            {
+              title: ["Student sleep quality and attention"],
+              author: [{ given: "Ada", family: "Lovelace" }],
+              issued: { "date-parts": [[2024]] },
+              DOI: "10.4000/student-sleep",
+              URL: "https://doi.org/10.4000/student-sleep",
+            },
+          ],
+        },
+      }));
+    },
+  });
+
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0]?.sourceType, "Crossref");
+  assert.equal(sources[0]?.doi, "10.4000/student-sleep");
 });

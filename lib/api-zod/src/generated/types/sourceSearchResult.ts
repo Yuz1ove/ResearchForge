@@ -5,8 +5,8 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { Source } from './source';
+import type { SourceRecord } from './sourceRecord';
 
 export interface SourceSearchResult {
-  sources: Source[];
+  sources: SourceRecord[];
 }

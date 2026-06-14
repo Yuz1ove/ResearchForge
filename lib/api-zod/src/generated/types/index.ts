@@ -8,7 +8,15 @@
 
 export * from './errorResponse';
 export * from './healthStatus';
+export * from './keywordExpansionResult';
+export * from './keywordExpansionResultLlmStatus';
+export * from './keywordSourceGroup';
+export * from './keywordSourceGroupProvider';
+export * from './keywordSourceSearchResult';
+export * from './keywordSourceSearchResultLlmStatus';
+export * from './searchKeywordsRequest';
 export * from './searchSourcesRequest';
-export * from './source';
+export * from './sourceRecord';
+export * from './sourceRecordSourceType';
+export * from './sourceReviewState';
 export * from './sourceSearchResult';
-export * from './sourceSourceType';

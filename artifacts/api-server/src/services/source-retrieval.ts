@@ -3,15 +3,33 @@ import {
   normalizeSourceRecord,
   type SourceRecord,
 } from "@workspace/api-zod";
+import {
+  getSourceProviderConfigs,
+  SOURCE_PROVIDER_NAMES,
+  type SourceProviderConfig,
+  type SourceProviderName,
+} from "./source-provider-config";
 
-const CROSSREF_WORKS_URL = "https://api.crossref.org/works";
-const SEMANTIC_SCHOLAR_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search";
-const REQUEST_TIMEOUT_MS = 8000;
-const RESULTS_PER_PROVIDER = 8;
 const MAX_RESULTS = 16;
 
-type SourceProvider = "Crossref" | "Semantic Scholar";
-type SourceSearchErrorCode = "timeout" | "api-failure";
+export type SourceProvider = SourceProviderName;
+export type SourceSearchErrorCode = "timeout" | "api-failure";
+
+export type SourceFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
+
+export interface SourceSearchOptions {
+  fetchImpl?: SourceFetch;
+  providerConfigs?: Partial<Record<SourceProvider, SourceProviderConfig>>;
+}
+
+export interface SourceProviderSearchResult {
+  ok: boolean;
+  provider: SourceProvider;
+  query: string;
+  results: SourceRecord[];
+  error_type: SourceSearchErrorCode | null;
+  error_message: string | null;
+}
 
 export class SourceSearchError extends Error {
   constructor(
@@ -183,18 +201,27 @@ export function normalizeSemanticScholarPaper(paper: SemanticScholarPaper): Sour
   });
 }
 
-async function fetchJson<T>(provider: SourceProvider, url: URL, headers?: Record<string, string>): Promise<T> {
+function sourceProviderConfigs(options?: SourceSearchOptions): Record<SourceProvider, SourceProviderConfig> {
+  const defaults = getSourceProviderConfigs();
+  return {
+    Crossref: options?.providerConfigs?.Crossref ?? defaults.Crossref,
+    "Semantic Scholar": options?.providerConfigs?.["Semantic Scholar"] ?? defaults["Semantic Scholar"],
+  };
+}
+
+async function fetchJson<T>(
+  provider: SourceProvider,
+  url: URL,
+  config: SourceProviderConfig,
+  fetchImpl: SourceFetch = fetch,
+): Promise<T> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchImpl(url, {
       signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "ReportFactoryAI/1.0",
-        ...headers,
-      },
+      headers: config.headers,
     });
 
     if (!response.ok) {
@@ -217,27 +244,26 @@ async function fetchJson<T>(provider: SourceProvider, url: URL, headers?: Record
   }
 }
 
-async function searchCrossref(query: string): Promise<SourceRecord[]> {
-  const url = new URL(CROSSREF_WORKS_URL);
+async function searchCrossref(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<SourceRecord[]> {
+  const url = new URL(config.endpoint);
   url.searchParams.set("query", query);
-  url.searchParams.set("rows", String(RESULTS_PER_PROVIDER));
+  url.searchParams.set("rows", String(config.queryLimit));
   url.searchParams.set("select", "title,author,issued,published,published-print,published-online,abstract,DOI,URL,publisher,container-title");
+  if (config.mailto) url.searchParams.set("mailto", config.mailto);
 
-  const data = await fetchJson<CrossrefResponse>("Crossref", url);
+  const data = await fetchJson<CrossrefResponse>("Crossref", url, config, options?.fetchImpl);
   return (data.message?.items ?? [])
     .map(normalizeCrossrefWork)
     .filter((source): source is SourceRecord => Boolean(source));
 }
 
-async function searchSemanticScholar(query: string): Promise<SourceRecord[]> {
-  const url = new URL(SEMANTIC_SCHOLAR_SEARCH_URL);
+async function searchSemanticScholar(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<SourceRecord[]> {
+  const url = new URL(config.endpoint);
   url.searchParams.set("query", query);
-  url.searchParams.set("limit", String(RESULTS_PER_PROVIDER));
+  url.searchParams.set("limit", String(config.queryLimit));
   url.searchParams.set("fields", "title,authors,year,abstract,externalIds,url,venue");
 
-  const apiKey = process.env.SEMANTIC_SCHOLAR_API_KEY;
-  const headers = apiKey ? { "x-api-key": apiKey } : undefined;
-  const data = await fetchJson<SemanticScholarResponse>("Semantic Scholar", url, headers);
+  const data = await fetchJson<SemanticScholarResponse>("Semantic Scholar", url, config, options?.fetchImpl);
 
   return (data.data ?? [])
     .map(normalizeSemanticScholarPaper)
@@ -248,33 +274,102 @@ export function dedupeSources(sources: SourceRecord[]): SourceRecord[] {
   return dedupeSourceRecords(sources);
 }
 
-export async function searchSources(query: string): Promise<SourceRecord[]> {
+async function searchProviderOrThrow(
+  provider: SourceProvider,
+  query: string,
+  config: SourceProviderConfig,
+  options?: SourceSearchOptions,
+): Promise<SourceRecord[]> {
+  if (provider === "Crossref") return searchCrossref(query, config, options);
+  return searchSemanticScholar(query, config, options);
+}
+
+function providerErrorResult(
+  provider: SourceProvider,
+  query: string,
+  error: unknown,
+): SourceProviderSearchResult {
+  if (error instanceof SourceSearchError) {
+    return {
+      ok: false,
+      provider,
+      query,
+      results: [],
+      error_type: error.code,
+      error_message: error.message,
+    };
+  }
+
+  const message = error instanceof Error ? error.message : "Source provider request failed";
+  return {
+    ok: false,
+    provider,
+    query,
+    results: [],
+    error_type: "api-failure",
+    error_message: message,
+  };
+}
+
+export async function searchSourceProvider(
+  provider: SourceProvider,
+  query: string,
+  options?: SourceSearchOptions,
+): Promise<SourceProviderSearchResult> {
+  const trimmedQuery = query.trim();
+  const config = sourceProviderConfigs(options)[provider];
+  if (!trimmedQuery) {
+    return {
+      ok: true,
+      provider,
+      query: trimmedQuery,
+      results: [],
+      error_type: null,
+      error_message: null,
+    };
+  }
+
+  try {
+    const results = await searchProviderOrThrow(provider, trimmedQuery, config, options);
+    return {
+      ok: true,
+      provider,
+      query: trimmedQuery,
+      results,
+      error_type: null,
+      error_message: null,
+    };
+  } catch (error) {
+    return providerErrorResult(provider, trimmedQuery, error);
+  }
+}
+
+export async function searchSourceProviders(
+  query: string,
+  options?: SourceSearchOptions,
+): Promise<SourceProviderSearchResult[]> {
+  return Promise.all(
+    SOURCE_PROVIDER_NAMES.map((provider) => searchSourceProvider(provider, query, options)),
+  );
+}
+
+export async function searchSources(query: string, options?: SourceSearchOptions): Promise<SourceRecord[]> {
   const trimmedQuery = query.trim();
   if (!trimmedQuery) return [];
 
-  const results = await Promise.allSettled([
-    searchCrossref(trimmedQuery),
-    searchSemanticScholar(trimmedQuery),
-  ]);
-
-  const fulfilled = results.filter(
-    (result): result is PromiseFulfilledResult<SourceRecord[]> => result.status === "fulfilled",
-  );
+  const providerResults = await searchSourceProviders(trimmedQuery, options);
+  const fulfilled = providerResults.filter((result) => result.ok);
 
   if (!fulfilled.length) {
-    const errors = results
-      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-      .map((result) => result.reason);
-
-    const timedOut = errors.some((error) => error instanceof SourceSearchError && error.code === "timeout");
+    const timedOut = providerResults.some((result) => result.error_type === "timeout");
     throw new SourceSearchError(
       timedOut ? "timeout" : "api-failure",
       "all",
       timedOut ? "All source providers timed out" : "All source providers failed",
-      errors,
+      providerResults,
     );
   }
 
-  const sources = fulfilled.flatMap((result) => result.value);
+  const sources = fulfilled.flatMap((result) => result.results);
   return dedupeSources(sources).slice(0, MAX_RESULTS);
 }

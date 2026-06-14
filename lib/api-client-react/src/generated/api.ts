@@ -22,6 +22,8 @@ import type {
 import type {
   ErrorResponse,
   HealthStatus,
+  KeywordSourceSearchResult,
+  SearchKeywordsRequest,
   SearchSourcesRequest,
   SourceSearchResult
 } from './api.schemas';
@@ -186,5 +188,77 @@ export const useSearchSources = <TError = ErrorType<ErrorResponse>,
         TContext
       > => {
       return useMutation(getSearchSourcesMutationOptions(options));
+    }
+
+export const getSearchKeywordsUrl = () => {
+
+
+
+
+  return `/api/search-keywords`
+}
+
+/**
+ * Generates LLM-assisted or deterministic fallback search keywords, then searches source providers grouped by query and provider.
+ * @summary Expand source-search keywords and search providers
+ */
+export const searchKeywords = async (searchKeywordsRequest: SearchKeywordsRequest, options?: RequestInit): Promise<KeywordSourceSearchResult> => {
+
+  return customFetch<KeywordSourceSearchResult>(getSearchKeywordsUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      searchKeywordsRequest,)
+  }
+);}
+
+
+
+
+export const getSearchKeywordsMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof searchKeywords>>, TError,{data: BodyType<SearchKeywordsRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof searchKeywords>>, TError,{data: BodyType<SearchKeywordsRequest>}, TContext> => {
+
+const mutationKey = ['searchKeywords'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof searchKeywords>>, {data: BodyType<SearchKeywordsRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  searchKeywords(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SearchKeywordsMutationResult = NonNullable<Awaited<ReturnType<typeof searchKeywords>>>
+    export type SearchKeywordsMutationBody = BodyType<SearchKeywordsRequest>
+    export type SearchKeywordsMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Expand source-search keywords and search providers
+ */
+export const useSearchKeywords = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof searchKeywords>>, TError,{data: BodyType<SearchKeywordsRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof searchKeywords>>,
+        TError,
+        {data: BodyType<SearchKeywordsRequest>},
+        TContext
+      > => {
+      return useMutation(getSearchKeywordsMutationOptions(options));
     }
 
