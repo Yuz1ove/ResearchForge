@@ -6,7 +6,16 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * Provide either `query` for direct keyword search or `topic` with generator context.
+ */
 export interface SearchSourcesRequest {
   /** @minLength 1 */
-  query: string;
+  query?: string;
+  /** @minLength 1 */
+  topic?: string;
+  reportType?: string;
+  audience?: string;
+  sourceMode?: string;
+  language?: string;
 }

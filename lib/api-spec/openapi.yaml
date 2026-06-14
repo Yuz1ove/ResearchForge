@@ -99,12 +99,22 @@ components:
         - status
     SearchSourcesRequest:
       type: object
+      description: Provide either `query` for direct keyword search or `topic` with generator context.
       properties:
         query:
           type: string
           minLength: 1
-      required:
-        - query
+        topic:
+          type: string
+          minLength: 1
+        reportType:
+          type: string
+        audience:
+          type: string
+        sourceMode:
+          type: string
+        language:
+          type: string
     SearchKeywordsRequest:
       type: object
       properties:
@@ -182,6 +192,22 @@ components:
     SourceSearchResult:
       type: object
       properties:
+        ok:
+          type: boolean
+        llm_status:
+          type: string
+          enum:
+            - success
+            - timeout
+            - quota_exceeded
+            - failed
+            - skipped
+        keyword_expansion:
+          $ref: "#/components/schemas/KeywordExpansionResult"
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/KeywordSourceGroup"
         sources:
           type: array
           items:

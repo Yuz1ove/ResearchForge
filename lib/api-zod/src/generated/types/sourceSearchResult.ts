@@ -5,8 +5,15 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { KeywordExpansionResult } from './keywordExpansionResult';
+import type { KeywordSourceGroup } from './keywordSourceGroup';
 import type { SourceRecord } from './sourceRecord';
+import type { SourceSearchResultLlmStatus } from './sourceSearchResultLlmStatus';
 
 export interface SourceSearchResult {
+  ok?: boolean;
+  llm_status?: SourceSearchResultLlmStatus;
+  keyword_expansion?: KeywordExpansionResult;
+  groups?: KeywordSourceGroup[];
   sources: SourceRecord[];
 }

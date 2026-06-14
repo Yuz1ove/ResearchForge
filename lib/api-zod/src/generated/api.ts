@@ -5,110 +5,183 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import * as zod from 'zod';
-
+import * as zod from "zod";
 
 /**
  * Returns server health status
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({
-  "status": zod.string()
-})
-
+  status: zod.string(),
+});
 
 /**
  * Searches Crossref and Semantic Scholar for academic/web sources related to a research topic.
  * @summary Search sources
  */
 
-
-
-export const SearchSourcesBody = zod.object({
-  "query": zod.string().min(1)
-})
+export const SearchSourcesBody = zod
+  .object({
+    query: zod.string().min(1).optional(),
+    topic: zod.string().min(1).optional(),
+    reportType: zod.string().optional(),
+    audience: zod.string().optional(),
+    sourceMode: zod.string().optional(),
+    language: zod.string().optional(),
+  })
+  .describe(
+    "Provide either `query` for direct keyword search or `topic` with generator context.",
+  );
 
 export const SearchSourcesResponse = zod.object({
-  "sources": zod.array(zod.object({
-  "id": zod.string(),
-  "title": zod.string(),
-  "authors": zod.array(zod.string()),
-  "year": zod.number().nullable(),
-  "abstract": zod.string().nullable(),
-  "doi": zod.string().nullable(),
-  "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
-  "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
-  "publisher": zod.string().nullable(),
-  "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
-}))
-})
+  ok: zod.boolean().optional(),
+  llm_status: zod
+    .enum(["success", "timeout", "quota_exceeded", "failed", "skipped"])
+    .optional(),
+  keyword_expansion: zod
+    .object({
+      normalized_topic: zod.string(),
+      domains: zod.array(zod.string()),
+      search_queries: zod.array(zod.string()),
+      english_queries: zod.array(zod.string()),
+      chinese_queries: zod.array(zod.string()),
+      preferred_source_types: zod.array(zod.string()),
+      avoid_source_types: zod.array(zod.string()),
+      reasoning_notes: zod.array(zod.string()),
+      fallback_used: zod.boolean(),
+      llm_status: zod.enum([
+        "success",
+        "timeout",
+        "quota_exceeded",
+        "failed",
+        "skipped",
+      ]),
+    })
+    .optional(),
+  groups: zod
+    .array(
+      zod.object({
+        ok: zod.boolean(),
+        provider: zod.enum(["Crossref", "Semantic Scholar"]),
+        query: zod.string(),
+        results: zod.array(
+          zod.object({
+            id: zod.string(),
+            title: zod.string(),
+            authors: zod.array(zod.string()),
+            year: zod.number().nullable(),
+            abstract: zod.string().nullable(),
+            doi: zod.string().nullable(),
+            url: zod.string().nullable(),
+            sourceType: zod.enum(["Crossref", "Semantic Scholar"]),
+            reviewState: zod.enum(["pending", "accepted", "rejected"]),
+            publisher: zod.string().nullable(),
+            containerTitle: zod.string().nullable(),
+            accessedAt: zod.string().nullable(),
+          }),
+        ),
+        error_type: zod.string().nullable(),
+        error_message: zod.string().nullable(),
+      }),
+    )
+    .optional(),
+  sources: zod.array(
+    zod.object({
+      id: zod.string(),
+      title: zod.string(),
+      authors: zod.array(zod.string()),
+      year: zod.number().nullable(),
+      abstract: zod.string().nullable(),
+      doi: zod.string().nullable(),
+      url: zod.string().nullable(),
+      sourceType: zod.enum(["Crossref", "Semantic Scholar"]),
+      reviewState: zod.enum(["pending", "accepted", "rejected"]),
+      publisher: zod.string().nullable(),
+      containerTitle: zod.string().nullable(),
+      accessedAt: zod.string().nullable(),
+    }),
+  ),
+});
 
 /**
  * Generates LLM-assisted or deterministic fallback search keywords, then searches source providers grouped by query and provider.
  * @summary Expand source-search keywords and search providers
  */
 
-
-
 export const SearchKeywordsBody = zod.object({
-  "topic": zod.string().min(1),
-  "reportType": zod.string().optional(),
-  "audience": zod.string().optional(),
-  "sourceMode": zod.string().optional(),
-  "language": zod.string().optional()
-})
+  topic: zod.string().min(1),
+  reportType: zod.string().optional(),
+  audience: zod.string().optional(),
+  sourceMode: zod.string().optional(),
+  language: zod.string().optional(),
+});
 
 export const SearchKeywordsResponse = zod.object({
-  "ok": zod.boolean(),
-  "llm_status": zod.enum(['success', 'timeout', 'quota_exceeded', 'failed', 'skipped']),
-  "keyword_expansion": zod.object({
-  "normalized_topic": zod.string(),
-  "domains": zod.array(zod.string()),
-  "search_queries": zod.array(zod.string()),
-  "english_queries": zod.array(zod.string()),
-  "chinese_queries": zod.array(zod.string()),
-  "preferred_source_types": zod.array(zod.string()),
-  "avoid_source_types": zod.array(zod.string()),
-  "reasoning_notes": zod.array(zod.string()),
-  "fallback_used": zod.boolean(),
-  "llm_status": zod.enum(['success', 'timeout', 'quota_exceeded', 'failed', 'skipped'])
-}),
-  "groups": zod.array(zod.object({
-  "ok": zod.boolean(),
-  "provider": zod.enum(['Crossref', 'Semantic Scholar']),
-  "query": zod.string(),
-  "results": zod.array(zod.object({
-  "id": zod.string(),
-  "title": zod.string(),
-  "authors": zod.array(zod.string()),
-  "year": zod.number().nullable(),
-  "abstract": zod.string().nullable(),
-  "doi": zod.string().nullable(),
-  "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
-  "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
-  "publisher": zod.string().nullable(),
-  "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
-})),
-  "error_type": zod.string().nullable(),
-  "error_message": zod.string().nullable()
-})),
-  "sources": zod.array(zod.object({
-  "id": zod.string(),
-  "title": zod.string(),
-  "authors": zod.array(zod.string()),
-  "year": zod.number().nullable(),
-  "abstract": zod.string().nullable(),
-  "doi": zod.string().nullable(),
-  "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
-  "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
-  "publisher": zod.string().nullable(),
-  "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
-}))
-})
-
+  ok: zod.boolean(),
+  llm_status: zod.enum([
+    "success",
+    "timeout",
+    "quota_exceeded",
+    "failed",
+    "skipped",
+  ]),
+  keyword_expansion: zod.object({
+    normalized_topic: zod.string(),
+    domains: zod.array(zod.string()),
+    search_queries: zod.array(zod.string()),
+    english_queries: zod.array(zod.string()),
+    chinese_queries: zod.array(zod.string()),
+    preferred_source_types: zod.array(zod.string()),
+    avoid_source_types: zod.array(zod.string()),
+    reasoning_notes: zod.array(zod.string()),
+    fallback_used: zod.boolean(),
+    llm_status: zod.enum([
+      "success",
+      "timeout",
+      "quota_exceeded",
+      "failed",
+      "skipped",
+    ]),
+  }),
+  groups: zod.array(
+    zod.object({
+      ok: zod.boolean(),
+      provider: zod.enum(["Crossref", "Semantic Scholar"]),
+      query: zod.string(),
+      results: zod.array(
+        zod.object({
+          id: zod.string(),
+          title: zod.string(),
+          authors: zod.array(zod.string()),
+          year: zod.number().nullable(),
+          abstract: zod.string().nullable(),
+          doi: zod.string().nullable(),
+          url: zod.string().nullable(),
+          sourceType: zod.enum(["Crossref", "Semantic Scholar"]),
+          reviewState: zod.enum(["pending", "accepted", "rejected"]),
+          publisher: zod.string().nullable(),
+          containerTitle: zod.string().nullable(),
+          accessedAt: zod.string().nullable(),
+        }),
+      ),
+      error_type: zod.string().nullable(),
+      error_message: zod.string().nullable(),
+    }),
+  ),
+  sources: zod.array(
+    zod.object({
+      id: zod.string(),
+      title: zod.string(),
+      authors: zod.array(zod.string()),
+      year: zod.number().nullable(),
+      abstract: zod.string().nullable(),
+      doi: zod.string().nullable(),
+      url: zod.string().nullable(),
+      sourceType: zod.enum(["Crossref", "Semantic Scholar"]),
+      reviewState: zod.enum(["pending", "accepted", "rejected"]),
+      publisher: zod.string().nullable(),
+      containerTitle: zod.string().nullable(),
+      accessedAt: zod.string().nullable(),
+    }),
+  ),
+});
