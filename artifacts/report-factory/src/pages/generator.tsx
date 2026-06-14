@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { searchKeywords, searchSources, type KeywordSourceSearchResult, type SourceRecord } from "@workspace/api-client-react";
+import { searchSources, type SourceSearchResult, type SourceRecord } from "@workspace/api-client-react";
 import {
   generateReport,
   expandTopic,
@@ -257,7 +257,9 @@ function sourceErrorMessage(error: unknown): string {
   return "來源搜尋暫時無法使用，請稍後再試。";
 }
 
-function keywordSearchDebugFromResult(result: KeywordSourceSearchResult): KeywordSearchDebugState {
+function keywordSearchDebugFromResult(result: SourceSearchResult): KeywordSearchDebugState | null {
+  if (!result.keyword_expansion || !result.llm_status || !result.groups) return null;
+
   const llmStatusLabelMap: Record<string, string> = {
     success: "成功",
     timeout: "逾時",
@@ -278,6 +280,10 @@ function keywordSearchDebugFromResult(result: KeywordSourceSearchResult): Keywor
         return `${group.provider} / ${group.query}${detail ? ` - ${detail}` : ""}`;
       }),
   };
+}
+
+function hasProviderFailures(result: SourceSearchResult): boolean {
+  return result.groups?.some((group) => !group.ok) ?? false;
 }
 
 // ─── Block renderer ───────────────────────────────────────────────────────────
@@ -839,7 +845,7 @@ export function Generator() {
     setSources([]);
 
     try {
-      const result = await searchKeywords({
+      const result = await searchSources({
         topic,
         reportType: input.reportType,
         audience: input.targetAudience || input.academicLevel,
@@ -849,11 +855,14 @@ export function Generator() {
       const normalizedSources = dedupeSourceRecords(result.sources.map(normalizeSourceForReview));
       setSources(normalizedSources);
       setKeywordSearchDebug(keywordSearchDebugFromResult(result));
-      if (result.sources.length) {
+      if (normalizedSources.length) {
         setSourceSearchStatus("done");
+        const partialProviderFailure = hasProviderFailures(result);
         toast({
-          title: "已找到來源",
-          description: `已套用關鍵詞搜尋策略，共找到 ${result.sources.length} 筆可選來源。`,
+          title: partialProviderFailure ? "部分來源搜尋失敗" : "已找到來源",
+          description: partialProviderFailure
+            ? "已顯示可用來源，部分資料來源暫時無法使用。"
+            : `已套用關鍵詞搜尋策略，共找到 ${normalizedSources.length} 筆可選來源。`,
         });
       } else {
         setSourceSearchStatus("empty");
@@ -872,13 +881,13 @@ export function Generator() {
           llmStatus: "skipped",
           llmStatusLabel: "略過",
           queries: [searchQuery],
-          providerErrors: [`/api/search-keywords - ${sourceErrorMessage(error)}`],
+          providerErrors: [`/api/search-sources topic - ${sourceErrorMessage(error)}`],
         });
-        if (result.sources.length) {
+        if (normalizedSources.length) {
           setSourceSearchStatus("done");
           toast({
             title: "已找到來源",
-            description: `關鍵詞搜尋端點暫不可用，已改用既有搜尋，共找到 ${result.sources.length} 筆可選來源。`,
+            description: `關鍵詞搜尋端點暫不可用，已改用既有搜尋，共找到 ${normalizedSources.length} 筆可選來源。`,
           });
         } else {
           setSourceSearchStatus("empty");

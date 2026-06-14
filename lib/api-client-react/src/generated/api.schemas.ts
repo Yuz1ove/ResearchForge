@@ -9,9 +9,18 @@ export interface HealthStatus {
   status: string;
 }
 
+/**
+ * Provide either `query` for direct keyword search or `topic` with generator context.
+ */
 export interface SearchSourcesRequest {
   /** @minLength 1 */
-  query: string;
+  query?: string;
+  /** @minLength 1 */
+  topic?: string;
+  reportType?: string;
+  audience?: string;
+  sourceMode?: string;
+  language?: string;
 }
 
 export interface SearchKeywordsRequest {
@@ -23,21 +32,21 @@ export interface SearchKeywordsRequest {
   language?: string;
 }
 
-export type SourceReviewState = typeof SourceReviewState[keyof typeof SourceReviewState];
-
+export type SourceReviewState =
+  (typeof SourceReviewState)[keyof typeof SourceReviewState];
 
 export const SourceReviewState = {
-  pending: 'pending',
-  accepted: 'accepted',
-  rejected: 'rejected',
+  pending: "pending",
+  accepted: "accepted",
+  rejected: "rejected",
 } as const;
 
-export type SourceRecordSourceType = typeof SourceRecordSourceType[keyof typeof SourceRecordSourceType];
-
+export type SourceRecordSourceType =
+  (typeof SourceRecordSourceType)[keyof typeof SourceRecordSourceType];
 
 export const SourceRecordSourceType = {
-  Crossref: 'Crossref',
-  Semantic_Scholar: 'Semantic Scholar',
+  Crossref: "Crossref",
+  Semantic_Scholar: "Semantic Scholar",
 } as const;
 
 export interface SourceRecord {
@@ -55,19 +64,26 @@ export interface SourceRecord {
   accessedAt: string | null;
 }
 
-export interface SourceSearchResult {
-  sources: SourceRecord[];
-}
+export type SourceSearchResultLlmStatus =
+  (typeof SourceSearchResultLlmStatus)[keyof typeof SourceSearchResultLlmStatus];
 
-export type KeywordExpansionResultLlmStatus = typeof KeywordExpansionResultLlmStatus[keyof typeof KeywordExpansionResultLlmStatus];
+export const SourceSearchResultLlmStatus = {
+  success: "success",
+  timeout: "timeout",
+  quota_exceeded: "quota_exceeded",
+  failed: "failed",
+  skipped: "skipped",
+} as const;
 
+export type KeywordExpansionResultLlmStatus =
+  (typeof KeywordExpansionResultLlmStatus)[keyof typeof KeywordExpansionResultLlmStatus];
 
 export const KeywordExpansionResultLlmStatus = {
-  success: 'success',
-  timeout: 'timeout',
-  quota_exceeded: 'quota_exceeded',
-  failed: 'failed',
-  skipped: 'skipped',
+  success: "success",
+  timeout: "timeout",
+  quota_exceeded: "quota_exceeded",
+  failed: "failed",
+  skipped: "skipped",
 } as const;
 
 export interface KeywordExpansionResult {
@@ -83,12 +99,12 @@ export interface KeywordExpansionResult {
   llm_status: KeywordExpansionResultLlmStatus;
 }
 
-export type KeywordSourceGroupProvider = typeof KeywordSourceGroupProvider[keyof typeof KeywordSourceGroupProvider];
-
+export type KeywordSourceGroupProvider =
+  (typeof KeywordSourceGroupProvider)[keyof typeof KeywordSourceGroupProvider];
 
 export const KeywordSourceGroupProvider = {
-  Crossref: 'Crossref',
-  Semantic_Scholar: 'Semantic Scholar',
+  Crossref: "Crossref",
+  Semantic_Scholar: "Semantic Scholar",
 } as const;
 
 export interface KeywordSourceGroup {
@@ -100,15 +116,23 @@ export interface KeywordSourceGroup {
   error_message: string | null;
 }
 
-export type KeywordSourceSearchResultLlmStatus = typeof KeywordSourceSearchResultLlmStatus[keyof typeof KeywordSourceSearchResultLlmStatus];
+export interface SourceSearchResult {
+  ok?: boolean;
+  llm_status?: SourceSearchResultLlmStatus;
+  keyword_expansion?: KeywordExpansionResult;
+  groups?: KeywordSourceGroup[];
+  sources: SourceRecord[];
+}
 
+export type KeywordSourceSearchResultLlmStatus =
+  (typeof KeywordSourceSearchResultLlmStatus)[keyof typeof KeywordSourceSearchResultLlmStatus];
 
 export const KeywordSourceSearchResultLlmStatus = {
-  success: 'success',
-  timeout: 'timeout',
-  quota_exceeded: 'quota_exceeded',
-  failed: 'failed',
-  skipped: 'skipped',
+  success: "success",
+  timeout: "timeout",
+  quota_exceeded: "quota_exceeded",
+  failed: "failed",
+  skipped: "skipped",
 } as const;
 
 export interface KeywordSourceSearchResult {

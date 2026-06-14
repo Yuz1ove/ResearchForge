@@ -8,7 +8,7 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "TMPDIR=/private/tmp tsx --test src/services/source-retrieval.test.ts src/services/keyword-expansion.test.ts src/routes/search-keywords.test.ts"
+    "test": "TMPDIR=/private/tmp tsx --test src/services/source-retrieval.test.ts src/services/keyword-expansion.test.ts src/routes/search-keywords.test.ts src/routes/search-sources.test.ts"
   },
   "dependencies": {
     "@workspace/api-zod": "workspace:*",

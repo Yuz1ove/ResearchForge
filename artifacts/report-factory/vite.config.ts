@@ -13,7 +13,8 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 const basePath = process.env.BASE_PATH ?? "/";
-const apiProxyTarget = process.env.API_PROXY_TARGET;
+const isProduction = process.env.NODE_ENV === "production";
+const apiProxyTarget = process.env.API_PROXY_TARGET ?? (isProduction ? undefined : "http://127.0.0.1:3100");
 
 export default defineConfig({
   base: basePath,
@@ -21,7 +22,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
-    ...(process.env.NODE_ENV !== "production" &&
+    ...(!isProduction &&
     process.env.REPL_ID !== undefined
       ? [
           await import("@replit/vite-plugin-cartographer").then((m) =>

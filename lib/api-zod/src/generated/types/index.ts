@@ -20,3 +20,4 @@ export * from './sourceRecord';
 export * from './sourceRecordSourceType';
 export * from './sourceReviewState';
 export * from './sourceSearchResult';
+export * from './sourceSearchResultLlmStatus';
