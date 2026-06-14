@@ -7,19 +7,19 @@ import {
 import { logger } from "../lib/logger";
 import { searchSources, SourceSearchError } from "../services/source-retrieval";
 import {
-  searchKeywordSources,
-  type KeywordExpansionRequest,
-  type KeywordSourceSearchResult,
-} from "../services/keyword-expansion";
+  searchIntentSources,
+  type SearchIntentPlannerInput,
+  type SearchIntentSourceSearchResult,
+} from "../services/search-intent-planner";
 
 const INVALID_SEARCH_MESSAGE = "請輸入有效的查詢關鍵字。";
 
 export type SearchSourcesHandler = (query: string) => Promise<SourceRecord[]>;
-export type TopicSearchSourcesHandler = (input: KeywordExpansionRequest) => Promise<KeywordSourceSearchResult>;
+export type TopicSearchSourcesHandler = (input: SearchIntentPlannerInput) => Promise<SearchIntentSourceSearchResult>;
 
 export type NormalizedSearchSourcesRequest =
   | { kind: "query"; query: string }
-  | { kind: "topic"; input: KeywordExpansionRequest };
+  | { kind: "topic"; input: SearchIntentPlannerInput };
 
 export interface SearchSourcesRouterOptions {
   querySearchHandler?: SearchSourcesHandler;
@@ -58,7 +58,7 @@ export function normalizeSearchSourcesRequest(body: unknown): NormalizedSearchSo
 
 export function createSearchSourcesRouter({
   querySearchHandler = searchSources,
-  topicSearchHandler = searchKeywordSources,
+  topicSearchHandler = searchIntentSources,
 }: SearchSourcesRouterOptions = {}): IRouter {
   const router: IRouter = Router();
 

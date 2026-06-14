@@ -7,13 +7,25 @@
  */
 import type { KeywordExpansionResult } from './keywordExpansionResult';
 import type { KeywordSourceGroup } from './keywordSourceGroup';
+import type { SearchIntentPlan } from './searchIntentPlan';
+import type { SearchIntentQuerySet } from './searchIntentQuerySet';
+import type { SearchIntentSummary } from './searchIntentSummary';
+import type { SearchRelevanceDebug } from './searchRelevanceDebug';
 import type { SourceRecord } from './sourceRecord';
 import type { SourceSearchResultLlmStatus } from './sourceSearchResultLlmStatus';
 
 export interface SourceSearchResult {
   ok?: boolean;
+  topic?: string;
+  searchIntent?: SearchIntentSummary;
+  queries?: SearchIntentQuerySet;
+  results?: SourceRecord[];
+  provider_status?: KeywordSourceGroup[];
+  warnings?: string[];
   llm_status?: SourceSearchResultLlmStatus;
   keyword_expansion?: KeywordExpansionResult;
   groups?: KeywordSourceGroup[];
   sources: SourceRecord[];
+  planner?: SearchIntentPlan;
+  relevance_debug?: SearchRelevanceDebug[];
 }
