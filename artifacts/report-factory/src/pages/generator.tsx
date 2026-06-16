@@ -898,6 +898,18 @@ function SourceReviewCard({
       : reviewState === "rejected"
         ? "bg-destructive text-destructive-foreground"
         : "bg-amber-100 text-amber-700";
+  const compactSummary =
+    reviewState === "accepted"
+      ? `已接受：${summary.contentSummary}`
+      : reviewState === "rejected"
+        ? `已拒絕：${summary.topicRelation}`
+        : summary.contentSummary;
+  const acceptButtonLabel =
+    summary.recommendation === "not_recommended"
+      ? "仍要接受"
+      : summary.recommendation === "check_first"
+        ? "確認後接受"
+        : "接受來源";
 
   return (
     <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
@@ -942,8 +954,8 @@ function SourceReviewCard({
           </div>
 
           <div className="space-y-2 rounded-md border border-border/70 bg-background/70 px-3 py-3">
-            <p className="line-clamp-3 text-sm leading-6 text-foreground/90">
-              {summary.contentSummary}
+            <p className="line-clamp-2 text-sm leading-6 text-foreground/90">
+              {compactSummary}
             </p>
             <p className="text-xs leading-5 text-muted-foreground">
               與主題關聯：{summary.topicRelation}
@@ -989,7 +1001,7 @@ function SourceReviewCard({
                 onClick={() => onReview(sourceId, "accepted")}
               >
                 <CheckCircle2 className="mr-2 h-4 w-4" />
-                {summary.recommendation === "not_recommended" ? "仍要接受" : "接受來源"}
+                {acceptButtonLabel}
               </Button>
             )}
             {reviewState === "rejected" ? (
@@ -1472,12 +1484,12 @@ function SourceManagePanel({
         const nextState = sourceReviewState(source);
         const previousState = previousReviewStates.current.get(key);
         activeIds.add(key);
-	        nextReviewStates.set(key, nextState);
+        nextReviewStates.set(key, nextState);
 
-	        if (previousState !== undefined && previousState !== nextState) {
-	          if (nextState === "pending") {
-	            nextExpanded.add(key);
-	          } else {
+        if (previousState !== undefined && previousState !== nextState) {
+          if (nextState === "pending") {
+            nextExpanded.add(key);
+          } else {
             nextExpanded.delete(key);
           }
         }
@@ -1532,6 +1544,7 @@ function SourceManagePanel({
           <Badge variant={counts.rejected ? "secondary" : "outline"}>
             已拒絕 {counts.rejected} 筆
           </Badge>
+          <Badge variant="outline">主要來源 {mainListSources.length} 筆</Badge>
         </div>
       </div>
 
@@ -1593,8 +1606,13 @@ function SourceManagePanel({
                     type="button"
                     className="flex min-h-[40px] w-full items-center justify-between gap-2 text-left"
                   >
-                    <span className="text-sm font-medium text-foreground">
-                      低相關來源 ({lowRelevanceSources.length})
+                    <span>
+                      <span className="block text-sm font-medium text-foreground">
+                        低相關來源 ({lowRelevanceSources.length})
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        已預設收合，不會進入主要推薦列表。
+                      </span>
                     </span>
                     <ChevronDown className="h-4 w-4 text-muted-foreground" />
                   </button>
