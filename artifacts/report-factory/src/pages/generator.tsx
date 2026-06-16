@@ -72,7 +72,8 @@ import {
   Trash2,
   CheckCircle2,
   XCircle,
-  FileText,
+  BookOpen,
+  ClipboardList,
   Sparkles,
   Lightbulb,
   ChevronDown,
@@ -103,6 +104,8 @@ type WorkspaceResumeState = {
   reportId: string;
   loaded: boolean;
 };
+
+type GeneratorWorkflowStep = "topic" | "search" | "manage" | "generate";
 
 const DEFAULT_INPUT: ReportInput = {
   topic: "",
@@ -435,6 +438,99 @@ const SOURCE_REVIEW_TABS: { value: SourceReviewTab; label: string }[] = [
   { value: "rejected", label: "已拒絕" },
 ];
 
+const WORKFLOW_STEPS: {
+  value: GeneratorWorkflowStep;
+  label: string;
+  description: string;
+  Icon: typeof CheckCircle2;
+}[] = [
+  { value: "topic", label: "設定主題", description: "輸入研究方向", Icon: ClipboardList },
+  { value: "search", label: "搜尋來源", description: "查找可信資料", Icon: Search },
+  { value: "manage", label: "管理來源", description: "審查與補 metadata", Icon: BookOpen },
+  { value: "generate", label: "生成報告", description: "建立結果頁", Icon: Wand2 },
+];
+
+function workflowStepIndex(step: GeneratorWorkflowStep): number {
+  return WORKFLOW_STEPS.findIndex((item) => item.value === step);
+}
+
+function safeCount(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function safeSourceReviewCounts(sources: SourceRecord[]): ReturnType<typeof sourceReviewCounts> {
+  const counts = sourceReviewCounts(sources);
+  return {
+    all: safeCount(counts.all),
+    accepted: safeCount(counts.accepted),
+    pending: safeCount(counts.pending),
+    rejected: safeCount(counts.rejected),
+  };
+}
+
+function generatorWorkflowStep({
+  hasTopic,
+  sources,
+  isSearching,
+  isGenerating,
+  canGenerate,
+}: {
+  hasTopic: boolean;
+  sources: SourceRecord[];
+  isSearching: boolean;
+  isGenerating: boolean;
+  canGenerate: boolean;
+}): GeneratorWorkflowStep {
+  if (!hasTopic) return "topic";
+  if (isGenerating || canGenerate) return "generate";
+  if (sources.length > 0) return "manage";
+  if (isSearching) return "search";
+  return "search";
+}
+
+function WorkflowStepper({ currentStep }: { currentStep: GeneratorWorkflowStep }) {
+  const currentIndex = workflowStepIndex(currentStep);
+
+  return (
+    <div className="rounded-lg border border-border bg-card px-4 py-4 shadow-sm" data-testid="generator-workflow-stepper">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+        {WORKFLOW_STEPS.map((step, index) => {
+          const completed = index < currentIndex;
+          const active = index === currentIndex;
+          const Icon = step.Icon;
+          return (
+            <div key={step.value} className="relative flex items-center gap-3 sm:flex-col sm:items-center sm:text-center">
+              {index > 0 && (
+                <div
+                  className={`hidden sm:block absolute right-[calc(50%+1.75rem)] top-5 h-px w-[calc(100%-3.5rem)] ${
+                    completed || active ? "bg-primary/60" : "bg-border"
+                  }`}
+                />
+              )}
+              <div
+                className={`relative z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-sm font-semibold transition-colors ${
+                  completed
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : active
+                      ? "border-primary bg-primary/10 text-primary ring-4 ring-primary/10"
+                      : "border-border bg-muted text-muted-foreground"
+                }`}
+                aria-current={active ? "step" : undefined}
+              >
+                {completed ? <CheckCircle2 className="h-5 w-5" /> : <Icon className="h-5 w-5" />}
+              </div>
+              <div className="min-w-0">
+                <p className={`text-sm font-semibold ${active ? "text-primary" : "text-foreground"}`}>{step.label}</p>
+                <p className="text-xs text-muted-foreground">{step.description}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function sourceReviewLabel(reviewState: SourceReviewState): string {
   switch (reviewState) {
     case "accepted":
@@ -507,53 +603,63 @@ function SourceReviewCard({
   const incomplete = sourceHasIncompleteMetadata(source);
   const reviewLabel = sourceReviewLabel(reviewState);
   const confidence = source.confidence ?? "中";
+  const StatusIcon = reviewState === "accepted" ? CheckCircle2 : reviewState === "rejected" ? XCircle : AlertTriangle;
   const cardTone =
     reviewState === "accepted"
-      ? "border-green-500/30 bg-green-500/5"
+      ? "border-green-500/30 bg-green-50/80"
       : reviewState === "rejected"
         ? "border-destructive/25 bg-destructive/5"
         : "border-border bg-card";
+  const statusTone =
+    reviewState === "accepted"
+      ? "bg-green-600 text-white"
+      : reviewState === "rejected"
+        ? "bg-destructive text-destructive-foreground"
+        : "bg-amber-100 text-amber-700";
 
   return (
     <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
       <article
-        className={`rounded-lg border p-4 transition-colors ${cardTone}`}
+        className={`rounded-lg border p-3 transition-colors sm:p-4 ${cardTone}`}
         data-testid={`source-card-${reviewState}`}
       >
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0 flex-1 space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={sourceReviewBadgeVariant(reviewState)}>{reviewLabel}</Badge>
-              <Badge variant="outline">{source.sourceType}</Badge>
-              <Badge variant="outline">{sourceCategoryLabel(source.sourceCategory)}</Badge>
-              <Badge variant="secondary">可信度 {confidence}</Badge>
-              {incomplete && <Badge variant="outline">資料不完整</Badge>}
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex min-w-0 flex-1 gap-3">
+            <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${statusTone}`}>
+              <StatusIcon className="h-4 w-4" />
             </div>
-            <h3 className="truncate text-sm font-semibold text-foreground" title={title}>
-              {title}
-            </h3>
-            <div className="grid grid-cols-1 gap-1 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
-              <span>作者：{sourceAuthorShortLabel(source.authors)}</span>
-              <span>年份：{year}</span>
-              <span>平台：{source.sourceType}</span>
-              <span>類型：{sourceCategoryLabel(source.sourceCategory)}</span>
-              <span>狀態：{reviewLabel}</span>
-              <span>可信度：{confidence}</span>
-            </div>
-            <div className="min-w-0 text-xs text-muted-foreground">
-              {source.url ? (
-                <a
-                  href={source.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex max-w-full items-center font-medium text-primary hover:underline"
-                >
-                  <span className="truncate">原始連結：{sourceLocatorLabel(source)}</span>
-                  <ExternalLink className="ml-1 h-3.5 w-3.5 shrink-0" />
-                </a>
-              ) : (
-                <span>原始連結：{source.doi ? `DOI ${source.doi}` : "待確認"}</span>
-              )}
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={sourceReviewBadgeVariant(reviewState)}>{reviewLabel}</Badge>
+                <Badge variant="outline">{sourceCategoryLabel(source.sourceCategory)}</Badge>
+                <Badge variant="secondary">可信度 {confidence}</Badge>
+                <Badge variant="outline">相關度 已排序</Badge>
+                {incomplete && <Badge variant="outline">資料不完整</Badge>}
+              </div>
+              <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-foreground" title={title}>
+                {title}
+              </h3>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span>作者：{sourceAuthorShortLabel(source.authors)}</span>
+                <span>年份：{year}</span>
+                <span>來源：{source.sourceType}</span>
+                <span>類型：{sourceCategoryLabel(source.sourceCategory)}</span>
+              </div>
+              <div className="min-w-0 text-xs text-muted-foreground">
+                {source.url ? (
+                  <a
+                    href={source.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex max-w-full items-center font-medium text-primary hover:underline"
+                  >
+                    <span className="truncate">原始連結：{sourceLocatorLabel(source)}</span>
+                    <ExternalLink className="ml-1 h-3.5 w-3.5 shrink-0" />
+                  </a>
+                ) : (
+                  <span>原始連結：{source.doi ? `DOI ${source.doi}` : "待確認"}</span>
+                )}
+              </div>
             </div>
           </div>
 
@@ -562,11 +668,12 @@ function SourceReviewCard({
               type="button"
               size="sm"
               variant="outline"
-              className="min-h-[36px] shrink-0"
+              className="min-h-[36px] shrink-0 self-start xl:self-center"
               data-testid="button-source-expand"
+              aria-label={isExpanded ? "收合來源細節" : "展開來源細節"}
+              title={isExpanded ? "收合來源細節" : "展開來源細節"}
             >
-              {isExpanded ? "收合" : "展開"}
-              {isExpanded ? <ChevronUp className="ml-1 h-4 w-4" /> : <ChevronDown className="ml-1 h-4 w-4" />}
+              {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
             </Button>
           </CollapsibleTrigger>
         </div>
@@ -878,17 +985,19 @@ function SourceSearchPanel({
       )}
 
       {status === "loading" && (
-        <div className="space-y-3 rounded-lg border border-border bg-card p-4" data-testid="sources-loading">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            正在擴展關鍵詞並搜尋 Crossref 與 Semantic Scholar...
+        <div className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-8 text-center" data-testid="sources-loading">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+            <Loader2 className="h-8 w-8 animate-spin" />
           </div>
-          {[1, 2, 3].map((item) => (
-            <div key={item} className="animate-pulse space-y-2 rounded-md border border-border p-3">
-              <div className="h-4 w-3/4 rounded bg-muted" />
-              <div className="h-3 w-1/2 rounded bg-muted" />
-            </div>
-          ))}
+          <h3 className="text-lg font-semibold text-foreground">正在搜尋來源</h3>
+          <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+            ResearchForge 正在為你搜尋相關學術資料與可信網頁，並整理成可審查來源。
+          </p>
+          <div className="mt-5 flex justify-center gap-2" aria-hidden="true">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-primary/40" />
+            <span className="h-2 w-2 animate-pulse rounded-full bg-primary/70 [animation-delay:120ms]" />
+            <span className="h-2 w-2 animate-pulse rounded-full bg-primary [animation-delay:240ms]" />
+          </div>
         </div>
       )}
 
@@ -900,7 +1009,18 @@ function SourceSearchPanel({
 
       {status === "error" && (
         <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-5 text-sm text-destructive" data-testid="sources-error">
-          {message || "來源搜尋失敗，請稍後再試。"}
+          <p className="font-semibold">來源搜尋失敗</p>
+          <p className="mt-1">{message || "來源搜尋失敗，請稍後再試。"}</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-3 min-h-[36px]"
+            onClick={onSearch}
+            disabled={isSearching || !hasTopic}
+          >
+            <Search className="mr-2 h-4 w-4" /> 重新搜尋
+          </Button>
         </div>
       )}
 
@@ -954,10 +1074,16 @@ function GenerationReadinessPanel({
   acceptedCount,
   readiness,
   isGenerating,
+  generateButtonLabel,
+  generateStatus,
+  onGenerate,
 }: {
   acceptedCount: number;
   readiness: ReturnType<typeof generationReadiness>;
   isGenerating: boolean;
+  generateButtonLabel: string;
+  generateStatus: "idle" | "loading" | "done" | "error";
+  onGenerate: () => void;
 }) {
   const progressValue = isGenerating
     ? 72
@@ -968,17 +1094,41 @@ function GenerationReadinessPanel({
         : Math.min(45, acceptedCount * 9);
 
   return (
-    <section className="mb-4 rounded-lg border border-border bg-card p-4" data-testid="generation-readiness-panel">
-      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+    <section className="rounded-lg border border-primary/25 bg-card p-4 shadow-sm" data-testid="generation-readiness-panel">
+      <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h2 className="text-base font-semibold text-foreground">生成準備度</h2>
           <p className="text-sm text-muted-foreground">
-            報告大綱、草稿與來源整理會在建立工作區後移到預覽頁顯示。
+            建立報告工作區後會前往獨立結果頁，草稿、來源與匯出集中在那裡檢視。
           </p>
         </div>
-        <Badge variant={readiness.canGenerateFull ? "default" : readiness.canGenerate ? "secondary" : "outline"}>
-          已接受 {acceptedCount} 筆來源
-        </Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={readiness.canGenerateFull ? "default" : readiness.canGenerate ? "secondary" : "outline"}>
+            已接受 {acceptedCount} 筆來源
+          </Badge>
+          <Button
+            type="button"
+            size="lg"
+            className="min-h-[44px]"
+            onClick={onGenerate}
+            disabled={isGenerating || !readiness.canGenerate}
+            data-testid="button-generate"
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" /> {generateButtonLabel}
+              </>
+            ) : generateStatus === "error" ? (
+              <>
+                <XCircle className="mr-2 h-5 w-5" /> {generateButtonLabel}
+              </>
+            ) : (
+              <>
+                <Wand2 className="mr-2 h-5 w-5" /> {generateButtonLabel}
+              </>
+            )}
+          </Button>
+        </div>
       </div>
       <Progress value={progressValue} />
       <div className="mt-3 flex flex-wrap gap-2 text-sm">
@@ -1200,6 +1350,14 @@ export function Generator() {
   const rejectedSources = rejectedSourceRecords(sources);
   const readiness = generationReadiness(acceptedSources.length);
   const workflowVisibility = generatorWorkflowVisibility(developerDebugOpen);
+  const currentStep = generatorWorkflowStep({
+    hasTopic,
+    sources,
+    isSearching: isSearchingSources,
+    isGenerating,
+    canGenerate: readiness.canGenerate,
+  });
+  const reviewCounts = safeSourceReviewCounts(sources);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1419,21 +1577,34 @@ export function Generator() {
     <div className="min-h-screen flex flex-col bg-muted/20">
       <Navbar />
 
-      <main className="generator-section flex-1 container mx-auto px-4 pt-24 pb-12 max-w-7xl">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-foreground">報告生成器</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            填寫以下資訊，即可快速生成結構完整、可後續修改的報告草稿。
-          </p>
+      <main className="generator-section flex-1 container mx-auto max-w-7xl px-4 pb-12 pt-24">
+        <div className="mb-6 space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <Badge variant="secondary" className="mb-2">研究工作台</Badge>
+              <h1 className="text-3xl font-bold tracking-normal text-foreground">ResearchForge</h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+                從主題設定、來源搜尋、來源審查到報告生成，依序完成可匯出的研究工作區。
+              </p>
+            </div>
+            <Button type="button" variant="outline" size="sm" className="min-h-[40px] self-start lg:self-auto" onClick={handleClear}>
+              <Trash2 className="mr-2 h-4 w-4" /> 重新開始
+            </Button>
+          </div>
+          <WorkflowStepper currentStep={currentStep} />
         </div>
 
-        <div className="flex flex-col lg:flex-row gap-6 lg:items-start">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[360px_minmax(0,1fr)] lg:items-start">
+          <aside className="w-full">
+            <div className="generator-card flex flex-col gap-5 rounded-lg border border-border bg-card p-5 shadow-sm lg:sticky lg:top-24">
+              <div className="flex items-start justify-between gap-3 border-b border-border pb-4">
+                <div>
+                  <h2 className="text-base font-semibold text-foreground">研究設定</h2>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">先定義主題與輸出條件，再進入來源流程。</p>
+                </div>
+                {workspaceResume && <Badge variant="outline">工作區續編</Badge>}
+              </div>
 
-          {/* ── Form panel ─────────────────────────────────────────────────── */}
-          <div className="w-full lg:w-80 xl:w-96 shrink-0">
-            <div className="generator-card bg-card border border-border rounded-xl shadow-sm p-6 flex flex-col gap-5 lg:sticky lg:top-24">
-
-              {/* Main fields */}
               <div className="space-y-2">
                 <Label htmlFor="topic">
                   報告主題 <span className="text-destructive">*</span>
@@ -1498,7 +1669,7 @@ export function Generator() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="w-full"
+                    className="min-h-[40px] w-full"
                     onClick={handleSearchSources}
                     disabled={isSearchingSources || !hasTopic}
                     data-testid="button-search-sources"
@@ -1613,28 +1784,6 @@ export function Generator() {
                 )}
               </div>
 
-              <Button
-                size="lg"
-                className="w-full h-12 text-base"
-                onClick={handleGenerate}
-                disabled={isGenerating || !hasTopic || !readiness.canGenerate}
-                data-testid="button-generate"
-              >
-                {isGenerating ? (
-                  <>
-                    <Loader2 className="mr-2 h-5 w-5 animate-spin" /> {generateButtonLabel}
-                  </>
-                ) : generateStatus === "error" ? (
-                  <>
-                    <XCircle className="mr-2 h-5 w-5" /> {generateButtonLabel}
-                  </>
-                ) : (
-                  <>
-                    <Wand2 className="mr-2 h-5 w-5" /> {generateButtonLabel}
-                  </>
-                )}
-              </Button>
-
               {readiness.warning && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
                   {readiness.warning}
@@ -1653,31 +1802,28 @@ export function Generator() {
                 </Button>
               )}
             </div>
-          </div>
+          </aside>
 
-          {/* ── Result panel ───────────────────────────────────────────────── */}
-          <div className="flex-1 min-h-[600px]">
-            {(autoSearchEnabled || sources.length > 0 || sourceSearchStatus !== "idle") && (
-              <SourceSearchPanel
-                sources={sources}
-                status={sourceSearchStatus}
-                message={sourceSearchMessage}
-                isSearching={isSearchingSources}
-                hasTopic={hasTopic}
-                onSearch={handleSearchSources}
-                onReview={updateSourceReview}
-                onEdit={updateSourceRecord}
-              />
-            )}
-
-            <GenerationReadinessPanel
-              acceptedCount={acceptedSources.length}
-              readiness={readiness}
-              isGenerating={isGenerating}
-            />
+          <section className="min-h-[620px] space-y-4" data-testid="generator-workspace">
+            <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-foreground">研究流程</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    目前步驟：{WORKFLOW_STEPS.find((step) => step.value === currentStep)?.label ?? "設定主題"}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant={hasTopic ? "secondary" : "outline"}>{hasTopic ? "主題已設定" : "等待主題"}</Badge>
+                  <Badge variant={sources.length ? "secondary" : "outline"}>來源 {reviewCounts.all} 筆</Badge>
+                  <Badge variant={acceptedSources.length ? "default" : "outline"}>已接受 {reviewCounts.accepted} 筆</Badge>
+                  {rejectedSources.length > 0 && <Badge variant="outline">已拒絕 {reviewCounts.rejected} 筆</Badge>}
+                </div>
+              </div>
+            </div>
 
             <Collapsible open={developerDebugOpen} onOpenChange={setDeveloperDebugOpen}>
-              <section className="mb-4 rounded-lg border border-border bg-card p-3" data-testid="developer-debug-toggle">
+              <section className="rounded-lg border border-border bg-card p-3" data-testid="developer-debug-toggle">
                 <CollapsibleTrigger asChild>
                   <Button type="button" variant="outline" size="sm" className="min-h-[36px]">
                     開發者除錯 <ChevronDown className="ml-1 h-4 w-4" />
@@ -1694,9 +1840,8 @@ export function Generator() {
               </section>
             </Collapsible>
 
-            {/* Short-topic hint (before generating) */}
             {shortTopicHint && (
-              <div className="report-card mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex gap-2">
+              <div className="report-card flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                 <Lightbulb className="h-4 w-4 shrink-0 mt-0.5" />
                 <span>
                   你的主題較簡短，生成後會是基礎版本。若要提高報告品質，建議補充研究方向、老師要求、資料來源或個人觀點，或先使用「幫我擴寫主題」。
@@ -1704,24 +1849,77 @@ export function Generator() {
               </div>
             )}
 
-            {/* Empty state */}
-            {!isGenerating && sources.length === 0 && sourceSearchStatus === "idle" && (
-              <div className="report-card h-full min-h-[480px] flex flex-col items-center justify-center text-center bg-card border border-border rounded-xl p-10 gap-4">
-                <div className="w-20 h-20 bg-muted rounded-full flex items-center justify-center">
-                  <FileText className="h-9 w-9 text-muted-foreground/50" />
+            {!hasTopic && (
+              <div className="report-card flex min-h-[460px] flex-col items-center justify-center gap-4 rounded-lg border border-dashed border-border bg-card p-10 text-center">
+                <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
+                  <ClipboardList className="h-9 w-9 text-primary" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-foreground mb-2">完成來源審查後進入預覽頁</h3>
-                  <p className="text-sm text-muted-foreground max-w-xs">
-                    這裡只保留報告設定與來源管理。點擊生成後，系統會建立報告工作區並開啟獨立預覽頁。
+                  <h3 className="mb-2 text-lg font-semibold text-foreground">先設定研究主題</h3>
+                  <p className="max-w-sm text-sm leading-6 text-muted-foreground">
+                    在左側輸入主題後，下一步會進入來源搜尋。ResearchForge 會把報告草稿放到獨立結果頁，不在這裡堆疊段落。
                   </p>
                 </div>
               </div>
             )}
 
-            {/* Loading skeleton */}
+            {hasTopic && sources.length === 0 && sourceSearchStatus === "idle" && !isGenerating && (
+              <div className="rounded-lg border border-border bg-card p-6 shadow-sm" data-testid="sources-ready">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <Search className="h-6 w-6" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-foreground">準備搜尋來源</h3>
+                    <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+                      目前主題為「{input.topic.trim()}」。請先搜尋來源，再接受可用資料，最後建立報告工作區。
+                    </p>
+                    <div className="mt-4 grid grid-cols-1 gap-2 text-sm text-muted-foreground sm:grid-cols-3">
+                      <div className="rounded-md border border-border bg-muted/20 px-3 py-2">1. 搜尋真實來源</div>
+                      <div className="rounded-md border border-border bg-muted/20 px-3 py-2">2. 審查 metadata</div>
+                      <div className="rounded-md border border-border bg-muted/20 px-3 py-2">3. 生成結果頁</div>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="lg"
+                    className="min-h-[44px] shrink-0"
+                    onClick={handleSearchSources}
+                    disabled={isSearchingSources || !autoSearchEnabled}
+                    data-testid="button-search-sources-ready"
+                  >
+                    <Search className="mr-2 h-5 w-5" /> 搜尋來源
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {hasTopic && (sourceSearchStatus !== "idle" || sources.length > 0) && (
+              <SourceSearchPanel
+                sources={sources}
+                status={sourceSearchStatus}
+                message={sourceSearchMessage}
+                isSearching={isSearchingSources}
+                hasTopic={hasTopic}
+                onSearch={handleSearchSources}
+                onReview={updateSourceReview}
+                onEdit={updateSourceRecord}
+              />
+            )}
+
+            {hasTopic && sources.length > 0 && (
+              <GenerationReadinessPanel
+                acceptedCount={acceptedSources.length}
+                readiness={readiness}
+                isGenerating={isGenerating}
+                generateButtonLabel={generateButtonLabel}
+                generateStatus={generateStatus}
+                onGenerate={handleGenerate}
+              />
+            )}
+
             {isGenerating && (
-              <div className="report-card bg-card border border-border rounded-xl p-6 flex flex-col gap-4">
+              <div className="report-card flex flex-col gap-4 rounded-lg border border-border bg-card p-6">
                 <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   {readiness.progressLabel}
@@ -1732,7 +1930,7 @@ export function Generator() {
                 </p>
               </div>
             )}
-          </div>
+          </section>
         </div>
       </main>
     </div>

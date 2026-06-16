@@ -60,6 +60,18 @@ function sourceLocator(source: ReportWorkspace["acceptedSources"][number]): stri
   }
 }
 
+function formatWorkspaceTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "時間待確認";
+  return new Intl.DateTimeFormat("zh-TW", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWorkspace }) {
   const { toast } = useToast();
   const [workspace, setWorkspace] = useState(initialWorkspace);
@@ -154,6 +166,24 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
               <p className="mt-1 text-sm text-muted-foreground">
                 大綱、草稿、來源與匯出集中在此頁；來源審查可返回生成器調整。
               </p>
+              <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-md border border-border bg-background px-3 py-2">
+                  <span className="block font-medium text-foreground">報告類型</span>
+                  {workspace.input.reportType}
+                </div>
+                <div className="rounded-md border border-border bg-background px-3 py-2">
+                  <span className="block font-medium text-foreground">使用對象</span>
+                  {workspace.input.targetAudience || workspace.input.academicLevel}
+                </div>
+                <div className="rounded-md border border-border bg-background px-3 py-2">
+                  <span className="block font-medium text-foreground">建立時間</span>
+                  {formatWorkspaceTime(workspace.createdAt)}
+                </div>
+                <div className="rounded-md border border-border bg-background px-3 py-2">
+                  <span className="block font-medium text-foreground">更新時間</span>
+                  {formatWorkspaceTime(workspace.updatedAt)}
+                </div>
+              </div>
             </div>
             <div className="flex flex-wrap gap-2">
               <Link href={editPath}>
