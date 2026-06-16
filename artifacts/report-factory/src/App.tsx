@@ -8,6 +8,7 @@ import { Features } from "@/pages/features";
 import { Pricing } from "@/pages/pricing";
 import { FAQ } from "@/pages/faq";
 import { Generator } from "@/pages/generator";
+import { ReportPreview } from "@/pages/report-preview";
 
 const queryClient = new QueryClient();
 
@@ -19,6 +20,8 @@ function Router() {
       <Route path="/pricing" component={Pricing} />
       <Route path="/faq" component={FAQ} />
       <Route path="/generator" component={Generator} />
+      <Route path="/reports/:reportId" component={ReportPreview} />
+      <Route path="/preview/:reportId" component={ReportPreview} />
       <Route component={NotFound} />
     </Switch>
   );

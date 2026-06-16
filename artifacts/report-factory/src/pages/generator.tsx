@@ -1,26 +1,41 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Navbar } from "@/components/layout/navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
-import { useToast } from "@/hooks/use-toast";
-import { searchSources, type SourceSearchResult, type SourceRecord } from "@workspace/api-client-react";
 import {
-  generateReport,
-  expandTopic,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Progress } from "@/components/ui/progress";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useToast } from "@/hooks/use-toast";
+import { useLocation } from "wouter";
+import {
+  searchSources,
+  type SourceSearchResult,
+} from "@workspace/api-client-react";
+import {
+  expandTopicCards,
   isShortTopic,
   detectTopicCategory,
   academicToAudience,
   academicToPurpose,
   ReportInput,
-  GeneratedReport,
-  ReportSection,
-  ContentBlock,
   TopicCategory,
   TOPIC_CATEGORIES,
+  type TopicExpansionCard,
 } from "@/lib/generateReport";
 import {
   buildPreflightSearchQuery,
@@ -35,48 +50,56 @@ import {
 } from "@/lib/zhTwLabels";
 import {
   acceptedSourceRecords,
-  buildExportReadinessWarnings,
+  candidateSourceRecords,
+  defaultUsableSections,
   dedupeSourceRecords,
   formatSourceAuthors,
   normalizeSourceForReview,
+  normalizeUsableSections,
   rejectedSourceRecords,
+  SOURCE_CATEGORY_LABELS,
+  SOURCE_CATEGORY_OPTIONS,
+  SOURCE_CONFIDENCE_OPTIONS,
   sourceHasIncompleteMetadata,
   sourceRecordKey,
+  sourceReviewCounts,
+  sourceReviewState,
+  type SourceRecord,
+  type SourceCategory,
+  updateSourceReviewState,
+  WORKFLOW_REPORT_SECTIONS,
   type SourceReviewState,
 } from "@/lib/sourceRecords";
+import { buildEvidenceCards, type EvidenceCard } from "@/lib/evidenceCards";
 import {
-  buildPlainText,
-  downloadTxt,
-  downloadMarkdown,
-  downloadDocx,
-  printPdf,
-  downloadJson,
-  downloadBlueprint,
-  downloadPromptPackage,
-} from "@/lib/exportReport";
-import { downloadProjectHandoff } from "@/lib/projectState";
+  sourceHasUsableAbstract,
+  sourceSummaryForUser,
+} from "@/lib/sourceSummaries";
+import { applySourceRelevanceAssessments } from "@/lib/sourceRelevance";
+import { applySourceAuthorityAndLanguage } from "@/lib/sourceAuthority";
+import {
+  generationReadiness,
+  generatorWorkflowVisibility,
+  loadReportWorkspace,
+  startReportWorkspaceNavigation,
+} from "@/lib/reportWorkspace";
 import {
   Wand2,
   Loader2,
-  Copy,
   Trash2,
-  RefreshCw,
   CheckCircle2,
   XCircle,
-  FileText,
-  FileType,
-  FileDown,
-  Printer,
+  BookOpen,
+  ClipboardList,
   Sparkles,
   Lightbulb,
+  ArrowLeft,
+  ArrowRight,
   ChevronDown,
   ChevronUp,
-  FileJson,
-  ClipboardList,
-  MessageSquareText,
-  Archive,
   Search,
   ExternalLink,
+  AlertTriangle,
 } from "lucide-react";
 
 // ─── Default form state ───────────────────────────────────────────────────────
@@ -96,6 +119,13 @@ type KeywordSearchDebugState = {
   warnings: string[];
 };
 
+type WorkspaceResumeState = {
+  reportId: string;
+  loaded: boolean;
+};
+
+type GeneratorWorkflowStep = "topic" | "search" | "manage" | "generate";
+
 const DEFAULT_INPUT: ReportInput = {
   topic: "",
   reportType: "研究報告",
@@ -104,7 +134,7 @@ const DEFAULT_INPUT: ReportInput = {
   purpose: "學校作業",
   domainOverride: "",
   mode: "先建立報告架構",
-  sourceRequirement: "需要，但先標示「資料來源待補」",
+  sourceRequirement: "需要，並生成參考文獻格式",
   citationFormat: "APA",
   chartRequirement: "需要",
   style: "高中生自然報告風格",
@@ -122,11 +152,17 @@ const DEFAULT_INPUT: ReportInput = {
   acceptedSources: [],
 };
 
+const RECOMMENDED_ACCEPTED_SOURCE_MIN = 10;
+
 // ─── Field config (visible labels map to stable internal generator values) ───
 
 type SelectOption = { label: string; value: string };
 
-const MAIN_SELECT_FIELDS: { key: ReportInputStringKey; label: string; options: SelectOption[] }[] = [
+const MAIN_SELECT_FIELDS: {
+  key: ReportInputStringKey;
+  label: string;
+  options: SelectOption[];
+}[] = [
   {
     key: "reportType",
     label: "報告類型",
@@ -167,7 +203,11 @@ const MAIN_SELECT_FIELDS: { key: ReportInputStringKey; label: string; options: S
   },
 ];
 
-const ADVANCED_SELECT_FIELDS: { key: ReportInputStringKey; label: string; options: SelectOption[] }[] = [
+const ADVANCED_SELECT_FIELDS: {
+  key: ReportInputStringKey;
+  label: string;
+  options: SelectOption[];
+}[] = [
   {
     key: "style",
     label: "寫作風格",
@@ -221,16 +261,55 @@ const ADVANCED_SELECT_FIELDS: { key: ReportInputStringKey; label: string; option
   },
 ];
 
-const ADVANCED_TEXT_FIELDS: { key: ReportInputStringKey; label: string; placeholder: string }[] = [
-  { key: "wordCount", label: "字數需求", placeholder: "例如：1200 字、3000 字、8 頁" },
+const ADVANCED_TEXT_FIELDS: {
+  key: ReportInputStringKey;
+  label: string;
+  placeholder: string;
+}[] = [
+  {
+    key: "wordCount",
+    label: "字數需求",
+    placeholder: "例如：1200 字、3000 字、8 頁",
+  },
 ];
 
-const ADVANCED_TEXTAREA_FIELDS: { key: ReportInputStringKey; label: string; placeholder: string; minHeight: string }[] = [
-  { key: "specifiedStructure", label: "指定架構", placeholder: "例如：前言、研究方法、結果、討論、結論", minHeight: "min-h-[88px]" },
-  { key: "rubric", label: "評分標準", placeholder: "貼上老師提供的評分標準或檢核項目。", minHeight: "min-h-[96px]" },
-  { key: "personalStyle", label: "個人語氣", placeholder: "例如：自然高中生語氣、保留個人反思、避免太像論文。", minHeight: "min-h-[88px]" },
-  { key: "supplementalMaterials", label: "自行提供資料", placeholder: "貼上課堂資料、書籍資訊、網址、作者、年份、引用來源或原始數據。", minHeight: "min-h-[120px]" },
-  { key: "additionalInfo", label: "其他補充", placeholder: "可貼上老師要求、課堂資料、個人觀點或想加入的內容。", minHeight: "min-h-[96px]" },
+const ADVANCED_TEXTAREA_FIELDS: {
+  key: ReportInputStringKey;
+  label: string;
+  placeholder: string;
+  minHeight: string;
+}[] = [
+  {
+    key: "specifiedStructure",
+    label: "指定架構",
+    placeholder: "例如：前言、研究方法、結果、討論、結論",
+    minHeight: "min-h-[88px]",
+  },
+  {
+    key: "rubric",
+    label: "評分標準",
+    placeholder: "貼上老師提供的評分標準或檢核項目。",
+    minHeight: "min-h-[96px]",
+  },
+  {
+    key: "personalStyle",
+    label: "個人語氣",
+    placeholder: "例如：自然高中生語氣、保留個人反思、避免太像論文。",
+    minHeight: "min-h-[88px]",
+  },
+  {
+    key: "supplementalMaterials",
+    label: "自行提供資料",
+    placeholder:
+      "貼上課堂資料、書籍資訊、網址、作者、年份、引用來源或原始數據。",
+    minHeight: "min-h-[120px]",
+  },
+  {
+    key: "additionalInfo",
+    label: "其他補充",
+    placeholder: "可貼上老師要求、課堂資料、個人觀點或想加入的內容。",
+    minHeight: "min-h-[96px]",
+  },
 ];
 
 function audienceToAcademicLevel(audience: string): string {
@@ -249,7 +328,9 @@ function audienceToAcademicLevel(audience: string): string {
 
 function displayOptionLabel(key: ReportInputStringKey, value: string): string {
   const fields = [...MAIN_SELECT_FIELDS, ...ADVANCED_SELECT_FIELDS];
-  const option = fields.find((field) => field.key === key)?.options.find((item) => item.value === value);
+  const option = fields
+    .find((field) => field.key === key)
+    ?.options.find((item) => item.value === value);
   return option?.label ?? value;
 }
 
@@ -258,15 +339,72 @@ function sourceErrorMessage(error: unknown): string {
     const data = (error as { data?: unknown }).data;
     if (data && typeof data === "object" && "message" in data) {
       const message = (data as { message?: unknown }).message;
-      if (typeof message === "string" && message.trim()) return message;
+      if (typeof message === "string" && message.trim()) {
+        if (
+          /http\s*(403|429)|daily_limit_exceeded|quota|rate limit|too many requests/i.test(
+            message,
+          )
+        ) {
+          return "部分資料來源暫時無法使用或達到查詢限制，請稍後再試。";
+        }
+        return message;
+      }
     }
   }
 
   return "來源搜尋暫時無法使用，請稍後再試。";
 }
 
-function keywordSearchDebugFromResult(result: SourceSearchResult): KeywordSearchDebugState | null {
-  if (!result.keyword_expansion && !result.searchIntent && !result.queries) return null;
+function sourceTechnicalErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "unknown source search error";
+  }
+}
+
+function sourceDomainLabel(url: string | null | undefined): string {
+  if (!url) return "網域待確認";
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "網域待確認";
+  }
+}
+
+function sourceLocatorLabel(source: SourceRecord): string {
+  if (source.url) return sourceDomainLabel(source.url);
+  if (source.doi) return `DOI ${source.doi}`;
+  return "來源位置待確認";
+}
+
+function sourceCategoryLabel(value: string | null | undefined): string {
+  if (!value) return SOURCE_CATEGORY_LABELS.unknown;
+  return SOURCE_CATEGORY_LABELS[value as SourceCategory] ?? value;
+}
+
+function toggleWorkflowSection(
+  sections: string[] | null | undefined,
+  section: (typeof WORKFLOW_REPORT_SECTIONS)[number],
+  checked: boolean,
+) {
+  const current = normalizeUsableSections(sections);
+  if (checked)
+    return current.includes(section) ? current : [...current, section];
+  return current.filter((item) => item !== section);
+}
+
+function evidenceCardLabel(card: EvidenceCard): string {
+  return card.sourceTitle || card.sourceDomain || card.sourceId;
+}
+
+function keywordSearchDebugFromResult(
+  result: SourceSearchResult,
+): KeywordSearchDebugState | null {
+  if (!result.keyword_expansion && !result.searchIntent && !result.queries)
+    return null;
 
   const llmStatusLabelMap: Record<string, string> = {
     success: "成功",
@@ -281,24 +419,30 @@ function keywordSearchDebugFromResult(result: SourceSearchResult): KeywordSearch
     skipped: "未設定 LLM",
     failed: "規劃失敗",
   };
-  const llmStatus = result.llm_status ?? result.searchIntent?.plannerStatus ?? "skipped";
+  const llmStatus =
+    result.llm_status ?? result.searchIntent?.plannerStatus ?? "skipped";
 
   return {
-    fallbackUsed: result.searchIntent?.fallbackUsed ?? result.keyword_expansion?.fallback_used ?? false,
+    fallbackUsed:
+      result.searchIntent?.fallbackUsed ??
+      result.keyword_expansion?.fallback_used ??
+      false,
     llmStatus,
     llmStatusLabel: result.searchIntent?.plannerStatus
-      ? plannerStatusLabelMap[result.searchIntent.plannerStatus] ?? result.searchIntent.plannerStatus
-      : llmStatusLabelMap[llmStatus] ?? llmStatus,
-    queries: result.keyword_expansion?.search_queries
-      ?? [
-        ...(result.queries?.highPrecision ?? []),
-        ...(result.queries?.english ?? []),
-        ...(result.queries?.chinese ?? []),
-      ],
+      ? (plannerStatusLabelMap[result.searchIntent.plannerStatus] ??
+        result.searchIntent.plannerStatus)
+      : (llmStatusLabelMap[llmStatus] ?? llmStatus),
+    queries: result.keyword_expansion?.search_queries ?? [
+      ...(result.queries?.highPrecision ?? []),
+      ...(result.queries?.english ?? []),
+      ...(result.queries?.chinese ?? []),
+    ],
     providerErrors: (result.provider_status ?? result.groups ?? [])
       .filter((group) => !group.ok)
       .map((group) => {
-        const detail = [group.error_type, group.error_message].filter(Boolean).join("：");
+        const detail = [group.error_type, group.error_message]
+          .filter(Boolean)
+          .join("：");
         return `${group.provider} / ${group.query}${detail ? ` - ${detail}` : ""}`;
       }),
     searchIntent: result.searchIntent ?? null,
@@ -308,14 +452,23 @@ function keywordSearchDebugFromResult(result: SourceSearchResult): KeywordSearch
 }
 
 function hasProviderFailures(result: SourceSearchResult): boolean {
-  return (result.provider_status ?? result.groups)?.some((group) => !group.ok) ?? false;
+  return (
+    (result.provider_status ?? result.groups)?.some((group) => !group.ok) ??
+    false
+  );
 }
 
-function SearchIntentFieldLabel({ field }: { field: SearchIntentDebugLabelKey }) {
+function SearchIntentFieldLabel({
+  field,
+}: {
+  field: SearchIntentDebugLabelKey;
+}) {
   return (
     <p className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
       <span>{searchIntentDebugLabel(field)}</span>
-      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-muted-foreground">{field}</code>
+      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-muted-foreground">
+        {field}
+      </code>
     </p>
   );
 }
@@ -324,15 +477,25 @@ function SearchIntentDebugPanel({ debug }: { debug: KeywordSearchDebugState }) {
   if (!debug.searchIntent) return null;
 
   return (
-    <div className="mb-3 rounded-md border border-border bg-muted/20 p-3" data-testid="search-intent-debug">
+    <div
+      className="mb-3 rounded-md border border-border bg-muted/20 p-3"
+      data-testid="search-intent-debug"
+    >
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="font-medium text-foreground">{searchIntentDebugLabel("searchIntent")}</span>
-        <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">searchIntent</code>
+        <span className="font-medium text-foreground">
+          {searchIntentDebugLabel("searchIntent")}
+        </span>
+        <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+          searchIntent
+        </code>
         <Badge variant="outline">
           {searchIntentDebugLabel("plannerStatus")}：{debug.llmStatusLabel}
         </Badge>
-        <Badge variant={debug.searchIntent.fallbackUsed ? "secondary" : "outline"}>
-          {searchIntentDebugLabel("fallbackUsed")}：{debug.searchIntent.fallbackUsed ? "是" : "否"}
+        <Badge
+          variant={debug.searchIntent.fallbackUsed ? "secondary" : "outline"}
+        >
+          {searchIntentDebugLabel("fallbackUsed")}：
+          {debug.searchIntent.fallbackUsed ? "是" : "否"}
         </Badge>
       </div>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -359,266 +522,1716 @@ function SearchIntentDebugPanel({ debug }: { debug: KeywordSearchDebugState }) {
       </div>
       {debug.intentQueries && (
         <div className="mt-3 space-y-1">
-          <p className="text-xs font-medium text-muted-foreground">高精度查詢 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">queries.highPrecision</code></p>
-          <PreflightPills items={debug.intentQueries.highPrecision.slice(0, 6)} />
+          <p className="text-xs font-medium text-muted-foreground">
+            高精度查詢{" "}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+              queries.highPrecision
+            </code>
+          </p>
+          <PreflightPills
+            items={debug.intentQueries.highPrecision.slice(0, 6)}
+          />
         </div>
       )}
     </div>
   );
 }
 
-// ─── Block renderer ───────────────────────────────────────────────────────────
+type SourceReviewTab = "all" | "accepted" | "pending" | "rejected";
 
-function BlockView({ block }: { block: ContentBlock }) {
-  switch (block.type) {
-    case "paragraph":
-      return <p className="leading-loose text-foreground/90 whitespace-pre-line">{block.text}</p>;
+const SOURCE_REVIEW_TABS: { value: SourceReviewTab; label: string }[] = [
+  { value: "all", label: "全部" },
+  { value: "accepted", label: "已接受" },
+  { value: "pending", label: "待審核" },
+  { value: "rejected", label: "已拒絕" },
+];
 
-    case "list":
-      return (
-        <ul className="space-y-2">
-          {block.items?.map((item, i) => (
-            <li key={i} className="flex gap-2 leading-loose">
-              <span className="text-primary shrink-0 mt-0.5">•</span>
-              <span className="text-foreground/90">{item}</span>
-            </li>
-          ))}
-        </ul>
-      );
+const WORKFLOW_STEPS: {
+  value: GeneratorWorkflowStep;
+  label: string;
+  description: string;
+  Icon: typeof CheckCircle2;
+}[] = [
+  {
+    value: "topic",
+    label: "設定主題",
+    description: "輸入研究方向",
+    Icon: ClipboardList,
+  },
+  {
+    value: "search",
+    label: "搜尋來源",
+    description: "查找可信資料",
+    Icon: Search,
+  },
+  {
+    value: "manage",
+    label: "管理來源",
+    description: "審查與補 metadata",
+    Icon: BookOpen,
+  },
+  {
+    value: "generate",
+    label: "生成報告",
+    description: "建立結果頁",
+    Icon: Wand2,
+  },
+];
 
-    case "note":
-      return (
-        <div className="flex gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-amber-800 text-sm leading-relaxed">
-          <Lightbulb className="h-4 w-4 shrink-0 mt-0.5" />
-          <span>{block.text}</span>
+function workflowStepIndex(step: GeneratorWorkflowStep): number {
+  return WORKFLOW_STEPS.findIndex((item) => item.value === step);
+}
+
+function workflowStepLabel(step: GeneratorWorkflowStep | "report"): string {
+  if (step === "report") return "報告工作區";
+  return WORKFLOW_STEPS.find((item) => item.value === step)?.label ?? "下一步";
+}
+
+function safeCount(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function safeSourceReviewCounts(
+  sources: SourceRecord[],
+): ReturnType<typeof sourceReviewCounts> {
+  const counts = sourceReviewCounts(sources);
+  return {
+    all: safeCount(counts.all),
+    accepted: safeCount(counts.accepted),
+    pending: safeCount(counts.pending),
+    rejected: safeCount(counts.rejected),
+  };
+}
+
+function workflowTransitionCopy(
+  from: GeneratorWorkflowStep,
+  to: GeneratorWorkflowStep,
+): { title: string; description: string } {
+  if (from === "topic" && to === "search") {
+    return {
+      title: "正在準備搜尋策略",
+      description: "ResearchForge 正在整理主題、報告類型與搜尋方向。",
+    };
+  }
+  if (from === "search" && to === "manage") {
+    return {
+      title: "正在整理候選來源",
+      description: "正在把搜尋結果轉成可審查的來源卡片。",
+    };
+  }
+  if (from === "manage" && to === "generate") {
+    return {
+      title: "正在整理已接受來源",
+      description: "正在檢查來源數量與報告生成準備度。",
+    };
+  }
+  if (to === "topic") {
+    return {
+      title: "正在回到主題設定",
+      description: "正在載入研究設定與進階選項。",
+    };
+  }
+  if (to === "search") {
+    return {
+      title: "正在回到來源搜尋",
+      description: "正在載入主題摘要與搜尋控制。",
+    };
+  }
+  if (to === "manage") {
+    return {
+      title: "正在回到來源管理",
+      description: "正在整理來源審查狀態。",
+    };
+  }
+  return {
+    title: "正在前往生成報告",
+    description: "正在載入報告生成工作區。",
+  };
+}
+
+function StepTransitionScreen({
+  title,
+  description,
+  targetStep,
+}: {
+  title: string;
+  description: string;
+  targetStep: GeneratorWorkflowStep | "report";
+}) {
+  return (
+    <section
+      className="flex min-h-[520px] items-center justify-center rounded-lg border border-primary/20 bg-card px-6 py-12 shadow-sm"
+      data-testid="step-transition"
+    >
+      <div className="text-center">
+        <div className="mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+          <Loader2 className="h-9 w-9 animate-spin" />
         </div>
-      );
-
-    case "suggestions":
-      return (
-        <div className="space-y-3">
-          {block.suggestions?.length ? (
-            block.suggestions.map((s, i) => (
-              <div key={i} className="rounded-md border border-border bg-muted/30 p-3 text-sm leading-relaxed">
-                <p className="font-semibold text-foreground">
-                  【建議{block.suggestionKind} {i + 1}：{s.title}】
-                </p>
-                <p className="text-muted-foreground">位置：{s.position}</p>
-                <p className="text-muted-foreground">用途：{s.purpose}</p>
-                <p className="text-muted-foreground">{block.suggestionKind === "流程圖" ? "流程" : "內容"}：{s.content}</p>
-              </div>
-            ))
-          ) : (
-            <p className="text-sm text-muted-foreground">（無建議{block.suggestionKind}）</p>
-          )}
+        <h2 className="text-xl font-semibold text-foreground">{title}</h2>
+        <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+          {description}
+        </p>
+        <Badge variant="outline" className="mt-4">
+          前往：{workflowStepLabel(targetStep)}
+        </Badge>
+        <div className="mt-6 flex justify-center gap-2" aria-hidden="true">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-primary/40" />
+          <span className="h-2 w-2 animate-pulse rounded-full bg-primary/70 [animation-delay:120ms]" />
+          <span className="h-2 w-2 animate-pulse rounded-full bg-primary [animation-delay:240ms]" />
         </div>
-      );
+      </div>
+    </section>
+  );
+}
 
-    case "dataTable":
-      return (
-        <div className="overflow-x-auto -mx-1">
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="border-b border-border text-left">
-                <th className="py-2 px-2 font-semibold">資料類型</th>
-                <th className="py-2 px-2 font-semibold">需要內容</th>
-                <th className="py-2 px-2 font-semibold">用途</th>
-                <th className="py-2 px-2 font-semibold whitespace-nowrap">優先程度</th>
-              </tr>
-            </thead>
-            <tbody>
-              {block.rows?.map((r, i) => (
-                <tr key={i} className="border-b border-border/60 align-top">
-                  <td className="py-2 px-2 font-medium text-foreground whitespace-nowrap">{r.type}</td>
-                  <td className="py-2 px-2 text-muted-foreground">{r.need}</td>
-                  <td className="py-2 px-2 text-muted-foreground">{r.use}</td>
-                  <td className="py-2 px-2">
-                    <Badge
-                      variant={r.priority === "高" ? "default" : r.priority === "中" ? "secondary" : "outline"}
-                    >
-                      {r.priority}
-                    </Badge>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
+function WorkflowStepper({
+  currentStep,
+  completedSteps,
+  canEnterStep,
+  onStepClick,
+  disabled,
+}: {
+  currentStep: GeneratorWorkflowStep;
+  completedSteps: Record<GeneratorWorkflowStep, boolean>;
+  canEnterStep: (step: GeneratorWorkflowStep) => boolean;
+  onStepClick: (step: GeneratorWorkflowStep) => void;
+  disabled: boolean;
+}) {
+  const currentIndex = workflowStepIndex(currentStep);
 
-    case "quality":
-      return (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {block.checks?.map((c, i) => (
-            <div key={i} className="flex items-center gap-2 text-sm">
-              {c.passed ? (
-                <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
-              ) : (
-                <XCircle className="h-4 w-4 text-muted-foreground shrink-0" />
+  return (
+    <div
+      className="rounded-lg border border-border bg-card px-4 py-4 shadow-sm"
+      data-testid="generator-workflow-stepper"
+    >
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+        {WORKFLOW_STEPS.map((step, index) => {
+          const completed = completedSteps[step.value] || index < currentIndex;
+          const active = index === currentIndex;
+          const Icon = step.Icon;
+          const enabled = canEnterStep(step.value) && !disabled;
+          return (
+            <button
+              key={step.value}
+              type="button"
+              disabled={!enabled || active}
+              onClick={() => onStepClick(step.value)}
+              className={`relative flex min-h-[76px] items-center gap-3 rounded-md px-2 py-2 text-left transition-colors sm:flex-col sm:items-center sm:text-center ${
+                enabled && !active ? "hover:bg-muted/60" : ""
+              } ${!enabled && !active ? "cursor-not-allowed opacity-55" : ""}`}
+              data-testid={`stepper-${step.value}`}
+            >
+              {index > 0 && (
+                <div
+                  className={`hidden sm:block absolute right-[calc(50%+1.75rem)] top-5 h-px w-[calc(100%-3.5rem)] ${
+                    completed || active ? "bg-primary/60" : "bg-border"
+                  }`}
+                />
               )}
-              <span className={c.passed ? "text-foreground" : "text-muted-foreground"}>{c.label}</span>
-              {!c.passed && c.reason ? <span className="text-muted-foreground">：{c.reason}</span> : null}
-            </div>
-          ))}
-        </div>
-      );
+              <div
+                className={`relative z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-sm font-semibold transition-colors ${
+                  completed
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : active
+                      ? "border-primary bg-primary/10 text-primary ring-4 ring-primary/10"
+                      : "border-border bg-muted text-muted-foreground"
+                }`}
+                aria-current={active ? "step" : undefined}
+              >
+                {completed ? (
+                  <CheckCircle2 className="h-5 w-5" />
+                ) : (
+                  <Icon className="h-5 w-5" />
+                )}
+              </div>
+              <div className="min-w-0">
+                <p
+                  className={`text-sm font-semibold ${active ? "text-primary" : "text-foreground"}`}
+                >
+                  {step.label}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {step.description}
+                </p>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
-    case "slides":
-      return (
-        <div className="space-y-3">
-          {block.slides?.map((s) => (
-            <div key={s.page} className="rounded-md border border-border bg-muted/30 p-3">
-              <p className="font-semibold text-foreground mb-1">
-                第 {s.page} 頁：{s.title}
-              </p>
-              <ul className="space-y-1 mb-2">
-                {s.points.map((p, i) => (
-                  <li key={i} className="flex gap-2 text-sm leading-relaxed">
-                    <span className="text-primary shrink-0 mt-0.5">•</span>
-                    <span className="text-foreground/90">{p}</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="text-xs text-muted-foreground">視覺建議：{s.visual}</p>
-            </div>
-          ))}
-        </div>
-      );
-
+function sourceReviewLabel(reviewState: SourceReviewState): string {
+  switch (reviewState) {
+    case "accepted":
+      return "已接受";
+    case "rejected":
+      return "已拒絕";
+    case "pending":
     default:
-      return null;
+      return "待審核";
   }
 }
 
-// ─── Collapsible section ──────────────────────────────────────────────────────
+function sourceReviewBadgeVariant(
+  reviewState: SourceReviewState,
+): "default" | "secondary" | "outline" | "destructive" {
+  switch (reviewState) {
+    case "accepted":
+      return "default";
+    case "rejected":
+      return "destructive";
+    case "pending":
+    default:
+      return "secondary";
+  }
+}
 
-function SectionView({ section }: { section: ReportSection }) {
-  const [open, setOpen] = useState(true);
+function sourceRelevanceLabel(level: SourceRecord["relevanceLevel"]): string {
+  switch (level) {
+    case "high":
+      return "高度相關";
+    case "medium":
+      return "需確認";
+    case "low":
+      return "低相關";
+    case "off_topic":
+      return "離題";
+    default:
+      return "相關度待確認";
+  }
+}
+
+function sourceRelevanceBadgeVariant(
+  level: SourceRecord["relevanceLevel"],
+): "default" | "secondary" | "outline" | "destructive" {
+  switch (level) {
+    case "high":
+      return "default";
+    case "medium":
+      return "secondary";
+    case "low":
+      return "outline";
+    case "off_topic":
+      return "destructive";
+    default:
+      return "outline";
+  }
+}
+
+function sourceAuthorShortLabel(authors: string[]): string {
+  if (authors.length === 0) return "作者待確認";
+  if (authors.length === 1) return authors[0];
+  return `${authors[0]} 等`;
+}
+
+function parseAuthorsInput(value: string): string[] {
+  return value
+    .split(/[、,，;]/)
+    .map((author) => author.trim())
+    .filter(Boolean);
+}
+
+function sourcesForReviewTab(
+  sources: SourceRecord[],
+  tab: SourceReviewTab,
+): SourceRecord[] {
+  switch (tab) {
+    case "accepted":
+      return acceptedSourceRecords(sources);
+    case "pending":
+      return candidateSourceRecords(sources);
+    case "rejected":
+      return rejectedSourceRecords(sources);
+    case "all":
+    default:
+      return sources;
+  }
+}
+
+function SourceReviewCard({
+  source,
+  isExpanded,
+  onExpandedChange,
+  onReview,
+  onEdit,
+  topic,
+}: {
+  source: SourceRecord;
+  isExpanded: boolean;
+  onExpandedChange: (open: boolean) => void;
+  onReview: (sourceId: string, reviewState: SourceReviewState) => void;
+  onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
+  topic: string;
+}) {
+  const sourceId = source.id || sourceRecordKey(source);
+  const reviewState = sourceReviewState(source);
+  const title = source.title || "標題待確認";
+  const year = source.year ? String(source.year) : "年份待確認";
+  const usableSections = normalizeUsableSections(source.usableSections);
+  const incomplete = sourceHasIncompleteMetadata(source);
+  const reviewLabel = sourceReviewLabel(reviewState);
+  const confidence = source.confidence ?? "中";
+  const category = sourceCategoryLabel(source.sourceCategory);
+  const summary = sourceSummaryForUser(source, topic);
+  const hasAbstract = sourceHasUsableAbstract(source);
+  const relevanceLevel = source.relevanceLevel ?? null;
+  const relevanceReasons = source.relevanceReasons ?? [];
+  const authorityLabel = source.authorityLabel ?? "權威性待確認";
+  const languageLabel = source.sourceLanguageLabel ?? "來源語言待確認";
+  const StatusIcon =
+    reviewState === "accepted"
+      ? CheckCircle2
+      : reviewState === "rejected"
+        ? XCircle
+        : AlertTriangle;
+  const cardTone =
+    reviewState === "accepted"
+      ? "border-green-500/30 bg-green-50/80"
+      : reviewState === "rejected"
+        ? "border-destructive/25 bg-destructive/5"
+        : "border-border bg-card";
+  const statusTone =
+    reviewState === "accepted"
+      ? "bg-green-600 text-white"
+      : reviewState === "rejected"
+        ? "bg-destructive text-destructive-foreground"
+        : "bg-amber-100 text-amber-700";
+  const compactSummary =
+    reviewState === "accepted"
+      ? `已接受：${summary.contentSummary}`
+      : reviewState === "rejected"
+        ? `已拒絕：${summary.topicRelation}`
+        : summary.contentSummary;
+  const acceptButtonLabel =
+    summary.recommendation === "not_recommended"
+      ? "仍要接受"
+      : summary.recommendation === "check_first"
+        ? "確認後接受"
+        : "接受來源";
+
   return (
-    <div className="report-section border border-border rounded-lg overflow-hidden">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-4 py-3 min-h-[48px] bg-muted/40 hover:bg-muted/60 transition-colors text-left"
-        data-testid={`section-toggle-${section.heading}`}
-      >
-        <span className="font-semibold text-sm text-foreground">{section.heading}</span>
-        {open ? (
-          <ChevronUp className="h-4 w-4 text-muted-foreground shrink-0" />
-        ) : (
-          <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
-        )}
-      </button>
-      {open && (
-        <div className="px-4 py-4 space-y-3">
-          {section.blocks.map((b, i) => (
-            <BlockView key={i} block={b} />
-          ))}
+    <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
+      <article className={`rounded-lg border p-3 transition-colors sm:p-4 ${cardTone}`} data-testid={`source-card-${reviewState}`}>
+        <div className="flex flex-col gap-3">
+          <div className="flex min-w-0 gap-3">
+            <div
+              className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${statusTone}`}
+            >
+              <StatusIcon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <h3 className="line-clamp-2 text-sm font-semibold leading-6 text-foreground" title={title}>
+                    {title}
+                  </h3>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <span>{sourceAuthorShortLabel(source.authors)}</span>
+                    <span>{year}</span>
+                    <span>{category}</span>
+                    <span>{source.sourceType}</span>
+                  </div>
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <Badge variant={sourceReviewBadgeVariant(reviewState)}>
+                    {reviewLabel}
+                  </Badge>
+                  <Badge variant="secondary">可信度 {confidence}</Badge>
+                  <Badge variant={hasAbstract ? "outline" : "secondary"}>
+                    {hasAbstract ? "摘要可判斷" : "摘要不足"}
+                  </Badge>
+                  <Badge variant={sourceRelevanceBadgeVariant(relevanceLevel)}>
+                    {sourceRelevanceLabel(relevanceLevel)}
+                  </Badge>
+                  <Badge variant="outline">{authorityLabel}</Badge>
+                  <Badge variant="outline">{languageLabel}</Badge>
+                  {incomplete && <Badge variant="outline">引用資料不完整</Badge>}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2 rounded-md border border-border/70 bg-background/70 px-3 py-3">
+            <p className="line-clamp-2 text-sm leading-6 text-foreground/90">
+              <span className="font-medium text-foreground">內容摘要：</span>
+              {compactSummary}
+            </p>
+            <p className="text-xs leading-5 text-muted-foreground">
+              與主題關聯：{summary.topicRelation}
+            </p>
+            <p className="text-xs leading-5 text-muted-foreground">
+              採用建議：{summary.recommendationReason}
+            </p>
+            {relevanceReasons.length > 0 && (
+              <p className="text-xs leading-5 text-muted-foreground">
+                主題相關性：{relevanceReasons.slice(0, 2).join("；")}
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                適合使用章節
+              </span>
+              {summary.usableSections.map((section) => (
+                <Badge key={section} variant="outline">
+                  {section}
+                </Badge>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {reviewState === "accepted" ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="min-h-[36px]"
+                onClick={() => onReview(sourceId, "pending")}
+              >
+                取消接受
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                variant="default"
+                className="min-h-[36px]"
+                disabled={reviewState === "rejected"}
+                onClick={() => onReview(sourceId, "accepted")}
+              >
+                <CheckCircle2 className="mr-2 h-4 w-4" />
+                {acceptButtonLabel}
+              </Button>
+            )}
+            {reviewState === "rejected" ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="min-h-[36px]"
+                onClick={() => onReview(sourceId, "pending")}
+              >
+                還原為待審
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="min-h-[36px]"
+                disabled={reviewState === "accepted"}
+                onClick={() => onReview(sourceId, "rejected")}
+              >
+                <XCircle className="mr-2 h-4 w-4" /> 拒絕
+              </Button>
+            )}
+            <CollapsibleTrigger asChild>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="min-h-[36px]"
+                data-testid="button-source-expand"
+                aria-label={isExpanded ? "收合來源細節" : "展開來源細節"}
+                title={isExpanded ? "收合來源細節" : "展開來源細節"}
+              >
+                {isExpanded ? (
+                  <ChevronUp className="mr-2 h-4 w-4" />
+                ) : (
+                  <ChevronDown className="mr-2 h-4 w-4" />
+                )}
+                展開詳情
+              </Button>
+            </CollapsibleTrigger>
+            {source.url ? (
+              <Button asChild type="button" size="sm" variant="ghost" className="min-h-[36px]">
+                <a href={source.url} target="_blank" rel="noreferrer">
+                  <ExternalLink className="mr-2 h-4 w-4" /> 查看原始來源
+                </a>
+              </Button>
+            ) : (
+              <Button type="button" size="sm" variant="ghost" className="min-h-[36px]" disabled>
+                查看原始來源
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <CollapsibleContent>
+          <div className="mt-4 grid grid-cols-1 gap-3 border-t border-border/70 pt-4 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <h4 className="text-sm font-semibold text-foreground">
+                進階資料與引用資訊
+              </h4>
+              <p className="mt-1 text-xs text-muted-foreground">
+                補齊引用 metadata 與審查筆記；接受或拒絕可直接在摘要卡操作。
+              </p>
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label htmlFor={`${sourceId}-title`} className="text-xs">
+                標題
+              </Label>
+              <Input
+                id={`${sourceId}-title`}
+                value={source.title}
+                onChange={(event) =>
+                  onEdit(sourceId, { title: event.target.value })
+                }
+                className="h-10 bg-background"
+              />
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label htmlFor={`${sourceId}-authors`} className="text-xs">
+                作者
+              </Label>
+              <Input
+                id={`${sourceId}-authors`}
+                value={source.authors.join("、")}
+                placeholder="以頓號或逗號分隔多位作者"
+                onChange={(event) =>
+                  onEdit(sourceId, {
+                    authors: parseAuthorsInput(event.target.value),
+                  })
+                }
+                className="h-10 bg-background"
+              />
+              <p className="text-xs text-muted-foreground">
+                顯示：{formatSourceAuthors(source.authors)}
+              </p>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${sourceId}-year`} className="text-xs">
+                年份
+              </Label>
+              <Input
+                id={`${sourceId}-year`}
+                value={source.year ?? ""}
+                inputMode="numeric"
+                placeholder="年份待確認"
+                onChange={(event) => {
+                  const value = event.target.value.trim();
+                  onEdit(sourceId, { year: value ? Number(value) : null });
+                }}
+                className="h-10 bg-background"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${sourceId}-provider`} className="text-xs">
+                來源平台
+              </Label>
+              <Input
+                id={`${sourceId}-provider`}
+                value={source.sourceType}
+                disabled
+                className="h-10 bg-muted/40"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${sourceId}-container`} className="text-xs">
+                期刊／會議／出處
+              </Label>
+              <Input
+                id={`${sourceId}-container`}
+                value={source.containerTitle ?? ""}
+                onChange={(event) =>
+                  onEdit(sourceId, { containerTitle: event.target.value })
+                }
+                className="h-10 bg-background"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${sourceId}-publisher`} className="text-xs">
+                出版者
+              </Label>
+              <Input
+                id={`${sourceId}-publisher`}
+                value={source.publisher ?? ""}
+                onChange={(event) =>
+                  onEdit(sourceId, { publisher: event.target.value })
+                }
+                className="h-10 bg-background"
+              />
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label htmlFor={`${sourceId}-doi`} className="text-xs">
+                DOI
+              </Label>
+              <Input
+                id={`${sourceId}-doi`}
+                value={source.doi ?? ""}
+                onChange={(event) =>
+                  onEdit(sourceId, { doi: event.target.value })
+                }
+                className="h-10 bg-background"
+              />
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label htmlFor={`${sourceId}-url`} className="text-xs">
+                URL
+              </Label>
+              <Input
+                id={`${sourceId}-url`}
+                value={source.url ?? ""}
+                onChange={(event) =>
+                  onEdit(sourceId, { url: event.target.value })
+                }
+                className="h-10 bg-background"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${sourceId}-sourceCategory`} className="text-xs">
+                來源類型
+              </Label>
+              <Select
+                value={source.sourceCategory ?? "unknown"}
+                onValueChange={(value) =>
+                  onEdit(sourceId, { sourceCategory: value })
+                }
+              >
+                <SelectTrigger
+                  id={`${sourceId}-sourceCategory`}
+                  className="h-10 bg-background"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SOURCE_CATEGORY_OPTIONS.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {SOURCE_CATEGORY_LABELS[option]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${sourceId}-confidence`} className="text-xs">
+                可信度
+              </Label>
+              <Select
+                value={source.confidence ?? "中"}
+                onValueChange={(value) =>
+                  onEdit(sourceId, { confidence: value })
+                }
+              >
+                <SelectTrigger
+                  id={`${sourceId}-confidence`}
+                  className="h-10 bg-background"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SOURCE_CONFIDENCE_OPTIONS.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <p className="text-xs font-medium text-foreground">可用章節</p>
+              <div className="flex flex-wrap gap-3">
+                {WORKFLOW_REPORT_SECTIONS.map((section) => (
+                  <label
+                    key={section}
+                    className="flex min-h-[28px] items-center gap-2 text-xs text-muted-foreground"
+                  >
+                    <Checkbox
+                      checked={usableSections.includes(section)}
+                      onCheckedChange={(checked) =>
+                        onEdit(sourceId, {
+                          usableSections: toggleWorkflowSection(
+                            usableSections.length
+                              ? usableSections
+                              : defaultUsableSections(),
+                            section,
+                            checked === true,
+                          ),
+                        })
+                      }
+                    />
+                    <span>{section}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label htmlFor={`${sourceId}-reviewNotes`} className="text-xs">
+                審查筆記
+              </Label>
+              <Textarea
+                id={`${sourceId}-reviewNotes`}
+                value={source.reviewNotes ?? ""}
+                placeholder="例如：方法清楚，但樣本偏小"
+                onChange={(event) =>
+                  onEdit(sourceId, { reviewNotes: event.target.value })
+                }
+                className="min-h-[76px] resize-y bg-background"
+              />
+            </div>
+          </div>
+        </CollapsibleContent>
+      </article>
+    </Collapsible>
+  );
+}
+
+function SearchStepPanel({
+  topic,
+  reportType,
+  audience,
+  status,
+  message,
+  sourceCount,
+  isSearching,
+  hasTopic,
+  onSearch,
+  onBack,
+}: {
+  topic: string;
+  reportType: string;
+  audience: string;
+  status: "idle" | "loading" | "done" | "empty" | "error";
+  message: string;
+  sourceCount: number;
+  isSearching: boolean;
+  hasTopic: boolean;
+  onSearch: () => void;
+  onBack: () => void;
+}) {
+  return (
+    <section
+      className="mx-auto max-w-4xl space-y-4"
+      data-testid="generator-search-step"
+    >
+      <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <Badge variant="secondary" className="mb-3">
+              步驟 2
+            </Badge>
+            <h2 className="text-2xl font-semibold tracking-normal text-foreground">
+              搜尋來源
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+              先確認主題摘要，再搜尋相關學術資料與可信文獻。搜尋完成後會自動進入來源管理。
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="min-h-[40px]"
+            onClick={onBack}
+          >
+            <ArrowLeft className="mr-2 h-4 w-4" /> 上一步
+          </Button>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+          <div className="rounded-md border border-border bg-muted/20 px-3 py-3 sm:col-span-2">
+            <span className="block text-xs font-medium text-muted-foreground">
+              主題摘要
+            </span>
+            <span className="mt-1 block font-medium text-foreground">
+              {topic || "尚未設定主題"}
+            </span>
+          </div>
+          <div className="rounded-md border border-border bg-muted/20 px-3 py-3">
+            <span className="block text-xs font-medium text-muted-foreground">
+              報告設定
+            </span>
+            <span className="mt-1 block text-foreground">
+              {reportType}・{audience}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {status === "loading" ? (
+        <div
+          className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-12 text-center shadow-sm"
+          data-testid="sources-loading"
+        >
+          <div className="mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+            <Loader2 className="h-9 w-9 animate-spin" />
+          </div>
+          <h3 className="text-xl font-semibold text-foreground">
+            正在搜尋來源
+          </h3>
+          <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+            ResearchForge 正在為你搜尋相關學術資料與文獻，並整理成可審查來源。
+          </p>
+          <div className="mt-6 flex justify-center gap-2" aria-hidden="true">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-primary/40" />
+            <span className="h-2 w-2 animate-pulse rounded-full bg-primary/70 [animation-delay:120ms]" />
+            <span className="h-2 w-2 animate-pulse rounded-full bg-primary [animation-delay:240ms]" />
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-border bg-card p-6 text-center shadow-sm">
+          {status === "done" && sourceCount > 0 ? (
+            <>
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-green-100 text-green-700">
+                <CheckCircle2 className="h-8 w-8" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground">
+                已找到 {sourceCount} 筆來源
+              </h3>
+              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+                已整理來源，接下來會進入管理來源工作區。
+              </p>
+            </>
+          ) : status === "empty" ? (
+            <>
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+                <Search className="h-8 w-8" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground">
+                尚未找到可用來源
+              </h3>
+              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+                {message ||
+                  "目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。"}
+              </p>
+            </>
+          ) : status === "error" ? (
+            <>
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-destructive/10 text-destructive">
+                <XCircle className="h-8 w-8" />
+              </div>
+              <h3 className="text-lg font-semibold text-destructive">
+                來源搜尋失敗
+              </h3>
+              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+                {message || "來源搜尋失敗，請稍後再試。"}
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                <Search className="h-8 w-8" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground">
+                準備搜尋來源
+              </h3>
+              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+                點擊搜尋後，ResearchForge 會依主題與報告設定查找候選來源。
+              </p>
+            </>
+          )}
+
+          <div className="mt-6 flex flex-col justify-center gap-2 sm:flex-row">
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-[42px]"
+              onClick={onBack}
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" /> 上一步
+            </Button>
+            <Button
+              type="button"
+              className="min-h-[42px]"
+              onClick={onSearch}
+              disabled={isSearching || !hasTopic}
+              data-testid="button-search-sources"
+            >
+              <Search className="mr-2 h-4 w-4" />
+              {status === "error" || status === "empty"
+                ? "重新搜尋"
+                : "搜尋來源"}
+            </Button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SourceManagePanel({
+  sources,
+  onReview,
+  onEdit,
+  topic,
+}: {
+  sources: SourceRecord[];
+  onReview: (sourceId: string, reviewState: SourceReviewState) => void;
+  onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
+  topic: string;
+}) {
+  const [activeTab, setActiveTab] = useState<SourceReviewTab>("all");
+  const [expandedSourceIds, setExpandedSourceIds] = useState<string[]>([]);
+  const previousReviewStates = useRef<Map<string, SourceReviewState>>(
+    new Map(),
+  );
+  const mainListSources = sources.filter((source) => source.shouldShowInMainList !== false);
+  const lowRelevanceSources = sources.filter((source) => source.shouldShowInMainList === false);
+  const counts = sourceReviewCounts(sources);
+  const visibleSources = sourcesForReviewTab(mainListSources, activeTab);
+  const activeTabLabel =
+    SOURCE_REVIEW_TABS.find((tab) => tab.value === activeTab)?.label ?? "來源";
+
+  useEffect(() => {
+    const nextReviewStates = new Map<string, SourceReviewState>();
+
+    setExpandedSourceIds((current) => {
+      const nextExpanded = new Set(current);
+      const activeIds = new Set<string>();
+
+      for (const source of sources) {
+        const key = source.id || sourceRecordKey(source);
+        const nextState = sourceReviewState(source);
+        const previousState = previousReviewStates.current.get(key);
+        activeIds.add(key);
+        nextReviewStates.set(key, nextState);
+
+        if (previousState !== undefined && previousState !== nextState) {
+          if (nextState === "pending") {
+            nextExpanded.add(key);
+          } else {
+            nextExpanded.delete(key);
+          }
+        }
+      }
+
+      for (const sourceId of Array.from(nextExpanded)) {
+        if (!activeIds.has(sourceId)) nextExpanded.delete(sourceId);
+      }
+
+      return Array.from(nextExpanded);
+    });
+
+    previousReviewStates.current = nextReviewStates;
+  }, [sources]);
+
+  const setSourceExpanded = (sourceId: string, open: boolean) => {
+    setExpandedSourceIds((current) => {
+      if (open)
+        return current.includes(sourceId) ? current : [...current, sourceId];
+      return current.filter((item) => item !== sourceId);
+    });
+  };
+
+  const handleReview = (sourceId: string, reviewState: SourceReviewState) => {
+    setSourceExpanded(sourceId, reviewState === "pending");
+    onReview(sourceId, reviewState);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-foreground">研究來源</h2>
+          <p className="text-sm text-muted-foreground">
+            接受的來源會進入參考文獻，拒絕的來源不會匯出；展開卡片可補
+            metadata。
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={counts.accepted ? "default" : "outline"}>
+            已接受來源：{counts.accepted} 筆
+          </Badge>
+          <Badge
+            variant={
+              counts.accepted >= RECOMMENDED_ACCEPTED_SOURCE_MIN
+                ? "secondary"
+                : "outline"
+            }
+          >
+            建議至少 {RECOMMENDED_ACCEPTED_SOURCE_MIN} 筆
+          </Badge>
+          <Badge variant={counts.rejected ? "secondary" : "outline"}>
+            已拒絕 {counts.rejected} 筆
+          </Badge>
+          <Badge variant="outline">主要來源 {mainListSources.length} 筆</Badge>
+        </div>
+      </div>
+
+      {sources.length > 0 && (
+        <div
+          className="max-h-[620px] space-y-3 overflow-y-auto pr-1"
+          data-testid="sources-list"
+        >
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => setActiveTab(value as SourceReviewTab)}
+          >
+            <TabsList className="h-auto flex-wrap justify-start gap-1">
+              <TabsTrigger value="all" data-testid="tab-sources-all">
+                全部 ({counts.all})
+              </TabsTrigger>
+              <TabsTrigger value="accepted" data-testid="tab-sources-accepted">
+                已接受 ({counts.accepted})
+              </TabsTrigger>
+              <TabsTrigger value="pending" data-testid="tab-sources-pending">
+                待審核 ({counts.pending})
+              </TabsTrigger>
+              <TabsTrigger value="rejected" data-testid="tab-sources-rejected">
+                已拒絕 ({counts.rejected})
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          {visibleSources.length > 0 ? (
+            <div
+              className="space-y-3"
+              data-testid={`sources-list-${activeTab}`}
+            >
+              {visibleSources.map((source) => {
+                const key = source.id || sourceRecordKey(source);
+                return (
+                  <SourceReviewCard
+                    key={key}
+                    source={source}
+                    isExpanded={expandedSourceIds.includes(key)}
+                    onExpandedChange={(open) => setSourceExpanded(key, open)}
+                    onReview={handleReview}
+                    onEdit={onEdit}
+                    topic={topic}
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            <p className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-3 text-sm text-muted-foreground">
+              {activeTabLabel}目前沒有來源。
+            </p>
+          )}
+          {lowRelevanceSources.length > 0 && (
+            <Collapsible>
+              <div className="rounded-md border border-border bg-muted/10 px-3 py-3">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex min-h-[40px] w-full items-center justify-between gap-2 text-left"
+                  >
+                    <span>
+                      <span className="block text-sm font-medium text-foreground">
+                        低相關來源 ({lowRelevanceSources.length})
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        已預設收合，不會進入主要推薦列表。
+                      </span>
+                    </span>
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="pt-3">
+                  <div className="space-y-3" data-testid="sources-list-low-relevance">
+                    {lowRelevanceSources.map((source) => {
+                      const key = source.id || sourceRecordKey(source);
+                      return (
+                        <SourceReviewCard
+                          key={key}
+                          source={source}
+                          isExpanded={expandedSourceIds.includes(key)}
+                          onExpandedChange={(open) => setSourceExpanded(key, open)}
+                          onReview={handleReview}
+                          onEdit={onEdit}
+                          topic={topic}
+                        />
+                      );
+                    })}
+                  </div>
+                </CollapsibleContent>
+              </div>
+            </Collapsible>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function SourceSearchPanel({
+function TopicStepPanel({
+  input,
+  expansions,
+  advancedOpen,
+  detectedCategory,
+  autoSearchEnabled,
+  workspaceResume,
+  onInputChange,
+  onExpandTopic,
+  onApplyExpansion,
+  onAdvancedOpenChange,
+  onNext,
+  onClearWorkspace,
+}: {
+  input: ReportInput;
+  expansions: TopicExpansionCard[];
+  advancedOpen: boolean;
+  detectedCategory: TopicCategory | null;
+  autoSearchEnabled: boolean;
+  workspaceResume: WorkspaceResumeState | null;
+  onInputChange: (key: ReportInputStringKey, value: string) => void;
+  onExpandTopic: () => void;
+  onApplyExpansion: (title: string) => void;
+  onAdvancedOpenChange: (open: boolean) => void;
+  onNext: () => void;
+  onClearWorkspace: () => void;
+}) {
+  const AUTO = "自動偵測";
+  const hasTopic = Boolean(input.topic.trim());
+
+  return (
+    <section className="mx-auto max-w-3xl" data-testid="generator-topic-step">
+      <div className="rounded-lg border border-border bg-card p-5 shadow-sm sm:p-6">
+        <div className="mb-5 flex flex-col gap-3 border-b border-border pb-5 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <Badge variant="secondary" className="mb-3">
+              步驟 1
+            </Badge>
+            <h2 className="text-2xl font-semibold tracking-normal text-foreground">
+              設定主題
+            </h2>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+              先定義研究主題與輸出條件，下一步再進入獨立的來源搜尋工作區。
+            </p>
+          </div>
+          {workspaceResume && <Badge variant="outline">工作區續編</Badge>}
+        </div>
+
+        <div className="space-y-5">
+          <div className="space-y-2">
+            <Label htmlFor="topic">
+              報告主題 <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              id="topic"
+              placeholder="例如：豬在農業生產與生態系統中的角色與價值"
+              value={input.topic}
+              onChange={(e) => onInputChange("topic", e.target.value)}
+              data-testid="input-topic"
+              className="h-11"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="min-h-[38px] w-full"
+              onClick={onExpandTopic}
+              data-testid="button-expand-topic"
+            >
+              <Sparkles className="mr-2 h-4 w-4" /> 擴寫主題
+            </Button>
+
+            {expansions.length > 0 && (
+              <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                <p className="text-xs font-medium text-muted-foreground">研究方向提示卡</p>
+                {expansions.map((card, i) => (
+                  <article
+                    key={`${card.title}-${card.angle}`}
+                    className="rounded-md border border-border bg-background px-3 py-3"
+                    data-testid={`expansion-${i}`}
+                  >
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <Badge variant="secondary" className="mb-2">
+                          {card.angle}
+                        </Badge>
+                        <h3 className="text-sm font-semibold leading-6 text-foreground">
+                          {card.title}
+                        </h3>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          {card.reason}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="min-h-[36px] shrink-0"
+                        onClick={() => onApplyExpansion(card.title)}
+                      >
+                        套用此題目
+                      </Button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {MAIN_SELECT_FIELDS.map((f) => (
+              <div key={f.key} className="space-y-2">
+                <Label htmlFor={f.key}>{f.label}</Label>
+                <Select
+                  value={input[f.key]}
+                  onValueChange={(v) => onInputChange(f.key, v)}
+                >
+                  <SelectTrigger
+                    id={f.key}
+                    data-testid={`select-${f.key}`}
+                    className="h-11"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {f.options.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ))}
+          </div>
+
+          {!autoSearchEnabled && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              目前資料來源設定為自行提供；仍可進入來源搜尋階段，再決定是否搜尋或回來調整。
+            </div>
+          )}
+
+          <Collapsible open={advancedOpen} onOpenChange={onAdvancedOpenChange}>
+            <div className="rounded-md border border-border bg-muted/20">
+              <CollapsibleTrigger asChild>
+                <button
+                  type="button"
+                  className="flex min-h-[44px] w-full items-center justify-between px-3 text-left"
+                  data-testid="button-advanced-settings"
+                >
+                  <span className="text-sm font-semibold text-foreground">
+                    進階設定
+                  </span>
+                  {advancedOpen ? (
+                    <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </button>
+              </CollapsibleTrigger>
+
+              <CollapsibleContent className="border-t border-border px-3 py-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label htmlFor="domainOverride">主題領域</Label>
+                    <div className="rounded-md border border-border bg-background px-3 py-2 text-sm">
+                      {detectedCategory ? (
+                        <span className="text-foreground">
+                          系統判定：
+                          <span className="ml-1 font-semibold text-primary">
+                            {detectedCategory}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">
+                          輸入主題後會自動判定領域。
+                        </span>
+                      )}
+                    </div>
+                    <Select
+                      value={input.domainOverride || AUTO}
+                      onValueChange={(v) =>
+                        onInputChange("domainOverride", v === AUTO ? "" : v)
+                      }
+                    >
+                      <SelectTrigger
+                        id="domainOverride"
+                        data-testid="select-domainOverride"
+                        className="h-11 bg-background"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={AUTO}>自動判定</SelectItem>
+                        {TOPIC_CATEGORIES.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {ADVANCED_SELECT_FIELDS.map((f) => (
+                    <div key={f.key} className="space-y-2">
+                      <Label htmlFor={f.key}>{f.label}</Label>
+                      <Select
+                        value={input[f.key]}
+                        onValueChange={(v) => onInputChange(f.key, v)}
+                      >
+                        <SelectTrigger
+                          id={f.key}
+                          data-testid={`select-${f.key}`}
+                          className="h-11 bg-background"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {f.options.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>
+                              {o.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+
+                  {ADVANCED_TEXT_FIELDS.map((f) => (
+                    <div key={f.key} className="space-y-2">
+                      <Label htmlFor={f.key}>{f.label}</Label>
+                      <Input
+                        id={f.key}
+                        placeholder={f.placeholder}
+                        value={input[f.key]}
+                        onChange={(e) => onInputChange(f.key, e.target.value)}
+                        data-testid={`input-${f.key}`}
+                        className="h-11 bg-background"
+                      />
+                    </div>
+                  ))}
+
+                  {ADVANCED_TEXTAREA_FIELDS.map((f) => (
+                    <div key={f.key} className="space-y-2 sm:col-span-2">
+                      <Label htmlFor={f.key}>{f.label}</Label>
+                      <Textarea
+                        id={f.key}
+                        placeholder={f.placeholder}
+                        value={input[f.key]}
+                        onChange={(e) => onInputChange(f.key, e.target.value)}
+                        data-testid={`input-${f.key}`}
+                        className={`${f.minHeight} resize-y bg-background`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </div>
+          </Collapsible>
+
+          <div className="flex flex-col-reverse gap-2 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              {workspaceResume && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground"
+                  onClick={onClearWorkspace}
+                  data-testid="button-clear-form"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" /> 清除工作區來源
+                </Button>
+              )}
+            </div>
+            <Button
+              type="button"
+              size="lg"
+              className="min-h-[46px]"
+              disabled={!hasTopic}
+              onClick={onNext}
+            >
+              下一步：搜尋來源 <ArrowRight className="ml-2 h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ManageStepPanel({
   sources,
   acceptedCount,
-  rejectedCount,
-  status,
-  message,
-  keywordDebug,
-  isSearching,
-  hasTopic,
-  onSearch,
+  onBack,
+  onNext,
   onReview,
   onEdit,
+  topic,
 }: {
   sources: SourceRecord[];
   acceptedCount: number;
-  rejectedCount: number;
-  status: "idle" | "loading" | "done" | "empty" | "error";
-  message: string;
-  keywordDebug: KeywordSearchDebugState | null;
-  isSearching: boolean;
-  hasTopic: boolean;
-  onSearch: () => void;
+  onBack: () => void;
+  onNext: () => void;
   onReview: (sourceId: string, reviewState: SourceReviewState) => void;
   onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
+  topic: string;
 }) {
   return (
-    <div className="mb-4 space-y-3">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-foreground">研究來源</h2>
-          <p className="text-sm text-muted-foreground">
-            從 Crossref 與 Semantic Scholar 搜尋真實來源；接受的來源會進入參考文獻，拒絕的來源不會匯出。
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={acceptedCount ? "default" : "outline"}>已接受 {acceptedCount} 筆</Badge>
-          <Badge variant={rejectedCount ? "secondary" : "outline"}>已拒絕 {rejectedCount} 筆</Badge>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="min-h-[40px]"
-            onClick={onSearch}
-            disabled={isSearching || !hasTopic}
-            data-testid="button-search-sources-panel"
+    <section
+      className="mx-auto max-w-5xl space-y-4"
+      data-testid="generator-manage-step"
+    >
+      <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <Badge variant="secondary" className="mb-3">
+              步驟 3
+            </Badge>
+            <h2 className="text-2xl font-semibold tracking-normal text-foreground">
+              管理來源
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+              審查候選來源、補 metadata，並留下要進入報告的可信資料。
+            </p>
+          </div>
+          <Badge
+            variant={acceptedCount ? "default" : "outline"}
+            className="w-fit"
           >
-            {isSearching ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 搜尋中
-              </>
-            ) : (
-              <>
-                <Search className="mr-2 h-4 w-4" /> 搜尋來源
-              </>
-            )}
-          </Button>
+            已接受來源：{acceptedCount} 筆
+          </Badge>
         </div>
       </div>
 
-      {status === "idle" && (
-        <div className="rounded-lg border border-dashed border-border bg-card/60 px-4 py-5 text-sm text-muted-foreground">
-          輸入研究主題後，可先搜尋學術與網路來源，再選取準備使用的資料。
-        </div>
-      )}
-
-      {status === "loading" && (
-        <div className="rounded-lg border border-border bg-card p-4 space-y-3" data-testid="sources-loading">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            正在擴展關鍵詞並搜尋 Crossref 與 Semantic Scholar...
-          </div>
-          {[1, 2, 3].map((item) => (
-            <div key={item} className="animate-pulse rounded-md border border-border p-3 space-y-2">
-              <div className="h-4 w-3/4 rounded bg-muted" />
-              <div className="h-3 w-1/2 rounded bg-muted" />
+      <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+        {sources.length > 0 ? (
+          <SourceManagePanel
+            sources={sources}
+            onReview={onReview}
+            onEdit={onEdit}
+            topic={topic}
+          />
+        ) : (
+          <div className="flex min-h-[320px] flex-col items-center justify-center text-center">
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+              <BookOpen className="h-8 w-8" />
             </div>
-          ))}
-        </div>
-      )}
+            <h3 className="text-lg font-semibold text-foreground">
+              尚無候選來源
+            </h3>
+            <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+              請先回到搜尋來源階段，找到來源後再進行管理。
+            </p>
+          </div>
+        )}
+      </div>
 
-      {status === "empty" && (
-        <div className="rounded-lg border border-border bg-card px-4 py-5 text-sm text-muted-foreground" data-testid="sources-empty">
-          {message || "目前沒有找到符合此主題的來源。"}
-        </div>
-      )}
+      <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
+        <Button
+          type="button"
+          variant="outline"
+          className="min-h-[42px]"
+          onClick={onBack}
+        >
+          <ArrowLeft className="mr-2 h-4 w-4" /> 上一步：搜尋來源
+        </Button>
+        <Button type="button" className="min-h-[42px]" onClick={onNext}>
+          下一步：生成報告 <ArrowRight className="ml-2 h-4 w-4" />
+        </Button>
+      </div>
+    </section>
+  );
+}
 
-      {status === "error" && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-5 text-sm text-destructive" data-testid="sources-error">
-          {message || "來源搜尋失敗，請稍後再試。"}
-        </div>
-      )}
+function GenerateStepPanel({
+  acceptedCount,
+  readiness,
+  isGenerating,
+  generateButtonLabel,
+  generateStatus,
+  onGenerate,
+  onBack,
+}: {
+  acceptedCount: number;
+  readiness: ReturnType<typeof generationReadiness>;
+  isGenerating: boolean;
+  generateButtonLabel: string;
+  generateStatus: "idle" | "loading" | "done" | "error";
+  onGenerate: () => void;
+  onBack: () => void;
+}) {
+  const progressValue = isGenerating
+    ? 72
+    : readiness.canGenerateFull
+      ? 100
+      : readiness.canGenerate
+        ? 60
+        : Math.min(45, acceptedCount * 9);
 
-      {keywordDebug && status !== "idle" && (
-        <div className="rounded-lg border border-border bg-card px-4 py-3 text-xs text-muted-foreground" data-testid="keyword-search-debug">
+  return (
+    <section
+      className="mx-auto max-w-4xl space-y-4"
+      data-testid="generator-generate-step"
+    >
+      <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <Badge variant="secondary" className="mb-3">
+              步驟 4
+            </Badge>
+            <h2 className="text-2xl font-semibold tracking-normal text-foreground">
+              生成報告
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+              這裡只確認來源數與生成準備度。建立成功後會前往獨立報告工作區。
+            </p>
+          </div>
+          <Badge
+            variant={
+              readiness.canGenerateFull
+                ? "default"
+                : readiness.canGenerate
+                  ? "secondary"
+                  : "outline"
+            }
+            className="w-fit"
+          >
+            已接受 {acceptedCount} 筆來源
+          </Badge>
+        </div>
+      </div>
+
+      <div
+        className="rounded-lg border border-primary/25 bg-card p-6 shadow-sm"
+        data-testid="generation-readiness-panel"
+      >
+        <div className="mb-4 flex items-start gap-4">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+            <Wand2 className="h-7 w-7" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold text-foreground">
+              生成準備度
+            </h3>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">
+              {readiness.canGenerateFull
+                ? "來源品質已達完整報告門檻，可以建立完整報告工作區。"
+                : readiness.canGenerate
+                  ? "來源品質已達簡版草稿門檻，可以先建立快速草稿。"
+                  : "來源品質不足，請先回到來源管理補足相關且有摘要的可信來源。"}
+            </p>
+          </div>
+        </div>
+
+        <Progress value={progressValue} />
+        <div className="mt-4 flex flex-wrap gap-2 text-sm">
+          <Badge
+            variant={
+              readiness.canGenerateFull
+                ? "default"
+                : readiness.canGenerate
+                  ? "secondary"
+                  : "outline"
+            }
+          >
+            {readiness.canGenerateFull
+              ? "可生成完整報告"
+              : readiness.canGenerate
+                ? "可生成簡版草稿"
+                : "來源不足"}
+          </Badge>
+          <Badge variant="outline">相關來源 {readiness.relevantSourceCount} 筆</Badge>
+          <Badge variant="outline">可用摘要 {readiness.usableSummaryCount} 筆</Badge>
+          <Badge variant="outline">涵蓋面 {readiness.coverageCount} 項</Badge>
+          {isGenerating && (
+            <Badge variant="outline">{readiness.progressLabel}</Badge>
+          )}
+        </div>
+
+        {readiness.warning && (
+          <div className="mt-4 flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{readiness.warning}</span>
+          </div>
+        )}
+
+        {readiness.diagnostics.length > 0 && (
+          <ul className="mt-3 space-y-1 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground">
+            {readiness.diagnostics.slice(0, 5).map((diagnostic) => (
+              <li key={diagnostic}>{diagnostic}</li>
+            ))}
+          </ul>
+        )}
+
+        {generateStatus === "error" && readiness.canGenerate && (
+          <div className="mt-4 flex gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>生成失敗，請確認輸入內容後再試一次。</span>
+          </div>
+        )}
+
+        <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-between">
+          <Button
+            type="button"
+            variant="outline"
+            className="min-h-[42px]"
+            onClick={onBack}
+          >
+            <ArrowLeft className="mr-2 h-4 w-4" /> 上一步：管理來源
+          </Button>
+          {readiness.canGenerate ? (
+            <Button
+              type="button"
+              size="lg"
+              className="min-h-[46px]"
+              onClick={onGenerate}
+              disabled={isGenerating}
+              data-testid="button-generate"
+            >
+              {isGenerating ? (
+                <>
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />{" "}
+                  {generateButtonLabel}
+                </>
+              ) : (
+                <>
+                  <Wand2 className="mr-2 h-5 w-5" /> {generateButtonLabel}
+                </>
+              )}
+            </Button>
+          ) : (
+            <Button type="button" className="min-h-[46px]" onClick={onBack}>
+              返回管理來源
+            </Button>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function DeveloperDebugPanel({
+  keywordDebug,
+  preflight,
+  acceptedSources,
+  visible,
+}: {
+  keywordDebug: KeywordSearchDebugState | null;
+  preflight: SearchPreflightResult | null;
+  acceptedSources: SourceRecord[];
+  visible: ReturnType<typeof generatorWorkflowVisibility>;
+}) {
+  if (!visible.showTechnicalLogs && !visible.showEvidenceCards) return null;
+
+  const debugEvidenceCards = visible.showEvidenceCards
+    ? buildEvidenceCards(acceptedSources, [], { resetText: true })
+    : [];
+
+  return (
+    <section
+      className="mb-4 space-y-3 rounded-lg border border-border bg-card p-4"
+      data-testid="developer-debug-panel"
+    >
+      <div>
+        <h2 className="text-base font-semibold text-foreground">開發者除錯</h2>
+        <p className="text-xs text-muted-foreground">
+          技術查詢、provider 狀態與中間證據卡只在此處顯示。
+        </p>
+      </div>
+
+      {keywordDebug && visible.showTechnicalLogs && (
+        <div
+          className="rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground"
+          data-testid="keyword-search-debug"
+        >
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <span className="font-medium text-foreground">關鍵詞搜尋除錯</span>
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">/api/search-sources</code>
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+              /api/search-sources
+            </code>
             <Badge variant="outline">LLM：{keywordDebug.llmStatusLabel}</Badge>
-            <Badge variant={keywordDebug.fallbackUsed ? "secondary" : "outline"}>
-              {keywordDebug.fallbackUsed ? "已使用備援關鍵詞" : "LLM 關鍵詞可用"}
+            <Badge
+              variant={keywordDebug.fallbackUsed ? "secondary" : "outline"}
+            >
+              {keywordDebug.fallbackUsed
+                ? "已使用備援關鍵詞"
+                : "LLM 關鍵詞可用"}
             </Badge>
           </div>
           <SearchIntentDebugPanel debug={keywordDebug} />
@@ -649,165 +2262,60 @@ function SourceSearchPanel({
         </div>
       )}
 
-      {sources.length > 0 && (
-        <div className="grid grid-cols-1 gap-3" data-testid="sources-list">
-          {sources.map((source) => {
-            const key = source.id || sourceRecordKey(source);
-            const accepted = source.reviewState === "accepted";
-            const rejected = source.reviewState === "rejected";
-            const incomplete = sourceHasIncompleteMetadata(source);
+      {preflight && visible.showTechnicalLogs && (
+        <PreflightDebugPanel preflight={preflight} />
+      )}
 
-            return (
-              <article
-                key={key}
-                className={`rounded-lg border bg-card p-4 transition-colors ${
-                  accepted
-                    ? "border-green-500 shadow-sm"
-                    : rejected
-                      ? "border-border bg-muted/30 opacity-75"
-                      : "border-border"
-                }`}
-                data-testid={`source-card-${source.sourceType}`}
-              >
-                <div className="min-w-0 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant={source.sourceType === "Crossref" ? "secondary" : "outline"}>{source.sourceType}</Badge>
-                      <Badge variant={accepted ? "default" : rejected ? "secondary" : "outline"}>
-                        {accepted ? "已接受" : rejected ? "已拒絕" : "待審核"}
-                      </Badge>
-                      {incomplete && <Badge variant="outline">來源資料不完整</Badge>}
-                    </div>
-                    {source.url && (
-                      <a
-                        href={source.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex min-h-[32px] items-center rounded-md px-2 text-xs font-medium text-primary hover:underline"
-                      >
-                        開啟連結 <ExternalLink className="ml-1 h-3.5 w-3.5" />
-                      </a>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="space-y-1 md:col-span-2">
-                      <Label htmlFor={`${key}-title`} className="text-xs">標題</Label>
-                      <Input
-                        id={`${key}-title`}
-                        value={source.title}
-                        onChange={(event) => onEdit(key, { title: event.target.value })}
-                        className="h-10"
-                      />
-                    </div>
-                    <div className="space-y-1 md:col-span-2">
-                      <Label htmlFor={`${key}-authors`} className="text-xs">作者</Label>
-                      <Input
-                        id={`${key}-authors`}
-                        value={source.authors.join("、")}
-                        placeholder="以頓號或逗號分隔多位作者"
-                        onChange={(event) => onEdit(key, { authors: event.target.value.split(/[、,]/).map((author) => author.trim()).filter(Boolean) })}
-                        className="h-10"
-                      />
-                      <p className="text-xs text-muted-foreground">顯示：{formatSourceAuthors(source.authors)}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <Label htmlFor={`${key}-year`} className="text-xs">年份</Label>
-                      <Input
-                        id={`${key}-year`}
-                        value={source.year ?? ""}
-                        inputMode="numeric"
-                        placeholder="年份待確認"
-                        onChange={(event) => {
-                          const value = event.target.value.trim();
-                          onEdit(key, { year: value ? Number(value) : null });
-                        }}
-                        className="h-10"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label htmlFor={`${key}-container`} className="text-xs">期刊／會議／出處</Label>
-                      <Input
-                        id={`${key}-container`}
-                        value={source.containerTitle ?? ""}
-                        onChange={(event) => onEdit(key, { containerTitle: event.target.value })}
-                        className="h-10"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label htmlFor={`${key}-publisher`} className="text-xs">出版者</Label>
-                      <Input
-                        id={`${key}-publisher`}
-                        value={source.publisher ?? ""}
-                        onChange={(event) => onEdit(key, { publisher: event.target.value })}
-                        className="h-10"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label htmlFor={`${key}-doi`} className="text-xs">DOI</Label>
-                      <Input
-                        id={`${key}-doi`}
-                        value={source.doi ?? ""}
-                        onChange={(event) => onEdit(key, { doi: event.target.value })}
-                        className="h-10"
-                      />
-                    </div>
-                    <div className="space-y-1 md:col-span-2">
-                      <Label htmlFor={`${key}-url`} className="text-xs">URL</Label>
-                      <Input
-                        id={`${key}-url`}
-                        value={source.url ?? ""}
-                        onChange={(event) => onEdit(key, { url: event.target.value })}
-                        className="h-10"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={accepted ? "secondary" : "default"}
-                      className="min-h-[36px]"
-                      onClick={() => onReview(key, "accepted")}
-                    >
-                      <CheckCircle2 className="mr-2 h-4 w-4" /> 接受
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={rejected ? "secondary" : "outline"}
-                      className="min-h-[36px]"
-                      onClick={() => onReview(key, "rejected")}
-                    >
-                      <XCircle className="mr-2 h-4 w-4" /> 拒絕
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="min-h-[36px]"
-                      onClick={() => onReview(key, "pending")}
-                    >
-                      標為待審
-                    </Button>
-                  </div>
+      {visible.showEvidenceCards && (
+        <div
+          className="rounded-md border border-border bg-muted/20 p-3"
+          data-testid="debug-evidence-cards"
+        >
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-sm font-medium text-foreground">中間證據卡</p>
+            <Badge variant="outline">{debugEvidenceCards.length} 張</Badge>
+          </div>
+          {debugEvidenceCards.length ? (
+            <div className="space-y-2">
+              {debugEvidenceCards.slice(0, 6).map((card, index) => (
+                <div
+                  key={card.id}
+                  className="rounded-md border border-border bg-background px-3 py-2 text-xs"
+                >
+                  <p
+                    className="truncate font-medium text-foreground"
+                    title={evidenceCardLabel(card)}
+                  >
+                    來源 {index + 1}：{evidenceCardLabel(card)}
+                  </p>
+                  <p className="mt-1 line-clamp-2 text-muted-foreground">
+                    {card.evidence}
+                  </p>
                 </div>
-              </article>
-            );
-          })}
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              尚無已接受來源可建立證據卡。
+            </p>
+          )}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
 function PreflightPills({ items }: { items: string[] }) {
-  if (items.length === 0) return <span className="text-xs text-muted-foreground">-</span>;
+  if (items.length === 0)
+    return <span className="text-xs text-muted-foreground">-</span>;
   return (
     <div className="flex flex-wrap gap-1.5">
       {items.map((item) => (
-        <Badge key={item} variant="outline" className="max-w-full whitespace-normal break-words text-left">
+        <Badge
+          key={item}
+          variant="outline"
+          className="max-w-full whitespace-normal break-words text-left"
+        >
           {item}
         </Badge>
       ))}
@@ -819,18 +2327,31 @@ function PreflightFieldLabel({ field }: { field: PreflightDebugLabelKey }) {
   return (
     <p className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
       <span>{preflightDebugLabel(field)}</span>
-      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-muted-foreground">{field}</code>
+      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-muted-foreground">
+        {field}
+      </code>
     </p>
   );
 }
 
-function PreflightDebugPanel({ preflight }: { preflight: SearchPreflightResult }) {
+function PreflightDebugPanel({
+  preflight,
+}: {
+  preflight: SearchPreflightResult;
+}) {
   return (
-    <div className="report-card mb-4 rounded-lg border border-border bg-card p-4" data-testid="preflight-debug-panel">
+    <div
+      className="report-card mb-4 rounded-lg border border-border bg-card p-4"
+      data-testid="preflight-debug-panel"
+    >
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-base font-semibold text-foreground">搜尋前檢查除錯面板</h2>
-          <p className="text-xs text-muted-foreground">只傳入最相關的搜尋指引，不傳完整大型測試資料給生成流程。</p>
+          <h2 className="text-base font-semibold text-foreground">
+            搜尋前檢查除錯面板
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            只傳入最相關的搜尋指引，不傳完整大型測試資料給生成流程。
+          </p>
         </div>
         <div className="flex flex-wrap gap-1.5">
           <Badge variant="secondary">{preflight.matched_case_id}</Badge>
@@ -871,18 +2392,37 @@ function PreflightDebugPanel({ preflight }: { preflight: SearchPreflightResult }
 
 export function Generator() {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
 
   const [input, setInput] = useState<ReportInput>(DEFAULT_INPUT);
-  const [report, setReport] = useState<GeneratedReport | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generateStatus, setGenerateStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
-  const [expansions, setExpansions] = useState<string[]>([]);
+  const [generateStatus, setGenerateStatus] = useState<
+    "idle" | "loading" | "done" | "error"
+  >("idle");
+  const [expansions, setExpansions] = useState<TopicExpansionCard[]>([]);
   const [sources, setSources] = useState<SourceRecord[]>([]);
   const [isSearchingSources, setIsSearchingSources] = useState(false);
-  const [sourceSearchStatus, setSourceSearchStatus] = useState<"idle" | "loading" | "done" | "empty" | "error">("idle");
+  const [sourceSearchStatus, setSourceSearchStatus] = useState<
+    "idle" | "loading" | "done" | "empty" | "error"
+  >("idle");
   const [sourceSearchMessage, setSourceSearchMessage] = useState("");
-  const [keywordSearchDebug, setKeywordSearchDebug] = useState<KeywordSearchDebugState | null>(null);
+  const [keywordSearchDebug, setKeywordSearchDebug] =
+    useState<KeywordSearchDebugState | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [developerDebugOpen, setDeveloperDebugOpen] = useState(false);
+  const [workspaceResume, setWorkspaceResume] =
+    useState<WorkspaceResumeState | null>(null);
+  const [activeStep, setActiveStep] = useState<GeneratorWorkflowStep>("topic");
+  const [isStepTransitioning, setIsStepTransitioning] = useState(false);
+  const [transitionTargetStep, setTransitionTargetStep] = useState<
+    GeneratorWorkflowStep | "report"
+  >("topic");
+  const [transitionMessage, setTransitionMessage] = useState({
+    title: "",
+    description: "",
+  });
+  const transitionTimerRef = useRef<number | null>(null);
+  const stepDelayTimerRef = useRef<number | null>(null);
 
   const updateInput = (key: ReportInputStringKey, value: string) => {
     setInput((prev) => {
@@ -900,20 +2440,130 @@ export function Generator() {
     });
   };
 
+  const clearStepTransition = () => {
+    if (stepDelayTimerRef.current !== null) {
+      window.clearTimeout(stepDelayTimerRef.current);
+      stepDelayTimerRef.current = null;
+    }
+    if (transitionTimerRef.current !== null) {
+      window.clearTimeout(transitionTimerRef.current);
+      transitionTimerRef.current = null;
+    }
+  };
+
+  const beginStepTransition = (
+    targetStep: GeneratorWorkflowStep | "report",
+    message: { title: string; description: string },
+    duration = 560,
+    onComplete?: () => void,
+  ) => {
+    clearStepTransition();
+    setTransitionTargetStep(targetStep);
+    setTransitionMessage(message);
+    setIsStepTransitioning(true);
+    transitionTimerRef.current = window.setTimeout(() => {
+      if (targetStep !== "report") {
+        setActiveStep(targetStep);
+      }
+      setIsStepTransitioning(false);
+      transitionTimerRef.current = null;
+      onComplete?.();
+    }, duration);
+  };
+
   // Live AI domain detection (recomputed as topic / type / level change).
   const derivedPurpose = academicToPurpose(input.academicLevel);
   const hasTopic = Boolean(input.topic.trim());
   const preflight = useMemo(
-    () => (hasTopic ? runSearchPreflight({ topic: input.topic.trim(), reportType: input.reportType }) : null),
+    () =>
+      hasTopic
+        ? runSearchPreflight({
+            topic: input.topic.trim(),
+            reportType: input.reportType,
+          })
+        : null,
     [hasTopic, input.reportType, input.topic],
   );
   const detectedCategory: TopicCategory | null = input.topic.trim()
     ? detectTopicCategory(input.topic.trim(), input.reportType, derivedPurpose)
     : null;
-  const AUTO = "自動偵測";
   const acceptedSources = acceptedSourceRecords(sources);
-  const rejectedSources = rejectedSourceRecords(sources);
-  const reportInput = report ? { ...input, acceptedSources: report.meta.acceptedSources } : input;
+  const readiness = generationReadiness(acceptedSources);
+  const workflowVisibility = generatorWorkflowVisibility(developerDebugOpen);
+  const reviewCounts = safeSourceReviewCounts(sources);
+  const sourceReviewAvailable =
+    sourceSearchStatus !== "idle" || sources.length > 0;
+  const stepCompleted: Record<GeneratorWorkflowStep, boolean> = {
+    topic: hasTopic && activeStep !== "topic",
+    search: sourceReviewAvailable && activeStep !== "search",
+    manage: sources.length > 0 && activeStep !== "manage",
+    generate: false,
+  };
+  const canEnterStep = (step: GeneratorWorkflowStep) => {
+    if (step === "topic") return true;
+    if (!hasTopic) return false;
+    if (step === "search") return true;
+    if (step === "manage") return sources.length > 0;
+    return true;
+  };
+  const handleStepSelect = (step: GeneratorWorkflowStep) => {
+    if (
+      isStepTransitioning ||
+      isSearchingSources ||
+      isGenerating ||
+      step === activeStep ||
+      !canEnterStep(step)
+    )
+      return;
+    beginStepTransition(
+      step,
+      workflowTransitionCopy(activeStep, step),
+      step === "generate" ? 520 : 420,
+    );
+  };
+  const scheduleManageStepAfterSearch = (sourceCount: number) => {
+    if (sourceCount <= 0) return;
+    if (stepDelayTimerRef.current !== null) {
+      window.clearTimeout(stepDelayTimerRef.current);
+    }
+    stepDelayTimerRef.current = window.setTimeout(() => {
+      beginStepTransition(
+        "manage",
+        {
+          title: "已整理來源",
+          description: `已找到 ${sourceCount} 筆候選來源，正在進入來源管理。`,
+        },
+        620,
+      );
+      stepDelayTimerRef.current = null;
+    }, 620);
+  };
+
+  useEffect(() => {
+    return () => clearStepTransition();
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const reportId = params.get("reportId");
+    if (!reportId || workspaceResume?.loaded) return;
+
+    const workspace = loadReportWorkspace(reportId);
+    if (!workspace) return;
+
+    setWorkspaceResume({ reportId, loaded: true });
+    setInput(workspace.input);
+    setSources(workspace.acceptedSources);
+    setSourceSearchStatus("done");
+    setSourceSearchMessage("已載入報告工作區來源，可調整後重新生成。");
+    setActiveStep(
+      workspace.acceptedSources.length > 0
+        ? "manage"
+        : workspace.input.topic.trim()
+          ? "search"
+          : "topic",
+    );
+  }, [workspaceResume?.loaded]);
 
   // ── Source search ──────────────────────────────────────────────────────────
 
@@ -922,9 +2572,11 @@ export function Generator() {
     if (!topic) {
       setSourceSearchStatus("error");
       setSourceSearchMessage("請先輸入研究主題。");
+      setActiveStep("topic");
       toast({
         title: "請先輸入主題",
-        description: "輸入研究主題後，才能搜尋 Crossref 與 Semantic Scholar 來源。",
+        description:
+          "輸入研究主題後，才能搜尋 Crossref 與 Semantic Scholar 來源。",
         variant: "destructive",
       });
       return;
@@ -935,6 +2587,10 @@ export function Generator() {
     setSourceSearchMessage("");
     setKeywordSearchDebug(null);
     setSources([]);
+    if (stepDelayTimerRef.current !== null) {
+      window.clearTimeout(stepDelayTimerRef.current);
+      stepDelayTimerRef.current = null;
+    }
 
     try {
       const result = await searchSources({
@@ -944,7 +2600,12 @@ export function Generator() {
         sourceMode: input.sourceRequirement,
         language: input.outputLanguage,
       });
-      const normalizedSources = dedupeSourceRecords(result.sources.map(normalizeSourceForReview));
+      const normalizedSources = applySourceAuthorityAndLanguage(
+        applySourceRelevanceAssessments(
+          dedupeSourceRecords(result.sources.map(normalizeSourceForReview)),
+          topic,
+        ),
+      );
       setSources(normalizedSources);
       setKeywordSearchDebug(keywordSearchDebugFromResult(result));
       if (normalizedSources.length) {
@@ -956,24 +2617,36 @@ export function Generator() {
             ? "已顯示可用來源，部分資料來源暫時無法使用。"
             : `已套用關鍵詞搜尋策略，共找到 ${normalizedSources.length} 筆可選來源。`,
         });
+        scheduleManageStepAfterSearch(normalizedSources.length);
       } else {
         setSourceSearchStatus("empty");
-        setSourceSearchMessage("已產生搜尋關鍵詞，但目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。");
+        setSourceSearchMessage(
+          "已產生搜尋關鍵詞，但目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。",
+        );
       }
     } catch (error) {
-      const preflightResult = preflight ?? runSearchPreflight({ topic, reportType: input.reportType });
+      const preflightResult =
+        preflight ??
+        runSearchPreflight({ topic, reportType: input.reportType });
       const searchQuery = buildPreflightSearchQuery(topic, preflightResult);
 
       try {
         const result = await searchSources({ query: searchQuery });
-        const normalizedSources = dedupeSourceRecords(result.sources.map(normalizeSourceForReview));
+        const normalizedSources = applySourceAuthorityAndLanguage(
+          applySourceRelevanceAssessments(
+            dedupeSourceRecords(result.sources.map(normalizeSourceForReview)),
+            topic,
+          ),
+        );
         setSources(normalizedSources);
         setKeywordSearchDebug({
           fallbackUsed: true,
           llmStatus: "skipped",
           llmStatusLabel: "略過",
           queries: [searchQuery],
-          providerErrors: [`/api/search-sources topic - ${sourceErrorMessage(error)}`],
+          providerErrors: [
+            `/api/search-sources topic - ${sourceTechnicalErrorMessage(error)}`,
+          ],
           searchIntent: null,
           intentQueries: null,
           warnings: [],
@@ -984,9 +2657,12 @@ export function Generator() {
             title: "已找到來源",
             description: `關鍵詞搜尋端點暫不可用，已改用既有搜尋，共找到 ${normalizedSources.length} 筆可選來源。`,
           });
+          scheduleManageStepAfterSearch(normalizedSources.length);
         } else {
           setSourceSearchStatus("empty");
-          setSourceSearchMessage("目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。");
+          setSourceSearchMessage(
+            "目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。",
+          );
         }
       } catch (fallbackError) {
         setSourceSearchStatus("error");
@@ -1002,7 +2678,10 @@ export function Generator() {
     }
   };
 
-  const updateSourceRecord = (sourceId: string, patch: Partial<SourceRecord>) => {
+  const updateSourceRecord = (
+    sourceId: string,
+    patch: Partial<SourceRecord>,
+  ) => {
     setSources((current) =>
       current.map((source) => {
         const key = source.id || sourceRecordKey(source);
@@ -1012,8 +2691,13 @@ export function Generator() {
     );
   };
 
-  const updateSourceReview = (sourceId: string, reviewState: SourceReviewState) => {
-    updateSourceRecord(sourceId, { reviewState });
+  const updateSourceReview = (
+    sourceId: string,
+    reviewState: SourceReviewState,
+  ) => {
+    setSources((current) =>
+      updateSourceReviewState(current, sourceId, reviewState),
+    );
   };
 
   // ── Generate ────────────────────────────────────────────────────────────────
@@ -1021,6 +2705,7 @@ export function Generator() {
   const handleGenerate = () => {
     if (!input.topic.trim()) {
       setGenerateStatus("error");
+      setActiveStep("topic");
       toast({
         title: "請填寫報告主題",
         description: "主題欄位不能為空，請輸入你的報告主題後再生成。",
@@ -1028,30 +2713,65 @@ export function Generator() {
       });
       return;
     }
-    setIsGenerating(true);
-    setGenerateStatus("loading");
-    setReport(null);
-    // Academic level is the single source of truth: derive reader + purpose
-    // defensively here so generation stays consistent even if state drifts.
+    const currentReadiness = generationReadiness(acceptedSources);
+    if (!currentReadiness.canGenerate) {
+      setGenerateStatus("error");
+      toast({
+        title: "來源不足",
+        description:
+          currentReadiness.warning ?? "請先接受更多可信來源後再生成。",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const effectiveInput: ReportInput = {
       ...input,
-      targetAudience: input.targetAudience || academicToAudience(input.academicLevel),
+      targetAudience:
+        input.targetAudience || academicToAudience(input.academicLevel),
       purpose: academicToPurpose(input.academicLevel),
       acceptedSources,
     };
+
+    setIsGenerating(true);
+    setGenerateStatus("loading");
     setInput(effectiveInput);
-    // Simulate async — swap setTimeout for a real API call in the future.
-    setTimeout(() => {
-      try {
-        setReport(generateReport(effectiveInput));
-        setGenerateStatus("done");
-      } catch {
-        setGenerateStatus("error");
-        toast({ title: "生成失敗", description: "請確認輸入內容後再試一次。", variant: "destructive" });
-      } finally {
-        setIsGenerating(false);
-      }
-    }, 1400);
+
+    beginStepTransition(
+      "report",
+      {
+        title: "正在建立報告工作區",
+        description:
+          "正在整理已接受來源、產生大綱與草稿，完成後會自動前往報告頁。",
+      },
+      650,
+      () => {
+        try {
+          const navigation = startReportWorkspaceNavigation({
+            input: effectiveInput,
+            acceptedSources,
+            existingReportId: workspaceResume?.reportId,
+            navigate,
+          });
+
+          if (!navigation) {
+            setGenerateStatus("error");
+            setIsGenerating(false);
+            return;
+          }
+
+          setGenerateStatus("done");
+        } catch {
+          setGenerateStatus("error");
+          setIsGenerating(false);
+          toast({
+            title: "生成失敗",
+            description: "請確認輸入內容後再試一次。",
+            variant: "destructive",
+          });
+        }
+      },
+    );
   };
 
   // ── Expand topic ──────────────────────────────────────────────────────────────
@@ -1065,564 +2785,232 @@ export function Generator() {
       });
       return;
     }
-    setExpansions(expandTopic(input.topic.trim()));
+    setExpansions(expandTopicCards(input.topic.trim(), detectedCategory ?? undefined));
   };
 
   const applyExpansion = (title: string) => {
     updateInput("topic", title);
     setExpansions([]);
-    toast({ title: "已套用主題", description: "已將擴寫後的題目填入主題欄位。" });
-  };
-
-  // ── Copy / download / clear ───────────────────────────────────────────────────
-
-  const warnExportReadiness = (currentReport: GeneratedReport) => {
-    const warnings = buildExportReadinessWarnings(currentReport);
-    if (warnings.length === 0) return;
-
     toast({
-      title: "引用準備度提醒",
-      description: warnings.map((warning) => warning.message).join(" "),
+      title: "已套用研究題目",
+      description: "已將研究方向填入主題欄位。",
     });
   };
 
-  const handleCopy = () => {
-    if (!report) return;
-    navigator.clipboard.writeText(buildPlainText(report, reportInput));
-    toast({ title: "已複製到剪貼簿", description: "報告純文字已複製，可直接貼入文件。" });
-  };
-
-  const handleDownloadTxt = () => {
-    if (!report) return;
-    warnExportReadiness(report);
-    downloadTxt(report, reportInput);
-    toast({ title: "已下載 TXT", description: "純文字檔已儲存到你的裝置。" });
-  };
-
-  const handleDownloadMarkdown = () => {
-    if (!report) return;
-    warnExportReadiness(report);
-    downloadMarkdown(report, reportInput);
-    toast({ title: "已下載 Markdown", description: "Markdown 檔已儲存到你的裝置。" });
-  };
-
-  const handleDownloadDocx = async () => {
-    if (!report) return;
-    warnExportReadiness(report);
-    try {
-      await downloadDocx(report, reportInput);
-      toast({ title: "已下載 Word（DOCX）", description: "含封面、目錄、頁首頁尾的 Word 檔已儲存。" });
-    } catch {
-      toast({ title: "DOCX 產生失敗", description: "請稍後再試一次。", variant: "destructive" });
-    }
-  };
-
-  const handleDownloadJson = () => {
-    if (!report) return;
-    warnExportReadiness(report);
-    downloadJson(report, reportInput);
-    toast({ title: "已下載 JSON", description: "完整資料（JSON）已儲存，可供程式或其他工具使用。" });
-  };
-
-  const handleDownloadBlueprint = () => {
-    if (!report) return;
-    downloadBlueprint(report, reportInput);
-    toast({ title: "已下載研究藍圖", description: "規劃藍圖（Markdown）已儲存。" });
-  };
-
-  const handleDownloadPrompt = () => {
-    if (!report) return;
-    downloadPromptPackage(report, reportInput);
-    toast({ title: "已下載 AI 提示包", description: "可貼入其他 AI 以完成報告內容的提示已儲存。" });
-  };
-
-  const handleDownloadProjectHandoff = () => {
-    downloadProjectHandoff();
-    toast({ title: "已下載專案狀態", description: "專案能力與架構說明（Markdown）已儲存。" });
-  };
-
-  const handlePrintPdf = () => {
-    if (!report) return;
-    warnExportReadiness(report);
-    const ok = printPdf(report, reportInput);
-    if (ok) {
-      toast({ title: "正在開啟列印視窗", description: "請在列印對話框選擇「另存為 PDF」。" });
-    } else {
-      toast({ title: "無法開啟列印視窗", description: "請允許本網站開啟彈出視窗後再試一次。", variant: "destructive" });
-    }
-  };
+  // ── Clear ────────────────────────────────────────────────────────────────────
 
   const handleClear = () => {
+    clearStepTransition();
     setInput(DEFAULT_INPUT);
-    setReport(null);
     setExpansions([]);
     setSources([]);
     setSourceSearchStatus("idle");
     setSourceSearchMessage("");
     setKeywordSearchDebug(null);
     setGenerateStatus("idle");
+    setIsGenerating(false);
+    setIsSearchingSources(false);
+    setDeveloperDebugOpen(false);
+    setWorkspaceResume(null);
+    setActiveStep("topic");
   };
 
-  const shortTopicHint = input.topic.trim() && isShortTopic(input.topic) && !report;
-  const autoSearchEnabled = input.sourceRequirement === "需要，並生成參考文獻格式";
+  const shortTopicHint = input.topic.trim() && isShortTopic(input.topic);
+  const autoSearchEnabled =
+    input.sourceRequirement === "需要，並生成參考文獻格式";
   const generateButtonLabel = !hasTopic
     ? "尚未輸入主題"
     : isGenerating
-      ? "生成中..."
+      ? readiness.progressLabel
       : generateStatus === "error"
-        ? "生成錯誤"
-        : report
-          ? "完成，可重新生成"
-          : "生成報告草稿";
+        ? readiness.buttonLabel
+        : readiness.buttonLabel;
+  const goToStep = (step: GeneratorWorkflowStep) => handleStepSelect(step);
+  const goToSearchStep = () => {
+    if (!hasTopic) {
+      setActiveStep("topic");
+      toast({
+        title: "請先輸入主題",
+        description: "設定主題後才能進入來源搜尋。",
+        variant: "destructive",
+      });
+      return;
+    }
+    goToStep("search");
+  };
+  const goToManageStep = () => {
+    if (!sources.length) {
+      goToStep("search");
+      return;
+    }
+    goToStep("manage");
+  };
+  const goToGenerateStep = () => goToStep("generate");
+  const currentStepLabel =
+    WORKFLOW_STEPS.find((step) => step.value === activeStep)?.label ??
+    "設定主題";
 
   return (
     <div className="min-h-screen flex flex-col bg-muted/20">
       <Navbar />
 
-      <main className="generator-section flex-1 container mx-auto px-4 pt-24 pb-12 max-w-7xl">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-foreground">報告生成器</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            填寫以下資訊，即可快速生成結構完整、可後續修改的報告草稿。
-          </p>
+      <main className="generator-section flex-1 container mx-auto max-w-7xl px-4 pb-12 pt-24">
+        <div className="mb-6 space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <Badge variant="secondary" className="mb-2">
+                研究工作台
+              </Badge>
+              <h1 className="text-3xl font-bold tracking-normal text-foreground">
+                ResearchForge
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+                從主題設定、來源搜尋、來源審查到報告生成，依序完成可匯出的研究工作區。
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="min-h-[40px] self-start lg:self-auto"
+              onClick={handleClear}
+            >
+              <Trash2 className="mr-2 h-4 w-4" /> 重新開始
+            </Button>
+          </div>
+          <WorkflowStepper
+            currentStep={activeStep}
+            completedSteps={stepCompleted}
+            canEnterStep={canEnterStep}
+            onStepClick={handleStepSelect}
+            disabled={isStepTransitioning || isSearchingSources || isGenerating}
+          />
         </div>
 
-        <div className="flex flex-col lg:flex-row gap-6 lg:items-start">
+        <section
+          className="min-h-[620px] space-y-4"
+          data-testid="generator-workspace"
+        >
+          <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">
+                  {currentStepLabel}
+                </h2>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant={hasTopic ? "secondary" : "outline"}>
+                  {hasTopic ? "主題已設定" : "等待主題"}
+                </Badge>
+                <Badge variant={sources.length ? "secondary" : "outline"}>
+                  來源 {reviewCounts.all} 筆
+                </Badge>
+                <Badge variant={acceptedSources.length ? "default" : "outline"}>
+                  已接受 {reviewCounts.accepted} 筆
+                </Badge>
+                {reviewCounts.rejected > 0 && (
+                  <Badge variant="outline">
+                    已拒絕 {reviewCounts.rejected} 筆
+                  </Badge>
+                )}
+              </div>
+            </div>
+          </div>
 
-          {/* ── Form panel ─────────────────────────────────────────────────── */}
-          <div className="w-full lg:w-80 xl:w-96 shrink-0">
-            <div className="generator-card bg-card border border-border rounded-xl shadow-sm p-6 flex flex-col gap-5 lg:sticky lg:top-24">
+          {shortTopicHint && activeStep === "topic" && !isStepTransitioning && (
+            <div className="mx-auto flex max-w-3xl gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <Lightbulb className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                你的主題較簡短。若要提高報告品質，建議補充研究方向、老師要求、資料來源或個人觀點，或先使用「擴寫主題」。
+              </span>
+            </div>
+          )}
 
-              {/* Main fields */}
-              <div className="space-y-2">
-                <Label htmlFor="topic">
-                  報告主題 <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="topic"
-                  placeholder="例如：豬在農業生產與生態系統中的角色與價值"
-                  value={input.topic}
-                  onChange={(e) => updateInput("topic", e.target.value)}
-                  data-testid="input-topic"
-                  className="h-11"
-                />
+          {isStepTransitioning ? (
+            <StepTransitionScreen
+              title={transitionMessage.title}
+              description={transitionMessage.description}
+              targetStep={transitionTargetStep}
+            />
+          ) : activeStep === "topic" ? (
+            <TopicStepPanel
+              input={input}
+              expansions={expansions}
+              advancedOpen={advancedOpen}
+              detectedCategory={detectedCategory}
+              autoSearchEnabled={autoSearchEnabled}
+              workspaceResume={workspaceResume}
+              onInputChange={updateInput}
+              onExpandTopic={handleExpand}
+              onApplyExpansion={applyExpansion}
+              onAdvancedOpenChange={setAdvancedOpen}
+              onNext={goToSearchStep}
+              onClearWorkspace={handleClear}
+            />
+          ) : activeStep === "search" ? (
+            <SearchStepPanel
+              topic={input.topic.trim()}
+              reportType={input.reportType}
+              audience={input.targetAudience || input.academicLevel}
+              status={sourceSearchStatus}
+              message={sourceSearchMessage}
+              sourceCount={sources.length}
+              isSearching={isSearchingSources}
+              hasTopic={hasTopic}
+              onSearch={handleSearchSources}
+              onBack={() => goToStep("topic")}
+            />
+          ) : activeStep === "manage" ? (
+            <ManageStepPanel
+              sources={sources}
+              acceptedCount={acceptedSources.length}
+              onBack={() => goToStep("search")}
+              onNext={goToGenerateStep}
+              onReview={updateSourceReview}
+              onEdit={updateSourceRecord}
+              topic={input.topic}
+            />
+          ) : (
+            <GenerateStepPanel
+              acceptedCount={acceptedSources.length}
+              readiness={readiness}
+              isGenerating={isGenerating}
+              generateButtonLabel={generateButtonLabel}
+              generateStatus={generateStatus}
+              onGenerate={handleGenerate}
+              onBack={goToManageStep}
+            />
+          )}
+
+          <Collapsible
+            open={developerDebugOpen}
+            onOpenChange={setDeveloperDebugOpen}
+          >
+            <section
+              className="mx-auto max-w-5xl rounded-lg border border-border bg-card p-3"
+              data-testid="developer-debug-toggle"
+            >
+              <CollapsibleTrigger asChild>
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="w-full"
-                  onClick={handleExpand}
-                  data-testid="button-expand-topic"
+                  className="min-h-[36px]"
                 >
-                  <Sparkles className="mr-2 h-4 w-4" /> 擴寫主題
+                  開發者除錯 <ChevronDown className="ml-1 h-4 w-4" />
                 </Button>
-
-                {expansions.length > 0 && (
-                  <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2">
-                    <p className="text-xs text-muted-foreground">選擇建議主題：</p>
-                    {expansions.map((title, i) => (
-                      <button
-                        key={i}
-                        onClick={() => applyExpansion(title)}
-                        className="block w-full text-left text-sm text-foreground hover:text-primary leading-relaxed"
-                        data-testid={`expansion-${i}`}
-                      >
-                        {i + 1}. {title}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="border-t border-border pt-4 space-y-4">
-                <p className="text-xs font-semibold text-muted-foreground">核心設定</p>
-                {MAIN_SELECT_FIELDS.map((f) => (
-                  <div key={f.key} className="space-y-2">
-                    <Label htmlFor={f.key}>{f.label}</Label>
-                    <Select value={input[f.key]} onValueChange={(v) => updateInput(f.key, v)}>
-                      <SelectTrigger id={f.key} data-testid={`select-${f.key}`} className="h-11">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {f.options.map((o) => (
-                          <SelectItem key={o.value} value={o.value}>
-                            {o.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ))}
-                {autoSearchEnabled && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    onClick={handleSearchSources}
-                    disabled={isSearchingSources || !hasTopic}
-                    data-testid="button-search-sources"
-                  >
-                    {isSearchingSources ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 搜尋來源中...
-                      </>
-                    ) : (
-                      <>
-                        <Search className="mr-2 h-4 w-4" /> 搜尋來源
-                      </>
-                    )}
-                  </Button>
-                )}
-              </div>
-
-              <div className="border-t border-border pt-4 space-y-4">
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between text-left"
-                  onClick={() => setAdvancedOpen((open) => !open)}
-                  aria-expanded={advancedOpen}
-                  data-testid="button-advanced-settings"
-                >
-                  <span className="text-xs font-semibold text-muted-foreground">進階設定</span>
-                  {advancedOpen ? (
-                    <ChevronUp className="h-4 w-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </button>
-
-                {advancedOpen && (
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="domainOverride">主題領域</Label>
-                      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
-                        {detectedCategory ? (
-                          <span className="text-foreground">
-                            系統判定：
-                            <span className="ml-1 font-semibold text-primary">{detectedCategory}</span>
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">輸入主題後會自動判定領域。</span>
-                        )}
-                      </div>
-                      <Select
-                        value={input.domainOverride || AUTO}
-                        onValueChange={(v) => updateInput("domainOverride", v === AUTO ? "" : v)}
-                      >
-                        <SelectTrigger id="domainOverride" data-testid="select-domainOverride" className="h-11">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={AUTO}>自動判定</SelectItem>
-                          {TOPIC_CATEGORIES.map((c) => (
-                            <SelectItem key={c} value={c}>
-                              {c}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {ADVANCED_SELECT_FIELDS.map((f) => (
-                      <div key={f.key} className="space-y-2">
-                        <Label htmlFor={f.key}>{f.label}</Label>
-                        <Select value={input[f.key]} onValueChange={(v) => updateInput(f.key, v)}>
-                          <SelectTrigger id={f.key} data-testid={`select-${f.key}`} className="h-11">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {f.options.map((o) => (
-                              <SelectItem key={o.value} value={o.value}>
-                                {o.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    ))}
-
-                    {ADVANCED_TEXT_FIELDS.map((f) => (
-                      <div key={f.key} className="space-y-2">
-                        <Label htmlFor={f.key}>{f.label}</Label>
-                        <Input
-                          id={f.key}
-                          placeholder={f.placeholder}
-                          value={input[f.key]}
-                          onChange={(e) => updateInput(f.key, e.target.value)}
-                          data-testid={`input-${f.key}`}
-                          className="h-11"
-                        />
-                      </div>
-                    ))}
-
-                    {ADVANCED_TEXTAREA_FIELDS.map((f) => (
-                      <div key={f.key} className="space-y-2">
-                        <Label htmlFor={f.key}>{f.label}</Label>
-                        <Textarea
-                          id={f.key}
-                          placeholder={f.placeholder}
-                          value={input[f.key]}
-                          onChange={(e) => updateInput(f.key, e.target.value)}
-                          data-testid={`input-${f.key}`}
-                          className={`${f.minHeight} resize-y`}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <Button
-                size="lg"
-                className="w-full h-12 text-base"
-                onClick={handleGenerate}
-                disabled={isGenerating || !hasTopic}
-                data-testid="button-generate"
-              >
-                {isGenerating ? (
-                  <>
-                    <Loader2 className="mr-2 h-5 w-5 animate-spin" /> {generateButtonLabel}
-                  </>
-                ) : generateStatus === "error" ? (
-                  <>
-                    <XCircle className="mr-2 h-5 w-5" /> {generateButtonLabel}
-                  </>
-                ) : report ? (
-                  <>
-                    <CheckCircle2 className="mr-2 h-5 w-5" /> {generateButtonLabel}
-                  </>
-                ) : (
-                  <>
-                    <Wand2 className="mr-2 h-5 w-5" /> {generateButtonLabel}
-                  </>
-                )}
-              </Button>
-
-              {report && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full text-muted-foreground"
-                  onClick={handleClear}
-                  data-testid="button-clear-form"
-                >
-                  <Trash2 className="mr-2 h-4 w-4" /> 清除並重新開始
-                </Button>
-              )}
-            </div>
-          </div>
-
-          {/* ── Result panel ───────────────────────────────────────────────── */}
-          <div className="flex-1 min-h-[600px]">
-            {(autoSearchEnabled || sources.length > 0 || sourceSearchStatus !== "idle") && (
-              <SourceSearchPanel
-                sources={sources}
-                acceptedCount={acceptedSources.length}
-                rejectedCount={rejectedSources.length}
-                status={sourceSearchStatus}
-                message={sourceSearchMessage}
-                keywordDebug={keywordSearchDebug}
-                isSearching={isSearchingSources}
-                hasTopic={hasTopic}
-                onSearch={handleSearchSources}
-                onReview={updateSourceReview}
-                onEdit={updateSourceRecord}
-              />
-            )}
-
-            {preflight && <PreflightDebugPanel preflight={preflight} />}
-
-            {/* Short-topic hint (before generating) */}
-            {shortTopicHint && (
-              <div className="report-card mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex gap-2">
-                <Lightbulb className="h-4 w-4 shrink-0 mt-0.5" />
-                <span>
-                  你的主題較簡短，生成後會是基礎版本。若要提高報告品質，建議補充研究方向、老師要求、資料來源或個人觀點，或先使用「幫我擴寫主題」。
-                </span>
-              </div>
-            )}
-
-            {/* Empty state */}
-            {!report && !isGenerating && (
-              <div className="report-card h-full min-h-[480px] flex flex-col items-center justify-center text-center bg-card border border-border rounded-xl p-10 gap-4">
-                <div className="w-20 h-20 bg-muted rounded-full flex items-center justify-center">
-                  <FileText className="h-9 w-9 text-muted-foreground/50" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-foreground mb-2">報告草稿將顯示在這裡</h3>
-                  <p className="text-sm text-muted-foreground max-w-xs">
-                    填寫左側表單並點擊「生成報告草稿」，即可在此看到完整的結構化報告。
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Loading skeleton */}
-            {isGenerating && (
-              <div className="report-card bg-card border border-border rounded-xl p-6 flex flex-col gap-4 animate-pulse">
-                <div className="h-7 bg-muted rounded w-2/3" />
-                <div className="flex gap-2">
-                  <div className="h-6 bg-muted rounded w-20" />
-                  <div className="h-6 bg-muted rounded w-16" />
-                  <div className="h-6 bg-muted rounded w-24" />
-                </div>
-                {[1, 2, 3, 4].map((n) => (
-                  <div key={n} className="border border-border rounded-lg overflow-hidden">
-                    <div className="h-10 bg-muted/60" />
-                    <div className="p-4 space-y-2">
-                      <div className="h-4 bg-muted rounded w-full" />
-                      <div className="h-4 bg-muted rounded w-5/6" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Report output */}
-            {report && !isGenerating && (
-              <div className="flex flex-col gap-4">
-
-                {/* Header + completeness card */}
-                <div className="report-card bg-card border border-border rounded-xl shadow-sm p-5">
-                  <h2 className="text-xl font-bold text-foreground mb-3">{report.meta.title}</h2>
-                  <div className="flex flex-wrap gap-2 mb-4">
-                    <Badge variant="default">{report.meta.category}</Badge>
-                    <Badge variant="secondary">{displayOptionLabel("mode", input.mode)}</Badge>
-                    <Badge variant="secondary">{displayOptionLabel("style", input.style)}</Badge>
-                    <Badge variant="secondary">{displayOptionLabel("length", input.length)}</Badge>
-                    <Badge variant="outline" className="text-muted-foreground">
-                      {displayOptionLabel("targetAudience", input.targetAudience)}
-                    </Badge>
-                  </div>
-
-                  {/* Completeness */}
-                  <div className="rounded-lg bg-muted/40 p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-foreground">
-                        目前版本：{report.meta.versionLabel}
-                      </span>
-                      <span className="text-sm font-semibold text-primary">
-                        完整度約 {report.meta.completeness}%
-                      </span>
-                    </div>
-                    <div className="h-2 w-full rounded-full bg-muted overflow-hidden mb-3">
-                      <div
-                        className="h-full rounded-full bg-primary transition-all"
-                        style={{ width: `${report.meta.completeness}%` }}
-                      />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      建議補充：{report.meta.suggestedAdditions.join("、")}
-                    </p>
-                  </div>
-                  <div className="mt-4 rounded-lg border border-border bg-background p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                      <p className="text-sm font-medium text-foreground">已接受來源</p>
-                      <Badge variant={report.meta.acceptedSources.length ? "default" : "outline"}>
-                        {report.meta.acceptedSources.length} 筆
-                      </Badge>
-                    </div>
-                    {report.meta.bibliography.length ? (
-                      <ol className="space-y-1 text-xs leading-relaxed text-muted-foreground list-decimal pl-5">
-                        {report.meta.bibliography.map((entry) => (
-                          <li key={entry.sourceId}>{entry.text}</li>
-                        ))}
-                      </ol>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">尚未有接受來源；參考文獻會保留待補提醒。</p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Short-topic warning + expansions */}
-                {report.shortTopic && (
-                  <div className="report-card rounded-xl border border-amber-200 bg-amber-50 p-4">
-                    <div className="flex gap-2 text-sm text-amber-800 mb-3">
-                      <Lightbulb className="h-4 w-4 shrink-0 mt-0.5" />
-                      <span>{report.shortTopic.message}</span>
-                    </div>
-                    <p className="text-xs font-medium text-amber-900 mb-2">建議的延伸主題（點選即可套用）：</p>
-                    <div className="space-y-1.5">
-                      {report.shortTopic.expansions.map((title, i) => (
-                        <button
-                          key={i}
-                          onClick={() => applyExpansion(title)}
-                          className="block w-full text-left text-sm text-amber-900 hover:text-amber-950 hover:underline leading-relaxed"
-                          data-testid={`short-expansion-${i}`}
-                        >
-                          {i + 1}. {title}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Action buttons */}
-                <div className="action-buttons report-card bg-card border border-border rounded-xl shadow-sm p-4 flex flex-col gap-3">
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-2">匯出文件</p>
-                    <div className="flex flex-wrap gap-2">
-                      <Button size="sm" className="min-h-[44px]" onClick={handleDownloadDocx} data-testid="button-export-docx">
-                        <FileType className="mr-2 h-4 w-4" /> Word（DOCX）
-                      </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handlePrintPdf} data-testid="button-export-pdf">
-                        <Printer className="mr-2 h-4 w-4" /> PDF（列印）
-                      </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadMarkdown} data-testid="button-export-md">
-                        <FileDown className="mr-2 h-4 w-4" /> Markdown
-                      </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadTxt} data-testid="button-export-txt">
-                        <FileText className="mr-2 h-4 w-4" /> TXT
-                      </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleCopy} data-testid="button-copy">
-                        <Copy className="mr-2 h-4 w-4" /> 複製文字
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="border-t border-border pt-3">
-                    <p className="text-xs font-medium text-muted-foreground mb-2">規劃與交接</p>
-                    <div className="flex flex-wrap gap-2">
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadBlueprint} data-testid="button-export-blueprint">
-                        <ClipboardList className="mr-2 h-4 w-4" /> 研究藍圖
-                      </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadPrompt} data-testid="button-export-prompt">
-                        <MessageSquareText className="mr-2 h-4 w-4" /> AI 提示包
-                      </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadJson} data-testid="button-export-json">
-                        <FileJson className="mr-2 h-4 w-4" /> JSON
-                      </Button>
-                      <Button size="sm" variant="outline" className="min-h-[44px]" onClick={handleDownloadProjectHandoff} data-testid="button-export-handoff">
-                        <Archive className="mr-2 h-4 w-4" /> 匯出專案狀態
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2 border-t border-border pt-3">
-                    <Button size="sm" variant="ghost" className="min-h-[44px]" onClick={handleGenerate} data-testid="button-regenerate">
-                      <RefreshCw className="mr-2 h-4 w-4" /> 重新生成
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="min-h-[44px] text-destructive hover:text-destructive"
-                      onClick={handleClear}
-                      data-testid="button-clear"
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" /> 清除內容
-                    </Button>
-                  </div>
-                </div>
-
-                {/* Sections */}
-                <div className="report-card bg-card border border-border rounded-xl shadow-sm p-5 flex flex-col gap-3">
-                  {report.sections.map((s, i) => (
-                    <SectionView key={`${s.heading}-${i}`} section={s} />
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-3">
+                <DeveloperDebugPanel
+                  keywordDebug={keywordSearchDebug}
+                  preflight={preflight}
+                  acceptedSources={acceptedSources}
+                  visible={workflowVisibility}
+                />
+              </CollapsibleContent>
+            </section>
+          </Collapsible>
+        </section>
       </main>
     </div>
   );

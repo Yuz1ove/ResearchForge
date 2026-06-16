@@ -8,6 +8,7 @@ import {
   type SourceProviderSearchResult,
   type SourceSearchOptions,
 } from "./source-retrieval";
+import { getReportModelConfig } from "./report-model-config";
 
 export interface SearchIntentPlannerInput {
   topic: string;
@@ -189,6 +190,7 @@ const URBAN_HEAT_PENALTIES = [
 const SHORT_VIDEO_PRIMARY = [
   "short-form video",
   "short video",
+  "TikTok",
   "social media",
   "digital media use",
   "sleep quality",
@@ -200,6 +202,8 @@ const SHORT_VIDEO_CONTEXT = [
   "secondary school",
   "adolescents",
   "teenagers",
+  "高中生",
+  "青少年",
 ];
 
 const SHORT_VIDEO_OUTCOMES = [
@@ -218,6 +222,7 @@ const SHORT_VIDEO_LOW_WEIGHT = [
 const SHORT_VIDEO_MUST_HAVE = [
   "short-form video",
   "short video",
+  "TikTok",
   "social media",
   "digital media",
   "sleep",
@@ -225,6 +230,146 @@ const SHORT_VIDEO_MUST_HAVE = [
   "短影音",
   "睡眠",
   "注意力",
+];
+
+const COLA_HEALTH_PRIMARY = [
+  "cola",
+  "soda",
+  "soft drink",
+  "sugar-sweetened beverage",
+  "含糖飲料",
+  "可樂",
+  "碳酸飲料",
+];
+
+const COLA_HEALTH_CONTEXT = [
+  "consumption",
+  "dietary intake",
+  "drinking habits",
+  "攝取習慣",
+  "飲用習慣",
+];
+
+const COLA_HEALTH_OUTCOMES = [
+  "sugar",
+  "caffeine",
+  "health",
+  "obesity",
+  "metabolic health",
+  "dental caries",
+  "糖分",
+  "咖啡因",
+  "健康影響",
+];
+
+const COLA_HEALTH_MUST_HAVE = [
+  "cola",
+  "soda",
+  "soft drink",
+  "sugar-sweetened beverage",
+  "可樂",
+  "含糖飲料",
+  "碳酸飲料",
+  "sugar",
+  "caffeine",
+  "health",
+  "糖",
+  "咖啡因",
+  "健康",
+];
+
+const COLA_HEALTH_LOW_WEIGHT = [
+  "students",
+  "education",
+  "research",
+  "impact",
+  "學生",
+  "研究",
+  "影響",
+];
+
+const COLA_HEALTH_PENALTIES = [
+  "adult college entrance examination",
+  "engineering management enrollment",
+  "library book recommendation video",
+  "vocational education",
+  "招生",
+  "高考",
+  "工程管理",
+  "圖書館推介",
+  "職業教育",
+  "成人高考",
+];
+
+const CLIMATE_CAUSES_PRIMARY = [
+  "climate change",
+  "global warming",
+  "greenhouse gas",
+  "溫室氣體",
+  "氣候變遷",
+  "全球暖化",
+];
+
+const CLIMATE_CAUSES_CONTEXT = [
+  "fossil fuel",
+  "化石燃料",
+  "industrialization",
+  "工業化",
+  "land use",
+  "土地利用",
+  "deforestation",
+  "森林砍伐",
+];
+
+const CLIMATE_CAUSES_OUTCOMES = [
+  "emissions",
+  "carbon dioxide",
+  "methane",
+  "radiative forcing",
+  "排放",
+  "二氧化碳",
+  "甲烷",
+  "人為活動",
+];
+
+const CLIMATE_CAUSES_MUST_HAVE = [
+  "climate change",
+  "global warming",
+  "greenhouse gas",
+  "fossil fuel",
+  "氣候變遷",
+  "全球暖化",
+  "溫室氣體",
+  "化石燃料",
+  "emissions",
+  "排放",
+];
+
+const CLIMATE_CAUSES_LOW_WEIGHT = [
+  "cause",
+  "causes",
+  "research",
+  "impact",
+  "study",
+  "成因",
+  "原因",
+  "研究",
+  "影響",
+];
+
+const CLIMATE_CAUSES_PENALTIES = [
+  "tone sandhi",
+  "beijing dialect",
+  "jerusalem",
+  "religious title",
+  "enrollment",
+  "library recommendation",
+  "變調",
+  "北京話",
+  "耶路撒冷",
+  "宗教稱號",
+  "招生",
+  "圖書館推薦",
 ];
 
 function normalizeText(value: string): string {
@@ -264,6 +409,32 @@ function isShortVideoSleepAttentionTopic(input: SearchIntentPlannerInput): boole
   const hasSleepCue = hasAny(text, [/睡眠|失眠|作息/, /sleep|insomnia|circadian/i]);
   const hasAttentionCue = hasAny(text, [/注意力|專注|認知/, /attention|cognition|focus/i]);
   return hasMediaCue && (hasSleepCue || hasAttentionCue);
+}
+
+function isColaHealthTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  const hasBeverageCue = hasAny(text, [
+    /可樂|汽水|碳酸飲料|含糖飲料|飲料/,
+    /cola|soda|soft drink|sugar[- ]sweetened beverage|carbonated beverage/i,
+  ]);
+  const hasHealthCue = hasAny(text, [
+    /健康|糖|糖分|咖啡因|攝取|肥胖|代謝|蛀牙|飲用/,
+    /health|sugar|caffeine|consumption|intake|obesity|metabolic|dental/i,
+  ]);
+  return hasBeverageCue && hasHealthCue;
+}
+
+function isClimateChangeCauseTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  const hasClimateCue = hasAny(text, [
+    /氣候變遷|全球暖化|溫室氣體|氣候/,
+    /climate change|global warming|greenhouse gas|climate/i,
+  ]);
+  const hasCauseCue = hasAny(text, [
+    /成因|原因|化石燃料|排放|工業化|土地利用|人為活動/,
+    /cause|causes|fossil fuel|emission|industrialization|land use|anthropogenic/i,
+  ]);
+  return hasClimateCue && hasCauseCue;
 }
 
 function topicTerms(topic: string): string[] {
@@ -355,6 +526,96 @@ export function buildRuleBasedSearchIntent(
     };
   }
 
+  if (isColaHealthTopic(input)) {
+    return {
+      normalizedTopic,
+      primaryConcepts: COLA_HEALTH_PRIMARY,
+      contextConcepts: COLA_HEALTH_CONTEXT,
+      outcomeConcepts: COLA_HEALTH_OUTCOMES,
+      populationConcepts: [],
+      lowWeightTerms: COLA_HEALTH_LOW_WEIGHT,
+      mustHaveTerms: COLA_HEALTH_MUST_HAVE,
+      shouldHaveTerms: [
+        "systematic review",
+        "adolescents",
+        "dietary intake",
+        "sugar intake",
+        "caffeine intake",
+        "health outcomes",
+      ],
+      penaltyTerms: COLA_HEALTH_PENALTIES,
+      negativeTerms: [
+        "adult education enrollment",
+        "engineering management enrollment",
+        "library book recommendation video",
+        "generic education research",
+      ],
+      chineseQueries: [
+        "可樂 糖分 咖啡因 攝取習慣 健康影響",
+        "含糖飲料 攝取 健康 肥胖 咖啡因",
+        "碳酸飲料 糖分 健康影響 文獻回顧",
+        "可樂 飲用習慣 健康 研究",
+      ],
+      englishQueries: [
+        "cola sugar caffeine consumption health effects",
+        "soft drink consumption sugar caffeine health outcomes",
+        "sugar-sweetened beverages consumption obesity metabolic health review",
+        "soda intake caffeine sugar health systematic review",
+      ],
+      reasoningNotes: planReason(
+        reason,
+        "Cola-health searches must keep beverage, sugar/caffeine, consumption, and health terms together; education or student terms cannot pass alone.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isClimateChangeCauseTopic(input)) {
+    return {
+      normalizedTopic,
+      primaryConcepts: CLIMATE_CAUSES_PRIMARY,
+      contextConcepts: CLIMATE_CAUSES_CONTEXT,
+      outcomeConcepts: CLIMATE_CAUSES_OUTCOMES,
+      populationConcepts: [],
+      lowWeightTerms: CLIMATE_CAUSES_LOW_WEIGHT,
+      mustHaveTerms: CLIMATE_CAUSES_MUST_HAVE,
+      shouldHaveTerms: [
+        "anthropogenic emissions",
+        "carbon dioxide",
+        "methane",
+        "land use change",
+        "IPCC",
+        "systematic review",
+      ],
+      penaltyTerms: CLIMATE_CAUSES_PENALTIES,
+      negativeTerms: [
+        "beijing dialect tone sandhi",
+        "jerusalem religious title",
+        "enrollment advertisement",
+        "library recommendation",
+      ],
+      chineseQueries: [
+        "氣候變遷 成因 溫室氣體 化石燃料",
+        "全球暖化 成因 溫室氣體 排放",
+        "氣候變遷 人為活動 工業化 土地利用",
+        "氣候變遷 成因 IPCC 溫室氣體",
+      ],
+      englishQueries: [
+        "climate change causes greenhouse gas emissions fossil fuel",
+        "global warming causes greenhouse gases fossil fuel combustion",
+        "anthropogenic climate change causes land use industrialization",
+        "climate change causes greenhouse gas emissions IPCC",
+      ],
+      reasoningNotes: planReason(
+        reason,
+        "Climate-change-cause searches must keep climate, greenhouse gas, fossil fuel, emissions, and land-use terms together; language or religion matches are negative.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
   const genericTerms = topicTerms(normalizedTopic);
   const audience = cleanString(input.audience);
   return {
@@ -377,6 +638,7 @@ export function buildRuleBasedSearchIntent(
 }
 
 function llmConfig(options?: SearchIntentPlannerOptions): SearchIntentLlmConfig {
+  const reportModelConfig = getReportModelConfig();
   return {
     baseUrl: options?.llm?.baseUrl
       ?? process.env.SEARCH_INTENT_LLM_BASE_URL
@@ -394,7 +656,7 @@ function llmConfig(options?: SearchIntentPlannerOptions): SearchIntentLlmConfig 
       ?? process.env.KEYWORD_LLM_MODEL
       ?? process.env.LLM_MODEL
       ?? process.env.OPENAI_MODEL
-      ?? "gpt-4o-mini",
+      ?? reportModelConfig.fastModel,
     timeoutMs: options?.llm?.timeoutMs
       ?? (Number(process.env.SEARCH_INTENT_LLM_TIMEOUT_MS) || DEFAULT_SEARCH_INTENT_LLM_TIMEOUT_MS),
   };
@@ -465,7 +727,12 @@ function mergeFamilyCriticalTerms(
   plan: SearchIntentPlan,
 ): SearchIntentPlan {
   const fallback = buildRuleBasedSearchIntent(input);
-  if (!isUrbanHeatIslandTopic(input) && !isShortVideoSleepAttentionTopic(input)) return plan;
+  if (
+    !isUrbanHeatIslandTopic(input)
+    && !isShortVideoSleepAttentionTopic(input)
+    && !isColaHealthTopic(input)
+    && !isClimateChangeCauseTopic(input)
+  ) return plan;
 
   return {
     ...plan,

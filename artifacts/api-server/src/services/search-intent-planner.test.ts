@@ -11,6 +11,8 @@ import {
 
 const shortVideoTopic = "短影音使用對高中生注意力與睡眠品質之影響";
 const urbanHeatTopic = "都市熱島效應對校園環境與學生學習舒適度之影響";
+const colaHealthTopic = "可樂中的成分與攝取習慣對健康的影響";
+const climateCausesTopic = "氣候變遷成因";
 
 function sourceRecord(patch: Partial<SourceRecord> & { title: string }): SourceRecord {
   return {
@@ -44,6 +46,55 @@ test("rule fallback returns digital media, sleep, and attention concepts for sho
   assert.ok(plan.chineseQueries.some((query) => query.includes("短影音")));
   assert.equal(plan.plannerStatus, "rule_fallback");
   assert.equal(plan.fallbackUsed, true);
+});
+
+test("rule fallback keeps cola health core concepts ahead of generic education terms", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: colaHealthTopic,
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const queries = buildSearchIntentQueries(plan);
+  const allQueries = [...queries.highPrecision, ...queries.english, ...queries.chinese, ...queries.broad];
+
+  for (const concept of ["cola", "soft drink", "sugar-sweetened beverage", "含糖飲料"]) {
+    assert.ok(plan.primaryConcepts.includes(concept), `expected ${concept}`);
+  }
+  for (const term of ["sugar", "caffeine", "health"]) {
+    assert.ok(plan.mustHaveTerms.includes(term), `expected must-have ${term}`);
+  }
+  assert.ok(plan.outcomeConcepts.includes("咖啡因"));
+  assert.ok(plan.penaltyTerms.includes("成人高考"));
+  assert.ok(allQueries.some((query) => /cola|soft drink|sugar-sweetened/i.test(query)));
+  assert.ok(
+    !allQueries.some((query) => /education students peer reviewed research/i.test(query)),
+    "generic education query should not be generated",
+  );
+});
+
+test("rule fallback keeps climate change cause concepts in every main query family", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: climateCausesTopic,
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = [...queries.highPrecision, ...queries.english, ...queries.chinese].join(" ");
+
+  for (const concept of ["climate change", "global warming", "greenhouse gas", "溫室氣體"]) {
+    assert.ok(plan.primaryConcepts.includes(concept), `expected ${concept}`);
+  }
+  for (const term of ["fossil fuel", "化石燃料", "emissions", "排放"]) {
+    assert.ok(plan.mustHaveTerms.includes(term), `expected must-have ${term}`);
+  }
+  assert.ok(plan.contextConcepts.includes("land use"));
+  assert.ok(plan.penaltyTerms.includes("北京話"));
+  assert.match(queryText, /climate change|氣候變遷/);
+  assert.match(queryText, /greenhouse gas|溫室氣體/);
+  assert.match(queryText, /fossil fuel|化石燃料/);
+  assert.ok(!/education students peer reviewed research/i.test(queryText));
 });
 
 test("rule fallback weights urban heat island, thermal comfort, and microclimate over generic learning terms", () => {

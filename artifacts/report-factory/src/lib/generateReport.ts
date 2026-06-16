@@ -17,7 +17,7 @@ import {
   sourceHasIncompleteMetadata,
   type BibliographyEntry,
   type SourceRecord,
-} from "./sourceRecords";
+} from "./sourceRecords.ts";
 
 // ─── Form option lists (single source of truth, imported by the UI) ──────────
 
@@ -253,6 +253,12 @@ export interface GeneratedReport {
   sections: ReportSection[];
 }
 
+export interface TopicExpansionCard {
+  title: string;
+  angle: string;
+  reason: string;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function chars(s: string): number {
@@ -481,121 +487,211 @@ export function isShortTopic(topic: string): boolean {
   return chars(t) <= 4 || BROAD_TOPICS.includes(t.toLowerCase());
 }
 
-export function expandTopic(topic: string, category?: TopicCategory): string[] {
-  const t = topic.trim() || "主題";
-  const cat = category ?? detectTopicCategory(t, "", "");
-  switch (cat) {
-    case "食品／飲食文化":
-      return [
-        `${t}的風味特性、烹調方式與品質分析`,
-        `台灣${t}市場發展現況與消費趨勢研究`,
-        `${t}的產地來源、分級標準與選購指南`,
-        `${t}的食品安全規範、衛生管理與法規探討`,
-        `${t}的飲食文化脈絡與現代餐飲產業發展`,
-      ];
-    case "化學／化工":
-      return [
-        `${t}的化學結構、特性與作用機制`,
-        `${t}在人體生理代謝中的角色與功能研究`,
-        `${t}的天然來源、食物分布與建議攝取量`,
-        `${t}攝取不足或過量對健康的影響與科學證據`,
-        `${t}的工業製備方式、純化技術與應用領域`,
-      ];
+type TopicExpansionKind =
+  | "nature"
+  | "food"
+  | "tech"
+  | "education"
+  | "environment"
+  | "culture"
+  | "scienceExperiment"
+  | "business"
+  | "care"
+  | "book"
+  | "general";
+
+function topicExpansionKind(topic: string, category?: TopicCategory): TopicExpansionKind {
+  const t = topic.trim();
+  const lower = t.toLowerCase();
+
+  if (has(t, ["花語", "茶文化", "廟宇", "動漫", "流行音樂", "藝術", "文化"])) return "culture";
+  if (has(t, ["花朵", "植物", "蜜蜂", "細菌", "海龜", "昆蟲", "生態", "物種"])) return "nature";
+  if (has(t, ["可樂", "咖啡", "泡麵", "手搖飲", "早餐", "飲料", "奶茶", "速食", "食品"])) return "food";
+  if (has(lower, ["ai"]) || has(t, ["短影音", "手機", "社群媒體", "電動車", "人工智慧", "演算法", "平台"])) return "tech";
+  if (has(t, ["睡眠", "注意力", "考試壓力", "補習", "閱讀", "學習", "壓力"])) return "education";
+  if (has(t, ["氣候變遷", "都市熱島", "空氣污染", "少子化", "夜市文化", "環境", "污染", "永續"])) return "environment";
+
+  switch (category) {
     case "生物／動物":
-      return [
-        `${t}的生物特徵、生活習性與分類地位研究`,
-        `${t}在農業生產與生態系統中的角色與價值`,
-        `臺灣${t}相關產業現況、挑戰與未來發展`,
-        `${t}的飼養管理技術與動物福利議題探討`,
-        `${t}與人類生活及文化的關聯性研究`,
-      ];
-    case "科學實驗":
-      return [
-        `不同條件對「${t}」的影響之實驗探討`,
-        `「${t}」的變因分析與量化測量`,
-        `「${t}」實驗誤差來源與改進方法`,
-        `「${t}」的原理驗證與數據呈現`,
-        `「${t}」在日常生活中的應用實驗`,
-      ];
+      return "nature";
+    case "食品／飲食文化":
+    case "化學／化工":
+      return "food";
+    case "AI／網站／程式專案":
+      return "tech";
+    case "醫療／長照／社工／心理":
+      return "care";
     case "社會議題":
-      return [
-        `「${t}」的成因與現況分析`,
-        `「${t}」對不同族群的影響探討`,
-        `「${t}」的國內外案例比較`,
-        `面對「${t}」的可行解決策略`,
-        `「${t}」議題中的不同觀點與個人看法`,
-      ];
-    case "商業／產品分析":
-      return [
-        `「${t}」的市場機會與目標客群分析`,
-        `「${t}」的競品比較與差異化策略`,
-        `「${t}」的商業模式與獲利規劃`,
-        `「${t}」的成本、風險與執行步驟`,
-        `「${t}」的未來發展與擴充方向`,
-      ];
-    case "AI／網站／程式專案": {
-      // Conceptual AI topics (研究報告) vs. project names (專案計畫)
-      const isAiConcept = has(t, ["人工智慧", "機器學習", "深度學習", "ai", "大型語言模型", "神經網路", "生成式ai"]);
-      return isAiConcept
-        ? [
-            `${t}的發展歷程、技術原理與主要應用領域`,
-            `${t}對產業與社會的影響：機遇、挑戰與倫理議題`,
-            `${t}在台灣的現況、發展政策與未來展望`,
-            `${t}的主要技術流派與代表性研究成果`,
-            `${t}帶來的就業市場變化與人才培育方向`,
-          ]
-        : [
-            `「${t}」的使用者需求與核心功能規劃`,
-            `「${t}」的系統架構與技術選型`,
-            `「${t}」的開發步驟與測試方式`,
-            `「${t}」的資料流程與安全性設計`,
-            `「${t}」的風險、限制與未來擴充`,
-          ];
-    }
-    case "醫療／長照／社工／心理": {
-      // Academic psychology vs. clinical/care service topic
-      const isPsychAcademic = has(t, ["心理學", "認知心理", "發展心理", "社會心理", "行為心理", "正向心理"]);
-      return isPsychAcademic
-        ? [
-            `${t}的主要理論流派、代表人物與發展歷程`,
-            `${t}的核心研究方法與實驗設計`,
-            `${t}在教育、職場與日常生活中的應用`,
-            `${t}與當代社會現象的關聯：壓力、幸福感、人際關係`,
-            `${t}的未來研究方向與跨領域整合趨勢`,
-          ]
-        : [
-            `「${t}」的服務對象與需求分析`,
-            `「${t}」的現況與主要挑戰`,
-            `「${t}」相關制度與服務資源`,
-            `「${t}」的案例分析與專業觀點`,
-            `面對「${t}」的個人反思與建議`,
-          ];
-    }
     case "歷史／地理／公民":
-      return [
-        `「${t}」的歷史脈絡與背景`,
-        `「${t}」的重要事件或制度演變`,
-        `「${t}」的現況與影響`,
-        `「${t}」的爭議與不同觀點`,
-        `從「${t}」看公民素養與個人省思`,
-      ];
+      return "environment";
+    case "商業／產品分析":
+      return "business";
+    case "科學實驗":
+      return "scienceExperiment";
     case "讀書心得":
+      return "book";
+    default:
+      return "general";
+  }
+}
+
+function expansionCard(title: string, angle: string, reason: string): TopicExpansionCard {
+  return { title, angle, reason };
+}
+
+function natureExpansionCards(topic: string): TopicExpansionCard[] {
+  const t = topic || "自然主題";
+  if (has(t, ["花朵", "植物"])) {
+    return [
+      expansionCard(`${t}如何透過授粉與繁殖維持族群`, "生態", "可觀察花粉、昆蟲互動與植物繁殖方式。"),
+      expansionCard(`${t}在校園或城市環境中的生長條件`, "校園觀察", "適合做實地觀察，記錄光照、水分與季節差異。"),
+      expansionCard(`${t}與蜜蜂等昆蟲互動對生態系的影響`, "生物互動", "可連結授粉者、食物網與生物多樣性。"),
+      expansionCard(`${t}在花語、節慶與日常美感中的意義`, "文化", "可討論自然物如何被人類賦予象徵與情感。"),
+      expansionCard(`${t}面對氣候與季節變化的適應方式`, "環境變化", "可分析開花時間、溫度與降雨對生長的影響。"),
+    ];
+  }
+  if (has(t, ["蜜蜂"])) {
+    return [
+      expansionCard("蜜蜂授粉對農業生產與生態系的影響", "生態", "可分析作物授粉、生物多樣性與糧食安全。"),
+      expansionCard("蜜蜂族群減少可能反映哪些環境問題", "環境", "適合討論農藥、棲地變化與氣候因素。"),
+      expansionCard("蜂巢分工如何展現昆蟲社會行為", "行為科學", "可整理蜂后、工蜂與群體溝通。"),
+      expansionCard("蜂產品與人類生活的關係", "生活應用", "可連結蜂蜜、蜂蠟與食品安全。"),
+      expansionCard("校園或社區如何營造友善授粉環境", "行動方案", "可提出種植蜜源植物與減少農藥的策略。"),
+    ];
+  }
+  if (has(t, ["細菌"])) {
+    return [
+      expansionCard("細菌在人體健康與腸道微生態中的角色", "健康", "可討論益菌、感染與日常衛生。"),
+      expansionCard("細菌如何參與分解與物質循環", "生態", "可連結土壤、腐敗與自然循環。"),
+      expansionCard("抗生素使用與抗藥性問題", "公共衛生", "適合討論用藥觀念與醫療挑戰。"),
+      expansionCard("食品保存如何抑制細菌生長", "食品安全", "可比較溫度、水分與保存方式。"),
+      expansionCard("細菌觀察實驗的安全設計", "實驗方法", "可規劃培養限制、變因與安全規範。"),
+    ];
+  }
+  return [
+    expansionCard(`${t}的棲地需求與生存策略`, "生態", "可分析環境條件、食物來源與族群變化。"),
+    expansionCard(`${t}與其他生物之間的互動關係`, "生物互動", "可連結掠食、共生、競爭或授粉等關係。"),
+    expansionCard(`${t}面臨的人為威脅與保育方法`, "保育", "適合討論污染、棲地破壞與保護行動。"),
+    expansionCard(`${t}在地方文化或日常生活中的意義`, "文化", "可整理人類如何理解與使用自然資源。"),
+    expansionCard(`${t}的校園或社區觀察研究設計`, "觀察方法", "可規劃觀察地點、紀錄方式與倫理注意事項。"),
+  ];
+}
+
+function foodExpansionCards(topic: string): TopicExpansionCard[] {
+  const t = topic || "食品";
+  return [
+    expansionCard(`${t}中的成分與攝取習慣對健康的影響`, "健康", "可分析營養標示、攝取量與青少年飲食習慣。"),
+    expansionCard(`${t}品牌如何透過廣告塑造消費印象`, "行銷", "適合討論品牌、廣告語言與消費心理。"),
+    expansionCard(`${t}包裝、製程與廢棄物對環境的影響`, "環境", "可連結回收、塑膠污染與企業責任。"),
+    expansionCard(`${t}在日常飲食文化中的流行原因`, "文化", "可討論生活方式、同儕影響與地方飲食習慣。"),
+    expansionCard(`${t}的替代選擇是否真的比較健康`, "科學比較", "可比較糖分、添加物、營養標示或加工方式。"),
+  ];
+}
+
+function techExpansionCards(topic: string): TopicExpansionCard[] {
+  const t = topic || "科技主題";
+  return [
+    expansionCard(`${t}對注意力與學習習慣的影響`, "注意力", "可討論使用時間、分心情境與自我管理。"),
+    expansionCard(`${t}背後的演算法如何影響內容選擇`, "演算法", "適合分析推薦機制、資訊泡泡與平台責任。"),
+    expansionCard(`${t}使用時間與睡眠品質的關係`, "睡眠", "可連結夜間使用、藍光與生活作息。"),
+    expansionCard(`${t}在青少年生活中的角色與風險`, "青少年", "可討論社交、娛樂、隱私與心理壓力。"),
+    expansionCard(`${t}的產業發展與倫理議題`, "科技社會", "可整理創新應用、商業模式與監管問題。"),
+  ];
+}
+
+function educationExpansionCards(topic: string): TopicExpansionCard[] {
+  const t = topic || "學習主題";
+  return [
+    expansionCard(`${t}如何影響學生的學習表現`, "學習", "可整理習慣、環境與成效之間的關係。"),
+    expansionCard(`${t}與心理壓力或情緒調節的關聯`, "心理", "適合討論壓力來源、調適策略與支持系統。"),
+    expansionCard(`${t}在不同年齡學生身上的差異`, "教育階段", "可比較國中、高中或大學生的需求。"),
+    expansionCard(`${t}的家庭與學校支持策略`, "支持系統", "可提出時間安排、師長協助與同儕互助。"),
+    expansionCard(`${t}是否能透過習慣設計改善`, "行動方案", "適合設計可觀察、可執行的小型研究。"),
+  ];
+}
+
+function environmentExpansionCards(topic: string): TopicExpansionCard[] {
+  const t = topic || "社會議題";
+  return [
+    expansionCard(`${t}的成因與日常生活關聯`, "背景脈絡", "可整理自然因素、人為活動與生活場景。"),
+    expansionCard(`${t}對不同族群或地區的影響`, "社會影響", "適合比較年齡、職業、城鄉或地方差異。"),
+    expansionCard(`${t}的台灣在地案例與公共政策`, "在地案例", "可補充政府資料、地方新聞與政策措施。"),
+    expansionCard(`${t}可用哪些數據或指標觀察`, "統計資料", "可找近年統計、監測資料或官方報告。"),
+    expansionCard(`面對${t}的可行改善策略`, "解決策略", "可討論個人、學校、企業與政府的責任。"),
+  ];
+}
+
+function cultureExpansionCards(topic: string): TopicExpansionCard[] {
+  const t = topic || "文化主題";
+  return [
+    expansionCard(`${t}的歷史脈絡與形成原因`, "歷史", "可整理起源、時代背景與重要轉變。"),
+    expansionCard(`${t}在日常生活中的象徵與功能`, "文化意義", "適合分析儀式、社群認同與生活方式。"),
+    expansionCard(`${t}如何受到媒體與商業化影響`, "媒體與產業", "可討論傳播、品牌化與消費文化。"),
+    expansionCard(`${t}在不同世代之間的理解差異`, "世代觀點", "可比較年輕族群、家庭與地方社群。"),
+    expansionCard(`${t}的保存、創新與未來發展`, "文化保存", "可提出教育、展演、社區參與或數位化方向。"),
+  ];
+}
+
+export function expandTopicCards(topic: string, category?: TopicCategory): TopicExpansionCard[] {
+  const t = topic.trim() || "主題";
+  switch (topicExpansionKind(t, category ?? detectTopicCategory(t, "", ""))) {
+    case "nature":
+      return natureExpansionCards(t);
+    case "food":
+      return foodExpansionCards(t);
+    case "tech":
+      return techExpansionCards(t);
+    case "education":
+      return educationExpansionCards(t);
+    case "environment":
+      return environmentExpansionCards(t);
+    case "culture":
+      return cultureExpansionCards(t);
+    case "scienceExperiment":
       return [
-        `《${t}》的內容大意與主旨整理`,
-        `《${t}》印象最深的段落與原因`,
-        `《${t}》與個人生活經驗的連結`,
-        `《${t}》的批判與反思`,
-        `從《${t}》獲得的啟發與行動`,
+        expansionCard(`不同條件對「${t}」的影響之實驗探討`, "實驗設計", "可設定自變因、應變因與控制變因。"),
+        expansionCard(`「${t}」的變因分析與量化測量`, "數據", "適合規劃表格、重複測量與圖表呈現。"),
+        expansionCard(`「${t}」實驗誤差來源與改進方法`, "誤差分析", "可討論測量工具、環境干擾與操作差異。"),
+        expansionCard(`「${t}」的原理驗證與生活應用`, "科學原理", "可把課本概念連結到日常現象。"),
+        expansionCard(`「${t}」實驗安全與倫理注意事項`, "安全", "可列出材料限制、操作規範與風險管理。"),
+      ];
+    case "business":
+      return [
+        expansionCard(`「${t}」的目標客群與需求情境`, "市場", "可分析使用者痛點、購買動機與族群差異。"),
+        expansionCard(`「${t}」的競品比較與差異化策略`, "競爭", "適合整理功能、價格、通路與品牌定位。"),
+        expansionCard(`「${t}」的商業模式與收入來源`, "商業模式", "可討論訂閱、廣告、銷售或服務費。"),
+        expansionCard(`「${t}」的成本、風險與執行限制`, "風險", "可評估資源、人力、法規與市場不確定性。"),
+        expansionCard(`「${t}」未來擴張與永續經營方向`, "發展", "可提出產品迭代、合作與長期策略。"),
+      ];
+    case "care":
+      return [
+        expansionCard(`「${t}」的服務對象與需求分析`, "需求", "可整理使用者處境、照顧壓力與資源落差。"),
+        expansionCard(`「${t}」的現況與主要挑戰`, "現況", "適合補充機構、政策或專業資料。"),
+        expansionCard(`「${t}」相關制度與服務資源`, "制度", "可查政府、醫療或社福單位資訊。"),
+        expansionCard(`「${t}」的案例分析與專業觀點`, "案例", "可比較情境差異，但需注意隱私與倫理。"),
+        expansionCard(`面對「${t}」的支持策略與個人反思`, "支持", "可提出家庭、學校或社區層面的協助。"),
+      ];
+    case "book":
+      return [
+        expansionCard(`《${t}》的主題意識與核心問題`, "主旨", "可先整理作品想回應的問題。"),
+        expansionCard(`《${t}》人物或情節如何推動主題`, "文本分析", "適合引用具體段落並說明作用。"),
+        expansionCard(`《${t}》與個人生活經驗的連結`, "反思", "可把閱讀感受轉成具體觀察。"),
+        expansionCard(`《${t}》值得討論的爭議或限制`, "批判", "可提出同意與不同意之處。"),
+        expansionCard(`從《${t}》延伸出的行動或提問`, "延伸", "可連結課程、社會議題或後續閱讀。"),
       ];
     default:
       return [
-        `「${t}」的背景與重要性探討`,
-        `「${t}」的現況分析`,
-        `「${t}」的主要面向與分類整理`,
-        `「${t}」的相關案例與討論`,
-        `「${t}」的結論與個人觀點`,
+        expansionCard(`「${t}」可以從哪些具體問題切入`, "研究問題", "先把大題目縮成可搜尋、可回答的問題。"),
+        expansionCard(`「${t}」與日常生活或課程內容的關聯`, "生活連結", "可找出讀者容易理解的情境。"),
+        expansionCard(`「${t}」有哪些可比較的不同觀點`, "比較", "適合整理支持、反對或不同族群看法。"),
+        expansionCard(`「${t}」可用哪些資料類型佐證`, "資料策略", "可規劃官方資料、學術文章、新聞或案例。"),
+        expansionCard(`「${t}」的限制與下一步研究方向`, "研究限制", "可先標示缺口，避免過度推論。"),
       ];
   }
+}
+
+export function expandTopic(topic: string, category?: TopicCategory): string[] {
+  return expandTopicCards(topic, category).map((card) => card.title);
 }
 
 // ─── Category content model ──────────────────────────────────────────────────
