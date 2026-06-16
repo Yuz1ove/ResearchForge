@@ -82,6 +82,22 @@ test("sourceSummaryForUser explains cola-health topic relation in Traditional Ch
   assert.ok(summary.usableSections.length > 0);
 });
 
+test("sourceSummaryForUser separates content summary from relation and recommendation", () => {
+  const summary = sourceSummaryForUser(
+    source({
+      title: "Soft drink intake and health outcomes",
+      abstract:
+        "This cohort study evaluates soft drink intake, sugar exposure, caffeine, and health outcomes.",
+      sourceCategory: "journal_article",
+    }),
+    "可樂中的成分與攝取習慣對健康的影響",
+  );
+
+  assert.match(summary.contentSummary, /soft drink intake/);
+  assert.match(summary.topicRelation, /與主題關聯|核心概念|相關面向/);
+  assert.match(summary.recommendationReason, /採用|接受|確認|不建議/);
+});
+
 test("sourceSummaryForUser does not recommend off-topic sources", () => {
   const summary = sourceSummaryForUser(
     source({

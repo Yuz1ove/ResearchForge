@@ -955,6 +955,7 @@ function SourceReviewCard({
 
           <div className="space-y-2 rounded-md border border-border/70 bg-background/70 px-3 py-3">
             <p className="line-clamp-2 text-sm leading-6 text-foreground/90">
+              <span className="font-medium text-foreground">內容摘要：</span>
               {compactSummary}
             </p>
             <p className="text-xs leading-5 text-muted-foreground">
