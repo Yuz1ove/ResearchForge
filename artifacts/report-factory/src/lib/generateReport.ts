@@ -17,7 +17,7 @@ import {
   sourceHasIncompleteMetadata,
   type BibliographyEntry,
   type SourceRecord,
-} from "./sourceRecords";
+} from "./sourceRecords.ts";
 
 // ─── Form option lists (single source of truth, imported by the UI) ──────────
 

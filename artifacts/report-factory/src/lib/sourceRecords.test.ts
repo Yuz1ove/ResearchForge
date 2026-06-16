@@ -4,11 +4,16 @@ import {
   acceptedSourceRecords,
   buildBibliography,
   buildExportReadinessWarnings,
+  calculateSourceConfidence,
+  candidateSourceRecords,
+  classifySourceRecord,
   dedupeSourceRecords,
   formatApaReference,
   normalizeSourceForReview,
   rejectedSourceRecords,
   sourceHasIncompleteMetadata,
+  sourceReviewState,
+  updateSourceReviewState,
   type SourceRecord,
 } from "./sourceRecords.ts";
 
@@ -47,6 +52,66 @@ test("normalizes editable source metadata and preserves pending review state", (
   assert.equal(normalized.reviewState, "pending");
 });
 
+test("normalizes accepted source review metadata for evidence workflow", () => {
+  const normalized = normalizeSourceForReview(
+    source({
+      sourceCategory: " 學術論文 ",
+      usableSections: ["研究背景", "文獻探討", "不存在"],
+      confidence: "high",
+      reviewNotes: " 方法清楚 ",
+    }),
+  );
+
+  assert.equal(normalized.sourceCategory, "academic_paper");
+  assert.deepEqual(normalized.usableSections, ["研究背景", "文獻探討"]);
+  assert.equal(normalized.confidence, "高");
+  assert.equal(normalized.reviewNotes, "方法清楚");
+});
+
+test("maps editable source category labels to stable category keys", () => {
+  const normalized = normalizeSourceForReview(
+    source({
+      sourceCategory: " 學術論文 ",
+    }),
+  );
+
+  assert.equal(normalized.sourceCategory, "academic_paper");
+});
+
+test("classifies source types without defaulting to other", () => {
+  assert.equal(classifySourceRecord(source({ sourceType: "Crossref", containerTitle: "Nature Medicine" })), "journal_article");
+  assert.equal(
+    classifySourceRecord(
+      source({
+        doi: null,
+        url: "https://www.cdc.gov/example/report",
+        sourceType: "Web",
+        publisher: "Centers for Disease Control and Prevention",
+        containerTitle: null,
+      }),
+    ),
+    "government_or_institution",
+  );
+  assert.equal(
+    classifySourceRecord(
+      source({
+        doi: null,
+        url: "https://example-news.test/story",
+        sourceType: "Web",
+        publisher: "Example News",
+        containerTitle: null,
+      }),
+    ),
+    "news_or_web",
+  );
+});
+
+test("calculates source confidence from DOI, year, title, and provider metadata", () => {
+  assert.equal(calculateSourceConfidence(source({ sourceType: "Crossref" })), "高");
+  assert.equal(calculateSourceConfidence(source({ doi: null, sourceType: "Web", publisher: "Example Publisher" })), "中");
+  assert.equal(calculateSourceConfidence(source({ title: "", doi: null, url: null, authors: [], year: null })), "低");
+});
+
 test("dedupes sources by DOI before URL or title", () => {
   const deduped = dedupeSourceRecords([
     source(),
@@ -68,7 +133,48 @@ test("filters accepted and rejected sources explicitly", () => {
   const pending = source({ id: "pending", reviewState: "pending", doi: "10.1000/pending" });
 
   assert.deepEqual(acceptedSourceRecords([accepted, rejected, pending]), [accepted]);
+  assert.deepEqual(candidateSourceRecords([accepted, rejected, pending]), [pending]);
   assert.deepEqual(rejectedSourceRecords([accepted, rejected, pending]), [rejected]);
+});
+
+test("reads accepted review aliases before rendering source lists", () => {
+  const acceptedByStatus = source({
+    id: "status-accepted",
+    doi: "10.1000/status-accepted",
+    reviewState: "pending",
+    status: "accepted",
+  } as Partial<SourceRecord>);
+  const dismissedByStatus = source({
+    id: "status-dismissed",
+    doi: "10.1000/status-dismissed",
+    reviewState: "pending",
+    reviewStatus: "dismissed",
+  } as Partial<SourceRecord>);
+  const pending = source({ id: "pending", doi: "10.1000/pending", reviewState: "pending" });
+  const sources = [acceptedByStatus, dismissedByStatus, pending];
+
+  assert.equal(sourceReviewState(acceptedByStatus), "accepted");
+  assert.equal(sourceReviewState(dismissedByStatus), "rejected");
+  assert.deepEqual(acceptedSourceRecords(sources), [acceptedByStatus]);
+  assert.deepEqual(candidateSourceRecords(sources), [pending]);
+  assert.deepEqual(rejectedSourceRecords(sources), [dismissedByStatus]);
+});
+
+test("updates source review state without duplicating source records", () => {
+  const sources = [
+    source({ id: "first", doi: "10.1000/first", title: "First source" }),
+    source({ id: "second", doi: "10.1000/second", title: "Second source" }),
+  ];
+
+  const accepted = updateSourceReviewState(sources, "first", "accepted");
+  const undone = updateSourceReviewState(accepted, "first", "pending");
+
+  assert.equal(accepted.length, 2);
+  assert.equal(accepted[0]?.reviewState, "accepted");
+  assert.equal(accepted[1]?.reviewState, "pending");
+  assert.equal(undone.length, 2);
+  assert.equal(undone[0]?.reviewState, "pending");
+  assert.deepEqual(undone.map((item) => item.id), ["first", "second"]);
 });
 
 test("formats accepted sources as APA-style bibliography entries", () => {
