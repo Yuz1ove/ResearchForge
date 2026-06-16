@@ -72,10 +72,8 @@ import {
 } from "@/lib/sourceRecords";
 import { buildEvidenceCards, type EvidenceCard } from "@/lib/evidenceCards";
 import {
-  sourceDecisionHint,
   sourceHasUsableAbstract,
-  sourceRecommendedSections,
-  sourceSummaryText,
+  sourceSummaryForUser,
 } from "@/lib/sourceSummaries";
 import { applySourceRelevanceAssessments } from "@/lib/sourceRelevance";
 import { applySourceAuthorityAndLanguage } from "@/lib/sourceAuthority";
@@ -858,25 +856,25 @@ function SourceReviewCard({
   onExpandedChange,
   onReview,
   onEdit,
+  topic,
 }: {
   source: SourceRecord;
   isExpanded: boolean;
   onExpandedChange: (open: boolean) => void;
   onReview: (sourceId: string, reviewState: SourceReviewState) => void;
   onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
+  topic: string;
 }) {
   const sourceId = source.id || sourceRecordKey(source);
   const reviewState = sourceReviewState(source);
   const title = source.title || "標題待確認";
   const year = source.year ? String(source.year) : "年份待確認";
   const usableSections = normalizeUsableSections(source.usableSections);
-  const recommendedSections = sourceRecommendedSections(source);
   const incomplete = sourceHasIncompleteMetadata(source);
   const reviewLabel = sourceReviewLabel(reviewState);
   const confidence = source.confidence ?? "中";
   const category = sourceCategoryLabel(source.sourceCategory);
-  const summary = sourceSummaryText(source);
-  const decisionHint = sourceDecisionHint(source);
+  const summary = sourceSummaryForUser(source, topic);
   const hasAbstract = sourceHasUsableAbstract(source);
   const relevanceLevel = source.relevanceLevel ?? null;
   const relevanceReasons = source.relevanceReasons ?? [];
@@ -945,10 +943,13 @@ function SourceReviewCard({
 
           <div className="space-y-2 rounded-md border border-border/70 bg-background/70 px-3 py-3">
             <p className="line-clamp-3 text-sm leading-6 text-foreground/90">
-              {summary}
+              {summary.contentSummary}
             </p>
             <p className="text-xs leading-5 text-muted-foreground">
-              {decisionHint}
+              與主題關聯：{summary.topicRelation}
+            </p>
+            <p className="text-xs leading-5 text-muted-foreground">
+              採用建議：{summary.recommendationReason}
             </p>
             {relevanceReasons.length > 0 && (
               <p className="text-xs leading-5 text-muted-foreground">
@@ -959,7 +960,7 @@ function SourceReviewCard({
               <span className="text-xs font-medium text-muted-foreground">
                 適合使用章節
               </span>
-              {recommendedSections.map((section) => (
+              {summary.usableSections.map((section) => (
                 <Badge key={section} variant="outline">
                   {section}
                 </Badge>
@@ -987,7 +988,8 @@ function SourceReviewCard({
                 disabled={reviewState === "rejected"}
                 onClick={() => onReview(sourceId, "accepted")}
               >
-                <CheckCircle2 className="mr-2 h-4 w-4" /> 接受來源
+                <CheckCircle2 className="mr-2 h-4 w-4" />
+                {summary.recommendation === "not_recommended" ? "仍要接受" : "接受來源"}
               </Button>
             )}
             {reviewState === "rejected" ? (
@@ -1439,10 +1441,12 @@ function SourceManagePanel({
   sources,
   onReview,
   onEdit,
+  topic,
 }: {
   sources: SourceRecord[];
   onReview: (sourceId: string, reviewState: SourceReviewState) => void;
   onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
+  topic: string;
 }) {
   const [activeTab, setActiveTab] = useState<SourceReviewTab>("all");
   const [expandedSourceIds, setExpandedSourceIds] = useState<string[]>([]);
@@ -1571,6 +1575,7 @@ function SourceManagePanel({
                     onExpandedChange={(open) => setSourceExpanded(key, open)}
                     onReview={handleReview}
                     onEdit={onEdit}
+                    topic={topic}
                   />
                 );
               })}
@@ -1606,6 +1611,7 @@ function SourceManagePanel({
                           onExpandedChange={(open) => setSourceExpanded(key, open)}
                           onReview={handleReview}
                           onEdit={onEdit}
+                          topic={topic}
                         />
                       );
                     })}
@@ -1917,6 +1923,7 @@ function ManageStepPanel({
   onNext,
   onReview,
   onEdit,
+  topic,
 }: {
   sources: SourceRecord[];
   acceptedCount: number;
@@ -1924,6 +1931,7 @@ function ManageStepPanel({
   onNext: () => void;
   onReview: (sourceId: string, reviewState: SourceReviewState) => void;
   onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
+  topic: string;
 }) {
   return (
     <section
@@ -1958,6 +1966,7 @@ function ManageStepPanel({
             sources={sources}
             onReview={onReview}
             onEdit={onEdit}
+            topic={topic}
           />
         ) : (
           <div className="flex min-h-[320px] flex-col items-center justify-center text-center">
@@ -2931,6 +2940,7 @@ export function Generator() {
               onNext={goToGenerateStep}
               onReview={updateSourceReview}
               onEdit={updateSourceRecord}
+              topic={input.topic}
             />
           ) : (
             <GenerateStepPanel

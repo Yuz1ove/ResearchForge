@@ -5,6 +5,7 @@ import {
   sourceDecisionHint,
   sourceHasUsableAbstract,
   sourceRecommendedSections,
+  sourceSummaryForUser,
   sourceSummaryText,
 } from "./sourceSummaries.ts";
 
@@ -61,4 +62,54 @@ test("sourceRecommendedSections always returns at least one section", () => {
   );
 
   assert.ok(sections.length > 0);
+});
+
+test("sourceSummaryForUser explains cola-health topic relation in Traditional Chinese", () => {
+  const summary = sourceSummaryForUser(
+    source({
+      title: "Sugar-sweetened beverage consumption and adolescent obesity",
+      abstract:
+        "This study examines soft drink and cola consumption, sugar intake, caffeine exposure, obesity, and health outcomes among adolescents.",
+      sourceCategory: "journal_article",
+    }),
+    "可樂中的成分與攝取習慣對健康的影響",
+  );
+
+  assert.equal(summary.recommendation, "recommended");
+  assert.match(summary.topicRelation, /可樂中的成分與攝取習慣對健康的影響/);
+  assert.match(summary.topicRelation, /核心概念|相關面向/);
+  assert.match(summary.recommendationReason, /優先考慮接受/);
+  assert.ok(summary.usableSections.length > 0);
+});
+
+test("sourceSummaryForUser does not recommend off-topic sources", () => {
+  const summary = sourceSummaryForUser(
+    source({
+      title: "成人高考招生策略研究",
+      abstract: "本文分析成人高考招生與職業教育策略。",
+      doi: null,
+      sourceCategory: "news_or_web",
+    }),
+    "可樂中的成分與攝取習慣對健康的影響",
+  );
+
+  assert.equal(summary.recommendation, "not_recommended");
+  assert.match(summary.topicRelation, /關聯不足/);
+  assert.match(summary.recommendationReason, /不建議納入/);
+});
+
+test("sourceSummaryForUser marks relevant metadata-only sources as check-first", () => {
+  const summary = sourceSummaryForUser(
+    source({
+      title: "Climate change causes from greenhouse gas emissions and fossil fuel combustion",
+      abstract: null,
+      sourceCategory: "journal_article",
+    }),
+    "氣候變遷成因",
+  );
+
+  assert.equal(summary.recommendation, "check_first");
+  assert.match(summary.contentSummary, /摘要不足/);
+  assert.match(summary.topicRelation, /摘要不足/);
+  assert.match(summary.recommendationReason, /開啟原文確認/);
 });
