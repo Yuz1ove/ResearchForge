@@ -12,7 +12,7 @@ import {
 const shortVideoTopic = "短影音使用對高中生注意力與睡眠品質之影響";
 const urbanHeatTopic = "都市熱島效應對校園環境與學生學習舒適度之影響";
 const colaHealthTopic = "可樂中的成分與攝取習慣對健康的影響";
-const climateCausesTopic = "氣候變遷成因";
+const climateCausesTopic = "「氣候變遷」的成因與現況分析";
 
 function sourceRecord(patch: Partial<SourceRecord> & { title: string }): SourceRecord {
   return {
@@ -90,10 +90,13 @@ test("rule fallback keeps climate change cause concepts in every main query fami
     assert.ok(plan.mustHaveTerms.includes(term), `expected must-have ${term}`);
   }
   assert.ok(plan.contextConcepts.includes("land use"));
+  assert.ok(plan.outcomeConcepts.includes("observed warming"));
+  assert.ok(plan.mustHaveTerms.includes("CO2 concentration"));
   assert.ok(plan.penaltyTerms.includes("北京話"));
   assert.match(queryText, /climate change|氣候變遷/);
   assert.match(queryText, /greenhouse gas|溫室氣體/);
   assert.match(queryText, /fossil fuel|化石燃料/);
+  assert.match(queryText, /observed warming|CO2 concentration|IPCC/);
   assert.ok(!/education students peer reviewed research/i.test(queryText));
 });
 

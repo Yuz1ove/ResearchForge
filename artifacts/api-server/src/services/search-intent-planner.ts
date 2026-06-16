@@ -131,7 +131,7 @@ class SearchIntentPlannerError extends Error {
 }
 
 const DEFAULT_SEARCH_INTENT_LLM_TIMEOUT_MS = 8000;
-const DEFAULT_SEARCH_INTENT_QUERY_LIMIT = 6;
+const DEFAULT_SEARCH_INTENT_QUERY_LIMIT = 8;
 const MAX_QUERY_COUNT = 8;
 
 const URBAN_HEAT_PRIMARY = [
@@ -308,6 +308,8 @@ const CLIMATE_CAUSES_PRIMARY = [
   "溫室氣體",
   "氣候變遷",
   "全球暖化",
+  "observed climate change",
+  "climate indicators",
 ];
 
 const CLIMATE_CAUSES_CONTEXT = [
@@ -319,6 +321,10 @@ const CLIMATE_CAUSES_CONTEXT = [
   "土地利用",
   "deforestation",
   "森林砍伐",
+  "IPCC",
+  "WMO",
+  "NASA",
+  "NOAA",
 ];
 
 const CLIMATE_CAUSES_OUTCOMES = [
@@ -326,10 +332,18 @@ const CLIMATE_CAUSES_OUTCOMES = [
   "carbon dioxide",
   "methane",
   "radiative forcing",
+  "observed warming",
+  "global temperature",
+  "CO2 concentration",
+  "sea level",
+  "emissions trend",
   "排放",
   "二氧化碳",
   "甲烷",
   "人為活動",
+  "全球升溫",
+  "溫室氣體濃度",
+  "海平面",
 ];
 
 const CLIMATE_CAUSES_MUST_HAVE = [
@@ -342,6 +356,9 @@ const CLIMATE_CAUSES_MUST_HAVE = [
   "溫室氣體",
   "化石燃料",
   "emissions",
+  "observed warming",
+  "CO2 concentration",
+  "IPCC",
   "排放",
 ];
 
@@ -431,8 +448,8 @@ function isClimateChangeCauseTopic(input: SearchIntentPlannerInput): boolean {
     /climate change|global warming|greenhouse gas|climate/i,
   ]);
   const hasCauseCue = hasAny(text, [
-    /成因|原因|化石燃料|排放|工業化|土地利用|人為活動/,
-    /cause|causes|fossil fuel|emission|industrialization|land use|anthropogenic/i,
+    /成因|原因|現況|現狀|觀測|升溫|化石燃料|排放|工業化|土地利用|人為活動|溫室氣體濃度/,
+    /cause|causes|current status|observed|warming|trend|fossil fuel|emission|industrialization|land use|anthropogenic|co2 concentration/i,
   ]);
   return hasClimateCue && hasCauseCue;
 }
@@ -585,6 +602,11 @@ export function buildRuleBasedSearchIntent(
         "carbon dioxide",
         "methane",
         "land use change",
+        "observed warming",
+        "global temperature",
+        "CO2 concentration",
+        "emissions trend",
+        "WMO state of climate",
         "IPCC",
         "systematic review",
       ],
@@ -597,15 +619,19 @@ export function buildRuleBasedSearchIntent(
       ],
       chineseQueries: [
         "氣候變遷 成因 溫室氣體 化石燃料",
-        "全球暖化 成因 溫室氣體 排放",
-        "氣候變遷 人為活動 工業化 土地利用",
-        "氣候變遷 成因 IPCC 溫室氣體",
+        "全球暖化 成因 二氧化碳 甲烷 排放",
+        "氣候變遷 成因 人為活動 工業化 土地利用",
+        "氣候變遷 現況 全球升溫 溫室氣體濃度",
+        "氣候變遷 觀測 現況 IPCC",
+        "氣候變遷 排放趨勢 二氧化碳濃度",
       ],
       englishQueries: [
-        "climate change causes greenhouse gas emissions fossil fuel",
-        "global warming causes greenhouse gases fossil fuel combustion",
-        "anthropogenic climate change causes land use industrialization",
-        "climate change causes greenhouse gas emissions IPCC",
+        "climate change causes greenhouse gas emissions fossil fuels",
+        "anthropogenic climate change causes carbon dioxide methane land use",
+        "global warming attribution greenhouse gas fossil fuel combustion",
+        "current status of climate change observed warming CO2 concentration",
+        "IPCC climate change causes greenhouse gases current status",
+        "observed climate change temperature trends emissions",
       ],
       reasoningNotes: planReason(
         reason,
@@ -969,6 +995,10 @@ function sourceDebugId(source: SourceRecord): string {
   return source.id || source.doi || source.url || source.title;
 }
 
+function hasUsableAbstract(source: SourceRecord): boolean {
+  return (source.abstract ?? "").trim().length >= 80;
+}
+
 export function scoreSourceRelevance(source: SourceRecord, plan: SearchIntentPlan): SourceRelevanceDebug {
   const title = source.title ?? "";
   const abstract = source.abstract ?? "";
@@ -991,15 +1021,15 @@ export function scoreSourceRelevance(source: SourceRecord, plan: SearchIntentPla
 
   let score = 0;
   score += matchedPrimaryTitle.length * 8;
-  score += matchedPrimaryAbstract.length * 5;
+  score += matchedPrimaryAbstract.length * 10;
   score += matchedMustTitle.length * 8;
-  score += matchedMustAbstract.length * 5;
+  score += matchedMustAbstract.length * 12;
   score += matchedContextTitle.length * 3;
-  score += matchedContextAbstract.length * 2;
+  score += matchedContextAbstract.length * 5;
   score += matchedOutcomeTitle.length * 2;
-  score += matchedOutcomeAbstract.length * 1.5;
+  score += matchedOutcomeAbstract.length * 5;
   score += source.doi ? 1 : 0;
-  score += source.abstract ? 1 : 0;
+  score += hasUsableAbstract(source) ? 18 : -18;
   score += sourceYearBonus(source.year);
 
   if (matchedMustHaveTerms.length === 0) {
@@ -1015,6 +1045,10 @@ export function scoreSourceRelevance(source: SourceRecord, plan: SearchIntentPla
   if (matchedPenalties.length > 0 && matchedMustHaveTerms.length === 0) {
     score -= matchedPenalties.length * 4;
     penalties.push(`penalty_terms:${matchedPenalties.join(",")}`);
+  }
+
+  if (!hasUsableAbstract(source)) {
+    penalties.push("metadata_only");
   }
 
   if (isUrbanHeatPlan(plan)) {
