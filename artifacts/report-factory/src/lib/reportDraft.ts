@@ -1,7 +1,14 @@
 import type { EvidenceCard } from "./evidenceCards.ts";
-import type { ReportOutline } from "./reportOutline.ts";
-import { buildBibliography, type SourceRecord, type WorkflowReportSection } from "./sourceRecords.ts";
-import { buildAcceptedSourceDigest, type AcceptedSourceDigest } from "./sourceDigest.ts";
+import type { ReportOutline, ReportOutlineSection } from "./reportOutline.ts";
+import {
+  buildBibliography,
+  type SourceRecord,
+  type WorkflowReportSection,
+} from "./sourceRecords.ts";
+import {
+  buildAcceptedSourceDigest,
+  type AcceptedSourceDigest,
+} from "./sourceDigest.ts";
 import { sourceHasUsableAbstract } from "./sourceSummaries.ts";
 
 export interface ReportDraftInput {
@@ -28,166 +35,252 @@ export interface ReportDraft {
   text: string;
 }
 
+export interface ReportSynthesisContext {
+  topic: string;
+  reportType: string;
+  audience: string;
+  acceptedSources: SourceRecord[];
+  evidenceCards: EvidenceCard[];
+  outline: ReportOutline;
+  acceptedSourceDigest: AcceptedSourceDigest;
+  evidenceNumbers: Map<string, number>;
+}
+
+export interface SectionPlan {
+  sectionId: string;
+  title: string;
+  intent: string;
+  evidenceSections: WorkflowReportSection[];
+  selectedEvidence: EvidenceCard[];
+  needsMoreEvidence: boolean;
+}
+
+const SECTION_EVIDENCE_MAP: Record<string, WorkflowReportSection[]> = {
+  abstract: ["研究背景", "文獻探討", "數據分析", "結論"],
+  motivation: ["研究背景"],
+  questions: ["研究背景", "文獻探討"],
+  literature: ["文獻探討"],
+  method: ["研究方法"],
+  evidence: ["數據分析", "文獻探討", "研究背景"],
+  discussion: ["數據分析", "文獻探討", "結論"],
+  conclusion: ["結論", "數據分析", "文獻探討"],
+};
+
 function marker(card: EvidenceCard, evidenceNumbers: Map<string, number>): string {
   return `（來源 ${evidenceNumbers.get(card.id) ?? "?"}）`;
 }
 
-function cardsFor(cards: EvidenceCard[], section: WorkflowReportSection): EvidenceCard[] {
-  return cards.filter((card) => card.usableSections.includes(section));
+function cardsFor(cards: EvidenceCard[], sections: WorkflowReportSection[]): EvidenceCard[] {
+  const wanted = new Set(sections);
+  return cards.filter((card) => card.usableSections.some((section) => wanted.has(section)));
 }
 
-function markersFromCards(cards: EvidenceCard[], evidenceNumbers: Map<string, number>, limit = 3): string {
+function evidenceMarkers(cards: EvidenceCard[], evidenceNumbers: Map<string, number>, limit = 3): string {
   return cards
     .slice(0, limit)
     .map((card) => marker(card, evidenceNumbers))
     .join("");
 }
 
-function supportedParagraph(cards: EvidenceCard[], evidenceNumbers: Map<string, number>, sentence: string, fallback: string): string {
-  if (cards.length === 0) return fallback;
-  return `${sentence}${markersFromCards(cards, evidenceNumbers)}`;
+function hasUsableSources(sources: SourceRecord[]): boolean {
+  return sources.some(sourceHasUsableAbstract);
 }
 
-function sourceTitles(cards: EvidenceCard[], limit = 3): string {
-  const titles = cards
-    .map((card) => card.sourceTitle.trim())
-    .filter(Boolean)
-    .slice(0, limit);
-  if (titles.length === 0) return "已接受來源";
-  if (titles.length === 1) return `「${titles[0]}」`;
-  return titles.map((title) => `「${title}」`).join("、");
+function sourceQualityLimitNote(sources: SourceRecord[]): string {
+  if (sources.length === 0) return "目前尚未接受來源，內容只能作為研究架構草稿。";
+  if (!hasUsableSources(sources)) return "此段仍需補充原文細節，避免把摘要不足的來源當成完整證據；目前已接受來源缺少可用摘要，草稿不可視為正式完整報告。";
+  if (sources.some((source) => !sourceHasUsableAbstract(source))) {
+    return "此段仍需補充原文細節，避免把摘要不足的來源當成完整證據。";
+  }
+  return "";
 }
 
-function groupedEvidenceSummary(cards: EvidenceCard[], evidenceNumbers: Map<string, number>): string {
-  if (cards.length === 0) return "目前尚無可整理的證據卡。";
+function conciseEvidenceThemes(cards: EvidenceCard[], evidenceNumbers: Map<string, number>, limit = 3): string {
+  if (cards.length === 0) return "目前沒有足夠證據可直接支撐此段。";
+  const labels = cards.slice(0, limit).map((card) => {
+    const title = card.sourceTitle.trim() || "已接受來源";
+    return `${title}${marker(card, evidenceNumbers)}`;
+  });
+  return `可引用的佐證池包括：${labels.join("、")}。`;
+}
 
+function questionSet(topic: string, digest: AcceptedSourceDigest): string {
+  const coverage = digest.coverage.slice(0, 3);
+  const coverageText = coverage.length ? coverage.join("、") : "背景、文獻與資料缺口";
+  return [
+    `1. 「${topic}」的核心概念、背景與研究範圍為何？`,
+    `2. 現有資料在${coverageText}上能支持哪些初步判斷？`,
+    `3. 依目前資料缺口，哪些結論仍需要補充來源後才能成立？`,
+  ].join("\n");
+}
+
+function evidenceAspectLabel(section: WorkflowReportSection): string {
+  switch (section) {
+    case "研究背景":
+      return "背景與概念脈絡";
+    case "文獻探討":
+      return "既有研究觀點";
+    case "研究方法":
+      return "資料取得與整理方式";
+    case "數據分析":
+      return "資料與證據面向";
+    case "結論":
+      return "結論可支持範圍";
+  }
+}
+
+function evidenceByAspect(cards: EvidenceCard[], evidenceNumbers: Map<string, number>): string {
   const sections: WorkflowReportSection[] = ["研究背景", "文獻探討", "研究方法", "數據分析", "結論"];
   const lines = sections.flatMap((section) => {
-    const sectionCards = cardsFor(cards, section);
+    const sectionCards = cardsFor(cards, [section]);
     if (sectionCards.length === 0) return [];
-    return `${section}：可先使用${sourceTitles(sectionCards)}作為段落佐證，撰寫時需依研究問題整合內容${markersFromCards(sectionCards, evidenceNumbers, 2)}`;
+    return `${evidenceAspectLabel(section)}：${conciseEvidenceThemes(sectionCards, evidenceNumbers, 2)}`;
   });
 
-  return lines.length ? lines.join("\n") : "目前已接受來源尚未標記可用章節，建議回到來源審查補齊章節用途。";
+  return lines.length
+    ? lines.join("\n")
+    : "目前已接受來源尚未標記可用章節，建議回到來源審查補齊章節用途。";
 }
 
-function needsOriginalDetailNote(sources: SourceRecord[]): boolean {
-  return sources.some((source) => !sourceHasUsableAbstract(source));
-}
-
-function originalDetailNote(sources: SourceRecord[]): string {
-  return needsOriginalDetailNote(sources) ? "此段仍需補充原文細節，避免把摘要不足的來源當成完整證據。" : "";
-}
-
-export function buildReportDraft(input: ReportDraftInput): ReportDraft {
+export function buildReportSynthesisContext(input: ReportDraftInput): ReportSynthesisContext {
   const topic = input.topic.trim() || input.outline.topic;
   const reportType = input.reportType.trim() || input.outline.reportType;
   const audience = input.audience.trim() || input.outline.audience;
-  const evidenceNumbers = new Map(input.evidenceCards.map((card, index) => [card.id, index + 1]));
-  const backgroundCards = cardsFor(input.evidenceCards, "研究背景");
-  const literatureCards = cardsFor(input.evidenceCards, "文獻探討");
-  const methodCards = cardsFor(input.evidenceCards, "研究方法");
-  const dataCards = cardsFor(input.evidenceCards, "數據分析");
-  const conclusionCards = cardsFor(input.evidenceCards, "結論");
-  const bibliography = buildBibliography(input.acceptedSources, input.citationFormat || "APA");
-  const references = bibliography.length ? bibliography.map((entry) => entry.text) : ["參考資料待補"];
   const acceptedSourceDigest =
     input.acceptedSourceDigest ??
     buildAcceptedSourceDigest(input.acceptedSources, { topic });
-  const detailNote = originalDetailNote(input.acceptedSources);
 
-  const sections: ReportDraftSection[] = [
-    {
-      sectionId: "title",
-      title: "標題",
-      body: `《${topic}》${reportType}`,
-    },
-    {
-      sectionId: "abstract",
-      title: "摘要",
-      body: [
+  return {
+    topic,
+    reportType,
+    audience,
+    acceptedSources: input.acceptedSources,
+    evidenceCards: input.evidenceCards,
+    outline: input.outline,
+    acceptedSourceDigest,
+    evidenceNumbers: new Map(input.evidenceCards.map((card, index) => [card.id, index + 1])),
+  };
+}
+
+export function selectEvidenceForSection(
+  evidenceCards: EvidenceCard[],
+  sectionId: string,
+): EvidenceCard[] {
+  return cardsFor(evidenceCards, SECTION_EVIDENCE_MAP[sectionId] ?? []).slice(0, 4);
+}
+
+export function buildSectionPlan(
+  outlineSection: ReportOutlineSection,
+  context: ReportSynthesisContext,
+): SectionPlan {
+  const selectedEvidence = selectEvidenceForSection(context.evidenceCards, outlineSection.sectionId);
+  return {
+    sectionId: outlineSection.sectionId,
+    title: outlineSection.title,
+    intent: outlineSection.purpose,
+    evidenceSections: SECTION_EVIDENCE_MAP[outlineSection.sectionId] ?? [],
+    selectedEvidence,
+    needsMoreEvidence: selectedEvidence.length === 0 && !["title", "questions", "references"].includes(outlineSection.sectionId),
+  };
+}
+
+export function synthesizeSectionParagraph(plan: SectionPlan, context: ReportSynthesisContext): string {
+  const { topic, reportType, audience, acceptedSourceDigest, acceptedSources, evidenceNumbers } = context;
+  const evidenceText = conciseEvidenceThemes(plan.selectedEvidence, evidenceNumbers);
+  const qualityNote = sourceQualityLimitNote(acceptedSources);
+  const gaps = acceptedSourceDigest.gaps.length
+    ? `目前資料缺口包括：${acceptedSourceDigest.gaps.join("、")}。`
+    : "";
+
+  switch (plan.sectionId) {
+    case "title":
+      return `《${topic}》${reportType}`;
+    case "abstract":
+      return [
         acceptedSourceDigest.summary,
-        `本報告以「${topic}」為核心，面向${audience}先整理研究背景、文獻脈絡與可用資料，再依資料缺口修正草稿深度。`,
-        markersFromCards([...backgroundCards, ...literatureCards, ...dataCards], evidenceNumbers, 3) || "目前證據仍不足，摘要僅能先說明研究方向。",
-        detailNote,
-      ].filter(Boolean).join(""),
-    },
-    {
-      sectionId: "motivation",
-      title: "研究動機",
-      body: `研究「${topic}」的動機，在於釐清此主題的背景、重要性與可討論面向。${supportedParagraph(
-        backgroundCards,
-        evidenceNumbers,
-        "目前已接受資料可先協助建立基本背景，但仍需要在正文中補上更具體的脈絡與定義。",
-        "目前研究背景證據仍不足，建議補充官方資料或學術文獻。",
-      )}`,
-    },
-    {
-      sectionId: "questions",
-      title: "研究問題",
-      body: [
-        `本報告初步聚焦三個問題：`,
-        `1. 「${topic}」的背景與核心概念為何？`,
-        `2. 既有資料如何說明「${topic}」的重要面向？`,
-        `3. 根據目前證據，可以提出哪些結論與建議？`,
-      ].join("\n"),
-    },
-    {
-      sectionId: "literature",
-      title: "文獻探討",
-      body: supportedParagraph(
-        literatureCards,
-        evidenceNumbers,
-        "文獻探討應依研究問題分類整理既有觀點，先比較資料對主題的共同指向與限制，而不是逐篇摘要來源。",
-        "目前文獻探討證據不足，建議先補充學術論文、期刊或可信機構資料。",
-      ),
-    },
-    {
-      sectionId: "method",
-      title: "研究方法",
-      body: `本報告採用文獻整理與資料基礎摘要法：先搜尋來源，人工接受可信資料，再依研究背景、文獻探討、方法、數據與結論用途整理證據。${supportedParagraph(
-        methodCards,
-        evidenceNumbers,
-        "若來源提供方法資訊，正文可補充篩選標準、樣本或資料取得方式。",
-        "研究方法可再補充來源篩選標準、排除條件與分析步驟。",
-      )}`,
-    },
-    {
-      sectionId: "evidence",
-      title: "資料與證據整理",
-      body: groupedEvidenceSummary(input.evidenceCards, evidenceNumbers),
-    },
-    {
-      sectionId: "discussion",
-      title: "討論",
-      body: `綜合目前資料，討論時應優先連結背景、文獻與數據證據，並標示仍待補強之處。${supportedParagraph(
-        dataCards.length ? dataCards : literatureCards,
-        evidenceNumbers,
-        "目前資料可提供初步討論基礎，但仍要把推論限制與資料缺口寫清楚。",
-        "目前尚缺足夠數據分析證據，因此討論需避免過度推論。",
-      )}${acceptedSourceDigest.gaps.length ? `資料缺口包括：${acceptedSourceDigest.gaps.join("、")}。` : ""}`,
-    },
-    {
-      sectionId: "conclusion",
-      title: "結論與建議",
-      body: `根據目前證據，「${topic}」可先形成一份可追溯來源的初稿。${supportedParagraph(
-        conclusionCards,
-        evidenceNumbers,
-        "結論應回應研究問題，並把建議限定在已接受資料能支撐的範圍內。",
-        "結論段仍需更多證據支撐，建議補齊可直接回應研究問題的來源。",
-      )}${acceptedSourceDigest.recommendedNextStep}`,
-    },
-    {
-      sectionId: "references",
-      title: "參考資料",
-      body: references.map((reference, index) => `${index + 1}. ${reference}`).join("\n"),
-    },
-  ];
+        `本草稿以「${topic}」為核心，面向${audience}整理資料基礎、可支撐方向與限制。`,
+        `摘要先交代研究範圍與資料狀態，不逐篇排列來源；後續正文再依章節任務選用佐證。`,
+        qualityNote,
+      ].filter(Boolean).join("");
+    case "motivation":
+      return [
+        `研究「${topic}」的動機，在於釐清此主題的背景、重要性與可討論範圍，而不是把來源卡句子直接改寫成動機。`,
+        plan.selectedEvidence.length
+          ? `目前可先用背景資料說明主題為何值得研究，並把討論範圍限縮在已接受資料可支撐的部分。${evidenceText}`
+          : "目前研究背景證據仍不足，建議補充官方資料或學術文獻後再強化動機段。",
+      ].join("");
+    case "questions":
+      return [`本報告初步聚焦三個可蒐證問題：`, questionSet(topic, acceptedSourceDigest)].join("\n");
+    case "literature":
+      return plan.selectedEvidence.length
+        ? [
+          "文獻探討應比較既有資料的共同方向、差異與限制，而不是逐篇摘要來源。",
+          `目前可先依核心概念、影響面向與資料限制整理既有觀點。${evidenceText}`,
+        ].join("")
+        : "目前文獻探討證據不足，建議先補充學術論文、期刊或可信機構資料。";
+    case "method":
+      return [
+        "本報告採用文獻整理與來源審查法：先搜尋資料，再依主題相關性、權威性、摘要可用性與使用章節進行篩選。",
+        "撰寫時只將已接受來源作為佐證池，不假裝進行未實施的實驗、問卷或訪談。",
+        plan.selectedEvidence.length ? evidenceText : "方法段可再補充搜尋條件、排除條件與資料整理步驟。",
+      ].join("");
+    case "evidence":
+      return [
+        "資料與證據整理應依研究問題與證據面向組織，而不是依來源 1、來源 2 的順序排列。",
+        evidenceByAspect(context.evidenceCards, evidenceNumbers),
+      ].join("\n");
+    case "discussion":
+      return [
+        "討論段應把資料基礎、可支持方向與缺口連接起來，避免超出已接受來源的證據範圍。",
+        plan.selectedEvidence.length
+          ? `目前可先討論資料之間的共同指向，以及哪些推論仍需補強。${evidenceText}`
+          : "目前尚缺足夠證據，因此討論需維持保守，避免形成正式結論語氣。",
+        gaps,
+      ].filter(Boolean).join("");
+    case "conclusion":
+      return [
+        `根據目前證據，「${topic}」可先形成一份可追溯來源的初稿，但結論只能限於資料已支撐的範圍。`,
+        plan.selectedEvidence.length
+          ? `後續建議應回到研究問題與資料缺口逐步補強。${evidenceText}`
+          : "結論段仍需更多高相關來源支撐，現階段不宜寫成正式完整報告。",
+        acceptedSourceDigest.recommendedNextStep,
+      ].join("");
+    default:
+      return plan.intent;
+  }
+}
+
+export function buildReportDraft(input: ReportDraftInput): ReportDraft {
+  const context = buildReportSynthesisContext(input);
+  const bibliography = buildBibliography(context.acceptedSources, input.citationFormat || "APA");
+  const references = bibliography.length ? bibliography.map((entry) => entry.text) : ["參考資料待補"];
+  const outlineSections = context.outline.sections;
+  const detailNote = sourceQualityLimitNote(context.acceptedSources);
+
+  const sections: ReportDraftSection[] = outlineSections.map((outlineSection) => {
+    if (outlineSection.sectionId === "references") {
+      return {
+        sectionId: "references",
+        title: "參考資料",
+        body: references.map((reference, index) => `${index + 1}. ${reference}`).join("\n"),
+      };
+    }
+
+    const plan = buildSectionPlan(outlineSection, context);
+    const body = synthesizeSectionParagraph(plan, context);
+    return {
+      sectionId: outlineSection.sectionId,
+      title: outlineSection.sectionId === "title" ? "標題" : outlineSection.title.replace(/^[一二三四五六七八九十]+、/, ""),
+      body: plan.needsMoreEvidence && detailNote
+        ? `${body}${body.endsWith("。") ? "" : "。"}${detailNote}`
+        : body,
+    };
+  });
 
   const text = sections.map((section) => `${section.title}\n${section.body}`).join("\n\n");
 
   return {
-    title: `《${topic}》${reportType}草稿`,
+    title: `《${context.topic}》${context.reportType}草稿`,
     sections,
     referenceList: references,
     text,
