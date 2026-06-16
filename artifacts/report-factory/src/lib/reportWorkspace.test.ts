@@ -114,6 +114,33 @@ test("generation readiness gates report creation by source quality", () => {
   assert.equal(full.coverageCount >= 2, true);
 });
 
+test("generation readiness infers coverage from accepted source summaries", () => {
+  const inferredCoverageSources = [
+    source(1, {
+      abstract:
+        "This study reviews soft drink intake and health outcomes in the literature with enough detail for synthesis.",
+      usableSections: [],
+    }),
+    source(2, {
+      abstract:
+        "This report presents survey data and statistics about beverage consumption patterns and public health.",
+      usableSections: [],
+      sourceCategory: "government_or_institution",
+    }),
+    source(3, {
+      abstract:
+        "This research discusses findings and impact of sugar exposure among adolescents in enough detail.",
+      usableSections: [],
+    }),
+  ];
+
+  const readiness = generationReadiness(inferredCoverageSources);
+
+  assert.equal(readiness.canGenerate, true);
+  assert.equal(readiness.mode, "quick_draft");
+  assert.equal(readiness.coverageCount >= 1, true);
+});
+
 test("generator hides evidence cards unless developer debug is open", () => {
   assert.equal(generatorWorkflowVisibility(false).showEvidenceCards, false);
   assert.equal(generatorWorkflowVisibility(false).showTechnicalLogs, false);

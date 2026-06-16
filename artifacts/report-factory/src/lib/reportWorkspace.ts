@@ -1,6 +1,5 @@
 import {
   buildBibliography,
-  normalizeUsableSections,
   type SourceRecord,
 } from "./sourceRecords.ts";
 import { buildEvidenceCards } from "./evidenceCards.ts";
@@ -10,7 +9,7 @@ import {
   buildAcceptedSourceDigest,
   type AcceptedSourceDigest,
 } from "./sourceDigest.ts";
-import { sourceHasUsableAbstract } from "./sourceSummaries.ts";
+import { sourceHasUsableAbstract, sourceRecommendedSections } from "./sourceSummaries.ts";
 import {
   generateReport,
   type GeneratedReport,
@@ -111,7 +110,7 @@ function readinessDiagnostics(sources: SourceRecord[]) {
   const acceptedSourceCount = sources.length;
   const relevantSourceCount = sources.filter((source) => source.relevanceLevel === "high" || source.relevanceLevel === "medium" || !source.relevanceLevel).length;
   const usableSummaryCount = sources.filter(sourceHasUsableAbstract).length;
-  const coverage = new Set(sources.flatMap((source) => normalizeUsableSections(source.usableSections)));
+  const coverage = new Set(sources.flatMap(sourceRecommendedSections));
   const lowQualityAcceptedCount = sources.filter((source) => source.relevanceLevel === "low" || source.relevanceLevel === "off_topic").length;
 
   return {
