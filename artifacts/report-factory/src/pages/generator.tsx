@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Navbar } from "@/components/layout/navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Progress } from "@/components/ui/progress";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { searchSources, type SourceSearchResult } from "@workspace/api-client-react";
@@ -47,6 +48,8 @@ import {
   SOURCE_CONFIDENCE_OPTIONS,
   sourceHasIncompleteMetadata,
   sourceRecordKey,
+  sourceReviewCounts,
+  sourceReviewState,
   type SourceRecord,
   type SourceCategory,
   updateSourceReviewState,
@@ -423,13 +426,343 @@ function SearchIntentDebugPanel({ debug }: { debug: KeywordSearchDebugState }) {
   );
 }
 
+type SourceReviewTab = "all" | "accepted" | "pending" | "rejected";
+
+const SOURCE_REVIEW_TABS: { value: SourceReviewTab; label: string }[] = [
+  { value: "all", label: "全部" },
+  { value: "accepted", label: "已接受" },
+  { value: "pending", label: "待審核" },
+  { value: "rejected", label: "已拒絕" },
+];
+
+function sourceReviewLabel(reviewState: SourceReviewState): string {
+  switch (reviewState) {
+    case "accepted":
+      return "已接受";
+    case "rejected":
+      return "已拒絕";
+    case "pending":
+    default:
+      return "待審核";
+  }
+}
+
+function sourceReviewBadgeVariant(reviewState: SourceReviewState): "default" | "secondary" | "outline" | "destructive" {
+  switch (reviewState) {
+    case "accepted":
+      return "default";
+    case "rejected":
+      return "destructive";
+    case "pending":
+    default:
+      return "secondary";
+  }
+}
+
+function sourceAuthorShortLabel(authors: string[]): string {
+  if (authors.length === 0) return "作者待確認";
+  if (authors.length === 1) return authors[0];
+  return `${authors[0]} 等`;
+}
+
+function parseAuthorsInput(value: string): string[] {
+  return value
+    .split(/[、,，;]/)
+    .map((author) => author.trim())
+    .filter(Boolean);
+}
+
+function sourcesForReviewTab(sources: SourceRecord[], tab: SourceReviewTab): SourceRecord[] {
+  switch (tab) {
+    case "accepted":
+      return acceptedSourceRecords(sources);
+    case "pending":
+      return candidateSourceRecords(sources);
+    case "rejected":
+      return rejectedSourceRecords(sources);
+    case "all":
+    default:
+      return sources;
+  }
+}
+
+function SourceReviewCard({
+  source,
+  isExpanded,
+  onExpandedChange,
+  onReview,
+  onEdit,
+}: {
+  source: SourceRecord;
+  isExpanded: boolean;
+  onExpandedChange: (open: boolean) => void;
+  onReview: (sourceId: string, reviewState: SourceReviewState) => void;
+  onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
+}) {
+  const sourceId = source.id || sourceRecordKey(source);
+  const reviewState = sourceReviewState(source);
+  const title = source.title || "標題待確認";
+  const year = source.year ? String(source.year) : "年份待確認";
+  const usableSections = normalizeUsableSections(source.usableSections);
+  const incomplete = sourceHasIncompleteMetadata(source);
+  const reviewLabel = sourceReviewLabel(reviewState);
+  const confidence = source.confidence ?? "中";
+  const cardTone =
+    reviewState === "accepted"
+      ? "border-green-500/30 bg-green-500/5"
+      : reviewState === "rejected"
+        ? "border-destructive/25 bg-destructive/5"
+        : "border-border bg-card";
+
+  return (
+    <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
+      <article
+        className={`rounded-lg border p-4 transition-colors ${cardTone}`}
+        data-testid={`source-card-${reviewState}`}
+      >
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={sourceReviewBadgeVariant(reviewState)}>{reviewLabel}</Badge>
+              <Badge variant="outline">{source.sourceType}</Badge>
+              <Badge variant="outline">{sourceCategoryLabel(source.sourceCategory)}</Badge>
+              <Badge variant="secondary">可信度 {confidence}</Badge>
+              {incomplete && <Badge variant="outline">資料不完整</Badge>}
+            </div>
+            <h3 className="truncate text-sm font-semibold text-foreground" title={title}>
+              {title}
+            </h3>
+            <div className="grid grid-cols-1 gap-1 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
+              <span>作者：{sourceAuthorShortLabel(source.authors)}</span>
+              <span>年份：{year}</span>
+              <span>平台：{source.sourceType}</span>
+              <span>類型：{sourceCategoryLabel(source.sourceCategory)}</span>
+              <span>狀態：{reviewLabel}</span>
+              <span>可信度：{confidence}</span>
+            </div>
+            <div className="min-w-0 text-xs text-muted-foreground">
+              {source.url ? (
+                <a
+                  href={source.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex max-w-full items-center font-medium text-primary hover:underline"
+                >
+                  <span className="truncate">原始連結：{sourceLocatorLabel(source)}</span>
+                  <ExternalLink className="ml-1 h-3.5 w-3.5 shrink-0" />
+                </a>
+              ) : (
+                <span>原始連結：{source.doi ? `DOI ${source.doi}` : "待確認"}</span>
+              )}
+            </div>
+          </div>
+
+          <CollapsibleTrigger asChild>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="min-h-[36px] shrink-0"
+              data-testid="button-source-expand"
+            >
+              {isExpanded ? "收合" : "展開"}
+              {isExpanded ? <ChevronUp className="ml-1 h-4 w-4" /> : <ChevronDown className="ml-1 h-4 w-4" />}
+            </Button>
+          </CollapsibleTrigger>
+        </div>
+
+        <CollapsibleContent>
+          <div className="mt-4 grid grid-cols-1 gap-3 border-t border-border/70 pt-4 md:grid-cols-2">
+            <div className="space-y-1 md:col-span-2">
+              <Label htmlFor={`${sourceId}-title`} className="text-xs">標題</Label>
+              <Input
+                id={`${sourceId}-title`}
+                value={source.title}
+                onChange={(event) => onEdit(sourceId, { title: event.target.value })}
+                className="h-10 bg-background"
+              />
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label htmlFor={`${sourceId}-authors`} className="text-xs">作者</Label>
+              <Input
+                id={`${sourceId}-authors`}
+                value={source.authors.join("、")}
+                placeholder="以頓號或逗號分隔多位作者"
+                onChange={(event) => onEdit(sourceId, { authors: parseAuthorsInput(event.target.value) })}
+                className="h-10 bg-background"
+              />
+              <p className="text-xs text-muted-foreground">顯示：{formatSourceAuthors(source.authors)}</p>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${sourceId}-year`} className="text-xs">年份</Label>
+              <Input
+                id={`${sourceId}-year`}
+                value={source.year ?? ""}
+                inputMode="numeric"
+                placeholder="年份待確認"
+                onChange={(event) => {
+                  const value = event.target.value.trim();
+                  onEdit(sourceId, { year: value ? Number(value) : null });
+                }}
+                className="h-10 bg-background"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${sourceId}-provider`} className="text-xs">來源平台</Label>
+              <Input
+                id={`${sourceId}-provider`}
+                value={source.sourceType}
+                disabled
+                className="h-10 bg-muted/40"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${sourceId}-container`} className="text-xs">期刊／會議／出處</Label>
+              <Input
+                id={`${sourceId}-container`}
+                value={source.containerTitle ?? ""}
+                onChange={(event) => onEdit(sourceId, { containerTitle: event.target.value })}
+                className="h-10 bg-background"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${sourceId}-publisher`} className="text-xs">出版者</Label>
+              <Input
+                id={`${sourceId}-publisher`}
+                value={source.publisher ?? ""}
+                onChange={(event) => onEdit(sourceId, { publisher: event.target.value })}
+                className="h-10 bg-background"
+              />
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label htmlFor={`${sourceId}-doi`} className="text-xs">DOI</Label>
+              <Input
+                id={`${sourceId}-doi`}
+                value={source.doi ?? ""}
+                onChange={(event) => onEdit(sourceId, { doi: event.target.value })}
+                className="h-10 bg-background"
+              />
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label htmlFor={`${sourceId}-url`} className="text-xs">URL</Label>
+              <Input
+                id={`${sourceId}-url`}
+                value={source.url ?? ""}
+                onChange={(event) => onEdit(sourceId, { url: event.target.value })}
+                className="h-10 bg-background"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${sourceId}-sourceCategory`} className="text-xs">來源類型</Label>
+              <Select
+                value={source.sourceCategory ?? "unknown"}
+                onValueChange={(value) => onEdit(sourceId, { sourceCategory: value })}
+              >
+                <SelectTrigger id={`${sourceId}-sourceCategory`} className="h-10 bg-background">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SOURCE_CATEGORY_OPTIONS.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {SOURCE_CATEGORY_LABELS[option]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${sourceId}-confidence`} className="text-xs">可信度</Label>
+              <Select
+                value={source.confidence ?? "中"}
+                onValueChange={(value) => onEdit(sourceId, { confidence: value })}
+              >
+                <SelectTrigger id={`${sourceId}-confidence`} className="h-10 bg-background">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SOURCE_CONFIDENCE_OPTIONS.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <p className="text-xs font-medium text-foreground">可用章節</p>
+              <div className="flex flex-wrap gap-3">
+                {WORKFLOW_REPORT_SECTIONS.map((section) => (
+                  <label key={section} className="flex min-h-[28px] items-center gap-2 text-xs text-muted-foreground">
+                    <Checkbox
+                      checked={usableSections.includes(section)}
+                      onCheckedChange={(checked) =>
+                        onEdit(sourceId, {
+                          usableSections: toggleWorkflowSection(
+                            usableSections.length ? usableSections : defaultUsableSections(),
+                            section,
+                            checked === true,
+                          ),
+                        })
+                      }
+                    />
+                    <span>{section}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label htmlFor={`${sourceId}-reviewNotes`} className="text-xs">審查筆記</Label>
+              <Textarea
+                id={`${sourceId}-reviewNotes`}
+                value={source.reviewNotes ?? ""}
+                placeholder="例如：方法清楚，但樣本偏小"
+                onChange={(event) => onEdit(sourceId, { reviewNotes: event.target.value })}
+                className="min-h-[76px] resize-y bg-background"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2 md:col-span-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="default"
+                className="min-h-[36px]"
+                disabled={reviewState === "accepted"}
+                onClick={() => onReview(sourceId, "accepted")}
+              >
+                <CheckCircle2 className="mr-2 h-4 w-4" /> 接受
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="min-h-[36px]"
+                disabled={reviewState === "rejected"}
+                onClick={() => onReview(sourceId, "rejected")}
+              >
+                <XCircle className="mr-2 h-4 w-4" /> 拒絕
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="min-h-[36px]"
+                disabled={reviewState === "pending"}
+                onClick={() => onReview(sourceId, "pending")}
+              >
+                標為待審
+              </Button>
+            </div>
+          </div>
+        </CollapsibleContent>
+      </article>
+    </Collapsible>
+  );
+}
+
 function SourceSearchPanel({
   sources,
-  acceptedCount,
-  rejectedCount,
   status,
   message,
-  keywordDebug,
   isSearching,
   hasTopic,
   onSearch,
@@ -437,32 +770,71 @@ function SourceSearchPanel({
   onEdit,
 }: {
   sources: SourceRecord[];
-  acceptedCount: number;
-  rejectedCount: number;
   status: "idle" | "loading" | "done" | "empty" | "error";
   message: string;
-  keywordDebug: KeywordSearchDebugState | null;
   isSearching: boolean;
   hasTopic: boolean;
   onSearch: () => void;
   onReview: (sourceId: string, reviewState: SourceReviewState) => void;
   onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
 }) {
-  const acceptedSources = acceptedSourceRecords(sources);
-  const candidateSources = candidateSourceRecords(sources);
-  const rejectedSources = rejectedSourceRecords(sources);
-  const [expandedAcceptedIds, setExpandedAcceptedIds] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<SourceReviewTab>("all");
+  const [expandedSourceIds, setExpandedSourceIds] = useState<string[]>([]);
+  const previousReviewStates = useRef<Map<string, SourceReviewState>>(new Map());
+  const counts = sourceReviewCounts(sources);
+  const visibleSources = sourcesForReviewTab(sources, activeTab);
+  const activeTabLabel = SOURCE_REVIEW_TABS.find((tab) => tab.value === activeTab)?.label ?? "來源";
 
-  const setAcceptedExpanded = (sourceId: string, open: boolean) => {
-    setExpandedAcceptedIds((current) => {
+  useEffect(() => {
+    const nextReviewStates = new Map<string, SourceReviewState>();
+
+    setExpandedSourceIds((current) => {
+      const nextExpanded = new Set(current);
+      const activeIds = new Set<string>();
+
+      for (const source of sources) {
+        const key = source.id || sourceRecordKey(source);
+        const nextState = sourceReviewState(source);
+        const previousState = previousReviewStates.current.get(key);
+        activeIds.add(key);
+        nextReviewStates.set(key, nextState);
+
+        if (previousState === undefined) {
+          if (nextState === "pending") nextExpanded.add(key);
+        } else if (previousState !== nextState) {
+          if (nextState === "pending") {
+            nextExpanded.add(key);
+          } else {
+            nextExpanded.delete(key);
+          }
+        }
+      }
+
+      for (const sourceId of Array.from(nextExpanded)) {
+        if (!activeIds.has(sourceId)) nextExpanded.delete(sourceId);
+      }
+
+      return Array.from(nextExpanded);
+    });
+
+    previousReviewStates.current = nextReviewStates;
+  }, [sources]);
+
+  const setSourceExpanded = (sourceId: string, open: boolean) => {
+    setExpandedSourceIds((current) => {
       if (open) return current.includes(sourceId) ? current : [...current, sourceId];
       return current.filter((item) => item !== sourceId);
     });
   };
 
+  const handleReview = (sourceId: string, reviewState: SourceReviewState) => {
+    setSourceExpanded(sourceId, reviewState === "pending");
+    onReview(sourceId, reviewState);
+  };
+
   return (
     <div className="mb-4 space-y-3">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base font-semibold text-foreground">研究來源</h2>
           <p className="text-sm text-muted-foreground">
@@ -470,13 +842,13 @@ function SourceSearchPanel({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={acceptedCount ? "default" : "outline"}>
-            已接受來源：{acceptedCount} 筆
+          <Badge variant={counts.accepted ? "default" : "outline"}>
+            已接受來源：{counts.accepted} 筆
           </Badge>
-          <Badge variant={acceptedCount >= RECOMMENDED_ACCEPTED_SOURCE_MIN ? "secondary" : "outline"}>
+          <Badge variant={counts.accepted >= RECOMMENDED_ACCEPTED_SOURCE_MIN ? "secondary" : "outline"}>
             建議至少 {RECOMMENDED_ACCEPTED_SOURCE_MIN} 筆
           </Badge>
-          <Badge variant={rejectedCount ? "secondary" : "outline"}>已拒絕 {rejectedCount} 筆</Badge>
+          <Badge variant={counts.rejected ? "secondary" : "outline"}>已拒絕 {counts.rejected} 筆</Badge>
           <Button
             type="button"
             variant="outline"
@@ -506,13 +878,13 @@ function SourceSearchPanel({
       )}
 
       {status === "loading" && (
-        <div className="rounded-lg border border-border bg-card p-4 space-y-3" data-testid="sources-loading">
+        <div className="space-y-3 rounded-lg border border-border bg-card p-4" data-testid="sources-loading">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             正在擴展關鍵詞並搜尋 Crossref 與 Semantic Scholar...
           </div>
           {[1, 2, 3].map((item) => (
-            <div key={item} className="animate-pulse rounded-md border border-border p-3 space-y-2">
+            <div key={item} className="animate-pulse space-y-2 rounded-md border border-border p-3">
               <div className="h-4 w-3/4 rounded bg-muted" />
               <div className="h-3 w-1/2 rounded bg-muted" />
             </div>
@@ -532,457 +904,46 @@ function SourceSearchPanel({
         </div>
       )}
 
-      {keywordDebug?.providerErrors.length ? (
-        <div
-          className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
-          data-testid="friendly-provider-warning"
-        >
-          部分資料來源暫時無法回應或達到查詢限制，已顯示可用結果；可稍後重新搜尋。
-        </div>
-      ) : null}
-
       {sources.length > 0 && (
         <div className="space-y-3" data-testid="sources-list">
-          <section className="rounded-lg border border-border bg-card p-3" data-testid="accepted-sources-section">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-semibold text-foreground">已接受來源</h3>
-                <p className="text-xs text-muted-foreground">建議至少接受 {RECOMMENDED_ACCEPTED_SOURCE_MIN} 筆可信來源；這不是硬上限。</p>
-              </div>
-              <Badge variant={acceptedCount ? "default" : "outline"}>
-                已接受來源：{acceptedCount} 筆
-              </Badge>
-            </div>
+          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SourceReviewTab)}>
+            <TabsList className="h-auto flex-wrap justify-start gap-1">
+              <TabsTrigger value="all" data-testid="tab-sources-all">
+                全部 ({counts.all})
+              </TabsTrigger>
+              <TabsTrigger value="accepted" data-testid="tab-sources-accepted">
+                已接受 ({counts.accepted})
+              </TabsTrigger>
+              <TabsTrigger value="pending" data-testid="tab-sources-pending">
+                待審核 ({counts.pending})
+              </TabsTrigger>
+              <TabsTrigger value="rejected" data-testid="tab-sources-rejected">
+                已拒絕 ({counts.rejected})
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
 
-            {acceptedSources.length > 0 ? (
-              <div className="space-y-2">
-                {acceptedSources.map((source) => {
-                  const key = source.id || sourceRecordKey(source);
-                  const title = source.title || "標題待確認";
-                  const provider = source.sourceType || "來源平台待確認";
-                  const year = source.year ? String(source.year) : "年份待確認";
-                  const usableSections = normalizeUsableSections(source.usableSections);
-                  const isExpanded = expandedAcceptedIds.includes(key);
-
-                  return (
-                    <Collapsible
-                      key={key}
-                      open={isExpanded}
-                      onOpenChange={(open) => setAcceptedExpanded(key, open)}
-                    >
-                      <div
-                        className="rounded-md border border-green-500/30 bg-green-500/5 px-3 py-2.5"
-                        data-testid="accepted-source-row"
-                      >
-                        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-                          <div className="min-w-0 flex-1 space-y-1">
-                            <p className="truncate text-sm font-medium text-foreground" title={title}>
-                              {title}
-                            </p>
-                            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                              <Badge variant="outline">{provider}</Badge>
-                              <Badge variant="outline">{year}</Badge>
-                              <Badge variant="outline">{sourceCategoryLabel(source.sourceCategory)}</Badge>
-                              <Badge variant="secondary">可信度 {source.confidence ?? "中"}</Badge>
-                            </div>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <CollapsibleTrigger asChild>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                className="min-h-[34px]"
-                                data-testid="button-accepted-source-expand"
-                              >
-                                {isExpanded ? "收合編輯" : "展開編輯"}
-                                {isExpanded ? <ChevronUp className="ml-1 h-4 w-4" /> : <ChevronDown className="ml-1 h-4 w-4" />}
-                              </Button>
-                            </CollapsibleTrigger>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="min-h-[34px] shrink-0"
-                              onClick={() => onReview(key, "pending")}
-                            >
-                              取消接受
-                            </Button>
-                          </div>
-                        </div>
-
-                        <CollapsibleContent>
-                          <div className="mt-3 grid grid-cols-1 gap-3 border-t border-green-500/20 pt-3 lg:grid-cols-2">
-                            <div className="space-y-1 lg:col-span-2">
-                              <Label htmlFor={`${key}-accepted-title`} className="text-xs">標題</Label>
-                              <Input
-                                id={`${key}-accepted-title`}
-                                value={source.title}
-                                onChange={(event) => onEdit(key, { title: event.target.value })}
-                                className="h-9 bg-background"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label htmlFor={`${key}-accepted-authors`} className="text-xs">作者</Label>
-                              <Input
-                                id={`${key}-accepted-authors`}
-                                value={source.authors.join("、")}
-                                placeholder="以頓號或逗號分隔多位作者"
-                                onChange={(event) =>
-                                  onEdit(key, {
-                                    authors: event.target.value.split(/[、,]/).map((author) => author.trim()).filter(Boolean),
-                                  })
-                                }
-                                className="h-9 bg-background"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label htmlFor={`${key}-accepted-year`} className="text-xs">年份</Label>
-                              <Input
-                                id={`${key}-accepted-year`}
-                                value={source.year ?? ""}
-                                inputMode="numeric"
-                                placeholder="年份待確認"
-                                onChange={(event) => {
-                                  const value = event.target.value.trim();
-                                  onEdit(key, { year: value ? Number(value) : null });
-                                }}
-                                className="h-9 bg-background"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label htmlFor={`${key}-accepted-provider`} className="text-xs">來源平台</Label>
-                              <Input
-                                id={`${key}-accepted-provider`}
-                                value={source.sourceType}
-                                disabled
-                                className="h-9 bg-muted/40"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label htmlFor={`${key}-accepted-container`} className="text-xs">期刊／會議／出處</Label>
-                              <Input
-                                id={`${key}-accepted-container`}
-                                value={source.containerTitle ?? ""}
-                                onChange={(event) => onEdit(key, { containerTitle: event.target.value })}
-                                className="h-9 bg-background"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label htmlFor={`${key}-accepted-publisher`} className="text-xs">出版者</Label>
-                              <Input
-                                id={`${key}-accepted-publisher`}
-                                value={source.publisher ?? ""}
-                                onChange={(event) => onEdit(key, { publisher: event.target.value })}
-                                className="h-9 bg-background"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label htmlFor={`${key}-sourceCategory`} className="text-xs">來源類型</Label>
-                              <Select
-                                value={source.sourceCategory ?? "unknown"}
-                                onValueChange={(value) => onEdit(key, { sourceCategory: value })}
-                              >
-                                <SelectTrigger id={`${key}-sourceCategory`} className="h-9 bg-background">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {SOURCE_CATEGORY_OPTIONS.map((option) => (
-                                    <SelectItem key={option} value={option}>
-                                      {SOURCE_CATEGORY_LABELS[option]}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            <div className="space-y-1">
-                              <Label htmlFor={`${key}-confidence`} className="text-xs">可信度</Label>
-                              <Select
-                                value={source.confidence ?? "中"}
-                                onValueChange={(value) => onEdit(key, { confidence: value })}
-                              >
-                                <SelectTrigger id={`${key}-confidence`} className="h-9 bg-background">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {SOURCE_CONFIDENCE_OPTIONS.map((option) => (
-                                    <SelectItem key={option} value={option}>
-                                      {option}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            <div className="space-y-1 lg:col-span-2">
-                              <Label htmlFor={`${key}-accepted-doi`} className="text-xs">DOI</Label>
-                              <Input
-                                id={`${key}-accepted-doi`}
-                                value={source.doi ?? ""}
-                                onChange={(event) => onEdit(key, { doi: event.target.value })}
-                                className="h-9 bg-background"
-                              />
-                            </div>
-                            <div className="space-y-1 lg:col-span-2">
-                              <Label htmlFor={`${key}-accepted-url`} className="text-xs">URL</Label>
-                              <Input
-                                id={`${key}-accepted-url`}
-                                value={source.url ?? ""}
-                                onChange={(event) => onEdit(key, { url: event.target.value })}
-                                className="h-9 bg-background"
-                              />
-                              {source.url && (
-                                <a
-                                  href={source.url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="inline-flex min-w-0 max-w-full items-center text-xs font-medium text-primary hover:underline"
-                                >
-                                  <span className="truncate">{sourceLocatorLabel(source)}</span>
-                                  <ExternalLink className="ml-1 h-3 w-3 shrink-0" />
-                                </a>
-                              )}
-                            </div>
-                            <div className="space-y-1 lg:col-span-2">
-                              <Label htmlFor={`${key}-reviewNotes`} className="text-xs">審查筆記</Label>
-                              <Input
-                                id={`${key}-reviewNotes`}
-                                value={source.reviewNotes ?? ""}
-                                placeholder="例如：方法清楚，但樣本偏小"
-                                onChange={(event) => onEdit(key, { reviewNotes: event.target.value })}
-                                className="h-9 bg-background"
-                              />
-                            </div>
-                            <div className="space-y-2 lg:col-span-2">
-                              <p className="text-xs font-medium text-foreground">可用章節</p>
-                              <div className="flex flex-wrap gap-3">
-                                {WORKFLOW_REPORT_SECTIONS.map((section) => (
-                                  <label key={section} className="flex min-h-[28px] items-center gap-2 text-xs text-muted-foreground">
-                                    <Checkbox
-                                      checked={usableSections.includes(section)}
-                                      onCheckedChange={(checked) =>
-                                        onEdit(key, {
-                                          usableSections: toggleWorkflowSection(
-                                            usableSections.length ? usableSections : defaultUsableSections(),
-                                            section,
-                                            checked === true,
-                                          ),
-                                        })
-                                      }
-                                    />
-                                    <span>{section}</span>
-                                  </label>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        </CollapsibleContent>
-                      </div>
-                    </Collapsible>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                尚未接受來源。
-              </p>
-            )}
-          </section>
-
-          <section className="space-y-3" data-testid="candidate-sources-section">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-semibold text-foreground">候選來源</h3>
-                <p className="text-xs text-muted-foreground">待審核來源</p>
-              </div>
-              <Badge variant="outline">候選 {candidateSources.length} 筆</Badge>
-            </div>
-
-            {candidateSources.map((source) => {
-              const key = source.id || sourceRecordKey(source);
-              const incomplete = sourceHasIncompleteMetadata(source);
-
-              return (
-                <article
-                  key={key}
-                  className="rounded-lg border border-border bg-card p-4 transition-colors"
-                  data-testid={`source-card-${source.sourceType}`}
-                >
-                  <div className="min-w-0 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant={source.sourceType === "Crossref" ? "secondary" : "outline"}>{source.sourceType}</Badge>
-                        <Badge variant="outline">待審核</Badge>
-                        {incomplete && <Badge variant="outline">來源資料不完整</Badge>}
-                      </div>
-                      {source.url && (
-                        <a
-                          href={source.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex min-h-[32px] items-center rounded-md px-2 text-xs font-medium text-primary hover:underline"
-                        >
-                          開啟連結 <ExternalLink className="ml-1 h-3.5 w-3.5" />
-                        </a>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div className="space-y-1 md:col-span-2">
-                        <Label htmlFor={`${key}-title`} className="text-xs">標題</Label>
-                        <Input
-                          id={`${key}-title`}
-                          value={source.title}
-                          onChange={(event) => onEdit(key, { title: event.target.value })}
-                          className="h-10"
-                        />
-                      </div>
-                      <div className="space-y-1 md:col-span-2">
-                        <Label htmlFor={`${key}-authors`} className="text-xs">作者</Label>
-                        <Input
-                          id={`${key}-authors`}
-                          value={source.authors.join("、")}
-                          placeholder="以頓號或逗號分隔多位作者"
-                          onChange={(event) => onEdit(key, { authors: event.target.value.split(/[、,]/).map((author) => author.trim()).filter(Boolean) })}
-                          className="h-10"
-                        />
-                        <p className="text-xs text-muted-foreground">顯示：{formatSourceAuthors(source.authors)}</p>
-                      </div>
-                      <div className="space-y-1">
-                        <Label htmlFor={`${key}-year`} className="text-xs">年份</Label>
-                        <Input
-                          id={`${key}-year`}
-                          value={source.year ?? ""}
-                          inputMode="numeric"
-                          placeholder="年份待確認"
-                          onChange={(event) => {
-                            const value = event.target.value.trim();
-                            onEdit(key, { year: value ? Number(value) : null });
-                          }}
-                          className="h-10"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label htmlFor={`${key}-container`} className="text-xs">期刊／會議／出處</Label>
-                        <Input
-                          id={`${key}-container`}
-                          value={source.containerTitle ?? ""}
-                          onChange={(event) => onEdit(key, { containerTitle: event.target.value })}
-                          className="h-10"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label htmlFor={`${key}-publisher`} className="text-xs">出版者</Label>
-                        <Input
-                          id={`${key}-publisher`}
-                          value={source.publisher ?? ""}
-                          onChange={(event) => onEdit(key, { publisher: event.target.value })}
-                          className="h-10"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label htmlFor={`${key}-doi`} className="text-xs">DOI</Label>
-                        <Input
-                          id={`${key}-doi`}
-                          value={source.doi ?? ""}
-                          onChange={(event) => onEdit(key, { doi: event.target.value })}
-                          className="h-10"
-                        />
-                      </div>
-                      <div className="space-y-1 md:col-span-2">
-                        <Label htmlFor={`${key}-url`} className="text-xs">URL</Label>
-                        <Input
-                          id={`${key}-url`}
-                          value={source.url ?? ""}
-                          onChange={(event) => onEdit(key, { url: event.target.value })}
-                          className="h-10"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="default"
-                        className="min-h-[36px]"
-                        onClick={() => onReview(key, "accepted")}
-                      >
-                        <CheckCircle2 className="mr-2 h-4 w-4" /> 接受
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="min-h-[36px]"
-                        onClick={() => onReview(key, "rejected")}
-                      >
-                        <XCircle className="mr-2 h-4 w-4" /> 拒絕
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="min-h-[36px]"
-                        onClick={() => onReview(key, "pending")}
-                      >
-                        標為待審
-                      </Button>
-                    </div>
-                  </div>
-                </article>
-              );
+          {visibleSources.length > 0 ? (
+            <div className="space-y-3" data-testid={`sources-list-${activeTab}`}>
+              {visibleSources.map((source) => {
+                const key = source.id || sourceRecordKey(source);
+                return (
+                  <SourceReviewCard
+                    key={key}
+                    source={source}
+                    isExpanded={expandedSourceIds.includes(key)}
+                    onExpandedChange={(open) => setSourceExpanded(key, open)}
+                    onReview={handleReview}
+                    onEdit={onEdit}
+                  />
+                );
               })}
-            </section>
-
-          <Collapsible>
-            <section className="rounded-lg border border-border bg-card p-3" data-testid="rejected-sources-section">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h3 className="text-sm font-semibold text-foreground">已拒絕來源</h3>
-                  <p className="text-xs text-muted-foreground">拒絕來源會隱藏，不會進入證據卡或參考文獻。</p>
-                </div>
-                <CollapsibleTrigger asChild>
-                  <Button type="button" size="sm" variant="outline" className="min-h-[34px]">
-                    {rejectedSources.length} 筆 <ChevronDown className="ml-1 h-4 w-4" />
-                  </Button>
-                </CollapsibleTrigger>
-              </div>
-              <CollapsibleContent>
-                {rejectedSources.length > 0 ? (
-                  <div className="mt-3 space-y-2">
-                    {rejectedSources.map((source) => {
-                      const key = source.id || sourceRecordKey(source);
-                      return (
-                        <div
-                          key={key}
-                          className="flex flex-col gap-2 rounded-md border border-border bg-muted/20 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
-                          data-testid="rejected-source-row"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-foreground" title={source.title || "標題待確認"}>{source.title || "標題待確認"}</p>
-                            <p className="text-xs text-muted-foreground">{source.sourceType}・{sourceLocatorLabel(source)}</p>
-                          </div>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className="min-h-[34px] shrink-0"
-                            onClick={() => onReview(key, "pending")}
-                          >
-                            還原為候選
-                          </Button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="mt-3 rounded-md border border-dashed border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                    尚未拒絕來源。
-                  </p>
-                )}
-              </CollapsibleContent>
-            </section>
-          </Collapsible>
+            </div>
+          ) : (
+            <p className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-3 text-sm text-muted-foreground">
+              {activeTabLabel}目前沒有來源。
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -1012,7 +973,7 @@ function GenerationReadinessPanel({
         <div>
           <h2 className="text-base font-semibold text-foreground">生成準備度</h2>
           <p className="text-sm text-muted-foreground">
-            報告大綱、草稿與證據卡會在建立工作區後移到預覽頁顯示。
+            報告大綱、草稿與來源整理會在建立工作區後移到預覽頁顯示。
           </p>
         </div>
         <Badge variant={readiness.canGenerateFull ? "default" : readiness.canGenerate ? "secondary" : "outline"}>
@@ -1699,11 +1660,8 @@ export function Generator() {
             {(autoSearchEnabled || sources.length > 0 || sourceSearchStatus !== "idle") && (
               <SourceSearchPanel
                 sources={sources}
-                acceptedCount={acceptedSources.length}
-                rejectedCount={rejectedSources.length}
                 status={sourceSearchStatus}
                 message={sourceSearchMessage}
-                keywordDebug={keywordSearchDebug}
                 isSearching={isSearchingSources}
                 hasTopic={hasTopic}
                 onSearch={handleSearchSources}
@@ -1770,7 +1728,7 @@ export function Generator() {
                 </div>
                 <Progress value={74} />
                 <p className="text-sm text-muted-foreground">
-                  正在整理已接受來源、建立中間證據卡、產生大綱與草稿，完成後會自動前往報告預覽頁。
+                  正在整理已接受來源、產生大綱與草稿，完成後會自動前往報告預覽頁。
                 </p>
               </div>
             )}

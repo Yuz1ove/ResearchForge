@@ -12,6 +12,7 @@ import {
   normalizeSourceForReview,
   rejectedSourceRecords,
   sourceHasIncompleteMetadata,
+  sourceReviewCounts,
   sourceReviewState,
   updateSourceReviewState,
   type SourceRecord,
@@ -135,6 +136,21 @@ test("filters accepted and rejected sources explicitly", () => {
   assert.deepEqual(acceptedSourceRecords([accepted, rejected, pending]), [accepted]);
   assert.deepEqual(candidateSourceRecords([accepted, rejected, pending]), [pending]);
   assert.deepEqual(rejectedSourceRecords([accepted, rejected, pending]), [rejected]);
+});
+
+test("counts source review tabs from filtered records", () => {
+  const sources = [
+    source({ id: "accepted", reviewState: "accepted" }),
+    source({ id: "pending", reviewState: "pending", doi: "10.1000/pending" }),
+    source({ id: "rejected", reviewState: "rejected", doi: "10.1000/rejected" }),
+  ];
+
+  assert.deepEqual(sourceReviewCounts(sources), {
+    all: sources.length,
+    accepted: acceptedSourceRecords(sources).length,
+    pending: candidateSourceRecords(sources).length,
+    rejected: rejectedSourceRecords(sources).length,
+  });
 });
 
 test("reads accepted review aliases before rendering source lists", () => {

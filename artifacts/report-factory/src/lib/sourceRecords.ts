@@ -322,6 +322,20 @@ export function rejectedSourceRecords(sources: SourceRecord[]): SourceRecord[] {
   return sources.filter((source) => sourceReviewState(source) === "rejected");
 }
 
+export function sourceReviewCounts(sources: SourceRecord[]): {
+  all: number;
+  accepted: number;
+  pending: number;
+  rejected: number;
+} {
+  return {
+    all: sources.length,
+    accepted: acceptedSourceRecords(sources).length,
+    pending: candidateSourceRecords(sources).length,
+    rejected: rejectedSourceRecords(sources).length,
+  };
+}
+
 export function updateSourceReviewState(
   sources: SourceRecord[],
   sourceId: string,
