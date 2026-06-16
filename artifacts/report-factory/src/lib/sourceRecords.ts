@@ -4,6 +4,12 @@ export type { SourceReviewState };
 
 export const WORKFLOW_REPORT_SECTIONS = ["研究背景", "文獻探討", "研究方法", "數據分析", "結論"] as const;
 export type WorkflowReportSection = (typeof WORKFLOW_REPORT_SECTIONS)[number];
+export type SourceRelevanceLevel = "primary" | "secondary" | "clue" | "low" | "off_topic";
+export type EvidenceGroundingStatus =
+  | "abstract_grounded"
+  | "snippet_grounded"
+  | "metadata_only"
+  | "insufficient";
 
 export const SOURCE_CONFIDENCE_OPTIONS = ["高", "中", "低"] as const;
 export type SourceConfidence = (typeof SOURCE_CONFIDENCE_OPTIONS)[number];
@@ -32,11 +38,15 @@ export interface SourceRecordMetadata {
   usableSections?: WorkflowReportSection[] | string[] | null;
   confidence?: SourceConfidence | string | null;
   reviewNotes?: string | null;
-  relevanceLevel?: "high" | "medium" | "low" | "off_topic" | null;
+  relevanceLevel?: SourceRelevanceLevel | null;
   relevanceScore?: number | null;
   relevanceReasons?: string[] | null;
   matchedCoreConcepts?: string[] | null;
   missingCoreConcepts?: string[] | null;
+  matchedFacets?: string[] | null;
+  missingRequiredFacets?: string[] | null;
+  evidenceGrounding?: EvidenceGroundingStatus | null;
+  sourceRelevanceReasonZhTw?: string | null;
   shouldShowInMainList?: boolean | null;
   shouldRecommendAccept?: boolean | null;
   authorityLevel?: "high" | "medium" | "check" | "insufficient_summary" | "low_relevance" | null;
@@ -127,7 +137,19 @@ function normalizeStringList(value: unknown): string[] | null {
 }
 
 function normalizeRelevanceLevel(value: unknown): SourceRecordMetadata["relevanceLevel"] {
-  if (value === "high" || value === "medium" || value === "low" || value === "off_topic") return value;
+  if (value === "primary" || value === "secondary" || value === "clue" || value === "low" || value === "off_topic") return value;
+  if (value === "high") return "primary";
+  if (value === "medium") return "secondary";
+  return null;
+}
+
+function normalizeEvidenceGrounding(value: unknown): SourceRecordMetadata["evidenceGrounding"] {
+  if (
+    value === "abstract_grounded"
+    || value === "snippet_grounded"
+    || value === "metadata_only"
+    || value === "insufficient"
+  ) return value;
   return null;
 }
 
@@ -334,6 +356,10 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     relevanceReasons: normalizeStringList(source.relevanceReasons),
     matchedCoreConcepts: normalizeStringList(source.matchedCoreConcepts),
     missingCoreConcepts: normalizeStringList(source.missingCoreConcepts),
+    matchedFacets: normalizeStringList(source.matchedFacets),
+    missingRequiredFacets: normalizeStringList(source.missingRequiredFacets),
+    evidenceGrounding: normalizeEvidenceGrounding(source.evidenceGrounding),
+    sourceRelevanceReasonZhTw: cleanText(source.sourceRelevanceReasonZhTw),
     shouldShowInMainList: typeof source.shouldShowInMainList === "boolean" ? source.shouldShowInMainList : null,
     shouldRecommendAccept: typeof source.shouldRecommendAccept === "boolean" ? source.shouldRecommendAccept : null,
     authorityLevel: normalizeAuthorityLevel(source.authorityLevel),

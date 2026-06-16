@@ -12,6 +12,11 @@ import {
   type SourceIntentProfile,
   type SourceRelevanceAssessment,
 } from "./sourceRelevance.ts";
+import {
+  buildSourceEvidenceProfile,
+  type EvidenceGrounding,
+} from "./sourceEvidence.ts";
+import { buildTopicFacets } from "./topicFacets.ts";
 
 const FALLBACK_SUMMARY =
   "此來源與主題可能相關，但摘要不足，建議開啟原始來源確認研究內容。";
@@ -115,10 +120,14 @@ export function sourceDecisionHint(source: SourceRecord): string {
 
 export interface SourceSummaryForUser {
   contentSummary: string;
+  evidenceSnippets: string[];
+  originalEvidenceSnippets: string[];
+  groundingStatus: EvidenceGrounding;
   topicRelation: string;
-  recommendation: "recommended" | "check_first" | "not_recommended";
+  recommendation: "recommended" | "supporting" | "check_first" | "not_recommended";
   recommendationReason: string;
   usableSections: WorkflowReportSection[];
+  suitableSectionLabels: string[];
 }
 
 function topicCoreLabel(profile: SourceIntentProfile): string {
@@ -131,26 +140,26 @@ function relationFromAssessment(
   profile: SourceIntentProfile,
   assessment: SourceRelevanceAssessment,
 ): string {
-  const title = cleanText(source.title);
   const topicText = cleanText(topic) || "本主題";
-  const matched = assessment.matchedCoreConcepts.slice(0, 3).join("、");
-  const sections = sourceRecommendedSections(source).join("、");
+
+  if (assessment.relevanceLevel === "primary") {
+    const matched = assessment.matchedFacets.slice(0, 2).join("、") || topicCoreLabel(profile);
+    return `此來源直接支撐「${topicText}」的${matched}，可作為主要證據候選。`;
+  }
+
+  if (assessment.relevanceLevel === "secondary") {
+    return `此來源與「${topicText}」相關，但主要作為影響、政策或延伸脈絡，不適合作為成因/現況主證據。`;
+  }
+
+  if (assessment.relevanceLevel === "clue") {
+    return `此來源題名與「${topicText}」有初步關聯，但目前缺少可驗證摘要片段，需開啟原文確認。`;
+  }
 
   if (assessment.relevanceLevel === "off_topic" || assessment.relevanceLevel === "low") {
     return "此來源雖可能出現部分相近詞，但主要內容與本主題關聯不足，不建議納入。";
   }
 
-  if (!sourceHasUsableAbstract(source)) {
-    return `此來源標題與「${topicText}」有初步關聯，但摘要不足，建議開啟原文確認後再判斷是否可支撐${sections}。`;
-  }
-
-  if (matched) {
-    return `此來源命中${matched}等核心概念，可作為「${topicText}」中${topicCoreLabel(profile)}相關面向的佐證。`;
-  }
-
-  return title
-    ? `此來源題名為「${title}」，可先作為「${topicText}」的延伸線索，但仍需確認內容是否能支撐${sections}。`
-    : `此來源可先作為「${topicText}」的延伸線索，但仍需確認內容是否能支撐${sections}。`;
+  return `此來源可先作為「${topicText}」的延伸線索，但仍需確認內容是否能支撐研究問題。`;
 }
 
 function recommendationFromAssessment(
@@ -158,9 +167,9 @@ function recommendationFromAssessment(
   assessment: SourceRelevanceAssessment,
 ): SourceSummaryForUser["recommendation"] {
   if (assessment.relevanceLevel === "off_topic" || assessment.relevanceLevel === "low") return "not_recommended";
-  if (!sourceHasUsableAbstract(source)) return "check_first";
+  if (assessment.relevanceLevel === "clue" || !sourceHasUsableAbstract(source)) return "check_first";
   if (assessment.shouldRecommendAccept) return "recommended";
-  return "check_first";
+  return "supporting";
 }
 
 function recommendationReason(
@@ -168,14 +177,48 @@ function recommendationReason(
   assessment: SourceRelevanceAssessment,
 ): string {
   if (recommendation === "recommended") {
-    return "此來源主題相關性高，且摘要足以先判斷內容，可優先考慮接受。";
+    return "推薦採用：此來源直接支撐必要面向，且摘要片段足以先判斷內容。";
+  }
+  if (recommendation === "supporting") {
+    return "可作輔助：此來源可補充延伸背景或輔助論述，但不宜單獨作為主證據。";
   }
   if (recommendation === "check_first") {
     return assessment.reasons.some((reason) => reason.includes("摘要不足"))
-      ? "此來源可能相關，但摘要不足，接受前建議先開啟原文確認。"
-      : "此來源有可用線索，但仍需確認內容是否足以支撐正式證據。";
+      ? "需開啟原文確認：此來源可能相關，但摘要不足。"
+      : "需開啟原文確認：此來源有線索，但仍需確認內容是否足以支撐正式證據。";
   }
-  return "此來源低相關或離題，不建議納入主要證據池。";
+  return "不建議採用：此來源低相關或離題，不建議納入主要證據池。";
+}
+
+function suitableSectionLabels(source: SourceRecord, assessment: SourceRelevanceAssessment): string[] {
+  const labels: string[] = [];
+  const text = [
+    source.title,
+    source.abstract,
+    assessment.matchedFacets.join(" "),
+    assessment.reasonZhTw,
+  ]
+    .map(cleanText)
+    .join(" ")
+    .toLowerCase();
+
+  if (/成因|greenhouse|fossil|carbon dioxide|co2|methane|emission|anthropogenic|溫室氣體|化石燃料|二氧化碳|甲烷|排放|人為/.test(text)) {
+    labels.push("成因分析");
+  }
+  if (/現況|observed|temperature|concentration|indicator|trend|sea level|ipcc|wmo|nasa|noaa|全球升溫|濃度|趨勢|海平面/.test(text)) {
+    labels.push("現況分析");
+  }
+  if (/data|statistics|indicator|trend|concentration|temperature|emission|數據|統計|指標|趨勢|濃度/.test(text)) {
+    labels.push("數據背景");
+  }
+  if (/journal|review|study|assessment|文獻|研究|論文|期刊|評估/.test(text) || source.sourceCategory === "journal_article" || source.sourceCategory === "academic_paper") {
+    labels.push("文獻探討");
+  }
+  if (assessment.relevanceLevel === "secondary" || /impact|policy|finance|adaptation|effect|影響|政策|金融|調適|因應/.test(text)) {
+    labels.push("延伸影響");
+  }
+
+  return Array.from(new Set(labels)).slice(0, 3);
 }
 
 export function sourceContentSummary(source: SourceRecord): string {
@@ -201,12 +244,18 @@ export function sourceSummaryForUser(
 ): SourceSummaryForUser {
   const assessment = buildSourceRelevanceAssessment(source, profile);
   const recommendation = sourceAdoptionRecommendation(source, assessment);
+  const evidenceProfile = buildSourceEvidenceProfile(source, buildTopicFacets(topic));
+  const usableSections = sourceRecommendedSections(source);
 
   return {
-    contentSummary: sourceContentSummary(source),
+    contentSummary: evidenceProfile.summaryZhTw || sourceContentSummary(source),
+    evidenceSnippets: evidenceProfile.evidenceSnippets,
+    originalEvidenceSnippets: evidenceProfile.originalSnippets,
+    groundingStatus: evidenceProfile.groundingStatus,
     topicRelation: relationFromAssessment(source, topic, profile, assessment),
     recommendation,
     recommendationReason: recommendationReason(recommendation, assessment),
-    usableSections: sourceRecommendedSections(source),
+    usableSections,
+    suitableSectionLabels: suitableSectionLabels(source, assessment),
   };
 }

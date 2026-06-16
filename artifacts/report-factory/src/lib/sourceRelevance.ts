@@ -1,4 +1,12 @@
 import type { SourceRecord } from "./sourceRecords.ts";
+import {
+  buildSourceEvidenceProfile,
+  type EvidenceGrounding,
+} from "./sourceEvidence.ts";
+import {
+  buildTopicFacets,
+  type TopicFacets,
+} from "./topicFacets.ts";
 
 export interface SourceIntentProfile {
   coreConcepts: string[];
@@ -8,14 +16,23 @@ export interface SourceIntentProfile {
   excludeTerms: string[];
 }
 
-export interface SourceRelevanceAssessment {
-  relevanceLevel: "high" | "medium" | "low" | "off_topic";
+export type SourceFacetRelevanceLevel = "primary" | "secondary" | "clue" | "low" | "off_topic";
+
+export interface SourceFacetAssessment {
+  relevanceLevel: SourceFacetRelevanceLevel;
   relevanceScore: number;
+  matchedFacets: string[];
+  missingRequiredFacets: string[];
+  evidenceGrounding: EvidenceGrounding;
+  reasonZhTw: string;
+  shouldShowInMainList: boolean;
+  shouldRecommendAccept: boolean;
+}
+
+export interface SourceRelevanceAssessment extends SourceFacetAssessment {
   reasons: string[];
   matchedCoreConcepts: string[];
   missingCoreConcepts: string[];
-  shouldShowInMainList: boolean;
-  shouldRecommendAccept: boolean;
 }
 
 const DEFAULT_PROFILE: SourceIntentProfile = {
@@ -82,8 +99,8 @@ function authoritySignal(source: SourceRecord): number {
   if (source.doi) score += 2;
   if (source.year) score += 1;
   if (source.abstract) score += 1;
-  if (/\.gov(\.|$)|\.edu(\.|$)|who\.int$|un\.org$|oecd\.org$|worldbank\.org$|europa\.eu$/.test(host)) score += 2;
-  if (/crossref|semantic scholar|openalex|pubmed|doi|scopus|web of science/.test(text)) score += 1;
+  if (/\.gov(\.|$)|\.edu(\.|$)|who\.int$|un\.org$|oecd\.org$|worldbank\.org$|europa\.eu$|ipcc\.ch$|wmo\.int$|nasa\.gov$|noaa\.gov$/.test(host)) score += 3;
+  if (/crossref|semantic scholar|openalex|pubmed|doi|scopus|web of science|ipcc|wmo|nasa|noaa/.test(text)) score += 1;
   if (/journal|review|systematic review|meta-analysis|期刊|論文|研究|政府|機構|大學|醫院|研究院/.test(text)) score += 1;
   return score;
 }
@@ -96,29 +113,149 @@ function sourceAuthorityScore(source: SourceRecord): number {
   return authority;
 }
 
-function inferLevel(score: number, matchedCoreCount: number, hasAbstract: boolean, hasExclusion: boolean, requiredGroupHits: number): "high" | "medium" | "low" | "off_topic" {
-  if (hasExclusion) return "off_topic";
-  if (matchedCoreCount === 0 && requiredGroupHits === 0) return "low";
-  if (matchedCoreCount >= 2 && requiredGroupHits > 0 && hasAbstract && score >= 15) return "high";
-  if (matchedCoreCount >= 1 || requiredGroupHits > 0 || hasAbstract) return "medium";
-  return "low";
+function matchedTopicCore(text: string, facets: TopicFacets): string[] {
+  return matchTerms(text, facets.topicCore);
 }
 
-function relatedReasonText(level: SourceRelevanceAssessment["relevanceLevel"], matches: string[], missing: string[], hasAbstract: boolean, authority: number): string[] {
-  const reasons: string[] = [];
-  if (matches.length) reasons.push(`命中核心概念：${matches.slice(0, 4).join("、")}`);
-  if (missing.length) reasons.push(`尚未命中核心概念：${missing.slice(0, 4).join("、")}`);
-  if (!hasAbstract) reasons.push("摘要不足，需先開啟原文確認");
-  if (authority >= 12) reasons.push("權威性高");
-  else if (authority >= 8) reasons.push("權威性中");
-  else reasons.push("權威性待確認");
-  if (level === "off_topic") reasons.unshift("明顯與主題無關");
-  return reasons;
+function matchedRequiredFacetLabels(text: string, facets: TopicFacets): string[] {
+  return facets.requiredFacets
+    .filter((facet) => matchTerms(text, facet.terms).length > 0)
+    .map((facet) => facet.labelZhTw);
 }
 
-export function buildSourceRelevanceAssessment(
+function matchedSecondaryFacetLabels(text: string, facets: TopicFacets): string[] {
+  return facets.secondaryFacets
+    .filter((facet) => matchTerms(text, facet.terms).length > 0)
+    .map((facet) => facet.labelZhTw);
+}
+
+function hasDowngradingSecondaryFacet(text: string, facets: TopicFacets): boolean {
+  const downgradeFacetIds = new Set(["adaptation", "policy", "finance", "local_case", "ecological_effects"]);
+  return facets.secondaryFacets.some((facet) =>
+    downgradeFacetIds.has(facet.id) && matchTerms(text, facet.terms).length > 0
+  );
+}
+
+function matchedDowngradeTerms(text: string, facets: TopicFacets): string[] {
+  return matchTerms(text, facets.excludeOrDowngrade);
+}
+
+function sourceLooksExtremelySpecificFromTitle(source: SourceRecord, facets: TopicFacets): boolean {
+  const title = cleanText(source.title);
+  if (!title) return false;
+  return matchedTopicCore(title, facets).length > 0
+    && matchedRequiredFacetLabels(title, facets).length > 0
+    && matchedSecondaryFacetLabels(title, facets).length === 0;
+}
+
+function inferFacetLevel(input: {
+  hasCore: boolean;
+  requiredHits: number;
+  secondaryHits: number;
+  downgradeHits: number;
+  hasDowngradingSecondary: boolean;
+  hasEvidence: boolean;
+  hasAbstract: boolean;
+  titleSpecific: boolean;
+}): SourceFacetRelevanceLevel {
+  if (!input.hasCore && input.requiredHits === 0) return "off_topic";
+  if (input.downgradeHits > 0 && input.requiredHits === 0) return "low";
+  if (input.hasCore && input.requiredHits > 0 && input.hasDowngradingSecondary) return "secondary";
+  if (input.hasCore && input.requiredHits > 0 && input.hasEvidence) return "primary";
+  if (input.titleSpecific && !input.hasAbstract) return "clue";
+  if (input.hasCore && input.secondaryHits > 0 && input.requiredHits === 0) return "secondary";
+  if (input.hasCore && input.secondaryHits > 0) return "secondary";
+  if (input.hasCore && input.requiredHits > 0 && !input.hasEvidence) return "clue";
+  if (input.hasCore) return "low";
+  return "off_topic";
+}
+
+function reasonForLevel(
+  level: SourceFacetRelevanceLevel,
+  matchedRequired: string[],
+  matchedSecondary: string[],
+  grounding: EvidenceGrounding,
+): string {
+  if (level === "primary") {
+    return `直接命中${matchedRequired.join("、")}，且有可驗證摘要片段可支撐主題。`;
+  }
+  if (level === "secondary") {
+    return matchedSecondary.length
+      ? `主要落在${matchedSecondary.join("、")}，可作延伸資料，不適合作為成因/現況主證據。`
+      : "與主題有部分關聯，但尚未直接回答必要面向。";
+  }
+  if (level === "clue") {
+    return grounding === "metadata_only"
+      ? "摘要不足：題名看似相關，但目前只有 metadata；需開啟原文確認後才能採用。"
+      : "摘要不足：有初步線索，但可驗證片段不足，需先確認原文。";
+  }
+  if (level === "low") {
+    return "只命中主題詞或延伸面向，未能回答研究主題的必要面向。";
+  }
+  return "明顯與研究主題無關。";
+}
+
+export function buildSourceFacetAssessment(
   source: SourceRecord,
-  profile: SourceIntentProfile = DEFAULT_PROFILE,
+  topicFacets: TopicFacets,
+): SourceFacetAssessment {
+  const text = textForSource(source);
+  const coreHits = matchedTopicCore(text, topicFacets);
+  const requiredHits = matchedRequiredFacetLabels(text, topicFacets);
+  const secondaryHits = matchedSecondaryFacetLabels(text, topicFacets);
+  const downgradeHits = matchedDowngradeTerms(text, topicFacets);
+  const downgradingSecondary = hasDowngradingSecondaryFacet(cleanText(source.title), topicFacets);
+  const evidenceProfile = buildSourceEvidenceProfile(source, topicFacets);
+  const hasAbstract = sourceHasAbstract(source);
+  const titleSpecific = sourceLooksExtremelySpecificFromTitle(source, topicFacets);
+  const relevanceLevel = inferFacetLevel({
+    hasCore: coreHits.length > 0,
+    requiredHits: requiredHits.length,
+    secondaryHits: secondaryHits.length,
+    downgradeHits: downgradeHits.length,
+    hasDowngradingSecondary: downgradingSecondary,
+    hasEvidence: evidenceProfile.hasRequiredEvidence,
+    hasAbstract,
+    titleSpecific,
+  });
+  const authority = sourceAuthorityScore(source);
+  const relevanceScore =
+    coreHits.length * 10
+    + requiredHits.length * 18
+    + secondaryHits.length * 6
+    + authority
+    + (evidenceProfile.hasRequiredEvidence ? 12 : 0)
+    + (hasAbstract ? 3 : 0)
+    - downgradeHits.length * 10
+    - (relevanceLevel === "off_topic" ? 20 : 0);
+  const missingRequiredFacets = topicFacets.requiredFacets
+    .map((facet) => facet.labelZhTw)
+    .filter((label) => !requiredHits.includes(label));
+  const shouldShowInMainList = relevanceLevel === "primary";
+  const shouldRecommendAccept = relevanceLevel === "primary"
+    && evidenceProfile.evidenceSnippets.length > 0
+    && (evidenceProfile.groundingStatus === "abstract_grounded" || evidenceProfile.groundingStatus === "snippet_grounded");
+
+  return {
+    relevanceLevel,
+    relevanceScore,
+    matchedFacets: unique([...requiredHits, ...secondaryHits]),
+    missingRequiredFacets,
+    evidenceGrounding: evidenceProfile.groundingStatus,
+    reasonZhTw: reasonForLevel(
+      relevanceLevel,
+      requiredHits,
+      secondaryHits,
+      evidenceProfile.groundingStatus,
+    ),
+    shouldShowInMainList,
+    shouldRecommendAccept,
+  };
+}
+
+function legacyProfileAssessment(
+  source: SourceRecord,
+  profile: SourceIntentProfile,
 ): SourceRelevanceAssessment {
   const text = textForSource(source);
   const coreConcepts = unique(profile.coreConcepts);
@@ -133,7 +270,17 @@ export function buildSourceRelevanceAssessment(
   const requiredGroupHits = matchedConceptGroups(text, profile.requiredConceptGroups).length;
   const hasAbstract = sourceHasAbstract(source);
   const authority = sourceAuthorityScore(source);
-
+  const isOffTopic = matchedExclusions.length > 0;
+  const isPrimary = matchedCoreConcepts.length >= 2 && requiredGroupHits > 0 && hasAbstract && !isOffTopic;
+  const relevanceLevel: SourceFacetRelevanceLevel = isOffTopic
+    ? "off_topic"
+    : isPrimary
+      ? "primary"
+      : matchedCoreConcepts.length > 0 || requiredGroupHits > 0
+        ? hasAbstract
+          ? "secondary"
+          : "clue"
+        : "low";
   const rawScore =
     matchedCoreConcepts.length * 8 +
     matchedVariables.length * 4 +
@@ -141,36 +288,74 @@ export function buildSourceRelevanceAssessment(
     authority +
     (hasAbstract ? 2 : 0) -
     matchedExclusions.length * 8;
-
-  const relevanceLevel = inferLevel(
-    rawScore,
-    matchedCoreConcepts.length,
-    hasAbstract,
-    matchedExclusions.length > 0,
-    requiredGroupHits,
-  );
-
-  const shouldShowInMainList = relevanceLevel === "high" || relevanceLevel === "medium";
-  const shouldRecommendAccept = relevanceLevel === "high" && hasAbstract && matchedExclusions.length === 0;
+  const reasons = [
+    matchedCoreConcepts.length ? `命中核心概念：${matchedCoreConcepts.slice(0, 4).join("、")}` : null,
+    missingCoreConcepts.length ? `尚未命中核心概念：${missingCoreConcepts.slice(0, 4).join("、")}` : null,
+    !hasAbstract ? "摘要不足，需先開啟原文確認" : null,
+    relevanceLevel === "off_topic" ? "明顯與主題無關" : null,
+  ].filter((reason): reason is string => Boolean(reason));
 
   return {
     relevanceLevel,
     relevanceScore: rawScore,
-    reasons: relatedReasonText(relevanceLevel, matchedCoreConcepts, missingCoreConcepts, hasAbstract, authority),
+    reasons,
     matchedCoreConcepts,
     missingCoreConcepts,
-    shouldShowInMainList,
-    shouldRecommendAccept,
+    matchedFacets: matchedCoreConcepts,
+    missingRequiredFacets: missingCoreConcepts,
+    evidenceGrounding: hasAbstract ? "abstract_grounded" : "metadata_only",
+    reasonZhTw: reasons[0] ?? "來源相關性待確認。",
+    shouldShowInMainList: relevanceLevel === "primary" || relevanceLevel === "secondary" || relevanceLevel === "clue",
+    shouldRecommendAccept: relevanceLevel === "primary" && hasAbstract && matchedExclusions.length === 0,
   };
+}
+
+export function buildSourceRelevanceAssessment(
+  source: SourceRecord,
+  profile: SourceIntentProfile = DEFAULT_PROFILE,
+): SourceRelevanceAssessment {
+  const topicCore = profile.coreConcepts;
+  const climateLike = topicCore.some((term) => /氣候變遷|全球暖化|climate change|global warming|greenhouse gas|溫室氣體/.test(cleanText(term)));
+
+  if (climateLike) {
+    const facets = buildTopicFacets(topicCore.join(" "));
+    const facetAssessment = buildSourceFacetAssessment(source, facets);
+    const text = textForSource(source);
+    const matchedCoreConcepts = matchedTopicCore(text, facets);
+    const missingCoreConcepts = facets.topicCore.filter((term) => !matchedCoreConcepts.includes(term));
+    return {
+      ...facetAssessment,
+      reasons: [facetAssessment.reasonZhTw],
+      matchedCoreConcepts,
+      missingCoreConcepts,
+    };
+  }
+
+  return legacyProfileAssessment(source, profile);
 }
 
 export function applySourceRelevanceAssessments(
   sources: SourceRecord[],
   topic: string,
 ): SourceRecord[] {
+  const topicFacets = buildTopicFacets(topic);
   const profile = buildSourceIntentProfile(topic);
+  const useFacetAssessment = topicFacets.requiredFacets.length > 0;
+
   return sources.map((source) => {
-    const assessment = buildSourceRelevanceAssessment(source, profile);
+    const assessment = (() => {
+      if (!useFacetAssessment) return buildSourceRelevanceAssessment(source, profile);
+      const facetAssessment = buildSourceFacetAssessment(source, topicFacets);
+      const sourceText = textForSource(source);
+      const coreMatches = matchedTopicCore(sourceText, topicFacets);
+      return {
+        ...facetAssessment,
+        reasons: [facetAssessment.reasonZhTw],
+        matchedCoreConcepts: coreMatches,
+        missingCoreConcepts: topicFacets.topicCore.filter((term) => !coreMatches.includes(term)),
+      };
+    })();
+
     return {
       ...source,
       relevanceLevel: assessment.relevanceLevel,
@@ -178,6 +363,10 @@ export function applySourceRelevanceAssessments(
       relevanceReasons: assessment.reasons,
       matchedCoreConcepts: assessment.matchedCoreConcepts,
       missingCoreConcepts: assessment.missingCoreConcepts,
+      evidenceGrounding: assessment.evidenceGrounding,
+      matchedFacets: assessment.matchedFacets,
+      missingRequiredFacets: assessment.missingRequiredFacets,
+      sourceRelevanceReasonZhTw: assessment.reasonZhTw,
       shouldShowInMainList: assessment.shouldShowInMainList,
       shouldRecommendAccept: assessment.shouldRecommendAccept,
     };
@@ -201,15 +390,16 @@ export function buildSourceIntentProfile(topic: string): SourceIntentProfile {
   }
 
   if (/氣候變遷|全球暖化|溫室氣體|climate change|global warming|greenhouse gas/.test(normalized)) {
+    const facets = buildTopicFacets(topic);
     return {
-      coreConcepts: ["climate change", "global warming", "greenhouse gas", "溫室氣體", "氣候變遷", "全球暖化", "fossil fuel", "化石燃料", "emissions", "排放"],
-      researchVariables: ["industrialization", "land use", "deforestation", "anthropogenic", "carbon dioxide", "methane", "工業化", "土地利用", "森林砍伐", "人為活動"],
+      coreConcepts: facets.topicCore,
+      researchVariables: facets.requiredFacets.flatMap((facet) => facet.terms),
       requiredConceptGroups: [
-        ["climate change", "global warming", "氣候變遷", "全球暖化"],
-        ["greenhouse gas", "fossil fuel", "溫室氣體", "化石燃料", "emissions", "排放"],
+        facets.topicCore,
+        ...facets.requiredFacets.map((facet) => facet.terms),
       ],
-      usefulContextTerms: ["review", "systematic review", "IPCC", "government", "university", "study", "research", "大學", "政府"],
-      excludeTerms: ["北京話變調", "耶路撒冷", "宗教稱號", "招生", "圖書館推薦", "成人高考"],
+      usefulContextTerms: ["review", "systematic review", "IPCC", "WMO", "NASA", "NOAA", "government", "university", "study", "research", "大學", "政府"],
+      excludeTerms: facets.excludeOrDowngrade,
     };
   }
 

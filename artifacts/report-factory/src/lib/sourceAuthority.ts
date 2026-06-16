@@ -84,7 +84,7 @@ function authorityScore(source: SourceRecord): number {
   if (/\.gov(\.|$)|gov\.tw$|who\.int$|un\.org$|oecd\.org$|worldbank\.org$|europa\.eu$|unesco\.org$/.test(host)) score += 4;
   if (/\.edu(\.|$)|university|college|大學|學院|研究院|醫院|醫學中心|research institute/.test(`${host} ${text}`)) score += 3;
   if (/news|blog|content farm|行銷|廣告|招生|推介/.test(text)) score -= 3;
-  if (source.relevanceLevel === "low" || source.relevanceLevel === "off_topic") score -= 4;
+  if (source.relevanceLevel === "low" || source.relevanceLevel === "off_topic" || source.relevanceLevel === "clue") score -= 4;
 
   return score;
 }
@@ -96,7 +96,7 @@ export function sourceAuthorityScore(source: SourceRecord): number {
 export function sourceAuthorityProfile(source: SourceRecord): SourceAuthorityProfile {
   const score = sourceAuthorityScore(source);
   const hasSummary = sourceHasUsableAbstract(source);
-  const lowRelevance = source.relevanceLevel === "low" || source.relevanceLevel === "off_topic";
+  const lowRelevance = source.relevanceLevel === "low" || source.relevanceLevel === "off_topic" || source.relevanceLevel === "clue";
 
   if (lowRelevance) {
     return {
