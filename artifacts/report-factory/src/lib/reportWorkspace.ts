@@ -2,9 +2,11 @@ import {
   buildBibliography,
   type SourceRecord,
 } from "./sourceRecords.ts";
+import { buildEvidenceCards } from "./evidenceCards.ts";
+import { buildReportDraft, type ReportDraft } from "./reportDraft.ts";
+import { buildReportOutline, type ReportOutline } from "./reportOutline.ts";
 import {
   generateReport,
-  type ContentBlock,
   type GeneratedReport,
   type ReportInput,
   type TopicCategory,
@@ -27,23 +29,9 @@ export interface GeneratorWorkflowVisibility {
   showTechnicalLogs: boolean;
 }
 
-export interface ReportWorkspaceOutline {
-  sections: Array<{
-    sectionId: string;
-    title: string;
-    purpose: string;
-  }>;
-}
+export type ReportWorkspaceOutline = ReportOutline;
 
-export interface ReportWorkspaceDraft {
-  title: string;
-  text: string;
-  sections: Array<{
-    sectionId: string;
-    title: string;
-    body: string;
-  }>;
-}
+export type ReportWorkspaceDraft = ReportDraft;
 
 export interface ReportWorkspace {
   id: string;
@@ -133,26 +121,23 @@ function buildWorkspaceParts(input: ReportInput, acceptedSources: SourceRecord[]
     ...input,
     acceptedSources,
   });
-  const draftSections = report.sections.map((section, index) => {
-    const body = section.blocks.map(blockToText).filter(Boolean).join("\n\n");
-    return {
-      sectionId: `section-${index + 1}`,
-      title: section.heading,
-      body,
-    };
+  const evidenceCards = buildEvidenceCards(acceptedSources, [], { resetText: true });
+  const outline = buildReportOutline({
+    topic: input.topic,
+    reportType: input.reportType,
+    audience: input.targetAudience || input.academicLevel,
+    acceptedSources,
+    evidenceCards,
   });
-  const outline: ReportWorkspaceOutline = {
-    sections: draftSections.map((section) => ({
-      sectionId: section.sectionId,
-      title: section.title,
-      purpose: section.body.slice(0, 120) || "整理此段落的重點內容。",
-    })),
-  };
-  const draft: ReportWorkspaceDraft = {
-    title: report.meta.title,
-    text: draftSections.map((section) => `${section.title}\n${section.body}`).join("\n\n"),
-    sections: draftSections,
-  };
+  const draft = buildReportDraft({
+    topic: input.topic,
+    reportType: input.reportType,
+    audience: input.targetAudience || input.academicLevel,
+    evidenceCards,
+    outline,
+    acceptedSources,
+    citationFormat: input.citationFormat,
+  });
 
   return { report, outline, draft };
 }
@@ -240,34 +225,6 @@ export function saveReportWorkspace(workspace: ReportWorkspace): void {
 export function loadReportWorkspace(reportId: string): ReportWorkspace | null {
   if (typeof window === "undefined") return null;
   return parseStoredWorkspaces(window.localStorage.getItem(STORAGE_KEY))[reportId] ?? null;
-}
-
-function blockToText(block: ContentBlock): string {
-  switch (block.type) {
-    case "paragraph":
-    case "note":
-      return block.text ?? "";
-    case "list":
-      return (block.items ?? []).map((item) => `- ${item}`).join("\n");
-    case "suggestions":
-      return (block.suggestions ?? [])
-        .map((suggestion) => `${suggestion.title}：${suggestion.content}`)
-        .join("\n");
-    case "dataTable":
-      return (block.rows ?? [])
-        .map((row) => `${row.type}：${row.need}（${row.priority}）`)
-        .join("\n");
-    case "quality":
-      return (block.checks ?? [])
-        .map((check) => `${check.passed ? "通過" : "待補"}：${check.label}${check.reason ? `，${check.reason}` : ""}`)
-        .join("\n");
-    case "slides":
-      return (block.slides ?? [])
-        .map((slide) => `${slide.page}. ${slide.title}：${slide.points.join("、")}`)
-        .join("\n");
-    default:
-      return "";
-  }
 }
 
 export function workspaceToGeneratedReport(workspace: ReportWorkspace, category: TopicCategory): GeneratedReport {
