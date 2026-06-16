@@ -72,6 +72,12 @@ import {
 } from "@/lib/sourceRecords";
 import { buildEvidenceCards, type EvidenceCard } from "@/lib/evidenceCards";
 import {
+  sourceDecisionHint,
+  sourceHasUsableAbstract,
+  sourceRecommendedSections,
+  sourceSummaryText,
+} from "@/lib/sourceSummaries";
+import {
   generationReadiness,
   generatorWorkflowVisibility,
   loadReportWorkspace,
@@ -830,9 +836,14 @@ function SourceReviewCard({
   const title = source.title || "標題待確認";
   const year = source.year ? String(source.year) : "年份待確認";
   const usableSections = normalizeUsableSections(source.usableSections);
+  const recommendedSections = sourceRecommendedSections(source);
   const incomplete = sourceHasIncompleteMetadata(source);
   const reviewLabel = sourceReviewLabel(reviewState);
   const confidence = source.confidence ?? "中";
+  const category = sourceCategoryLabel(source.sourceCategory);
+  const summary = sourceSummaryText(source);
+  const decisionHint = sourceDecisionHint(source);
+  const hasAbstract = sourceHasUsableAbstract(source);
   const StatusIcon =
     reviewState === "accepted"
       ? CheckCircle2
@@ -854,82 +865,148 @@ function SourceReviewCard({
 
   return (
     <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
-      <article
-        className={`rounded-lg border p-2.5 transition-colors sm:p-3 ${cardTone}`}
-        data-testid={`source-card-${reviewState}`}
-      >
-        <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex min-w-0 flex-1 gap-3">
+      <article className={`rounded-lg border p-3 transition-colors sm:p-4 ${cardTone}`} data-testid={`source-card-${reviewState}`}>
+        <div className="flex flex-col gap-3">
+          <div className="flex min-w-0 gap-3">
             <div
               className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${statusTone}`}
             >
               <StatusIcon className="h-4 w-4" />
             </div>
-            <div className="min-w-0 flex-1 space-y-1.5">
-              <h3
-                className="line-clamp-1 text-sm font-semibold leading-5 text-foreground"
-                title={title}
-              >
-                {title}
-              </h3>
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                <span>作者：{sourceAuthorShortLabel(source.authors)}</span>
-                <span>年份：{year}</span>
-                <span>來源：{source.sourceType}</span>
-                <span>類型：{sourceCategoryLabel(source.sourceCategory)}</span>
-                <span>狀態：{reviewLabel}</span>
-              </div>
-              <div className="min-w-0 text-xs text-muted-foreground">
-                {source.url ? (
-                  <a
-                    href={source.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex max-w-full items-center font-medium text-primary hover:underline"
-                  >
-                    <span className="truncate">
-                      原始連結：{sourceLocatorLabel(source)}
-                    </span>
-                    <ExternalLink className="ml-1 h-3.5 w-3.5 shrink-0" />
-                  </a>
-                ) : (
-                  <span>
-                    原始連結：{source.doi ? `DOI ${source.doi}` : "待確認"}
-                  </span>
-                )}
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <h3 className="line-clamp-2 text-sm font-semibold leading-6 text-foreground" title={title}>
+                    {title}
+                  </h3>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <span>{sourceAuthorShortLabel(source.authors)}</span>
+                    <span>{year}</span>
+                    <span>{category}</span>
+                    <span>{source.sourceType}</span>
+                  </div>
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <Badge variant={sourceReviewBadgeVariant(reviewState)}>
+                    {reviewLabel}
+                  </Badge>
+                  <Badge variant="secondary">可信度 {confidence}</Badge>
+                  <Badge variant={hasAbstract ? "outline" : "secondary"}>
+                    {hasAbstract ? "摘要可判斷" : "摘要不足"}
+                  </Badge>
+                  <Badge variant="outline">相關度待確認</Badge>
+                  {incomplete && <Badge variant="outline">引用資料不完整</Badge>}
+                </div>
               </div>
             </div>
           </div>
 
-          <div className="flex shrink-0 items-center gap-2 self-start xl:self-center">
-            <Badge variant={sourceReviewBadgeVariant(reviewState)}>
-              {reviewLabel}
-            </Badge>
-            <Badge variant="secondary">可信度 {confidence}</Badge>
-            <Badge variant="outline">相關度 已排序</Badge>
-            {incomplete && <Badge variant="outline">資料不完整</Badge>}
+          <div className="space-y-2 rounded-md border border-border/70 bg-background/70 px-3 py-3">
+            <p className="line-clamp-3 text-sm leading-6 text-foreground/90">
+              {summary}
+            </p>
+            <p className="text-xs leading-5 text-muted-foreground">
+              {decisionHint}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                適合使用章節
+              </span>
+              {recommendedSections.map((section) => (
+                <Badge key={section} variant="outline">
+                  {section}
+                </Badge>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {reviewState === "accepted" ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="min-h-[36px]"
+                onClick={() => onReview(sourceId, "pending")}
+              >
+                取消接受
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                variant="default"
+                className="min-h-[36px]"
+                disabled={reviewState === "rejected"}
+                onClick={() => onReview(sourceId, "accepted")}
+              >
+                <CheckCircle2 className="mr-2 h-4 w-4" /> 接受來源
+              </Button>
+            )}
+            {reviewState === "rejected" ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="min-h-[36px]"
+                onClick={() => onReview(sourceId, "pending")}
+              >
+                還原為待審
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="min-h-[36px]"
+                disabled={reviewState === "accepted"}
+                onClick={() => onReview(sourceId, "rejected")}
+              >
+                <XCircle className="mr-2 h-4 w-4" /> 拒絕
+              </Button>
+            )}
             <CollapsibleTrigger asChild>
               <Button
                 type="button"
                 size="sm"
                 variant="ghost"
-                className="h-8 w-8 shrink-0 p-0"
+                className="min-h-[36px]"
                 data-testid="button-source-expand"
                 aria-label={isExpanded ? "收合來源細節" : "展開來源細節"}
                 title={isExpanded ? "收合來源細節" : "展開來源細節"}
               >
                 {isExpanded ? (
-                  <ChevronUp className="h-4 w-4" />
+                  <ChevronUp className="mr-2 h-4 w-4" />
                 ) : (
-                  <ChevronDown className="h-4 w-4" />
+                  <ChevronDown className="mr-2 h-4 w-4" />
                 )}
+                展開詳情
               </Button>
             </CollapsibleTrigger>
+            {source.url ? (
+              <Button asChild type="button" size="sm" variant="ghost" className="min-h-[36px]">
+                <a href={source.url} target="_blank" rel="noreferrer">
+                  <ExternalLink className="mr-2 h-4 w-4" /> 查看原始來源
+                </a>
+              </Button>
+            ) : (
+              <Button type="button" size="sm" variant="ghost" className="min-h-[36px]" disabled>
+                查看原始來源
+              </Button>
+            )}
           </div>
         </div>
 
         <CollapsibleContent>
           <div className="mt-4 grid grid-cols-1 gap-3 border-t border-border/70 pt-4 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <h4 className="text-sm font-semibold text-foreground">
+                進階資料與引用資訊
+              </h4>
+              <p className="mt-1 text-xs text-muted-foreground">
+                補齊引用 metadata 與審查筆記；接受或拒絕可直接在摘要卡操作。
+              </p>
+            </div>
             <div className="space-y-1 md:col-span-2">
               <Label htmlFor={`${sourceId}-title`} className="text-xs">
                 標題
@@ -1131,38 +1208,6 @@ function SourceReviewCard({
                 }
                 className="min-h-[76px] resize-y bg-background"
               />
-            </div>
-            <div className="flex flex-wrap items-center gap-2 md:col-span-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="default"
-                className="min-h-[36px]"
-                disabled={reviewState === "accepted"}
-                onClick={() => onReview(sourceId, "accepted")}
-              >
-                <CheckCircle2 className="mr-2 h-4 w-4" /> 接受
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="min-h-[36px]"
-                disabled={reviewState === "rejected"}
-                onClick={() => onReview(sourceId, "rejected")}
-              >
-                <XCircle className="mr-2 h-4 w-4" /> 拒絕
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="min-h-[36px]"
-                disabled={reviewState === "pending"}
-                onClick={() => onReview(sourceId, "pending")}
-              >
-                標為待審
-              </Button>
             </div>
           </div>
         </CollapsibleContent>
