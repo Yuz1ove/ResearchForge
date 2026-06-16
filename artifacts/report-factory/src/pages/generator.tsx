@@ -77,6 +77,7 @@ import {
 } from "@/lib/sourceSummaries";
 import { applySourceRelevanceAssessments } from "@/lib/sourceRelevance";
 import { applySourceAuthorityAndLanguage } from "@/lib/sourceAuthority";
+import { supplementTrustedClimateSources } from "@/lib/trustedClimateSources";
 import {
   generationReadiness,
   generatorWorkflowVisibility,
@@ -790,10 +791,12 @@ function sourceReviewBadgeVariant(
 
 function sourceRelevanceLabel(level: SourceRecord["relevanceLevel"]): string {
   switch (level) {
-    case "high":
-      return "高度相關";
-    case "medium":
-      return "需確認";
+    case "primary":
+      return "主要來源";
+    case "secondary":
+      return "延伸來源";
+    case "clue":
+      return "線索來源";
     case "low":
       return "低相關";
     case "off_topic":
@@ -807,16 +810,32 @@ function sourceRelevanceBadgeVariant(
   level: SourceRecord["relevanceLevel"],
 ): "default" | "secondary" | "outline" | "destructive" {
   switch (level) {
-    case "high":
+    case "primary":
       return "default";
-    case "medium":
+    case "secondary":
       return "secondary";
+    case "clue":
+      return "outline";
     case "low":
       return "outline";
     case "off_topic":
       return "destructive";
     default:
       return "outline";
+  }
+}
+
+function evidenceGroundingLabel(status: SourceRecord["evidenceGrounding"]): string {
+  switch (status) {
+    case "abstract_grounded":
+    case "snippet_grounded":
+      return "有摘要可用";
+    case "metadata_only":
+      return "只有 metadata";
+    case "insufficient":
+      return "摘要不足";
+    default:
+      return "片段待確認";
   }
 }
 
@@ -907,6 +926,8 @@ function SourceReviewCard({
   const acceptButtonLabel =
     summary.recommendation === "not_recommended"
       ? "仍要接受"
+      : summary.recommendation === "supporting"
+        ? "作為輔助"
       : summary.recommendation === "check_first"
         ? "確認後接受"
         : "接受來源";
@@ -940,7 +961,7 @@ function SourceReviewCard({
                   </Badge>
                   <Badge variant="secondary">可信度 {confidence}</Badge>
                   <Badge variant={hasAbstract ? "outline" : "secondary"}>
-                    {hasAbstract ? "摘要可判斷" : "摘要不足"}
+                    {evidenceGroundingLabel(summary.groundingStatus)}
                   </Badge>
                   <Badge variant={sourceRelevanceBadgeVariant(relevanceLevel)}>
                     {sourceRelevanceLabel(relevanceLevel)}
@@ -954,8 +975,24 @@ function SourceReviewCard({
           </div>
 
           <div className="space-y-2 rounded-md border border-border/70 bg-background/70 px-3 py-3">
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-foreground">可驗證片段</p>
+              {summary.evidenceSnippets.length > 0 ? (
+                <ul className="space-y-1.5">
+                  {summary.evidenceSnippets.slice(0, 2).map((snippet) => (
+                    <li key={snippet} className="rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-5 text-foreground/90">
+                      {snippet}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs leading-5 text-muted-foreground">
+                  尚未取得可驗證摘要片段。
+                </p>
+              )}
+            </div>
             <p className="line-clamp-2 text-sm leading-6 text-foreground/90">
-              <span className="font-medium text-foreground">內容摘要：</span>
+              <span className="font-medium text-foreground">繁中摘要：</span>
               {compactSummary}
             </p>
             <p className="text-xs leading-5 text-muted-foreground">
@@ -973,7 +1010,7 @@ function SourceReviewCard({
               <span className="text-xs font-medium text-muted-foreground">
                 適合使用章節
               </span>
-              {summary.usableSections.map((section) => (
+              {(summary.suitableSectionLabels.length ? summary.suitableSectionLabels : summary.usableSections).map((section) => (
                 <Badge key={section} variant="outline">
                   {section}
                 </Badge>
@@ -996,7 +1033,7 @@ function SourceReviewCard({
               <Button
                 type="button"
                 size="sm"
-                variant="default"
+                variant={summary.recommendation === "recommended" ? "default" : "outline"}
                 className="min-h-[36px]"
                 disabled={reviewState === "rejected"}
                 onClick={() => onReview(sourceId, "accepted")}
@@ -1466,8 +1503,8 @@ function SourceManagePanel({
   const previousReviewStates = useRef<Map<string, SourceReviewState>>(
     new Map(),
   );
-  const mainListSources = sources.filter((source) => source.shouldShowInMainList !== false);
-  const lowRelevanceSources = sources.filter((source) => source.shouldShowInMainList === false);
+  const mainListSources = sources.filter((source) => source.shouldShowInMainList === true);
+  const lowRelevanceSources = sources.filter((source) => source.shouldShowInMainList !== true);
   const counts = sourceReviewCounts(sources);
   const visibleSources = sourcesForReviewTab(mainListSources, activeTab);
   const activeTabLabel =
@@ -1609,7 +1646,7 @@ function SourceManagePanel({
                   >
                     <span>
                       <span className="block text-sm font-medium text-foreground">
-                        低相關來源 ({lowRelevanceSources.length})
+                        線索／延伸／低相關來源 ({lowRelevanceSources.length})
                       </span>
                       <span className="block text-xs text-muted-foreground">
                         已預設收合，不會進入主要推薦列表。
@@ -1952,6 +1989,13 @@ function ManageStepPanel({
   onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
   topic: string;
 }) {
+  const sourceQualityReadiness = generationReadiness(acceptedSourceRecords(sources));
+  const sourceGateWarning = sourceQualityReadiness.relevantSourceCount < 3
+    ? "目前主要來源不足。請重新搜尋或調整主題，至少需要 3 筆可驗證主要來源。"
+    : sourceQualityReadiness.lowQualityAcceptedCount > 0
+      ? "系統找到多筆延伸或低相關來源，但它們不足以支撐本研究主題。"
+      : sourceQualityReadiness.warning;
+
   return (
     <section
       className="mx-auto max-w-5xl space-y-4"
@@ -2011,9 +2055,21 @@ function ManageStepPanel({
         >
           <ArrowLeft className="mr-2 h-4 w-4" /> 上一步：搜尋來源
         </Button>
-        <Button type="button" className="min-h-[42px]" onClick={onNext}>
+        <div className="flex flex-col items-stretch gap-2 sm:items-end">
+          {!sourceQualityReadiness.canGenerate && (
+            <p className="max-w-md rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-5 text-amber-800">
+              {sourceGateWarning}
+            </p>
+          )}
+        <Button
+          type="button"
+          className="min-h-[42px]"
+          onClick={onNext}
+          disabled={!sourceQualityReadiness.canGenerate}
+        >
           下一步：生成報告 <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
+        </div>
       </div>
     </section>
   );
@@ -2504,6 +2560,7 @@ export function Generator() {
     if (!hasTopic) return false;
     if (step === "search") return true;
     if (step === "manage") return sources.length > 0;
+    if (step === "generate") return readiness.canGenerate;
     return true;
   };
   const handleStepSelect = (step: GeneratorWorkflowStep) => {
@@ -2602,7 +2659,12 @@ export function Generator() {
       });
       const normalizedSources = applySourceAuthorityAndLanguage(
         applySourceRelevanceAssessments(
-          dedupeSourceRecords(result.sources.map(normalizeSourceForReview)),
+          dedupeSourceRecords(
+            supplementTrustedClimateSources(
+              result.sources.map(normalizeSourceForReview),
+              topic,
+            ),
+          ),
           topic,
         ),
       );
@@ -2634,7 +2696,12 @@ export function Generator() {
         const result = await searchSources({ query: searchQuery });
         const normalizedSources = applySourceAuthorityAndLanguage(
           applySourceRelevanceAssessments(
-            dedupeSourceRecords(result.sources.map(normalizeSourceForReview)),
+            dedupeSourceRecords(
+              supplementTrustedClimateSources(
+                result.sources.map(normalizeSourceForReview),
+                topic,
+              ),
+            ),
             topic,
           ),
         );

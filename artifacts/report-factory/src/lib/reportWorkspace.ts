@@ -99,19 +99,35 @@ function readinessSources(input: number | SourceRecord[]): SourceRecord[] {
       publisher: "Synthetic",
       containerTitle: "Synthetic Journal",
       accessedAt: null,
-      relevanceLevel: "high",
+      relevanceLevel: "primary",
       usableSections: ["研究背景", "文獻探討", "數據分析"],
     }));
   }
   return input;
 }
 
+function sourceHasUsableGrounding(source: SourceRecord): boolean {
+  return source.evidenceGrounding === "abstract_grounded"
+    || source.evidenceGrounding === "snippet_grounded"
+    || (!source.evidenceGrounding && sourceHasUsableAbstract(source));
+}
+
 function readinessDiagnostics(sources: SourceRecord[]) {
   const acceptedSourceCount = sources.length;
-  const relevantSourceCount = sources.filter((source) => source.relevanceLevel === "high" || source.relevanceLevel === "medium" || !source.relevanceLevel).length;
-  const usableSummaryCount = sources.filter(sourceHasUsableAbstract).length;
+  const relevantSourceCount = sources.filter((source) =>
+    source.relevanceLevel === "primary"
+    || (source.relevanceLevel === "secondary" && sourceHasUsableGrounding(source))
+    || (!source.relevanceLevel && sourceHasUsableGrounding(source))
+  ).length;
+  const usableSummaryCount = sources.filter(sourceHasUsableGrounding).length;
   const coverage = new Set(sources.flatMap(sourceRecommendedSections));
-  const lowQualityAcceptedCount = sources.filter((source) => source.relevanceLevel === "low" || source.relevanceLevel === "off_topic").length;
+  const lowQualityAcceptedCount = sources.filter((source) =>
+    source.relevanceLevel === "low"
+    || source.relevanceLevel === "off_topic"
+    || source.relevanceLevel === "clue"
+    || source.evidenceGrounding === "metadata_only"
+    || source.evidenceGrounding === "insufficient"
+  ).length;
 
   return {
     acceptedSourceCount,
@@ -125,15 +141,19 @@ function readinessDiagnostics(sources: SourceRecord[]) {
 function diagnosticMessages(diagnostics: ReturnType<typeof readinessDiagnostics>, full = false): string[] {
   const messages: string[] = [];
   const requiredAccepted = full ? 8 : 3;
-  const requiredRelevant = full ? 5 : 2;
+  const requiredRelevant = full ? 5 : 3;
   const requiredSummaries = full ? 4 : 1;
   const requiredCoverage = full ? 2 : 1;
 
   if (diagnostics.acceptedSourceCount < requiredAccepted) messages.push(`已接受來源需至少 ${requiredAccepted} 筆`);
-  if (diagnostics.relevantSourceCount < requiredRelevant) messages.push(`medium/high 相關來源需至少 ${requiredRelevant} 筆`);
+  if (diagnostics.relevantSourceCount < requiredRelevant) {
+    messages.push("目前主要來源不足。請重新搜尋或調整主題，至少需要 3 筆可驗證主要來源。");
+  }
   if (diagnostics.usableSummaryCount < requiredSummaries) messages.push(`可用摘要來源需至少 ${requiredSummaries} 筆`);
   if (diagnostics.coverageCount < requiredCoverage) messages.push(`來源 coverage 需至少涵蓋 ${requiredCoverage} 個章節面向`);
-  if (diagnostics.lowQualityAcceptedCount > 0) messages.push("已有低相關或離題來源被接受，建議先取消接受");
+  if (diagnostics.lowQualityAcceptedCount > 0) {
+    messages.push("系統找到多筆延伸或低相關來源，但它們不足以支撐本研究主題。");
+  }
   return messages;
 }
 

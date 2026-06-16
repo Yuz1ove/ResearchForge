@@ -56,7 +56,8 @@ function source(index: number, overrides: Partial<SourceRecord> = {}): SourceRec
     confidence: "高",
     usableSections: ["研究背景", "文獻探討"],
     reviewNotes: "usable",
-    relevanceLevel: "high",
+    relevanceLevel: "primary",
+    evidenceGrounding: "abstract_grounded",
     ...overrides,
   };
 }
@@ -85,12 +86,12 @@ test("generation readiness gates report creation by source quality", () => {
   ];
   const quickDraftSources = [
     source(1, { usableSections: ["研究背景"] }),
-    source(2, { relevanceLevel: "medium", usableSections: ["文獻探討"] } as Partial<SourceRecord>),
-    source(3, { abstract: null, relevanceLevel: "medium", usableSections: ["結論"] } as Partial<SourceRecord>),
+    source(2, { relevanceLevel: "secondary", usableSections: ["文獻探討"] } as Partial<SourceRecord>),
+    source(3, { relevanceLevel: "primary", usableSections: ["結論"] } as Partial<SourceRecord>),
   ];
   const fullSources = Array.from({ length: 8 }, (_, index) =>
     source(index + 1, {
-      relevanceLevel: index < 5 ? "high" : "medium",
+      relevanceLevel: index < 5 ? "primary" : "secondary",
       abstract: index < 4
         ? `Useful abstract ${index} includes enough detail to support readiness quality checks.`
         : index === 4
@@ -105,11 +106,11 @@ test("generation readiness gates report creation by source quality", () => {
   const full = generationReadiness(fullSources);
 
   assert.equal(blocked.canGenerate, false);
-  assert.ok(blocked.diagnostics.some((message) => message.includes("低相關或離題")));
+  assert.ok(blocked.diagnostics.some((message) => message.includes("延伸或低相關來源")));
   assert.equal(quickDraft.canGenerate, true);
   assert.equal(quickDraft.canGenerateFull, false);
   assert.equal(quickDraft.relevantSourceCount, 3);
-  assert.equal(quickDraft.usableSummaryCount, 2);
+  assert.equal(quickDraft.usableSummaryCount, 3);
   assert.equal(full.canGenerateFull, true);
   assert.equal(full.coverageCount >= 2, true);
 });
