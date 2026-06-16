@@ -77,6 +77,7 @@ import {
   sourceRecommendedSections,
   sourceSummaryText,
 } from "@/lib/sourceSummaries";
+import { applySourceRelevanceAssessments } from "@/lib/sourceRelevance";
 import {
   generationReadiness,
   generatorWorkflowVisibility,
@@ -788,6 +789,38 @@ function sourceReviewBadgeVariant(
   }
 }
 
+function sourceRelevanceLabel(level: SourceRecord["relevanceLevel"]): string {
+  switch (level) {
+    case "high":
+      return "高度相關";
+    case "medium":
+      return "需確認";
+    case "low":
+      return "低相關";
+    case "off_topic":
+      return "離題";
+    default:
+      return "相關度待確認";
+  }
+}
+
+function sourceRelevanceBadgeVariant(
+  level: SourceRecord["relevanceLevel"],
+): "default" | "secondary" | "outline" | "destructive" {
+  switch (level) {
+    case "high":
+      return "default";
+    case "medium":
+      return "secondary";
+    case "low":
+      return "outline";
+    case "off_topic":
+      return "destructive";
+    default:
+      return "outline";
+  }
+}
+
 function sourceAuthorShortLabel(authors: string[]): string {
   if (authors.length === 0) return "作者待確認";
   if (authors.length === 1) return authors[0];
@@ -844,6 +877,8 @@ function SourceReviewCard({
   const summary = sourceSummaryText(source);
   const decisionHint = sourceDecisionHint(source);
   const hasAbstract = sourceHasUsableAbstract(source);
+  const relevanceLevel = source.relevanceLevel ?? null;
+  const relevanceReasons = source.relevanceReasons ?? [];
   const StatusIcon =
     reviewState === "accepted"
       ? CheckCircle2
@@ -894,7 +929,9 @@ function SourceReviewCard({
                   <Badge variant={hasAbstract ? "outline" : "secondary"}>
                     {hasAbstract ? "摘要可判斷" : "摘要不足"}
                   </Badge>
-                  <Badge variant="outline">相關度待確認</Badge>
+                  <Badge variant={sourceRelevanceBadgeVariant(relevanceLevel)}>
+                    {sourceRelevanceLabel(relevanceLevel)}
+                  </Badge>
                   {incomplete && <Badge variant="outline">引用資料不完整</Badge>}
                 </div>
               </div>
@@ -908,6 +945,11 @@ function SourceReviewCard({
             <p className="text-xs leading-5 text-muted-foreground">
               {decisionHint}
             </p>
+            {relevanceReasons.length > 0 && (
+              <p className="text-xs leading-5 text-muted-foreground">
+                主題相關性：{relevanceReasons.slice(0, 2).join("；")}
+              </p>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-medium text-muted-foreground">
                 適合使用章節
@@ -1402,8 +1444,10 @@ function SourceManagePanel({
   const previousReviewStates = useRef<Map<string, SourceReviewState>>(
     new Map(),
   );
+  const mainListSources = sources.filter((source) => source.shouldShowInMainList !== false);
+  const lowRelevanceSources = sources.filter((source) => source.shouldShowInMainList === false);
   const counts = sourceReviewCounts(sources);
-  const visibleSources = sourcesForReviewTab(sources, activeTab);
+  const visibleSources = sourcesForReviewTab(mainListSources, activeTab);
   const activeTabLabel =
     SOURCE_REVIEW_TABS.find((tab) => tab.value === activeTab)?.label ?? "來源";
 
@@ -1530,6 +1574,40 @@ function SourceManagePanel({
             <p className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-3 text-sm text-muted-foreground">
               {activeTabLabel}目前沒有來源。
             </p>
+          )}
+          {lowRelevanceSources.length > 0 && (
+            <Collapsible>
+              <div className="rounded-md border border-border bg-muted/10 px-3 py-3">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex min-h-[40px] w-full items-center justify-between gap-2 text-left"
+                  >
+                    <span className="text-sm font-medium text-foreground">
+                      低相關來源 ({lowRelevanceSources.length})
+                    </span>
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="pt-3">
+                  <div className="space-y-3" data-testid="sources-list-low-relevance">
+                    {lowRelevanceSources.map((source) => {
+                      const key = source.id || sourceRecordKey(source);
+                      return (
+                        <SourceReviewCard
+                          key={key}
+                          source={source}
+                          isExpanded={expandedSourceIds.includes(key)}
+                          onExpandedChange={(open) => setSourceExpanded(key, open)}
+                          onReview={handleReview}
+                          onEdit={onEdit}
+                        />
+                      );
+                    })}
+                  </div>
+                </CollapsibleContent>
+              </div>
+            </Collapsible>
           )}
         </div>
       )}
@@ -2480,8 +2558,9 @@ export function Generator() {
         sourceMode: input.sourceRequirement,
         language: input.outputLanguage,
       });
-      const normalizedSources = dedupeSourceRecords(
-        result.sources.map(normalizeSourceForReview),
+      const normalizedSources = applySourceRelevanceAssessments(
+        dedupeSourceRecords(result.sources.map(normalizeSourceForReview)),
+        topic,
       );
       setSources(normalizedSources);
       setKeywordSearchDebug(keywordSearchDebugFromResult(result));
@@ -2509,8 +2588,9 @@ export function Generator() {
 
       try {
         const result = await searchSources({ query: searchQuery });
-        const normalizedSources = dedupeSourceRecords(
-          result.sources.map(normalizeSourceForReview),
+        const normalizedSources = applySourceRelevanceAssessments(
+          dedupeSourceRecords(result.sources.map(normalizeSourceForReview)),
+          topic,
         );
         setSources(normalizedSources);
         setKeywordSearchDebug({

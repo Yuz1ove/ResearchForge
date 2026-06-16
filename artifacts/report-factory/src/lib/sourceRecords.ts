@@ -32,6 +32,13 @@ export interface SourceRecordMetadata {
   usableSections?: WorkflowReportSection[] | string[] | null;
   confidence?: SourceConfidence | string | null;
   reviewNotes?: string | null;
+  relevanceLevel?: "high" | "medium" | "low" | "off_topic" | null;
+  relevanceScore?: number | null;
+  relevanceReasons?: string[] | null;
+  matchedCoreConcepts?: string[] | null;
+  missingCoreConcepts?: string[] | null;
+  shouldShowInMainList?: boolean | null;
+  shouldRecommendAccept?: boolean | null;
 }
 
 export type SourceRecord = ApiSourceRecord & SourceRecordMetadata;
@@ -103,6 +110,19 @@ function normalizeSourceConfidence(value: unknown): SourceConfidence | null {
   if (value === "high") return "高";
   if (value === "medium") return "中";
   if (value === "low") return "低";
+  return null;
+}
+
+function normalizeStringList(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const normalized = value
+    .map((item) => cleanText(typeof item === "string" ? item : null))
+    .filter((item): item is string => Boolean(item));
+  return normalized.length ? Array.from(new Set(normalized)) : null;
+}
+
+function normalizeRelevanceLevel(value: unknown): SourceRecordMetadata["relevanceLevel"] {
+  if (value === "high" || value === "medium" || value === "low" || value === "off_topic") return value;
   return null;
 }
 
@@ -286,6 +306,15 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     usableSections: normalizeUsableSections(source.usableSections),
     confidence: normalizeSourceConfidence(source.confidence),
     reviewNotes: cleanText(source.reviewNotes),
+    relevanceLevel: normalizeRelevanceLevel(source.relevanceLevel),
+    relevanceScore: typeof source.relevanceScore === "number" && Number.isFinite(source.relevanceScore)
+      ? source.relevanceScore
+      : null,
+    relevanceReasons: normalizeStringList(source.relevanceReasons),
+    matchedCoreConcepts: normalizeStringList(source.matchedCoreConcepts),
+    missingCoreConcepts: normalizeStringList(source.missingCoreConcepts),
+    shouldShowInMainList: typeof source.shouldShowInMainList === "boolean" ? source.shouldShowInMainList : null,
+    shouldRecommendAccept: typeof source.shouldRecommendAccept === "boolean" ? source.shouldRecommendAccept : null,
   };
   return {
     ...normalized,
