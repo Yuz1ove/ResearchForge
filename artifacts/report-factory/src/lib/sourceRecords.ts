@@ -39,6 +39,11 @@ export interface SourceRecordMetadata {
   missingCoreConcepts?: string[] | null;
   shouldShowInMainList?: boolean | null;
   shouldRecommendAccept?: boolean | null;
+  authorityLevel?: "high" | "medium" | "check" | "insufficient_summary" | "low_relevance" | null;
+  authorityScore?: number | null;
+  authorityLabel?: string | null;
+  sourceLanguage?: "zh-TW" | "zh-CN" | "en" | "other" | "unknown" | null;
+  sourceLanguageLabel?: string | null;
 }
 
 export type SourceRecord = ApiSourceRecord & SourceRecordMetadata;
@@ -123,6 +128,22 @@ function normalizeStringList(value: unknown): string[] | null {
 
 function normalizeRelevanceLevel(value: unknown): SourceRecordMetadata["relevanceLevel"] {
   if (value === "high" || value === "medium" || value === "low" || value === "off_topic") return value;
+  return null;
+}
+
+function normalizeAuthorityLevel(value: unknown): SourceRecordMetadata["authorityLevel"] {
+  if (
+    value === "high"
+    || value === "medium"
+    || value === "check"
+    || value === "insufficient_summary"
+    || value === "low_relevance"
+  ) return value;
+  return null;
+}
+
+function normalizeSourceLanguage(value: unknown): SourceRecordMetadata["sourceLanguage"] {
+  if (value === "zh-TW" || value === "zh-CN" || value === "en" || value === "other" || value === "unknown") return value;
   return null;
 }
 
@@ -315,6 +336,13 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     missingCoreConcepts: normalizeStringList(source.missingCoreConcepts),
     shouldShowInMainList: typeof source.shouldShowInMainList === "boolean" ? source.shouldShowInMainList : null,
     shouldRecommendAccept: typeof source.shouldRecommendAccept === "boolean" ? source.shouldRecommendAccept : null,
+    authorityLevel: normalizeAuthorityLevel(source.authorityLevel),
+    authorityScore: typeof source.authorityScore === "number" && Number.isFinite(source.authorityScore)
+      ? source.authorityScore
+      : null,
+    authorityLabel: cleanText(source.authorityLabel),
+    sourceLanguage: normalizeSourceLanguage(source.sourceLanguage),
+    sourceLanguageLabel: cleanText(source.sourceLanguageLabel),
   };
   return {
     ...normalized,

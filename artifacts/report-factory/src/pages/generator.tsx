@@ -78,6 +78,7 @@ import {
   sourceSummaryText,
 } from "@/lib/sourceSummaries";
 import { applySourceRelevanceAssessments } from "@/lib/sourceRelevance";
+import { applySourceAuthorityAndLanguage } from "@/lib/sourceAuthority";
 import {
   generationReadiness,
   generatorWorkflowVisibility,
@@ -879,6 +880,8 @@ function SourceReviewCard({
   const hasAbstract = sourceHasUsableAbstract(source);
   const relevanceLevel = source.relevanceLevel ?? null;
   const relevanceReasons = source.relevanceReasons ?? [];
+  const authorityLabel = source.authorityLabel ?? "權威性待確認";
+  const languageLabel = source.sourceLanguageLabel ?? "來源語言待確認";
   const StatusIcon =
     reviewState === "accepted"
       ? CheckCircle2
@@ -932,6 +935,8 @@ function SourceReviewCard({
                   <Badge variant={sourceRelevanceBadgeVariant(relevanceLevel)}>
                     {sourceRelevanceLabel(relevanceLevel)}
                   </Badge>
+                  <Badge variant="outline">{authorityLabel}</Badge>
+                  <Badge variant="outline">{languageLabel}</Badge>
                   {incomplete && <Badge variant="outline">引用資料不完整</Badge>}
                 </div>
               </div>
@@ -2558,9 +2563,11 @@ export function Generator() {
         sourceMode: input.sourceRequirement,
         language: input.outputLanguage,
       });
-      const normalizedSources = applySourceRelevanceAssessments(
-        dedupeSourceRecords(result.sources.map(normalizeSourceForReview)),
-        topic,
+      const normalizedSources = applySourceAuthorityAndLanguage(
+        applySourceRelevanceAssessments(
+          dedupeSourceRecords(result.sources.map(normalizeSourceForReview)),
+          topic,
+        ),
       );
       setSources(normalizedSources);
       setKeywordSearchDebug(keywordSearchDebugFromResult(result));
@@ -2588,9 +2595,11 @@ export function Generator() {
 
       try {
         const result = await searchSources({ query: searchQuery });
-        const normalizedSources = applySourceRelevanceAssessments(
-          dedupeSourceRecords(result.sources.map(normalizeSourceForReview)),
-          topic,
+        const normalizedSources = applySourceAuthorityAndLanguage(
+          applySourceRelevanceAssessments(
+            dedupeSourceRecords(result.sources.map(normalizeSourceForReview)),
+            topic,
+          ),
         );
         setSources(normalizedSources);
         setKeywordSearchDebug({
