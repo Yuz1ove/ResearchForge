@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { detectTopicCategory } from "@/lib/generateReport";
+import { buildAcceptedSourceDigest } from "@/lib/sourceDigest";
 import {
   buildExportReadinessWarnings,
   formatSourceAuthors,
@@ -82,6 +83,14 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
   );
   const exportReport = useMemo(() => workspaceToGeneratedReport(workspace, category), [category, workspace]);
   const exportWarnings = buildExportReadinessWarnings(exportReport);
+  const acceptedSourceDigest = useMemo(
+    () =>
+      workspace.acceptedSourceDigest ??
+      buildAcceptedSourceDigest(workspace.acceptedSources, {
+        topic: workspace.input.topic,
+      }),
+    [workspace.acceptedSourceDigest, workspace.acceptedSources, workspace.input.topic],
+  );
   const editPath = `/generator?reportId=${encodeURIComponent(workspace.id)}`;
 
   const warnExportReadiness = () => {
@@ -222,6 +231,45 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
             <span>{exportWarnings.map((warning) => warning.message).join(" ")}</span>
           </section>
         )}
+
+        <section className="mb-5 rounded-lg border border-primary/20 bg-card p-4 shadow-sm sm:p-5" data-testid="preview-source-digest">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-base font-semibold text-foreground">資料基礎摘要</h2>
+              <p className="mt-1 text-xs text-muted-foreground">由已接受來源彙整，作為正式草稿前的資料理解基礎。</p>
+            </div>
+            <Badge variant="secondary">{workspace.acceptedSources.length} 筆來源</Badge>
+          </div>
+          <p className="text-sm leading-7 text-foreground/90">{acceptedSourceDigest.summary}</p>
+          <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <h3 className="text-sm font-semibold text-foreground">涵蓋面</h3>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {acceptedSourceDigest.coverage.length ? (
+                  acceptedSourceDigest.coverage.map((item) => (
+                    <Badge key={item} variant="outline">
+                      {item}
+                    </Badge>
+                  ))
+                ) : (
+                  <span className="text-xs text-muted-foreground">尚未建立涵蓋面</span>
+                )}
+              </div>
+            </div>
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <h3 className="text-sm font-semibold text-foreground">資料缺口</h3>
+              <ul className="mt-2 space-y-1.5 text-xs leading-5 text-muted-foreground">
+                {acceptedSourceDigest.gaps.map((gap) => (
+                  <li key={gap}>{gap}</li>
+                ))}
+              </ul>
+            </div>
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <h3 className="text-sm font-semibold text-foreground">下一步建議</h3>
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">{acceptedSourceDigest.recommendedNextStep}</p>
+            </div>
+          </div>
+        </section>
 
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(280px,0.82fr)_minmax(0,1.35fr)] xl:items-start">
           <div className="space-y-5">

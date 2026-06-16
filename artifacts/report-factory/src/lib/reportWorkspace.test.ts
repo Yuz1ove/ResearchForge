@@ -101,6 +101,7 @@ test("start report workspace navigation saves workspace and calls navigation wit
   assert.ok(result);
   assert.equal(result.workspace.id, "rf-existing");
   assert.equal(result.workspace.generationMode, "quick_draft");
+  assert.match(result.workspace.acceptedSourceDigest.summary, /目前已接受/);
   assert.deepEqual(savedWorkspaceIds, ["rf-existing"]);
   assert.deepEqual(navigateCalls, ["/reports/rf-existing"]);
 });

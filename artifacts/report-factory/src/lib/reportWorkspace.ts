@@ -144,6 +144,7 @@ function buildWorkspaceParts(input: ReportInput, acceptedSources: SourceRecord[]
     evidenceCards,
     outline,
     acceptedSources,
+    acceptedSourceDigest,
     citationFormat: input.citationFormat,
   });
 

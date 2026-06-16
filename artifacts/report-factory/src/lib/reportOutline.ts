@@ -82,9 +82,9 @@ const OUTLINE_TEMPLATES: OutlineTemplate[] = [
   {
     sectionId: "evidence",
     title: "五、資料與證據整理",
-    purpose: "把已接受來源轉成可引用的證據，並整理支持哪些論點。",
+    purpose: "依研究問題整理已接受來源可支撐的證據面向。",
     evidenceSections: ["數據分析", "文獻探討", "研究背景"],
-    writingHints: ["每個重要主張都要能回到至少一張證據卡。"],
+    writingHints: ["每個重要主張都要能回到至少一張證據卡，但不要依來源卡順序排列正文。"],
   },
   {
     sectionId: "discussion",

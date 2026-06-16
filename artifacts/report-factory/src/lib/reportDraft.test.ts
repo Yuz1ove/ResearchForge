@@ -46,7 +46,38 @@ test("draft generator includes section headings, source markers, and reference l
 
   assert.match(draft.text, /研究動機/);
   assert.match(draft.text, /（來源 1）/);
+  assert.match(draft.text, /資料缺口/);
+  assert.doesNotMatch(draft.sections.find((section) => section.sectionId === "abstract")?.body ?? "", /來源 1 可支持/);
   assert.match(draft.text, /參考資料/);
   assert.equal(draft.referenceList.length, 1);
   assert.match(draft.referenceList[0]!, /Screen time and sleep/);
+});
+
+test("draft generator flags accepted sources with insufficient abstracts", () => {
+  const acceptedSources = [
+    source({
+      abstract: null,
+      title: "Metadata-only source",
+      usableSections: ["研究背景"],
+    }),
+  ];
+  const evidenceCards = buildEvidenceCards(acceptedSources);
+  const outline = buildReportOutline({
+    topic: "可樂與健康",
+    reportType: "研究報告",
+    audience: "高中",
+    acceptedSources,
+    evidenceCards,
+  });
+  const draft = buildReportDraft({
+    topic: "可樂與健康",
+    reportType: "研究報告",
+    audience: "高中",
+    evidenceCards,
+    outline,
+    acceptedSources,
+    citationFormat: "APA",
+  });
+
+  assert.match(draft.text, /此段仍需補充原文細節/);
 });
