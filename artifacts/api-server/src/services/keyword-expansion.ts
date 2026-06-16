@@ -2,6 +2,7 @@ import {
   dedupeSourceRecords,
   type SourceRecord,
 } from "@workspace/api-zod";
+import { getReportModelConfig } from "./report-model-config";
 import {
   searchSourceProviders,
   type SourceFetch,
@@ -274,6 +275,7 @@ export function buildFallbackKeywordExpansion(
 }
 
 function keywordLlmConfig(options?: KeywordExpansionOptions): KeywordLlmConfig {
+  const reportModelConfig = getReportModelConfig();
   return {
     baseUrl: options?.llm?.baseUrl
       ?? process.env.KEYWORD_LLM_BASE_URL
@@ -288,7 +290,7 @@ function keywordLlmConfig(options?: KeywordExpansionOptions): KeywordLlmConfig {
       ?? process.env.KEYWORD_LLM_MODEL
       ?? process.env.LLM_MODEL
       ?? process.env.OPENAI_MODEL
-      ?? "gpt-4o-mini",
+      ?? reportModelConfig.cheapModel,
     timeoutMs: options?.llm?.timeoutMs
       ?? (Number(process.env.KEYWORD_LLM_TIMEOUT_MS) || DEFAULT_KEYWORD_LLM_TIMEOUT_MS),
   };

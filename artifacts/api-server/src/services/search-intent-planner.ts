@@ -8,6 +8,7 @@ import {
   type SourceProviderSearchResult,
   type SourceSearchOptions,
 } from "./source-retrieval";
+import { getReportModelConfig } from "./report-model-config";
 
 export interface SearchIntentPlannerInput {
   topic: string;
@@ -377,6 +378,7 @@ export function buildRuleBasedSearchIntent(
 }
 
 function llmConfig(options?: SearchIntentPlannerOptions): SearchIntentLlmConfig {
+  const reportModelConfig = getReportModelConfig();
   return {
     baseUrl: options?.llm?.baseUrl
       ?? process.env.SEARCH_INTENT_LLM_BASE_URL
@@ -394,7 +396,7 @@ function llmConfig(options?: SearchIntentPlannerOptions): SearchIntentLlmConfig 
       ?? process.env.KEYWORD_LLM_MODEL
       ?? process.env.LLM_MODEL
       ?? process.env.OPENAI_MODEL
-      ?? "gpt-4o-mini",
+      ?? reportModelConfig.fastModel,
     timeoutMs: options?.llm?.timeoutMs
       ?? (Number(process.env.SEARCH_INTENT_LLM_TIMEOUT_MS) || DEFAULT_SEARCH_INTENT_LLM_TIMEOUT_MS),
   };
