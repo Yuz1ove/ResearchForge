@@ -27,7 +27,7 @@ import {
   type SourceSearchResult,
 } from "@workspace/api-client-react";
 import {
-  expandTopic,
+  expandTopicCards,
   isShortTopic,
   detectTopicCategory,
   academicToAudience,
@@ -35,6 +35,7 @@ import {
   ReportInput,
   TopicCategory,
   TOPIC_CATEGORIES,
+  type TopicExpansionCard,
 } from "@/lib/generateReport";
 import {
   buildPreflightSearchQuery,
@@ -1506,7 +1507,7 @@ function TopicStepPanel({
   onClearWorkspace,
 }: {
   input: ReportInput;
-  expansions: string[];
+  expansions: TopicExpansionCard[];
   advancedOpen: boolean;
   detectedCategory: TopicCategory | null;
   autoSearchEnabled: boolean;
@@ -1564,18 +1565,37 @@ function TopicStepPanel({
             </Button>
 
             {expansions.length > 0 && (
-              <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
-                <p className="text-xs text-muted-foreground">選擇建議主題：</p>
-                {expansions.map((title, i) => (
-                  <button
-                    key={title}
-                    type="button"
-                    onClick={() => onApplyExpansion(title)}
-                    className="block w-full text-left text-sm leading-relaxed text-foreground hover:text-primary"
+              <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                <p className="text-xs font-medium text-muted-foreground">研究方向提示卡</p>
+                {expansions.map((card, i) => (
+                  <article
+                    key={`${card.title}-${card.angle}`}
+                    className="rounded-md border border-border bg-background px-3 py-3"
                     data-testid={`expansion-${i}`}
                   >
-                    {i + 1}. {title}
-                  </button>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <Badge variant="secondary" className="mb-2">
+                          {card.angle}
+                        </Badge>
+                        <h3 className="text-sm font-semibold leading-6 text-foreground">
+                          {card.title}
+                        </h3>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          {card.reason}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="min-h-[36px] shrink-0"
+                        onClick={() => onApplyExpansion(card.title)}
+                      >
+                        套用此題目
+                      </Button>
+                    </div>
+                  </article>
                 ))}
               </div>
             )}
@@ -2214,7 +2234,7 @@ export function Generator() {
   const [generateStatus, setGenerateStatus] = useState<
     "idle" | "loading" | "done" | "error"
   >("idle");
-  const [expansions, setExpansions] = useState<string[]>([]);
+  const [expansions, setExpansions] = useState<TopicExpansionCard[]>([]);
   const [sources, setSources] = useState<SourceRecord[]>([]);
   const [isSearchingSources, setIsSearchingSources] = useState(false);
   const [sourceSearchStatus, setSourceSearchStatus] = useState<
@@ -2594,15 +2614,15 @@ export function Generator() {
       });
       return;
     }
-    setExpansions(expandTopic(input.topic.trim()));
+    setExpansions(expandTopicCards(input.topic.trim(), detectedCategory ?? undefined));
   };
 
   const applyExpansion = (title: string) => {
     updateInput("topic", title);
     setExpansions([]);
     toast({
-      title: "已套用主題",
-      description: "已將擴寫後的題目填入主題欄位。",
+      title: "已套用研究題目",
+      description: "已將研究方向填入主題欄位。",
     });
   };
 
