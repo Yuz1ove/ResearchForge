@@ -38,13 +38,13 @@ function input(overrides: Partial<ReportInput> = {}): ReportInput {
   };
 }
 
-function source(index: number): SourceRecord {
+function source(index: number, overrides: Partial<SourceRecord> = {}): SourceRecord {
   return {
     id: `source-${index}`,
     title: `Source ${index}`,
     authors: ["Ada Lovelace"],
     year: 2020 + index,
-    abstract: `Evidence abstract ${index}.`,
+    abstract: `Evidence abstract ${index} includes enough detail to judge relevance and usable summary quality.`,
     doi: `10.1000/source-${index}`,
     url: `https://doi.org/10.1000/source-${index}`,
     sourceType: "Crossref",
@@ -56,23 +56,62 @@ function source(index: number): SourceRecord {
     confidence: "高",
     usableSections: ["研究背景", "文獻探討"],
     reviewNotes: "usable",
+    relevanceLevel: "high",
+    ...overrides,
   };
 }
 
-test("generation readiness gates blocked, quick draft, and full report states", () => {
-  const blocked = generationReadiness(4);
-  const quickDraft = generationReadiness(5);
-  const fullReport = generationReadiness(10);
+test("generation readiness keeps legacy count gates for existing callers", () => {
+  const blocked = generationReadiness(2);
+  const quickDraft = generationReadiness(3);
+  const fullReport = generationReadiness(8);
 
   assert.equal(blocked.canGenerate, false);
-  assert.equal(blocked.buttonLabel, "來源不足，至少接受 5 筆");
+  assert.equal(blocked.buttonLabel, "來源品質不足");
   assert.equal(quickDraft.mode, "quick_draft");
   assert.equal(quickDraft.buttonLabel, "生成簡版草稿");
-  assert.equal(quickDraft.warning, "來源少於 10 筆，報告證據鏈可能不完整。");
-  assert.equal(generationReadiness(9).canGenerateFull, false);
+  assert.match(quickDraft.warning ?? "", /完整報告門檻/);
+  assert.equal(generationReadiness(7).canGenerateFull, false);
   assert.equal(fullReport.mode, "full_report");
   assert.equal(fullReport.buttonLabel, "生成完整報告");
   assert.equal(fullReport.canGenerateFull, true);
+});
+
+test("generation readiness gates report creation by source quality", () => {
+  const lowQualityAccepted = [
+    source(1),
+    source(2),
+    source(3, { relevanceLevel: "off_topic" } as Partial<SourceRecord>),
+  ];
+  const quickDraftSources = [
+    source(1, { usableSections: ["研究背景"] }),
+    source(2, { relevanceLevel: "medium", usableSections: ["文獻探討"] } as Partial<SourceRecord>),
+    source(3, { abstract: null, relevanceLevel: "medium", usableSections: ["結論"] } as Partial<SourceRecord>),
+  ];
+  const fullSources = Array.from({ length: 8 }, (_, index) =>
+    source(index + 1, {
+      relevanceLevel: index < 5 ? "high" : "medium",
+      abstract: index < 4
+        ? `Useful abstract ${index} includes enough detail to support readiness quality checks.`
+        : index === 4
+          ? null
+          : `Additional useful abstract ${index} includes enough detail to support readiness quality checks.`,
+      usableSections: index % 3 === 0 ? ["研究背景"] : index % 3 === 1 ? ["文獻探討"] : ["數據分析"],
+    } as Partial<SourceRecord>),
+  );
+
+  const blocked = generationReadiness(lowQualityAccepted);
+  const quickDraft = generationReadiness(quickDraftSources);
+  const full = generationReadiness(fullSources);
+
+  assert.equal(blocked.canGenerate, false);
+  assert.ok(blocked.diagnostics.some((message) => message.includes("低相關或離題")));
+  assert.equal(quickDraft.canGenerate, true);
+  assert.equal(quickDraft.canGenerateFull, false);
+  assert.equal(quickDraft.relevantSourceCount, 3);
+  assert.equal(quickDraft.usableSummaryCount, 2);
+  assert.equal(full.canGenerateFull, true);
+  assert.equal(full.coverageCount >= 2, true);
 });
 
 test("generator hides evidence cards unless developer debug is open", () => {
@@ -86,7 +125,7 @@ test("report workspace path supports the route transition target", () => {
 });
 
 test("start report workspace navigation saves workspace and calls navigation with preview route", () => {
-  const acceptedSources = Array.from({ length: 5 }, (_, index) => source(index + 1));
+  const acceptedSources = Array.from({ length: 3 }, (_, index) => source(index + 1));
   const navigateCalls: string[] = [];
   const savedWorkspaceIds: string[] = [];
 
@@ -112,7 +151,7 @@ test("start report workspace navigation does not navigate when accepted sources 
 
   const result = startReportWorkspaceNavigation({
     input: input(),
-    acceptedSources: Array.from({ length: 4 }, (_, index) => source(index + 1)),
+    acceptedSources: Array.from({ length: 2 }, (_, index) => source(index + 1)),
     navigate: (path) => navigateCalls.push(path),
     saveWorkspace: (workspace) => savedWorkspaceIds.push(workspace.id),
   });

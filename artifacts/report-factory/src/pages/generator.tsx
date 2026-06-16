@@ -2090,10 +2090,10 @@ function GenerateStepPanel({
             </h3>
             <p className="mt-1 text-sm leading-6 text-muted-foreground">
               {readiness.canGenerateFull
-                ? "來源數已達完整報告門檻，可以建立完整報告工作區。"
+                ? "來源品質已達完整報告門檻，可以建立完整報告工作區。"
                 : readiness.canGenerate
-                  ? "來源數已達簡版草稿門檻，可以先建立快速草稿。"
-                  : "已接受來源少於 5 筆，請先回到來源管理補足可信來源。"}
+                  ? "來源品質已達簡版草稿門檻，可以先建立快速草稿。"
+                  : "來源品質不足，請先回到來源管理補足相關且有摘要的可信來源。"}
             </p>
           </div>
         </div>
@@ -2115,8 +2115,9 @@ function GenerateStepPanel({
                 ? "可生成簡版草稿"
                 : "來源不足"}
           </Badge>
-          <Badge variant="outline">簡版草稿需 5 筆來源</Badge>
-          <Badge variant="outline">完整報告需 10 筆來源</Badge>
+          <Badge variant="outline">相關來源 {readiness.relevantSourceCount} 筆</Badge>
+          <Badge variant="outline">可用摘要 {readiness.usableSummaryCount} 筆</Badge>
+          <Badge variant="outline">涵蓋面 {readiness.coverageCount} 項</Badge>
           {isGenerating && (
             <Badge variant="outline">{readiness.progressLabel}</Badge>
           )}
@@ -2127,6 +2128,14 @@ function GenerateStepPanel({
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{readiness.warning}</span>
           </div>
+        )}
+
+        {readiness.diagnostics.length > 0 && (
+          <ul className="mt-3 space-y-1 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground">
+            {readiness.diagnostics.slice(0, 5).map((diagnostic) => (
+              <li key={diagnostic}>{diagnostic}</li>
+            ))}
+          </ul>
         )}
 
         {generateStatus === "error" && readiness.canGenerate && (
@@ -2478,7 +2487,7 @@ export function Generator() {
     ? detectTopicCategory(input.topic.trim(), input.reportType, derivedPurpose)
     : null;
   const acceptedSources = acceptedSourceRecords(sources);
-  const readiness = generationReadiness(acceptedSources.length);
+  const readiness = generationReadiness(acceptedSources);
   const workflowVisibility = generatorWorkflowVisibility(developerDebugOpen);
   const reviewCounts = safeSourceReviewCounts(sources);
   const sourceReviewAvailable =
@@ -2703,7 +2712,7 @@ export function Generator() {
       });
       return;
     }
-    const currentReadiness = generationReadiness(acceptedSources.length);
+    const currentReadiness = generationReadiness(acceptedSources);
     if (!currentReadiness.canGenerate) {
       setGenerateStatus("error");
       toast({
