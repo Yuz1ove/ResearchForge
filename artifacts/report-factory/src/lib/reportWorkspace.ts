@@ -6,6 +6,10 @@ import { buildEvidenceCards } from "./evidenceCards.ts";
 import { buildReportDraft, type ReportDraft } from "./reportDraft.ts";
 import { buildReportOutline, type ReportOutline } from "./reportOutline.ts";
 import {
+  buildAcceptedSourceDigest,
+  type AcceptedSourceDigest,
+} from "./sourceDigest.ts";
+import {
   generateReport,
   type GeneratedReport,
   type ReportInput,
@@ -40,6 +44,7 @@ export interface ReportWorkspace {
   generationMode: Exclude<ReportGenerationMode, "blocked">;
   input: ReportInput;
   acceptedSources: SourceRecord[];
+  acceptedSourceDigest: AcceptedSourceDigest;
   report: GeneratedReport;
   outline: ReportWorkspaceOutline;
   draft: ReportWorkspaceDraft;
@@ -122,6 +127,9 @@ function buildWorkspaceParts(input: ReportInput, acceptedSources: SourceRecord[]
     acceptedSources,
   });
   const evidenceCards = buildEvidenceCards(acceptedSources, [], { resetText: true });
+  const acceptedSourceDigest = buildAcceptedSourceDigest(acceptedSources, {
+    topic: input.topic,
+  });
   const outline = buildReportOutline({
     topic: input.topic,
     reportType: input.reportType,
@@ -139,7 +147,7 @@ function buildWorkspaceParts(input: ReportInput, acceptedSources: SourceRecord[]
     citationFormat: input.citationFormat,
   });
 
-  return { report, outline, draft };
+  return { report, outline, draft, acceptedSourceDigest };
 }
 
 export function createReportWorkspace(
