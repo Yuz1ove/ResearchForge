@@ -174,6 +174,11 @@ export function buildBlueprint(report: GeneratedReport, input: ReportInput): str
 
   lines.push(
     "",
+    "## 品質檢查",
+    report.meta.qualityReport
+      ? JSON.stringify(report.meta.qualityReport, null, 2)
+      : "品質報告待補。",
+    "",
     "## 注意事項",
     "- 本藍圖為規劃用途，內容中的事實、數據與引用需自行查證後補齊。",
     "- 標示〔…〕或「資料來源待補」處，請填入實際查證後的資料。",

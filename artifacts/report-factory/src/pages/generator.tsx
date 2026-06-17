@@ -134,6 +134,7 @@ const DEFAULT_INPUT: ReportInput = {
   reportType: "研究報告",
   academicLevel: "高中",
   targetAudience: "高中",
+  researchDepth: "standard",
   purpose: "學校作業",
   domainOverride: "",
   mode: "先建立報告架構",
@@ -155,7 +156,11 @@ const DEFAULT_INPUT: ReportInput = {
   acceptedSources: [],
 };
 
-const RECOMMENDED_ACCEPTED_SOURCE_MIN = 10;
+const RESEARCH_DEPTH_OPTIONS: { label: string; value: ReportInput["researchDepth"]; recommendedSources: number }[] = [
+  { label: "quick：3-5 筆", value: "quick", recommendedSources: 5 },
+  { label: "standard：6-10 筆", value: "standard", recommendedSources: 8 },
+  { label: "deep：10-20 筆", value: "deep", recommendedSources: 12 },
+];
 
 // ─── Field config (visible labels map to stable internal generator values) ───
 
@@ -1538,11 +1543,13 @@ function SourceManagePanel({
   onReview,
   onEdit,
   topic,
+  recommendedAcceptedSourceCount,
 }: {
   sources: SourceRecord[];
   onReview: (sourceId: string, reviewState: SourceReviewState) => void;
   onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
   topic: string;
+  recommendedAcceptedSourceCount: number;
 }) {
   const [activeTab, setActiveTab] = useState<SourceReviewTab>("all");
   const [expandedSourceIds, setExpandedSourceIds] = useState<string[]>([]);
@@ -1618,12 +1625,12 @@ function SourceManagePanel({
           </Badge>
           <Badge
             variant={
-              counts.accepted >= RECOMMENDED_ACCEPTED_SOURCE_MIN
+              counts.accepted >= recommendedAcceptedSourceCount
                 ? "secondary"
                 : "outline"
             }
           >
-            建議至少 {RECOMMENDED_ACCEPTED_SOURCE_MIN} 筆
+            建議至少 {recommendedAcceptedSourceCount} 筆
           </Badge>
           <Badge variant={counts.rejected ? "secondary" : "outline"}>
             已拒絕 {counts.rejected} 筆
@@ -1735,6 +1742,7 @@ function TopicStepPanel({
   detectedCategory,
   autoSearchEnabled,
   workspaceResume,
+  researchDepthLabel,
   onInputChange,
   onExpandTopic,
   onApplyExpansion,
@@ -1748,6 +1756,7 @@ function TopicStepPanel({
   detectedCategory: TopicCategory | null;
   autoSearchEnabled: boolean;
   workspaceResume: WorkspaceResumeState | null;
+  researchDepthLabel: string;
   onInputChange: (key: ReportInputStringKey, value: string) => void;
   onExpandTopic: () => void;
   onApplyExpansion: (title: string) => void;
@@ -1862,6 +1871,27 @@ function TopicStepPanel({
                 </Select>
               </div>
             ))}
+            <div className="space-y-2">
+              <Label htmlFor="researchDepth">研究深度</Label>
+              <Select
+                value={input.researchDepth}
+                onValueChange={(value) => onInputChange("researchDepth", value)}
+              >
+                <SelectTrigger id="researchDepth" data-testid="select-researchDepth" className="h-11">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {RESEARCH_DEPTH_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                目前建議來源數：{researchDepthLabel}
+              </p>
+            </div>
           </div>
 
           {!autoSearchEnabled && (
@@ -2022,6 +2052,8 @@ function ManageStepPanel({
   sources,
   acceptedCount,
   hasWorkspaceTopicMismatch,
+  researchDepth,
+  recommendedAcceptedSourceCount,
   onBack,
   onNext,
   onReview,
@@ -2031,13 +2063,15 @@ function ManageStepPanel({
   sources: SourceRecord[];
   acceptedCount: number;
   hasWorkspaceTopicMismatch: boolean;
+  researchDepth: ReportInput["researchDepth"];
+  recommendedAcceptedSourceCount: number;
   onBack: () => void;
   onNext: () => void;
   onReview: (sourceId: string, reviewState: SourceReviewState) => void;
   onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
   topic: string;
 }) {
-  const sourceQualityReadiness = generationReadiness(acceptedSourceRecords(sources));
+  const sourceQualityReadiness = generationReadiness(acceptedSourceRecords(sources), researchDepth);
   const canProceedToGenerate = sourceQualityReadiness.canGenerate && !hasWorkspaceTopicMismatch;
   const sourceGateWarning = hasWorkspaceTopicMismatch
     ? "目前來源屬於另一個主題，請重新搜尋後再生成。"
@@ -2071,6 +2105,9 @@ function ManageStepPanel({
           >
             已接受來源：{acceptedCount} 筆
           </Badge>
+          <Badge variant="outline" className="w-fit">
+            {researchDepth} 建議 {recommendedAcceptedSourceCount} 筆
+          </Badge>
         </div>
       </div>
 
@@ -2081,6 +2118,7 @@ function ManageStepPanel({
             onReview={onReview}
             onEdit={onEdit}
             topic={topic}
+            recommendedAcceptedSourceCount={recommendedAcceptedSourceCount}
           />
         ) : (
           <div className="flex min-h-[320px] flex-col items-center justify-center text-center">
@@ -2128,6 +2166,8 @@ function ManageStepPanel({
 
 function GenerateStepPanel({
   acceptedCount,
+  researchDepth,
+  recommendedAcceptedSourceCount,
   readiness,
   isGenerating,
   generateButtonLabel,
@@ -2136,6 +2176,8 @@ function GenerateStepPanel({
   onBack,
 }: {
   acceptedCount: number;
+  researchDepth: ReportInput["researchDepth"];
+  recommendedAcceptedSourceCount: number;
   readiness: ReturnType<typeof generationReadiness>;
   isGenerating: boolean;
   generateButtonLabel: string;
@@ -2180,6 +2222,9 @@ function GenerateStepPanel({
             className="w-fit"
           >
             已接受 {acceptedCount} 筆來源
+          </Badge>
+          <Badge variant="outline" className="w-fit">
+            {researchDepth} 建議 {recommendedAcceptedSourceCount} 筆
           </Badge>
         </div>
       </div>
@@ -2598,7 +2643,10 @@ export function Generator() {
     ? detectTopicCategory(input.topic.trim(), input.reportType, derivedPurpose)
     : null;
   const acceptedSources = acceptedSourceRecords(sources);
-  const readiness = generationReadiness(acceptedSources);
+  const selectedDepthOption =
+    RESEARCH_DEPTH_OPTIONS.find((option) => option.value === input.researchDepth) ??
+    RESEARCH_DEPTH_OPTIONS[1]!;
+  const readiness = generationReadiness(acceptedSources, input.researchDepth);
   const currentTopicFingerprint = hasTopic ? reportTopicFingerprint(input.topic.trim()) : null;
   const hasWorkspaceTopicMismatch =
     Boolean(sources.length)
@@ -2888,7 +2936,7 @@ export function Generator() {
       });
       return;
     }
-    const currentReadiness = generationReadiness(acceptedSources);
+    const currentReadiness = generationReadiness(acceptedSources, input.researchDepth);
     if (hasWorkspaceTopicMismatch) {
       setGenerateStatus("error");
       toast({
@@ -3095,6 +3143,9 @@ export function Generator() {
                 <Badge variant={acceptedSources.length ? "default" : "outline"}>
                   已接受 {reviewCounts.accepted} 筆
                 </Badge>
+                <Badge variant="outline">
+                  {selectedDepthOption.label}
+                </Badge>
                 {reviewCounts.rejected > 0 && (
                   <Badge variant="outline">
                     已拒絕 {reviewCounts.rejected} 筆
@@ -3127,6 +3178,7 @@ export function Generator() {
               detectedCategory={detectedCategory}
               autoSearchEnabled={autoSearchEnabled}
               workspaceResume={workspaceResume}
+              researchDepthLabel={`${selectedDepthOption.label} / 建議 ${selectedDepthOption.recommendedSources} 筆`}
               onInputChange={updateInput}
               onExpandTopic={handleExpand}
               onApplyExpansion={applyExpansion}
@@ -3152,6 +3204,8 @@ export function Generator() {
               sources={sources}
               acceptedCount={acceptedSources.length}
               hasWorkspaceTopicMismatch={hasWorkspaceTopicMismatch}
+              researchDepth={input.researchDepth}
+              recommendedAcceptedSourceCount={selectedDepthOption.recommendedSources}
               onBack={() => goToStep("search")}
               onNext={goToGenerateStep}
               onReview={updateSourceReview}
@@ -3161,6 +3215,8 @@ export function Generator() {
           ) : (
             <GenerateStepPanel
               acceptedCount={acceptedSources.length}
+              researchDepth={input.researchDepth}
+              recommendedAcceptedSourceCount={selectedDepthOption.recommendedSources}
               readiness={readiness}
               isGenerating={isGenerating}
               generateButtonLabel={generateButtonLabel}

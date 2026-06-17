@@ -23,11 +23,9 @@ import {
 } from "@/lib/reportWorkspace";
 import {
   buildPlainText,
-  downloadBlueprint,
   downloadDocx,
   downloadJson,
   downloadMarkdown,
-  downloadPromptPackage,
   downloadTxt,
   printPdf,
 } from "@/lib/exportReport";
@@ -36,10 +34,7 @@ import {
   ArrowLeft,
   BookOpen,
   Copy,
-  Download,
   FileDown,
-  FileJson,
-  FileText,
   FileType,
   Printer,
   RefreshCw,
@@ -71,6 +66,26 @@ function formatWorkspaceTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function readinessLabel(readiness: ReportWorkspace["qualityReport"]["readiness"]): string {
+  switch (readiness) {
+    case "strong":
+      return "可輸出正式草稿";
+    case "usable":
+      return "可用草稿";
+    case "preliminary":
+      return "初步草稿";
+    case "insufficient":
+    default:
+      return "證據不足";
+  }
+}
+
+function readinessBadgeVariant(readiness: ReportWorkspace["qualityReport"]["readiness"]): "default" | "secondary" | "outline" {
+  if (readiness === "strong") return "default";
+  if (readiness === "usable" || readiness === "preliminary") return "secondary";
+  return "outline";
 }
 
 function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWorkspace }) {
@@ -232,6 +247,53 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
           </section>
         )}
 
+        <section className="mb-5 rounded-lg border border-border bg-card p-4 shadow-sm sm:p-5" data-testid="preview-quality-report">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-base font-semibold text-foreground">品質檢查</h2>
+              <p className="mt-1 text-xs text-muted-foreground">來源、證據卡與章節 grounding 的規則檢查結果。</p>
+            </div>
+            <Badge variant={readinessBadgeVariant(workspace.qualityReport.readiness)}>
+              {readinessLabel(workspace.qualityReport.readiness)}
+            </Badge>
+          </div>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <p className="text-xs text-muted-foreground">已接受來源</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{workspace.qualityReport.acceptedSourceCount} 筆</p>
+            </div>
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <p className="text-xs text-muted-foreground">證據卡</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{workspace.qualityReport.evidenceCardCount} 張</p>
+            </div>
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <p className="text-xs text-muted-foreground">citation 警告</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{workspace.qualityReport.missingCitationWarnings.length} 項</p>
+            </div>
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <p className="text-xs text-muted-foreground">過度推論</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{workspace.qualityReport.overclaimWarnings.length + workspace.qualityReport.unsupportedClaimWarnings.length} 項</p>
+            </div>
+          </div>
+          {[
+            ...workspace.qualityReport.missingCitationWarnings,
+            ...workspace.qualityReport.unsupportedClaimWarnings,
+            ...workspace.qualityReport.overclaimWarnings,
+            ...workspace.qualityReport.topicDriftWarnings,
+          ].length > 0 && (
+            <ul className="mt-4 space-y-1.5 rounded-md border border-border bg-muted/20 px-3 py-3 text-xs leading-5 text-muted-foreground">
+              {[
+                ...workspace.qualityReport.missingCitationWarnings,
+                ...workspace.qualityReport.unsupportedClaimWarnings,
+                ...workspace.qualityReport.overclaimWarnings,
+                ...workspace.qualityReport.topicDriftWarnings,
+              ].map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          )}
+        </section>
+
         <section className="mb-5 rounded-lg border border-primary/20 bg-card p-4 shadow-sm sm:p-5" data-testid="preview-source-digest">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -285,6 +347,34 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{section.purpose}</p>
                   </div>
                 ))}
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-border bg-card p-4" data-testid="preview-evidence-summary">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h2 className="text-base font-semibold text-foreground">證據摘要</h2>
+                <Badge variant="outline">{workspace.evidenceCards.length} 張</Badge>
+              </div>
+              <div className="space-y-2.5">
+                {workspace.evidenceCards.slice(0, 6).map((card, index) => (
+                  <article key={card.id} className="rounded-md border border-border bg-background px-3 py-3">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">證據 {index + 1}</Badge>
+                      <Badge variant={card.derivation === "metadata-derived" ? "outline" : "secondary"}>
+                        {card.derivation}
+                      </Badge>
+                      <Badge variant="outline">信心 {Math.round(card.confidenceScore * 100)}%</Badge>
+                    </div>
+                    <p className="line-clamp-2 text-sm font-medium leading-6 text-foreground">{card.summary || card.evidence}</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">{card.sourceTitle}</p>
+                    {card.limitation && (
+                      <p className="mt-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-5 text-muted-foreground">{card.limitation}</p>
+                    )}
+                  </article>
+                ))}
+                {workspace.evidenceCards.length > 6 && (
+                  <p className="text-xs text-muted-foreground">另有 {workspace.evidenceCards.length - 6} 張證據卡保留於工作區資料。</p>
+                )}
               </div>
             </section>
 
@@ -354,6 +444,13 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
               {workspace.draft.sections.map((section) => (
                 <article key={section.sectionId} className="rounded-md border border-border bg-background px-4 py-4 sm:px-5">
                   <h3 className="text-base font-semibold leading-6 text-foreground">{section.title}</h3>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Badge variant="outline">{section.evidenceCardIds.length} 張證據</Badge>
+                    <Badge variant="outline">{section.citationIds.length} 個 citation</Badge>
+                    {section.warnings.slice(0, 2).map((warning) => (
+                      <Badge key={warning} variant="secondary">{warning}</Badge>
+                    ))}
+                  </div>
                   <p className="mt-3 whitespace-pre-line text-sm leading-7 text-foreground/90 sm:text-[15px] sm:leading-8">{section.body}</p>
                 </article>
               ))}
