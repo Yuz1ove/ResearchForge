@@ -20,7 +20,13 @@ export const addEvidenceCard = mutation({
     const timestamp = now();
 
     return await ctx.db.insert("evidenceCards", {
-      ...args,
+      reportId: args.reportId,
+      ...(args.sourceId !== undefined ? { sourceId: args.sourceId } : {}),
+      claim: args.claim,
+      evidenceText: args.evidenceText,
+      ...(args.quote !== undefined ? { quote: args.quote } : {}),
+      ...(args.location !== undefined ? { location: args.location } : {}),
+      ...(args.reliability !== undefined ? { reliability: args.reliability } : {}),
       hiddenFromUser: args.hiddenFromUser ?? true,
       createdAt: timestamp,
       updatedAt: timestamp,
