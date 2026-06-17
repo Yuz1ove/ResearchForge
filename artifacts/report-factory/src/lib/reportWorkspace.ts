@@ -2,9 +2,10 @@ import {
   buildBibliography,
   type SourceRecord,
 } from "./sourceRecords.ts";
-import { buildEvidenceCards } from "./evidenceCards.ts";
+import { buildEvidenceCards, type EvidenceCard } from "./evidenceCards.ts";
 import { buildReportDraft, type ReportDraft } from "./reportDraft.ts";
 import { buildReportOutline, type ReportOutline } from "./reportOutline.ts";
+import type { QualityReport, ResearchProject } from "./qualityJudge.ts";
 import {
   buildAcceptedSourceDigest,
   type AcceptedSourceDigest,
@@ -55,6 +56,9 @@ export interface ReportWorkspace {
   report: GeneratedReport;
   outline: ReportWorkspaceOutline;
   draft: ReportWorkspaceDraft;
+  project: ResearchProject;
+  evidenceCards: EvidenceCard[];
+  qualityReport: QualityReport;
 }
 
 export interface ReportWorkspaceNavigationResult {
@@ -72,8 +76,38 @@ export interface StartReportWorkspaceNavigationOptions {
 
 const STORAGE_KEY = "researchforge:report-workspaces:v1";
 
+export const RESEARCH_DEPTH_CONFIG = {
+  quick: {
+    label: "quick",
+    recommendedSources: 5,
+    minimumAcceptedSources: 3,
+    fullReportSources: 5,
+  },
+  standard: {
+    label: "standard",
+    recommendedSources: 8,
+    minimumAcceptedSources: 3,
+    fullReportSources: 8,
+  },
+  deep: {
+    label: "deep",
+    recommendedSources: 12,
+    minimumAcceptedSources: 5,
+    fullReportSources: 10,
+  },
+} as const;
+
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function researchDepth(input: Pick<ReportInput, "researchDepth" | "length">): ReportInput["researchDepth"] {
+  if (input.researchDepth === "quick" || input.researchDepth === "standard" || input.researchDepth === "deep") {
+    return input.researchDepth;
+  }
+  if (input.length === "深度研究") return "deep";
+  if (input.length === "短版摘要") return "quick";
+  return "standard";
 }
 
 function normalizeTopicFingerprintInput(topic: string): string {
@@ -164,10 +198,15 @@ function readinessDiagnostics(sources: SourceRecord[]) {
   };
 }
 
-function diagnosticMessages(diagnostics: ReturnType<typeof readinessDiagnostics>, full = false): string[] {
+function diagnosticMessages(
+  diagnostics: ReturnType<typeof readinessDiagnostics>,
+  full = false,
+  depth: ReportInput["researchDepth"] = "standard",
+): string[] {
   const messages: string[] = [];
-  const requiredAccepted = full ? 8 : 3;
-  const requiredRelevant = full ? 5 : 3;
+  const config = RESEARCH_DEPTH_CONFIG[depth];
+  const requiredAccepted = full ? config.fullReportSources : config.minimumAcceptedSources;
+  const requiredRelevant = full ? Math.min(5, config.fullReportSources) : Math.min(3, config.minimumAcceptedSources);
   const requiredSummaries = full ? 4 : 1;
   const requiredCoverage = full ? 2 : 1;
 
@@ -183,11 +222,11 @@ function diagnosticMessages(diagnostics: ReturnType<typeof readinessDiagnostics>
   return messages;
 }
 
-export function generationReadiness(input: number | SourceRecord[]): GenerationReadiness {
+export function generationReadiness(input: number | SourceRecord[], depth: ReportInput["researchDepth"] = "standard"): GenerationReadiness {
   const sources = readinessSources(input);
   const diagnostics = readinessDiagnostics(sources);
-  const diagnosticList = diagnosticMessages(diagnostics, false);
-  const fullDiagnosticList = diagnosticMessages(diagnostics, true);
+  const diagnosticList = diagnosticMessages(diagnostics, false, depth);
+  const fullDiagnosticList = diagnosticMessages(diagnostics, true, depth);
 
   if (diagnosticList.length > 0) {
     return {
@@ -234,12 +273,34 @@ export function generatorWorkflowVisibility(developerDebugOpen: boolean): Genera
   };
 }
 
-function buildWorkspaceParts(input: ReportInput, acceptedSources: SourceRecord[]) {
+function createResearchProject(
+  id: string,
+  input: ReportInput,
+  createdAt: string,
+  updatedAt: string,
+  status: ResearchProject["status"],
+): ResearchProject {
+  return {
+    id,
+    topic: input.topic.trim() || "未命名主題",
+    reportType: input.reportType.trim() || "研究報告",
+    depth: researchDepth(input),
+    createdAt,
+    updatedAt,
+    status,
+  };
+}
+
+function buildWorkspaceParts(input: ReportInput, acceptedSources: SourceRecord[], project: ResearchProject) {
   const report = generateReport({
     ...input,
     acceptedSources,
   });
-  const evidenceCards = buildEvidenceCards(acceptedSources, [], { resetText: true });
+  const evidenceCards = buildEvidenceCards(acceptedSources, [], {
+    resetText: true,
+    topic: input.topic,
+    createdAt: project.updatedAt,
+  });
   const acceptedSourceDigest = buildAcceptedSourceDigest(acceptedSources, {
     topic: input.topic,
   });
@@ -251,6 +312,7 @@ function buildWorkspaceParts(input: ReportInput, acceptedSources: SourceRecord[]
     evidenceCards,
   });
   const draft = buildReportDraft({
+    project,
     topic: input.topic,
     reportType: input.reportType,
     audience: input.targetAudience || input.academicLevel,
@@ -261,7 +323,7 @@ function buildWorkspaceParts(input: ReportInput, acceptedSources: SourceRecord[]
     citationFormat: input.citationFormat,
   });
 
-  return { report, outline, draft, acceptedSourceDigest };
+  return { report, outline, draft, acceptedSourceDigest, evidenceCards, qualityReport: draft.qualityReport };
 }
 
 export function createReportWorkspace(
@@ -273,9 +335,11 @@ export function createReportWorkspace(
   const timestamp = nowIso();
   const effectiveInput: ReportInput = {
     ...input,
+    researchDepth: researchDepth(input),
     acceptedSources,
     mode: mode === "quick_draft" ? "先建立報告架構" : input.mode,
   };
+  const project = createResearchProject(id, effectiveInput, timestamp, timestamp, "ready_to_export");
   return {
     id,
     topicFingerprint: reportTopicFingerprint(effectiveInput.topic),
@@ -284,7 +348,8 @@ export function createReportWorkspace(
     generationMode: mode,
     input: effectiveInput,
     acceptedSources,
-    ...buildWorkspaceParts(effectiveInput, acceptedSources),
+    project,
+    ...buildWorkspaceParts(effectiveInput, acceptedSources, project),
   };
 }
 
@@ -295,7 +360,7 @@ export function startReportWorkspaceNavigation({
   navigate,
   saveWorkspace = saveReportWorkspace,
 }: StartReportWorkspaceNavigationOptions): ReportWorkspaceNavigationResult | null {
-  const readiness = generationReadiness(acceptedSources);
+  const readiness = generationReadiness(acceptedSources, researchDepth(input));
   if (!readiness.canGenerate) return null;
 
   const workspace = createReportWorkspace(
@@ -313,11 +378,25 @@ export function startReportWorkspaceNavigation({
 }
 
 export function regenerateReportWorkspace(workspace: ReportWorkspace): ReportWorkspace {
+  const updatedAt = nowIso();
+  const input = {
+    ...workspace.input,
+    researchDepth: researchDepth(workspace.input),
+  };
+  const project = createResearchProject(
+    workspace.project?.id ?? workspace.id,
+    input,
+    workspace.project?.createdAt ?? workspace.createdAt,
+    updatedAt,
+    "ready_to_export",
+  );
   return {
     ...workspace,
-    topicFingerprint: reportTopicFingerprint(workspace.input.topic),
-    updatedAt: nowIso(),
-    ...buildWorkspaceParts(workspace.input, workspace.acceptedSources),
+    input,
+    project,
+    topicFingerprint: reportTopicFingerprint(input.topic),
+    updatedAt,
+    ...buildWorkspaceParts(input, workspace.acceptedSources, project),
   };
 }
 
@@ -332,6 +411,31 @@ function parseStoredWorkspaces(raw: string | null): Record<string, ReportWorkspa
     return {};
   }
   return {};
+}
+
+function hydrateStoredWorkspace(reportId: string, workspace: ReportWorkspace): ReportWorkspace {
+  const input = {
+    ...workspace.input,
+    researchDepth: researchDepth(workspace.input),
+  };
+  const project =
+    workspace.project ??
+    createResearchProject(reportId, input, workspace.createdAt, workspace.updatedAt, "ready_to_export");
+
+  if (workspace.project && workspace.evidenceCards && workspace.qualityReport && workspace.draft && workspace.outline) {
+    return {
+      ...workspace,
+      input,
+      project,
+    };
+  }
+
+  return {
+    ...workspace,
+    input,
+    project,
+    ...buildWorkspaceParts(input, workspace.acceptedSources, project),
+  };
 }
 
 export function saveReportWorkspace(workspace: ReportWorkspace): void {
@@ -350,10 +454,10 @@ export function loadReportWorkspace(reportId: string): ReportWorkspace | null {
   if (typeof window === "undefined") return null;
   const workspace = parseStoredWorkspaces(window.localStorage.getItem(STORAGE_KEY))[reportId] ?? null;
   if (!workspace) return null;
-  return {
+  return hydrateStoredWorkspace(reportId, {
     ...workspace,
     topicFingerprint: workspace.topicFingerprint ?? reportTopicFingerprint(workspace.input.topic),
-  };
+  });
 }
 
 export function workspaceToGeneratedReport(workspace: ReportWorkspace, category: TopicCategory): GeneratedReport {
@@ -364,6 +468,9 @@ export function workspaceToGeneratedReport(workspace: ReportWorkspace, category:
       category,
       acceptedSources: workspace.acceptedSources,
       bibliography: buildBibliography(workspace.acceptedSources, workspace.input.citationFormat),
+      researchDraft: workspace.draft,
+      qualityReport: workspace.qualityReport,
+      evidenceCards: workspace.evidenceCards,
     },
   };
 }

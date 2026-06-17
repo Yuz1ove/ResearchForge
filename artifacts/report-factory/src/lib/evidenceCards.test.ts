@@ -33,6 +33,9 @@ test("builds evidence cards from accepted sources and inherits metadata", () => 
   assert.equal(cards[0]?.sourceCategory, "學術論文");
   assert.deepEqual(cards[0]?.usableSections, ["研究背景", "文獻探討"]);
   assert.equal(cards[0]?.confidence, "高");
+  assert.equal(cards[0]?.derivation, "abstract-derived");
+  assert.equal(cards[0]?.pageOrLocation, "abstract");
+  assert.equal(cards[0]?.confidenceScore <= 0.74, true);
   assert.equal(cards[0]?.notes, "樣本描述清楚。");
 });
 
@@ -62,6 +65,41 @@ test("does not duplicate by sourceId and removes no-longer-accepted sources on r
   assert.equal(regenerated.length, 2);
   assert.equal(regenerated[0]?.claim, "人工編輯後的主張");
   assert.deepEqual(afterCancel, []);
+});
+
+test("creates up to three evidence cards when abstract contains multiple matched snippets", () => {
+  const cards = buildEvidenceCards(
+    [
+      source({
+        id: "climate",
+        title: "Climate change evidence",
+        abstract:
+          "Anthropogenic greenhouse gas emissions drive climate change. Observed warming and sea level indicators show current status. Climate impacts create risks for ecosystems.",
+      }),
+    ],
+    [],
+    { topic: "氣候變遷的成因與現況" },
+  );
+
+  assert.equal(cards.length >= 2, true);
+  assert.equal(cards.length <= 3, true);
+  assert.equal(cards.every((card) => card.sourceId === "climate"), true);
+  assert.equal(cards.every((card) => card.limitation?.includes("尚未讀取全文")), true);
+});
+
+test("metadata-only evidence is bibliographic and low confidence", () => {
+  const cards = buildEvidenceCards([
+    source({
+      id: "metadata-only",
+      abstract: null,
+      evidenceGrounding: "metadata_only",
+    }),
+  ]);
+
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]?.derivation, "metadata-derived");
+  assert.equal(cards[0]?.confidenceScore, 0.35);
+  assert.match(cards[0]?.limitation ?? "", /不可產生具體研究結論|僅能作為書目/);
 });
 
 test("coverage summary counts usable sections and reports required warnings", () => {

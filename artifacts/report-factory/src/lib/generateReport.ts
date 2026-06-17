@@ -125,6 +125,8 @@ export const FORMAL_TONE_OPTIONS = ["需要", "不需要"] as const;
 export const CONVERSATIONAL_TONE_OPTIONS = ["不需要", "需要"] as const;
 export const OUTPUT_LANGUAGES = ["繁體中文", "英文", "日文", "其他"] as const;
 
+export type ResearchDepth = "quick" | "standard" | "deep";
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface ReportInput {
@@ -134,6 +136,8 @@ export interface ReportInput {
   academicLevel: string;
   /** Derived from academicLevel; retained for engine/export compatibility. */
   targetAudience: string;
+  /** Research workflow depth. Drives source-count guidance, quality threshold, and section depth. */
+  researchDepth: ResearchDepth;
   purpose: string;
   /** V3: when set to a TopicCategory, overrides AI domain detection. "" = auto. */
   domainOverride: string;
@@ -245,6 +249,9 @@ export interface ReportMeta {
   suggestedAdditions: string[];
   acceptedSources: SourceRecord[];
   bibliography: BibliographyEntry[];
+  researchDraft?: unknown;
+  qualityReport?: unknown;
+  evidenceCards?: unknown;
 }
 
 export interface GeneratedReport {

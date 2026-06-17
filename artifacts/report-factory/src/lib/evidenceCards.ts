@@ -7,12 +7,19 @@ import {
   type WorkflowReportSection,
   WORKFLOW_REPORT_SECTIONS,
 } from "./sourceRecords.ts";
+import { buildSourceEvidenceProfile } from "./sourceEvidence.ts";
+import { sourceHasUsableAbstract } from "./sourceSummaries.ts";
+import { buildTopicFacets } from "./topicFacets.ts";
+import type { EvidenceDerivation } from "@workspace/api-zod";
 
 export interface EvidenceCard {
   id: string;
   sourceId: string;
   claim: string;
   evidence: string;
+  quoteOrParaphrase: string;
+  summary: string;
+  relevance: string;
   sourceTitle: string;
   sourceUrl: string | null;
   sourceDomain: string;
@@ -21,6 +28,12 @@ export interface EvidenceCard {
   year: number | null;
   usableSections: WorkflowReportSection[];
   confidence: string | null;
+  confidenceScore: number;
+  derivation: EvidenceDerivation;
+  limitation: string | null;
+  citationText: string;
+  pageOrLocation?: string;
+  createdAt: string;
   notes: string;
 }
 
@@ -44,6 +57,8 @@ export interface EvidenceCoverageSummary {
 
 interface BuildEvidenceCardOptions {
   resetText?: boolean;
+  topic?: string;
+  createdAt?: string;
 }
 
 const RECOMMENDED_ACCEPTED_SOURCE_COUNT = 10;
@@ -71,26 +86,110 @@ function compactEvidenceText(source: SourceRecord): string {
   return locator ? `可由來源位置查證：${locator}` : "此來源已接受，但仍需要補充可引用的重點摘錄。";
 }
 
-function sourceToEvidenceCard(source: SourceRecord, ordinal: number): EvidenceCard {
+function confidenceScore(source: SourceRecord, hasSnippet: boolean): number {
+  const sourceConfidence = source.confidence?.trim();
+  if (source.evidenceGrounding === "metadata_only" || source.evidenceGrounding === "insufficient") return 0.35;
+  if (!sourceHasUsableAbstract(source)) return 0.35;
+  if (hasSnippet && sourceConfidence === "高") return 0.74;
+  if (hasSnippet && sourceConfidence === "中") return 0.66;
+  if (hasSnippet) return 0.58;
+  if (sourceConfidence === "高") return 0.6;
+  if (sourceConfidence === "中") return 0.52;
+  return 0.42;
+}
+
+function evidenceDerivation(source: SourceRecord, hasSnippet: boolean): EvidenceDerivation {
+  if (source.evidenceGrounding === "snippet_grounded") return "fulltext-derived";
+  if (hasSnippet || sourceHasUsableAbstract(source)) return "abstract-derived";
+  return "metadata-derived";
+}
+
+function limitationForEvidence(source: SourceRecord, derivation: EvidenceDerivation): string | null {
+  if (derivation === "fulltext-derived") return null;
+  if (derivation === "abstract-derived") return "目前依題名、摘要與 metadata 建立證據卡；尚未讀取全文，不能編造頁碼或超出摘要內容。";
+  if (source.abstract?.trim()) return "摘要過短，僅能作為書目與主題線索；正式結論需回查原文。";
+  return "此來源尚無摘要，僅可建立 bibliographic evidence，不可產生具體研究結論。";
+}
+
+function citationText(source: SourceRecord): string {
+  const author = source.authors[0]?.trim() || source.publisher?.trim() || "作者待確認";
+  const year = source.year ?? "年份待確認";
+  return `${author}（${year}）`;
+}
+
+function sourceToEvidenceCards(
+  source: SourceRecord,
+  ordinal: number,
+  options: Pick<BuildEvidenceCardOptions, "topic" | "createdAt">,
+): EvidenceCard[] {
   const id = sourceId(source);
   const title = source.title || "標題待確認";
   const usableSections = normalizeUsableSections(source.usableSections);
+  const evidenceProfile = buildSourceEvidenceProfile(source, buildTopicFacets(options.topic ?? ""));
+  const baseSections = usableSections.length ? usableSections : defaultUsableSections();
+  const snippets = evidenceProfile.evidenceSnippets.slice(0, 3);
+  const cards: EvidenceCard[] = [];
 
-  return {
-    id: `evidence:${id}`,
+  if (snippets.length > 0) {
+    snippets.forEach((snippet, index) => {
+      const evidence = snippet.snippetZhTw || snippet.reasoningZhTw || compactEvidenceText(source);
+      const derivation = evidenceDerivation(source, true);
+      cards.push({
+        id: `evidence:${id}:${index + 1}`,
+        sourceId: id,
+        claim: `來源 ${ordinal}.${index + 1} 可支持「${snippet.matchedFacet}」相關論點。`,
+        evidence,
+        quoteOrParaphrase: evidence,
+        summary: snippet.reasoningZhTw || evidenceProfile.summaryZhTw || evidence,
+        relevance: snippet.matchedFacet,
+        sourceTitle: title,
+        sourceUrl: source.url,
+        sourceDomain: sourceDomain(source.url),
+        sourceProvider: source.sourceType,
+        sourceCategory: source.sourceCategory?.trim() || null,
+        year: source.year,
+        usableSections: baseSections,
+        confidence: source.confidence?.trim() || null,
+        confidenceScore: confidenceScore(source, true),
+        derivation,
+        limitation: limitationForEvidence(source, derivation),
+        citationText: citationText(source),
+        pageOrLocation: "abstract",
+        createdAt: options.createdAt ?? new Date().toISOString(),
+        notes: source.reviewNotes?.trim() || "",
+      });
+    });
+    return cards;
+  }
+
+  const derivation = evidenceDerivation(source, false);
+  cards.push({
+    id: `evidence:${id}:0`,
     sourceId: id,
-    claim: `來源 ${ordinal} 可支持「${title}」相關論點。`,
+    claim: sourceHasUsableAbstract(source)
+      ? `來源 ${ordinal} 可作為「${title}」的摘要型佐證。`
+      : `來源 ${ordinal} 僅提供「${title}」的書目線索。`,
     evidence: compactEvidenceText(source),
+    quoteOrParaphrase: compactEvidenceText(source),
+    summary: evidenceProfile.summaryZhTw || compactEvidenceText(source),
+    relevance: source.mainEvidenceFacet || "研究背景",
     sourceTitle: title,
     sourceUrl: source.url,
     sourceDomain: sourceDomain(source.url),
     sourceProvider: source.sourceType,
     sourceCategory: source.sourceCategory?.trim() || null,
     year: source.year,
-    usableSections: usableSections.length ? usableSections : defaultUsableSections(),
+    usableSections: baseSections,
     confidence: source.confidence?.trim() || null,
+    confidenceScore: confidenceScore(source, false),
+    derivation,
+    limitation: limitationForEvidence(source, derivation),
+    citationText: citationText(source),
+    pageOrLocation: derivation === "abstract-derived" ? "abstract" : undefined,
+    createdAt: options.createdAt ?? new Date().toISOString(),
     notes: source.reviewNotes?.trim() || "",
-  };
+  });
+  return cards;
 }
 
 export function buildEvidenceCards(
@@ -99,7 +198,7 @@ export function buildEvidenceCards(
   options: BuildEvidenceCardOptions = {},
 ): EvidenceCard[] {
   const acceptedSources = acceptedSourceRecords(sources);
-  const existingBySourceId = new Map(existingCards.map((card) => [card.sourceId, card]));
+  const existingById = new Map(existingCards.map((card) => [card.id, card]));
   const seen = new Set<string>();
   const cards: EvidenceCard[] = [];
 
@@ -108,22 +207,33 @@ export function buildEvidenceCards(
     if (seen.has(id)) return;
     seen.add(id);
 
-    const generated = sourceToEvidenceCard(source, index + 1);
-    const existing = existingBySourceId.get(id);
-    if (!existing) {
-      cards.push(generated);
-      return;
-    }
+    const generatedCards = sourceToEvidenceCards(source, index + 1, options);
+    generatedCards.forEach((generated) => {
+      const existing = existingById.get(generated.id);
+      if (!existing) {
+        cards.push(generated);
+        return;
+      }
 
-    cards.push({
-      ...generated,
-      id: existing.id || generated.id,
-      claim: options.resetText ? generated.claim : existing.claim || generated.claim,
-      evidence: options.resetText ? generated.evidence : existing.evidence || generated.evidence,
-      sourceCategory: options.resetText ? generated.sourceCategory : existing.sourceCategory ?? generated.sourceCategory,
-      usableSections: options.resetText ? generated.usableSections : existing.usableSections ?? generated.usableSections,
-      confidence: options.resetText ? generated.confidence : existing.confidence ?? generated.confidence,
-      notes: options.resetText ? generated.notes : existing.notes ?? generated.notes,
+      cards.push({
+        ...generated,
+        id: existing.id || generated.id,
+        claim: options.resetText ? generated.claim : existing.claim || generated.claim,
+        evidence: options.resetText ? generated.evidence : existing.evidence || generated.evidence,
+        quoteOrParaphrase: options.resetText ? generated.quoteOrParaphrase : existing.quoteOrParaphrase || generated.quoteOrParaphrase,
+        summary: options.resetText ? generated.summary : existing.summary || generated.summary,
+        relevance: options.resetText ? generated.relevance : existing.relevance || generated.relevance,
+        sourceCategory: options.resetText ? generated.sourceCategory : existing.sourceCategory ?? generated.sourceCategory,
+        usableSections: options.resetText ? generated.usableSections : existing.usableSections ?? generated.usableSections,
+        confidence: options.resetText ? generated.confidence : existing.confidence ?? generated.confidence,
+        confidenceScore: options.resetText ? generated.confidenceScore : existing.confidenceScore ?? generated.confidenceScore,
+        derivation: options.resetText ? generated.derivation : existing.derivation ?? generated.derivation,
+        limitation: options.resetText ? generated.limitation : existing.limitation ?? generated.limitation,
+        citationText: options.resetText ? generated.citationText : existing.citationText ?? generated.citationText,
+        pageOrLocation: options.resetText ? generated.pageOrLocation : existing.pageOrLocation ?? generated.pageOrLocation,
+        createdAt: existing.createdAt ?? generated.createdAt,
+        notes: options.resetText ? generated.notes : existing.notes ?? generated.notes,
+      });
     });
   });
 

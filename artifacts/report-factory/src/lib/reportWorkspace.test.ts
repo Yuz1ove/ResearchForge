@@ -17,6 +17,7 @@ function input(overrides: Partial<ReportInput> = {}): ReportInput {
     reportType: "研究報告",
     academicLevel: "高中",
     targetAudience: "高中",
+    researchDepth: "standard",
     purpose: "學校作業",
     domainOverride: "",
     mode: "先建立報告架構",
@@ -171,7 +172,10 @@ test("workspace topic fingerprint isolates different topics", () => {
     acceptedSourceDigest: { summary: "", coverage: [], gaps: [], recommendedNextStep: "" },
     report: { meta: { acceptedSources: [source(1)] }, sections: [] } as any,
     outline: { title: "", sections: [] } as any,
-    draft: { title: "", sections: [] } as any,
+    draft: { title: "", sections: [], qualityReport: { readiness: "preliminary" } } as any,
+    project: { id: "rf-topic", topic: topicA, reportType: "研究報告", depth: "standard", createdAt: "2026-06-17T00:00:00.000Z", updatedAt: "2026-06-17T00:00:00.000Z", status: "draft" } as any,
+    evidenceCards: [],
+    qualityReport: { sourceCount: 1, acceptedSourceCount: 1, evidenceCardCount: 0, missingCitationWarnings: [], unsupportedClaimWarnings: [], overclaimWarnings: [], topicDriftWarnings: [], readiness: "preliminary" } as any,
   };
 
   assert.equal(workspaceMatchesTopic(workspace, topicA), true);
@@ -195,6 +199,9 @@ test("start report workspace navigation saves workspace and calls navigation wit
   assert.equal(result.workspace.id, "rf-existing");
   assert.equal(result.workspace.generationMode, "quick_draft");
   assert.match(result.workspace.acceptedSourceDigest.summary, /目前已接受/);
+  assert.equal(result.workspace.project.depth, "standard");
+  assert.equal(result.workspace.evidenceCards.length >= acceptedSources.length, true);
+  assert.equal(result.workspace.qualityReport.acceptedSourceCount, acceptedSources.length);
   assert.deepEqual(savedWorkspaceIds, ["rf-existing"]);
   assert.deepEqual(navigateCalls, ["/reports/rf-existing"]);
 });

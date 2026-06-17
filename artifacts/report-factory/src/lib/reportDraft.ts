@@ -10,8 +10,16 @@ import {
   type AcceptedSourceDigest,
 } from "./sourceDigest.ts";
 import { sourceHasUsableAbstract } from "./sourceSummaries.ts";
+import {
+  buildQualityReport,
+  type QualityReport,
+  type ResearchProject,
+  type ResearchSectionKey,
+  type ResearchSectionSnapshot,
+} from "./qualityJudge.ts";
 
 export interface ReportDraftInput {
+  project: ResearchProject;
   topic: string;
   reportType: string;
   audience: string;
@@ -26,6 +34,9 @@ export interface ReportDraftSection {
   sectionId: string;
   title: string;
   body: string;
+  evidenceCardIds: string[];
+  citationIds: string[];
+  warnings: string[];
 }
 
 export interface ReportDraft {
@@ -33,9 +44,11 @@ export interface ReportDraft {
   sections: ReportDraftSection[];
   referenceList: string[];
   text: string;
+  qualityReport: QualityReport;
 }
 
 export interface ReportSynthesisContext {
+  project: ResearchProject;
   topic: string;
   reportType: string;
   audience: string;
@@ -48,6 +61,7 @@ export interface ReportSynthesisContext {
 
 export interface SectionPlan {
   sectionId: string;
+  key: ResearchSectionKey;
   title: string;
   intent: string;
   evidenceSections: WorkflowReportSection[];
@@ -57,17 +71,20 @@ export interface SectionPlan {
 
 const SECTION_EVIDENCE_MAP: Record<string, WorkflowReportSection[]> = {
   abstract: ["研究背景", "文獻探討", "數據分析", "結論"],
-  motivation: ["研究背景"],
-  questions: ["研究背景", "文獻探討"],
-  literature: ["文獻探討"],
-  method: ["研究方法"],
-  evidence: ["數據分析", "文獻探討", "研究背景"],
+  introduction: ["研究背景"],
+  research_question: ["研究背景", "文獻探討"],
+  literature_review: ["文獻探討"],
+  methodology: ["研究方法"],
+  findings: ["數據分析", "文獻探討", "研究背景"],
   discussion: ["數據分析", "文獻探討", "結論"],
+  limitations: ["研究方法", "數據分析", "結論"],
   conclusion: ["結論", "數據分析", "文獻探討"],
+  references: [],
+  title: [],
 };
 
 function marker(card: EvidenceCard, evidenceNumbers: Map<string, number>): string {
-  return `（來源 ${evidenceNumbers.get(card.id) ?? "?"}）`;
+  return `（證據 ${evidenceNumbers.get(card.id) ?? "?"}）`;
 }
 
 function cardsFor(cards: EvidenceCard[], sections: WorkflowReportSection[]): EvidenceCard[] {
@@ -151,6 +168,7 @@ export function buildReportSynthesisContext(input: ReportDraftInput): ReportSynt
     buildAcceptedSourceDigest(input.acceptedSources, { topic });
 
   return {
+    project: input.project,
     topic,
     reportType,
     audience,
@@ -176,15 +194,16 @@ export function buildSectionPlan(
   const selectedEvidence = selectEvidenceForSection(context.evidenceCards, outlineSection.sectionId);
   return {
     sectionId: outlineSection.sectionId,
+    key: outlineSection.sectionId as ResearchSectionKey,
     title: outlineSection.title,
     intent: outlineSection.purpose,
     evidenceSections: SECTION_EVIDENCE_MAP[outlineSection.sectionId] ?? [],
     selectedEvidence,
-    needsMoreEvidence: selectedEvidence.length === 0 && !["title", "questions", "references"].includes(outlineSection.sectionId),
+    needsMoreEvidence: selectedEvidence.length === 0 && !["title", "research_question", "references"].includes(outlineSection.sectionId),
   };
 }
 
-export function synthesizeSectionParagraph(plan: SectionPlan, context: ReportSynthesisContext): string {
+function synthesizeSectionParagraph(plan: SectionPlan, context: ReportSynthesisContext): string {
   const { topic, reportType, audience, acceptedSourceDigest, acceptedSources, evidenceNumbers } = context;
   const evidenceText = conciseEvidenceThemes(plan.selectedEvidence, evidenceNumbers);
   const qualityNote = sourceQualityLimitNote(acceptedSources);
@@ -202,31 +221,31 @@ export function synthesizeSectionParagraph(plan: SectionPlan, context: ReportSyn
         `摘要先交代研究範圍與資料狀態，不逐篇排列來源；後續正文再依章節任務選用佐證。`,
         qualityNote,
       ].filter(Boolean).join("");
-    case "motivation":
+    case "introduction":
       return [
         `研究「${topic}」的動機，在於釐清此主題的背景、重要性與可討論範圍，而不是把來源卡句子直接改寫成動機。`,
         plan.selectedEvidence.length
           ? `目前可先用背景資料說明主題為何值得研究，並把討論範圍限縮在已接受資料可支撐的部分。${evidenceText}`
           : "目前研究背景證據仍不足，建議補充官方資料或學術文獻後再強化動機段。",
       ].join("");
-    case "questions":
+    case "research_question":
       return [`本報告初步聚焦三個可蒐證問題：`, questionSet(topic, acceptedSourceDigest)].join("\n");
-    case "literature":
+    case "literature_review":
       return plan.selectedEvidence.length
         ? [
           "文獻探討應比較既有資料的共同方向、差異與限制，而不是逐篇摘要來源。",
           `目前可先依核心概念、影響面向與資料限制整理既有觀點。${evidenceText}`,
         ].join("")
         : "目前文獻探討證據不足，建議先補充學術論文、期刊或可信機構資料。";
-    case "method":
+    case "methodology":
       return [
         "本報告採用文獻整理與來源審查法：先搜尋資料，再依主題相關性、權威性、摘要可用性與使用章節進行篩選。",
         "撰寫時只將已接受來源作為佐證池，不假裝進行未實施的實驗、問卷或訪談。",
         plan.selectedEvidence.length ? evidenceText : "方法段可再補充搜尋條件、排除條件與資料整理步驟。",
       ].join("");
-    case "evidence":
+    case "findings":
       return [
-        "資料與證據整理應依研究問題與證據面向組織，而不是依來源 1、來源 2 的順序排列。",
+        "主要發現應依研究問題與證據面向組織，而不是依來源 1、來源 2 的順序排列。",
         evidenceByAspect(context.evidenceCards, evidenceNumbers),
       ].join("\n");
     case "discussion":
@@ -237,6 +256,11 @@ export function synthesizeSectionParagraph(plan: SectionPlan, context: ReportSyn
           : "目前尚缺足夠證據，因此討論需維持保守，避免形成正式結論語氣。",
         gaps,
       ].filter(Boolean).join("");
+    case "limitations":
+      return [
+        "限制段需直接說明目前證據不足之處，例如摘要不足、來源數量有限、或缺少全文確認。",
+        gaps || "目前限制仍以來源數量與摘要可用性為主。",
+      ].join("");
     case "conclusion":
       return [
         `根據目前證據，「${topic}」可先形成一份可追溯來源的初稿，但結論只能限於資料已支撐的範圍。`,
@@ -250,12 +274,19 @@ export function synthesizeSectionParagraph(plan: SectionPlan, context: ReportSyn
   }
 }
 
+function sectionTitleFor(sectionId: string, title: string): string {
+  return sectionId === "title" ? "標題" : title.replace(/^[一二三四五六七八九十]+、/, "");
+}
+
+function citationIdsForCards(cards: EvidenceCard[]): string[] {
+  return cards.map((card) => card.sourceId);
+}
+
 export function buildReportDraft(input: ReportDraftInput): ReportDraft {
   const context = buildReportSynthesisContext(input);
   const bibliography = buildBibliography(context.acceptedSources, input.citationFormat || "APA");
   const references = bibliography.length ? bibliography.map((entry) => entry.text) : ["參考資料待補"];
   const outlineSections = context.outline.sections;
-  const detailNote = sourceQualityLimitNote(context.acceptedSources);
 
   const sections: ReportDraftSection[] = outlineSections.map((outlineSection) => {
     if (outlineSection.sectionId === "references") {
@@ -263,18 +294,46 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
         sectionId: "references",
         title: "參考資料",
         body: references.map((reference, index) => `${index + 1}. ${reference}`).join("\n"),
+        evidenceCardIds: [],
+        citationIds: context.acceptedSources.map((source) => source.id).filter(Boolean),
+        warnings: [],
       };
     }
 
     const plan = buildSectionPlan(outlineSection, context);
     const body = synthesizeSectionParagraph(plan, context);
+    const warnings: string[] = [];
+    if (plan.needsMoreEvidence) {
+      warnings.push("證據不足，請改寫成初步草稿語氣。");
+    }
+    if (!plan.selectedEvidence.length && !["title", "research_question"].includes(plan.sectionId)) {
+      warnings.push("目前此段缺少 evidence card。");
+    }
+
     return {
       sectionId: outlineSection.sectionId,
-      title: outlineSection.sectionId === "title" ? "標題" : outlineSection.title.replace(/^[一二三四五六七八九十]+、/, ""),
-      body: plan.needsMoreEvidence && detailNote
-        ? `${body}${body.endsWith("。") ? "" : "。"}${detailNote}`
-        : body,
+      title: sectionTitleFor(outlineSection.sectionId, outlineSection.title),
+      body,
+      evidenceCardIds: plan.selectedEvidence.map((card) => card.id),
+      citationIds: citationIdsForCards(plan.selectedEvidence),
+      warnings,
     };
+  });
+
+  const qualityReport = buildQualityReport({
+    topic: context.topic,
+    depth: input.project.depth,
+    acceptedSources: context.acceptedSources,
+    evidenceCards: context.evidenceCards,
+    sections: sections.map((section) => ({
+      id: section.sectionId,
+      key: section.sectionId as ResearchSectionKey,
+      title: section.title,
+      content: section.body,
+      evidenceCardIds: section.evidenceCardIds,
+      citationIds: section.citationIds,
+      warnings: section.warnings,
+    })),
   });
 
   const text = sections.map((section) => `${section.title}\n${section.body}`).join("\n\n");
@@ -284,5 +343,6 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
     sections,
     referenceList: references,
     text,
+    qualityReport,
   };
 }

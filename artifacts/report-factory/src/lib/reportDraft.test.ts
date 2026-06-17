@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildEvidenceCards } from "./evidenceCards.ts";
+import type { ResearchProject } from "./qualityJudge.ts";
 import { buildReportDraft } from "./reportDraft.ts";
 import { buildReportOutline } from "./reportOutline.ts";
 import type { SourceRecord } from "./sourceRecords.ts";
@@ -24,6 +25,19 @@ function source(overrides: Partial<SourceRecord> = {}): SourceRecord {
   };
 }
 
+function project(depth: ResearchProject["depth"] = "standard"): ResearchProject {
+  const now = "2026-06-18T00:00:00.000Z";
+  return {
+    id: "project-1",
+    topic: "短影音使用對高中生睡眠品質之影響",
+    reportType: "研究報告",
+    depth,
+    createdAt: now,
+    updatedAt: now,
+    status: "draft",
+  };
+}
+
 test("draft generator includes section headings, source markers, and reference list", () => {
   const acceptedSources = [source()];
   const evidenceCards = buildEvidenceCards(acceptedSources);
@@ -35,6 +49,7 @@ test("draft generator includes section headings, source markers, and reference l
     evidenceCards,
   });
   const draft = buildReportDraft({
+    project: project(),
     topic: "短影音使用對高中生睡眠品質之影響",
     reportType: "研究報告",
     audience: "高中",
@@ -44,14 +59,15 @@ test("draft generator includes section headings, source markers, and reference l
     citationFormat: "APA",
   });
 
-  assert.match(draft.text, /研究動機/);
-  assert.match(draft.text, /（來源 1）/);
+  assert.match(draft.text, /研究背景與動機/);
+  assert.match(draft.text, /（證據 1）/);
   assert.match(draft.text, /資料缺口/);
   assert.doesNotMatch(draft.sections.find((section) => section.sectionId === "abstract")?.body ?? "", /來源 1 可支持/);
   assert.doesNotMatch(draft.sections.find((section) => section.sectionId === "abstract")?.body ?? "", /來源 1[：:]/);
   assert.match(draft.text, /參考資料/);
   assert.equal(draft.referenceList.length, 1);
   assert.match(draft.referenceList[0]!, /Screen time and sleep/);
+  assert.equal(draft.qualityReport.acceptedSourceCount, 1);
 });
 
 test("draft generator flags accepted sources with insufficient abstracts", () => {
@@ -71,6 +87,7 @@ test("draft generator flags accepted sources with insufficient abstracts", () =>
     evidenceCards,
   });
   const draft = buildReportDraft({
+    project: project(),
     topic: "可樂與健康",
     reportType: "研究報告",
     audience: "高中",
@@ -107,6 +124,7 @@ test("draft synthesis organizes evidence by section intent instead of source-car
     evidenceCards,
   });
   const draft = buildReportDraft({
+    project: project("deep"),
     topic: "短影音使用對高中生注意力與睡眠品質之影響",
     reportType: "研究報告",
     audience: "高中",
@@ -116,8 +134,8 @@ test("draft synthesis organizes evidence by section intent instead of source-car
     citationFormat: "APA",
   });
 
-  const literature = draft.sections.find((section) => section.sectionId === "literature")?.body ?? "";
-  const evidence = draft.sections.find((section) => section.sectionId === "evidence")?.body ?? "";
+  const literature = draft.sections.find((section) => section.sectionId === "literature_review")?.body ?? "";
+  const evidence = draft.sections.find((section) => section.sectionId === "findings")?.body ?? "";
   const discussion = draft.sections.find((section) => section.sectionId === "discussion")?.body ?? "";
 
   assert.match(literature, /比較既有資料/);
