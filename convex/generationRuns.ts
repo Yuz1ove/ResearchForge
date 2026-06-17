@@ -17,8 +17,10 @@ export const createGenerationRun = mutation({
     return await ctx.db.insert("generationRuns", {
       reportId: args.reportId,
       status: args.status ?? "searching",
-      stageMessage: args.stageMessage,
-      metadata: args.metadata,
+      ...(args.stageMessage !== undefined
+        ? { stageMessage: args.stageMessage }
+        : {}),
+      ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
       startedAt: timestamp,
       updatedAt: timestamp,
     });
@@ -39,10 +41,12 @@ export const updateGenerationRunStatus = mutation({
 
     await ctx.db.patch(args.generationRunId, {
       status: args.status,
-      stageMessage: args.stageMessage,
-      error: args.error,
-      metadata: args.metadata,
-      completedAt: isTerminal ? timestamp : undefined,
+      ...(args.stageMessage !== undefined
+        ? { stageMessage: args.stageMessage }
+        : {}),
+      ...(args.error !== undefined ? { error: args.error } : {}),
+      ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
+      ...(isTerminal ? { completedAt: timestamp } : {}),
       updatedAt: timestamp,
     });
 
