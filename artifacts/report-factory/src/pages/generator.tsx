@@ -82,7 +82,9 @@ import {
   generationReadiness,
   generatorWorkflowVisibility,
   loadReportWorkspace,
+  reportTopicFingerprint,
   startReportWorkspaceNavigation,
+  workspaceMatchesTopic,
 } from "@/lib/reportWorkspace";
 import {
   Wand2,
@@ -899,6 +901,8 @@ function SourceReviewCard({
   const relevanceReasons = source.relevanceReasons ?? [];
   const authorityLabel = source.authorityLabel ?? "權威性待確認";
   const languageLabel = source.sourceLanguageLabel ?? "來源語言待確認";
+  const compactMode = reviewState !== "pending";
+  const shouldShowExpandedDetails = isExpanded && !compactMode;
   const StatusIcon =
     reviewState === "accepted"
       ? CheckCircle2
@@ -933,7 +937,7 @@ function SourceReviewCard({
         : "接受來源";
 
   return (
-    <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
+    <Collapsible open={shouldShowExpandedDetails} onOpenChange={onExpandedChange}>
       <article className={`rounded-lg border p-3 transition-colors sm:p-4 ${cardTone}`} data-testid={`source-card-${reviewState}`}>
         <div className="flex flex-col gap-3">
           <div className="flex min-w-0 gap-3">
@@ -975,47 +979,72 @@ function SourceReviewCard({
           </div>
 
           <div className="space-y-2 rounded-md border border-border/70 bg-background/70 px-3 py-3">
-            <div className="space-y-2">
-              <p className="text-xs font-semibold text-foreground">可驗證片段</p>
-              {summary.evidenceSnippets.length > 0 ? (
-                <ul className="space-y-1.5">
-                  {summary.evidenceSnippets.slice(0, 2).map((snippet) => (
-                    <li key={snippet} className="rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-5 text-foreground/90">
-                      {snippet}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-xs leading-5 text-muted-foreground">
-                  尚未取得可驗證摘要片段。
+            {compactMode ? (
+              <div className="space-y-2">
+                <p className="line-clamp-2 text-sm leading-6 text-foreground/90">
+                  <span className="font-medium text-foreground">繁中摘要：</span>
+                  {compactSummary}
                 </p>
-              )}
-            </div>
-            <p className="line-clamp-2 text-sm leading-6 text-foreground/90">
-              <span className="font-medium text-foreground">繁中摘要：</span>
-              {compactSummary}
-            </p>
-            <p className="text-xs leading-5 text-muted-foreground">
-              與主題關聯：{summary.topicRelation}
-            </p>
-            <p className="text-xs leading-5 text-muted-foreground">
-              採用建議：{summary.recommendationReason}
-            </p>
-            {relevanceReasons.length > 0 && (
-              <p className="text-xs leading-5 text-muted-foreground">
-                主題相關性：{relevanceReasons.slice(0, 2).join("；")}
-              </p>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline">
+                    {reviewState === "accepted" ? "已收合" : "已收合待檢視"}
+                  </Badge>
+                  <Badge variant="outline">{summary.mainEvidenceFacet ?? "證據鏈待確認"}</Badge>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-foreground">可驗證片段</p>
+                  {summary.evidenceSnippets.length > 0 ? (
+                    <ul className="space-y-1.5">
+                      {summary.evidenceSnippets.slice(0, 2).map((snippet) => (
+                        <li key={`${snippet.matchedFacet}-${snippet.originalSnippet}`} className="rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-5 text-foreground/90">
+                          <div className="font-medium text-foreground">{snippet.matchedFacet} · {snippet.supportLevel}</div>
+                          <div className="mt-0.5">{snippet.snippetZhTw}</div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            原始片段：{snippet.originalSnippet}
+                          </div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            命中詞：{snippet.matchedTerms.join("、")}
+                          </div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            {snippet.reasoningZhTw}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      尚未取得可驗證摘要片段。
+                    </p>
+                  )}
+                </div>
+                <p className="line-clamp-2 text-sm leading-6 text-foreground/90">
+                  <span className="font-medium text-foreground">繁中摘要：</span>
+                  {compactSummary}
+                </p>
+                <div className="space-y-1 text-xs leading-5 text-muted-foreground">
+                  <p>主證據面向：{summary.mainEvidenceFacet ?? "待確認"}</p>
+                  <p>證據鏈：{summary.evidenceChain.length > 0 ? summary.evidenceChain.map((entry) => `${entry.facetLabelZhTw} → ${entry.matchedTerms.slice(0, 2).join("、")} → ${entry.supportLevel}`).join("；") : "待確認"}</p>
+                  <p>與主題關聯：{summary.topicRelation}</p>
+                  <p>採用建議：{summary.recommendationReason}</p>
+                  {relevanceReasons.length > 0 && (
+                    <p>主題相關性：{relevanceReasons.slice(0, 2).join("；")}</p>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    適合使用章節
+                  </span>
+                  {(summary.suitableSectionLabels.length ? summary.suitableSectionLabels : summary.usableSections).map((section) => (
+                    <Badge key={section} variant="outline">
+                      {section}
+                    </Badge>
+                  ))}
+                </div>
+              </>
             )}
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-medium text-muted-foreground">
-                適合使用章節
-              </span>
-              {(summary.suitableSectionLabels.length ? summary.suitableSectionLabels : summary.usableSections).map((section) => (
-                <Badge key={section} variant="outline">
-                  {section}
-                </Badge>
-              ))}
-            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -1064,24 +1093,26 @@ function SourceReviewCard({
                 <XCircle className="mr-2 h-4 w-4" /> 拒絕
               </Button>
             )}
-            <CollapsibleTrigger asChild>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="min-h-[36px]"
-                data-testid="button-source-expand"
-                aria-label={isExpanded ? "收合來源細節" : "展開來源細節"}
-                title={isExpanded ? "收合來源細節" : "展開來源細節"}
-              >
-                {isExpanded ? (
-                  <ChevronUp className="mr-2 h-4 w-4" />
-                ) : (
-                  <ChevronDown className="mr-2 h-4 w-4" />
-                )}
-                展開詳情
-              </Button>
-            </CollapsibleTrigger>
+            {!compactMode && (
+              <CollapsibleTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="min-h-[36px]"
+                  data-testid="button-source-expand"
+                  aria-label={shouldShowExpandedDetails ? "收合來源細節" : "展開來源細節"}
+                  title={shouldShowExpandedDetails ? "收合來源細節" : "展開來源細節"}
+                >
+                  {shouldShowExpandedDetails ? (
+                    <ChevronUp className="mr-2 h-4 w-4" />
+                  ) : (
+                    <ChevronDown className="mr-2 h-4 w-4" />
+                  )}
+                  展開詳情
+                </Button>
+              </CollapsibleTrigger>
+            )}
             {source.url ? (
               <Button asChild type="button" size="sm" variant="ghost" className="min-h-[36px]">
                 <a href={source.url} target="_blank" rel="noreferrer">
@@ -1975,6 +2006,7 @@ function TopicStepPanel({
 function ManageStepPanel({
   sources,
   acceptedCount,
+  hasWorkspaceTopicMismatch,
   onBack,
   onNext,
   onReview,
@@ -1983,6 +2015,7 @@ function ManageStepPanel({
 }: {
   sources: SourceRecord[];
   acceptedCount: number;
+  hasWorkspaceTopicMismatch: boolean;
   onBack: () => void;
   onNext: () => void;
   onReview: (sourceId: string, reviewState: SourceReviewState) => void;
@@ -1990,11 +2023,14 @@ function ManageStepPanel({
   topic: string;
 }) {
   const sourceQualityReadiness = generationReadiness(acceptedSourceRecords(sources));
-  const sourceGateWarning = sourceQualityReadiness.relevantSourceCount < 3
-    ? "目前主要來源不足。請重新搜尋或調整主題，至少需要 3 筆可驗證主要來源。"
-    : sourceQualityReadiness.lowQualityAcceptedCount > 0
-      ? "系統找到多筆延伸或低相關來源，但它們不足以支撐本研究主題。"
-      : sourceQualityReadiness.warning;
+  const canProceedToGenerate = sourceQualityReadiness.canGenerate && !hasWorkspaceTopicMismatch;
+  const sourceGateWarning = hasWorkspaceTopicMismatch
+    ? "目前來源屬於另一個主題，請重新搜尋後再生成。"
+    : sourceQualityReadiness.relevantSourceCount < 3
+      ? "目前主要來源不足。請重新搜尋或調整主題，至少需要 3 筆可驗證主要來源。"
+      : sourceQualityReadiness.lowQualityAcceptedCount > 0
+        ? "系統找到多筆延伸或低相關來源，但它們不足以支撐本研究主題。"
+        : sourceQualityReadiness.warning;
 
   return (
     <section
@@ -2056,7 +2092,7 @@ function ManageStepPanel({
           <ArrowLeft className="mr-2 h-4 w-4" /> 上一步：搜尋來源
         </Button>
         <div className="flex flex-col items-stretch gap-2 sm:items-end">
-          {!sourceQualityReadiness.canGenerate && (
+          {!canProceedToGenerate && (
             <p className="max-w-md rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-5 text-amber-800">
               {sourceGateWarning}
             </p>
@@ -2065,7 +2101,7 @@ function ManageStepPanel({
           type="button"
           className="min-h-[42px]"
           onClick={onNext}
-          disabled={!sourceQualityReadiness.canGenerate}
+          disabled={!canProceedToGenerate}
         >
           下一步：生成報告 <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
@@ -2468,6 +2504,7 @@ export function Generator() {
   const [developerDebugOpen, setDeveloperDebugOpen] = useState(false);
   const [workspaceResume, setWorkspaceResume] =
     useState<WorkspaceResumeState | null>(null);
+  const [sourceWorkspaceFingerprint, setSourceWorkspaceFingerprint] = useState<string | null>(null);
   const [activeStep, setActiveStep] = useState<GeneratorWorkflowStep>("topic");
   const [isStepTransitioning, setIsStepTransitioning] = useState(false);
   const [transitionTargetStep, setTransitionTargetStep] = useState<
@@ -2479,6 +2516,8 @@ export function Generator() {
   });
   const transitionTimerRef = useRef<number | null>(null);
   const stepDelayTimerRef = useRef<number | null>(null);
+  const activeTopicFingerprintRef = useRef<string | null>(null);
+  const suppressTopicResetRef = useRef(false);
 
   const updateInput = (key: ReportInputStringKey, value: string) => {
     setInput((prev) => {
@@ -2545,6 +2584,12 @@ export function Generator() {
     : null;
   const acceptedSources = acceptedSourceRecords(sources);
   const readiness = generationReadiness(acceptedSources);
+  const currentTopicFingerprint = hasTopic ? reportTopicFingerprint(input.topic.trim()) : null;
+  const hasWorkspaceTopicMismatch =
+    Boolean(sources.length)
+    && Boolean(sourceWorkspaceFingerprint)
+    && Boolean(currentTopicFingerprint)
+    && sourceWorkspaceFingerprint !== currentTopicFingerprint;
   const workflowVisibility = generatorWorkflowVisibility(developerDebugOpen);
   const reviewCounts = safeSourceReviewCounts(sources);
   const sourceReviewAvailable =
@@ -2559,8 +2604,8 @@ export function Generator() {
     if (step === "topic") return true;
     if (!hasTopic) return false;
     if (step === "search") return true;
-    if (step === "manage") return sources.length > 0;
-    if (step === "generate") return readiness.canGenerate;
+    if (step === "manage") return sources.length > 0 && !hasWorkspaceTopicMismatch;
+    if (step === "generate") return readiness.canGenerate && !hasWorkspaceTopicMismatch;
     return true;
   };
   const handleStepSelect = (step: GeneratorWorkflowStep) => {
@@ -2601,16 +2646,61 @@ export function Generator() {
   }, []);
 
   useEffect(() => {
+    const topic = input.topic.trim();
+    const fingerprint = reportTopicFingerprint(topic);
+
+    if (suppressTopicResetRef.current) {
+      activeTopicFingerprintRef.current = topic ? fingerprint : null;
+      suppressTopicResetRef.current = false;
+      return;
+    }
+
+    const previousFingerprint = activeTopicFingerprintRef.current;
+    if (!topic) {
+      activeTopicFingerprintRef.current = null;
+      return;
+    }
+
+    if (previousFingerprint === null) {
+      activeTopicFingerprintRef.current = fingerprint;
+      return;
+    }
+
+    if (previousFingerprint === fingerprint) return;
+
+    activeTopicFingerprintRef.current = fingerprint;
+    if (sources.length === 0 && sourceSearchStatus === "idle" && !workspaceResume) return;
+
+    clearStepTransition();
+    setSources([]);
+    setSourceWorkspaceFingerprint(null);
+    setKeywordSearchDebug(null);
+    setSourceSearchStatus("idle");
+    setSourceSearchMessage("主題已變更，請重新搜尋來源。");
+    setGenerateStatus("idle");
+    setWorkspaceResume(null);
+    setActiveStep("search");
+    toast({
+      title: "主題已變更",
+      description: "已清空前一個主題的來源與接受紀錄，請重新搜尋。",
+    });
+  }, [input.topic, sourceSearchStatus, sources.length, toast, workspaceResume]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const reportId = params.get("reportId");
     if (!reportId || workspaceResume?.loaded) return;
 
     const workspace = loadReportWorkspace(reportId);
     if (!workspace) return;
+    if (!workspaceMatchesTopic(workspace, workspace.input.topic)) return;
 
+    suppressTopicResetRef.current = true;
+    activeTopicFingerprintRef.current = workspace.topicFingerprint;
     setWorkspaceResume({ reportId, loaded: true });
     setInput(workspace.input);
     setSources(workspace.acceptedSources);
+    setSourceWorkspaceFingerprint(workspace.topicFingerprint);
     setSourceSearchStatus("done");
     setSourceSearchMessage("已載入報告工作區來源，可調整後重新生成。");
     setActiveStep(
@@ -2644,6 +2734,7 @@ export function Generator() {
     setSourceSearchMessage("");
     setKeywordSearchDebug(null);
     setSources([]);
+    setSourceWorkspaceFingerprint(null);
     if (stepDelayTimerRef.current !== null) {
       window.clearTimeout(stepDelayTimerRef.current);
       stepDelayTimerRef.current = null;
@@ -2669,6 +2760,7 @@ export function Generator() {
         ),
       );
       setSources(normalizedSources);
+      setSourceWorkspaceFingerprint(reportTopicFingerprint(topic));
       setKeywordSearchDebug(keywordSearchDebugFromResult(result));
       if (normalizedSources.length) {
         setSourceSearchStatus("done");
@@ -2706,6 +2798,7 @@ export function Generator() {
           ),
         );
         setSources(normalizedSources);
+        setSourceWorkspaceFingerprint(reportTopicFingerprint(topic));
         setKeywordSearchDebug({
           fallbackUsed: true,
           llmStatus: "skipped",
@@ -2781,6 +2874,15 @@ export function Generator() {
       return;
     }
     const currentReadiness = generationReadiness(acceptedSources);
+    if (hasWorkspaceTopicMismatch) {
+      setGenerateStatus("error");
+      toast({
+        title: "主題與來源不一致",
+        description: "目前來源屬於另一個主題，請重新搜尋後再生成。",
+        variant: "destructive",
+      });
+      return;
+    }
     if (!currentReadiness.canGenerate) {
       setGenerateStatus("error");
       toast({
@@ -2869,8 +2971,11 @@ export function Generator() {
   const handleClear = () => {
     clearStepTransition();
     setInput(DEFAULT_INPUT);
+    activeTopicFingerprintRef.current = null;
+    suppressTopicResetRef.current = false;
     setExpansions([]);
     setSources([]);
+    setSourceWorkspaceFingerprint(null);
     setSourceSearchStatus("idle");
     setSourceSearchMessage("");
     setKeywordSearchDebug(null);
@@ -3031,6 +3136,7 @@ export function Generator() {
             <ManageStepPanel
               sources={sources}
               acceptedCount={acceptedSources.length}
+              hasWorkspaceTopicMismatch={hasWorkspaceTopicMismatch}
               onBack={() => goToStep("search")}
               onNext={goToGenerateStep}
               onReview={updateSourceReview}

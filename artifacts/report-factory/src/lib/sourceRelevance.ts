@@ -224,6 +224,8 @@ export function buildSourceFacetAssessment(
     + requiredHits.length * 18
     + secondaryHits.length * 6
     + authority
+    + evidenceProfile.snippetScore
+    + evidenceProfile.directSnippetCount * 14
     + (evidenceProfile.hasRequiredEvidence ? 12 : 0)
     + (hasAbstract ? 3 : 0)
     - downgradeHits.length * 10
@@ -356,6 +358,8 @@ export function applySourceRelevanceAssessments(
       };
     })();
 
+    const evidenceProfile = useFacetAssessment ? buildSourceEvidenceProfile(source, topicFacets) : null;
+
     return {
       ...source,
       relevanceLevel: assessment.relevanceLevel,
@@ -369,7 +373,24 @@ export function applySourceRelevanceAssessments(
       sourceRelevanceReasonZhTw: assessment.reasonZhTw,
       shouldShowInMainList: assessment.shouldShowInMainList,
       shouldRecommendAccept: assessment.shouldRecommendAccept,
+      mainEvidenceFacet: evidenceProfile?.mainEvidenceFacet ?? null,
+      evidenceSummaryZhTw: evidenceProfile?.summaryZhTw ?? null,
+      evidenceSnippets: evidenceProfile?.evidenceSnippets ?? null,
+      evidenceChain: evidenceProfile?.evidenceChain ?? null,
     };
+  }).sort((a, b) => {
+    const scoreDelta = (b.relevanceScore ?? 0) - (a.relevanceScore ?? 0);
+    if (scoreDelta !== 0) return scoreDelta;
+    const levelRank: Record<SourceFacetRelevanceLevel, number> = {
+      primary: 5,
+      secondary: 4,
+      clue: 3,
+      low: 2,
+      off_topic: 1,
+    };
+    const levelA = (a.relevanceLevel ?? "off_topic") as SourceFacetRelevanceLevel;
+    const levelB = (b.relevanceLevel ?? "off_topic") as SourceFacetRelevanceLevel;
+    return levelRank[levelB] - levelRank[levelA];
   });
 }
 

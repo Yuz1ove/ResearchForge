@@ -1,4 +1,9 @@
-import type { SourceRecord } from "./sourceRecords.ts";
+import type {
+  EvidenceSupportLevel,
+  SourceEvidenceChainEntry,
+  SourceEvidenceSnippet,
+  SourceRecord,
+} from "./sourceRecords.ts";
 import { buildTopicFacets, type TopicFacets } from "./topicFacets.ts";
 
 export type EvidenceGrounding =
@@ -9,11 +14,15 @@ export type EvidenceGrounding =
 
 export interface SourceEvidenceProfile {
   groundingStatus: EvidenceGrounding;
-  evidenceSnippets: string[];
+  evidenceSnippets: SourceEvidenceSnippet[];
   originalSnippets: string[];
   summaryZhTw: string;
   matchedRequiredFacets: string[];
   matchedSecondaryFacets: string[];
+  evidenceChain: SourceEvidenceChainEntry[];
+  mainEvidenceFacet: string | null;
+  snippetScore: number;
+  directSnippetCount: number;
   hasRequiredEvidence: boolean;
 }
 
@@ -65,7 +74,7 @@ function facetTerms(facets: TopicFacets): string[] {
   ]);
 }
 
-function sentenceScore(sentence: string, facets: TopicFacets): number {
+function facetSentenceScore(sentence: string, facets: TopicFacets): number {
   const coreHits = matchedTerms(sentence, facets.topicCore).length;
   const requiredHits = facets.requiredFacets.reduce(
     (count, facet) => count + (matchedTerms(sentence, facet.terms).length > 0 ? 1 : 0),
@@ -76,6 +85,24 @@ function sentenceScore(sentence: string, facets: TopicFacets): number {
     0,
   );
   return coreHits * 4 + requiredHits * 5 + secondaryHits;
+}
+
+function supportLevelForSentence(
+  sentence: string,
+  facets: TopicFacets,
+  matchedFacetKind: "required" | "secondary" | "none",
+): EvidenceSupportLevel {
+  const hasCore = matchedTerms(sentence, facets.topicCore).length > 0;
+  const requiredHits = facets.requiredFacets.reduce(
+    (count, facet) => count + (matchedTerms(sentence, facet.terms).length > 0 ? 1 : 0),
+    0,
+  );
+
+  if (matchedFacetKind === "required" && hasCore && requiredHits > 0) return "direct";
+  if (matchedFacetKind === "required" && requiredHits > 0) return "direct";
+  if (matchedFacetKind === "secondary" && (hasCore || requiredHits > 0)) return "indirect";
+  if (hasCore) return "weak";
+  return "weak";
 }
 
 function matchedFacetLabels(text: string, facets: TopicFacets, facetKind: "required" | "secondary"): string[] {
@@ -106,6 +133,90 @@ function translateEvidenceSnippet(sentence: string, facets: TopicFacets): string
   }
 
   return truncateText(sentence);
+}
+
+function reasoningForSnippet(
+  facetLabel: string,
+  matchedTermsForFacet: string[],
+  supportLevel: EvidenceSupportLevel,
+): string {
+  const terms = matchedTermsForFacet.slice(0, 4).join("、");
+  if (supportLevel === "direct") {
+    return `此片段直接命中${facetLabel}${terms ? `（${terms}）` : ""}，可作為主要證據。`;
+  }
+  if (supportLevel === "indirect") {
+    return `此片段支撐${facetLabel}${terms ? `（${terms}）` : ""}的背景或延伸脈絡。`;
+  }
+  return `此片段只提供${facetLabel}${terms ? `（${terms}）` : ""}的弱線索，需搭配其他來源確認。`;
+}
+
+function buildSnippetFromSentence(
+  sentence: string,
+  topicFacets: TopicFacets,
+): SourceEvidenceSnippet | null {
+  const requiredMatches = topicFacets.requiredFacets
+    .map((facet) => ({
+      facet,
+      matchedTerms: matchedTerms(sentence, facet.terms),
+    }))
+    .filter((item) => item.matchedTerms.length > 0);
+  const secondaryMatches = topicFacets.secondaryFacets
+    .map((facet) => ({
+      facet,
+      matchedTerms: matchedTerms(sentence, facet.terms),
+    }))
+    .filter((item) => item.matchedTerms.length > 0);
+  const primaryMatch = requiredMatches[0] ?? secondaryMatches[0];
+  if (!primaryMatch) return null;
+
+  const matchedFacetKind = requiredMatches.length > 0 ? "required" : "secondary";
+  const supportLevel = supportLevelForSentence(sentence, topicFacets, matchedFacetKind);
+  const coreMatches = matchedTerms(sentence, topicFacets.topicCore);
+  const allMatchedTerms = unique([...primaryMatch.matchedTerms, ...coreMatches]);
+  const score =
+    facetSentenceScore(sentence, topicFacets)
+    + (supportLevel === "direct" ? 18 : supportLevel === "indirect" ? 8 : 2)
+    + allMatchedTerms.length;
+
+  return {
+    originalSnippet: truncateText(sentence, 240),
+    snippetZhTw: translateEvidenceSnippet(sentence, topicFacets),
+    matchedFacet: primaryMatch.facet.labelZhTw,
+    matchedTerms: allMatchedTerms,
+    supportLevel,
+    reasoningZhTw: reasoningForSnippet(primaryMatch.facet.labelZhTw, allMatchedTerms, supportLevel),
+    score,
+  };
+}
+
+function buildEvidenceChain(snippets: SourceEvidenceSnippet[]): SourceEvidenceChainEntry[] {
+  const byFacet = new Map<string, SourceEvidenceChainEntry>();
+  for (const snippet of snippets) {
+    const existing = byFacet.get(snippet.matchedFacet);
+    if (!existing) {
+      byFacet.set(snippet.matchedFacet, {
+        facetLabelZhTw: snippet.matchedFacet,
+        matchedTerms: snippet.matchedTerms,
+        supportLevel: snippet.supportLevel,
+        reasoningZhTw: snippet.reasoningZhTw,
+      });
+      continue;
+    }
+
+    const supportRank = { direct: 3, indirect: 2, weak: 1 } satisfies Record<EvidenceSupportLevel, number>;
+    const strongerSupport =
+      supportRank[snippet.supportLevel] > supportRank[existing.supportLevel]
+        ? snippet.supportLevel
+        : existing.supportLevel;
+    byFacet.set(snippet.matchedFacet, {
+      facetLabelZhTw: snippet.matchedFacet,
+      matchedTerms: unique([...existing.matchedTerms, ...snippet.matchedTerms]).slice(0, 6),
+      supportLevel: strongerSupport,
+      reasoningZhTw: strongerSupport === snippet.supportLevel ? snippet.reasoningZhTw : existing.reasoningZhTw,
+    });
+  }
+
+  return Array.from(byFacet.values()).slice(0, 4);
 }
 
 function buildSummary(snippets: string[], facets: TopicFacets): string {
@@ -139,7 +250,7 @@ export function classifyEvidenceGrounding(source: SourceRecord): EvidenceGroundi
   return "insufficient";
 }
 
-export function extractEvidenceSnippets(source: SourceRecord, topicFacets: TopicFacets): string[] {
+export function extractEvidenceSnippets(source: SourceRecord, topicFacets: TopicFacets): SourceEvidenceSnippet[] {
   const abstract = cleanText(source.abstract);
   if (abstract.length < 24) return [];
 
@@ -149,14 +260,16 @@ export function extractEvidenceSnippets(source: SourceRecord, topicFacets: Topic
     .map((sentence, index) => ({
       sentence,
       index,
-      score: sentenceScore(sentence, topicFacets),
+      score: facetSentenceScore(sentence, topicFacets),
       hasFacetHit: matchedTerms(sentence, terms).length > 0,
     }))
     .filter((item) => item.hasFacetHit)
     .sort((a, b) => (b.score === a.score ? a.index - b.index : b.score - a.score));
 
   const selected = ranked.length > 0 ? ranked.slice(0, 3).map((item) => item.sentence) : sentences.slice(0, 1);
-  return selected.map((sentence) => truncateText(sentence, 240));
+  return selected
+    .map((sentence) => buildSnippetFromSentence(sentence, topicFacets))
+    .filter((snippet): snippet is SourceEvidenceSnippet => Boolean(snippet));
 }
 
 export function buildSourceEvidenceProfile(
@@ -176,7 +289,13 @@ export function buildSourceEvidenceProfile(
     .join(" ");
   const matchedRequiredFacets = matchedFacetLabels(searchableText, topicFacets, "required");
   const matchedSecondaryFacets = matchedFacetLabels(searchableText, topicFacets, "secondary");
-  const hasRequiredEvidence = matchedRequiredFacets.length > 0 && evidenceSnippets.length > 0;
+  const evidenceChain = buildEvidenceChain(evidenceSnippets);
+  const directSnippetCount = evidenceSnippets.filter((snippet) => snippet.supportLevel === "direct").length;
+  const hasRequiredEvidence =
+    matchedRequiredFacets.length > 0
+    && evidenceSnippets.some((snippet) => snippet.supportLevel === "direct" && matchedRequiredFacets.includes(snippet.matchedFacet));
+  const snippetScore = evidenceSnippets.reduce((sum, snippet) => sum + snippet.score, 0);
+  const mainEvidenceFacet = evidenceChain[0]?.facetLabelZhTw ?? null;
 
   if (groundingStatus === "metadata_only") {
     return {
@@ -186,6 +305,10 @@ export function buildSourceEvidenceProfile(
       summaryZhTw: METADATA_ONLY_SUMMARY,
       matchedRequiredFacets,
       matchedSecondaryFacets,
+      evidenceChain: [],
+      mainEvidenceFacet: null,
+      snippetScore: 0,
+      directSnippetCount: 0,
       hasRequiredEvidence: false,
     };
   }
@@ -198,17 +321,25 @@ export function buildSourceEvidenceProfile(
       summaryZhTw: INSUFFICIENT_SUMMARY,
       matchedRequiredFacets,
       matchedSecondaryFacets,
+      evidenceChain: [],
+      mainEvidenceFacet: null,
+      snippetScore: 0,
+      directSnippetCount: 0,
       hasRequiredEvidence: false,
     };
   }
 
   return {
     groundingStatus: evidenceSnippets.length > 0 ? groundingStatus : "insufficient",
-    evidenceSnippets: evidenceSnippets.map((snippet) => translateEvidenceSnippet(snippet, topicFacets)),
-    originalSnippets: evidenceSnippets,
-    summaryZhTw: buildSummary(evidenceSnippets, topicFacets),
+    evidenceSnippets,
+    originalSnippets: evidenceSnippets.map((snippet) => snippet.originalSnippet),
+    summaryZhTw: buildSummary(evidenceSnippets.map((snippet) => snippet.originalSnippet), topicFacets),
     matchedRequiredFacets,
     matchedSecondaryFacets,
+    evidenceChain,
+    mainEvidenceFacet,
+    snippetScore,
+    directSnippetCount,
     hasRequiredEvidence,
   };
 }

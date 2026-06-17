@@ -144,6 +144,11 @@ test("sourceSummaryForUser builds evidence snippets and zh-TW refined summary fo
   assert.equal(summary.recommendation, "recommended");
   assert.equal(summary.groundingStatus, "abstract_grounded");
   assert.ok(summary.evidenceSnippets.length > 0);
+  assert.ok(summary.evidenceSnippets[0]?.matchedFacet);
+  assert.ok(summary.evidenceSnippets[0]?.supportLevel);
+  assert.ok(summary.evidenceSnippets[0]?.reasoningZhTw);
+  assert.ok(summary.evidenceChain.length > 0);
+  assert.ok(summary.mainEvidenceFacet);
   assert.match(summary.contentSummary, /溫室氣體|二氧化碳|觀測升溫|海平面/);
   assert.ok(summary.suitableSectionLabels.includes("現況分析"));
 });

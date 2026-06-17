@@ -2,6 +2,8 @@ import {
   classifySourceRecord,
   normalizeUsableSections,
   SOURCE_CATEGORY_LABELS,
+  type SourceEvidenceChainEntry,
+  type SourceEvidenceSnippet,
   type SourceRecord,
   type WorkflowReportSection,
 } from "./sourceRecords.ts";
@@ -120,8 +122,10 @@ export function sourceDecisionHint(source: SourceRecord): string {
 
 export interface SourceSummaryForUser {
   contentSummary: string;
-  evidenceSnippets: string[];
+  evidenceSnippets: SourceEvidenceSnippet[];
   originalEvidenceSnippets: string[];
+  evidenceChain: SourceEvidenceChainEntry[];
+  mainEvidenceFacet: string | null;
   groundingStatus: EvidenceGrounding;
   topicRelation: string;
   recommendation: "recommended" | "supporting" | "check_first" | "not_recommended";
@@ -246,11 +250,17 @@ export function sourceSummaryForUser(
   const recommendation = sourceAdoptionRecommendation(source, assessment);
   const evidenceProfile = buildSourceEvidenceProfile(source, buildTopicFacets(topic));
   const usableSections = sourceRecommendedSections(source);
+  const contentSummary =
+    evidenceProfile.evidenceSnippets.length > 0 || !sourceHasUsableAbstract(source)
+      ? evidenceProfile.summaryZhTw
+      : sourceContentSummary(source);
 
   return {
-    contentSummary: evidenceProfile.summaryZhTw || sourceContentSummary(source),
+    contentSummary,
     evidenceSnippets: evidenceProfile.evidenceSnippets,
     originalEvidenceSnippets: evidenceProfile.originalSnippets,
+    evidenceChain: evidenceProfile.evidenceChain,
+    mainEvidenceFacet: evidenceProfile.mainEvidenceFacet,
     groundingStatus: evidenceProfile.groundingStatus,
     topicRelation: relationFromAssessment(source, topic, profile, assessment),
     recommendation,

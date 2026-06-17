@@ -45,6 +45,7 @@ export type ReportWorkspaceDraft = ReportDraft;
 
 export interface ReportWorkspace {
   id: string;
+  topicFingerprint: string;
   createdAt: string;
   updatedAt: string;
   generationMode: Exclude<ReportGenerationMode, "blocked">;
@@ -73,6 +74,31 @@ const STORAGE_KEY = "researchforge:report-workspaces:v1";
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function normalizeTopicFingerprintInput(topic: string): string {
+  return topic
+    .replace(/[「」"'`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function stableHash(text: string): string {
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash * 31 + text.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+export function reportTopicFingerprint(topic: string): string {
+  const normalized = normalizeTopicFingerprintInput(topic);
+  return normalized ? stableHash(normalized) : "empty-topic";
+}
+
+export function workspaceMatchesTopic(workspace: ReportWorkspace, topic: string): boolean {
+  return (workspace.topicFingerprint ?? reportTopicFingerprint(workspace.input.topic)) === reportTopicFingerprint(topic);
 }
 
 function createReportId(): string {
@@ -252,6 +278,7 @@ export function createReportWorkspace(
   };
   return {
     id,
+    topicFingerprint: reportTopicFingerprint(effectiveInput.topic),
     createdAt: timestamp,
     updatedAt: timestamp,
     generationMode: mode,
@@ -288,6 +315,7 @@ export function startReportWorkspaceNavigation({
 export function regenerateReportWorkspace(workspace: ReportWorkspace): ReportWorkspace {
   return {
     ...workspace,
+    topicFingerprint: reportTopicFingerprint(workspace.input.topic),
     updatedAt: nowIso(),
     ...buildWorkspaceParts(workspace.input, workspace.acceptedSources),
   };
@@ -320,7 +348,12 @@ export function saveReportWorkspace(workspace: ReportWorkspace): void {
 
 export function loadReportWorkspace(reportId: string): ReportWorkspace | null {
   if (typeof window === "undefined") return null;
-  return parseStoredWorkspaces(window.localStorage.getItem(STORAGE_KEY))[reportId] ?? null;
+  const workspace = parseStoredWorkspaces(window.localStorage.getItem(STORAGE_KEY))[reportId] ?? null;
+  if (!workspace) return null;
+  return {
+    ...workspace,
+    topicFingerprint: workspace.topicFingerprint ?? reportTopicFingerprint(workspace.input.topic),
+  };
 }
 
 export function workspaceToGeneratedReport(workspace: ReportWorkspace, category: TopicCategory): GeneratedReport {

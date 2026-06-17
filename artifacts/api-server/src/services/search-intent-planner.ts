@@ -975,6 +975,15 @@ function matchedTerms(text: string, terms: string[]): string[] {
   return unique(terms.filter((term) => textContains(text, term)));
 }
 
+function splitSentences(text: string): string[] {
+  return text
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(/(?<=[。！？.!?])(?:\s+|(?=\S))/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+}
+
 function isUrbanHeatPlan(plan: SearchIntentPlan): boolean {
   const concepts = normalizeText([...plan.primaryConcepts, ...plan.mustHaveTerms].join(" "));
   return concepts.includes("urban heat island")
@@ -999,6 +1008,47 @@ function hasUsableAbstract(source: SourceRecord): boolean {
   return (source.abstract ?? "").trim().length >= 80;
 }
 
+function evidenceSnippetScore(sentence: string, plan: SearchIntentPlan): number {
+  const matchedPrimary = matchedTerms(sentence, plan.primaryConcepts).length;
+  const matchedMust = matchedTerms(sentence, plan.mustHaveTerms).length;
+  const matchedContext = matchedTerms(sentence, plan.contextConcepts).length;
+  const matchedOutcome = matchedTerms(sentence, plan.outcomeConcepts).length;
+  return matchedPrimary * 7 + matchedMust * 12 + matchedContext * 3 + matchedOutcome * 5;
+}
+
+function sourceEvidenceScore(source: SourceRecord, plan: SearchIntentPlan): {
+  directSnippetCount: number;
+  snippetScore: number;
+  bestSnippetScore: number;
+} {
+  const abstract = source.abstract ?? "";
+  if (!hasUsableAbstract(source)) {
+    return { directSnippetCount: 0, snippetScore: 0, bestSnippetScore: 0 };
+  }
+
+  const snippets = splitSentences(abstract)
+    .map((sentence) => {
+      const matchedPrimary = matchedTerms(sentence, plan.primaryConcepts);
+      const matchedMust = matchedTerms(sentence, plan.mustHaveTerms);
+      const score = evidenceSnippetScore(sentence, plan);
+      return {
+        score,
+        direct: matchedPrimary.length > 0 && matchedMust.length > 0,
+      };
+    })
+    .filter((snippet) => snippet.score > 0);
+
+  if (snippets.length === 0) {
+    return { directSnippetCount: 0, snippetScore: 0, bestSnippetScore: 0 };
+  }
+
+  return {
+    directSnippetCount: snippets.filter((snippet) => snippet.direct).length,
+    snippetScore: snippets.reduce((sum, snippet) => sum + snippet.score, 0),
+    bestSnippetScore: Math.max(...snippets.map((snippet) => snippet.score)),
+  };
+}
+
 export function scoreSourceRelevance(source: SourceRecord, plan: SearchIntentPlan): SourceRelevanceDebug {
   const title = source.title ?? "";
   const abstract = source.abstract ?? "";
@@ -1018,16 +1068,16 @@ export function scoreSourceRelevance(source: SourceRecord, plan: SearchIntentPla
   const matchedContextConcepts = unique([...matchedContextTitle, ...matchedContextAbstract]);
   const matchedOutcomeConcepts = unique([...matchedOutcomeTitle, ...matchedOutcomeAbstract]);
   const penalties: string[] = [];
+  const evidence = sourceEvidenceScore(source, plan);
 
   let score = 0;
   score += matchedPrimaryTitle.length * 8;
-  score += matchedPrimaryAbstract.length * 10;
   score += matchedMustTitle.length * 8;
-  score += matchedMustAbstract.length * 12;
   score += matchedContextTitle.length * 3;
-  score += matchedContextAbstract.length * 5;
   score += matchedOutcomeTitle.length * 2;
-  score += matchedOutcomeAbstract.length * 5;
+  score += evidence.snippetScore;
+  score += evidence.bestSnippetScore;
+  score += evidence.directSnippetCount * 18;
   score += source.doi ? 1 : 0;
   score += hasUsableAbstract(source) ? 18 : -18;
   score += sourceYearBonus(source.year);
@@ -1049,6 +1099,11 @@ export function scoreSourceRelevance(source: SourceRecord, plan: SearchIntentPla
 
   if (!hasUsableAbstract(source)) {
     penalties.push("metadata_only");
+  }
+
+  if (evidence.directSnippetCount === 0) {
+    score -= 16;
+    penalties.push("no_direct_evidence_snippet");
   }
 
   if (isUrbanHeatPlan(plan)) {

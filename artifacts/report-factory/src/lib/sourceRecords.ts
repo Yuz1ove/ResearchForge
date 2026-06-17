@@ -14,6 +14,26 @@ export type EvidenceGroundingStatus =
 export const SOURCE_CONFIDENCE_OPTIONS = ["高", "中", "低"] as const;
 export type SourceConfidence = (typeof SOURCE_CONFIDENCE_OPTIONS)[number];
 
+export const EVIDENCE_SUPPORT_LEVELS = ["direct", "indirect", "weak"] as const;
+export type EvidenceSupportLevel = (typeof EVIDENCE_SUPPORT_LEVELS)[number];
+
+export interface SourceEvidenceSnippet {
+  originalSnippet: string;
+  snippetZhTw: string;
+  matchedFacet: string;
+  matchedTerms: string[];
+  supportLevel: EvidenceSupportLevel;
+  reasoningZhTw: string;
+  score: number;
+}
+
+export interface SourceEvidenceChainEntry {
+  facetLabelZhTw: string;
+  matchedTerms: string[];
+  supportLevel: EvidenceSupportLevel;
+  reasoningZhTw: string;
+}
+
 export const SOURCE_CATEGORY_OPTIONS = [
   "academic_paper",
   "journal_article",
@@ -54,6 +74,10 @@ export interface SourceRecordMetadata {
   authorityLabel?: string | null;
   sourceLanguage?: "zh-TW" | "zh-CN" | "en" | "other" | "unknown" | null;
   sourceLanguageLabel?: string | null;
+  mainEvidenceFacet?: string | null;
+  evidenceSummaryZhTw?: string | null;
+  evidenceSnippets?: SourceEvidenceSnippet[] | null;
+  evidenceChain?: SourceEvidenceChainEntry[] | null;
 }
 
 export type SourceRecord = ApiSourceRecord & SourceRecordMetadata;
@@ -103,6 +127,10 @@ function cleanText(value: string | null | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
+function cleanUnknownText(value: unknown): string | null {
+  return cleanText(typeof value === "string" ? value : null);
+}
+
 export function normalizeUsableSections(value: unknown): WorkflowReportSection[] {
   if (!Array.isArray(value)) return [];
   const allowed = new Set<string>(WORKFLOW_REPORT_SECTIONS);
@@ -134,6 +162,75 @@ function normalizeStringList(value: unknown): string[] | null {
     .map((item) => cleanText(typeof item === "string" ? item : null))
     .filter((item): item is string => Boolean(item));
   return normalized.length ? Array.from(new Set(normalized)) : null;
+}
+
+function normalizeEvidenceSupportLevel(value: unknown): EvidenceSupportLevel | null {
+  if (value === "direct" || value === "indirect" || value === "weak") return value;
+  return null;
+}
+
+function normalizeEvidenceSnippet(value: unknown): SourceEvidenceSnippet | null {
+  if (!value || typeof value !== "object") return null;
+  const data = value as Record<string, unknown>;
+  const originalSnippet = cleanUnknownText(data.originalSnippet ?? data.original_snippet);
+  const snippetZhTw = cleanUnknownText(data.snippetZhTw ?? data.snippet_zh_tw ?? data.snippet);
+  const matchedFacet = cleanUnknownText(data.matchedFacet ?? data.matched_facet);
+  const matchedTerms = normalizeStringList(data.matchedTerms ?? data.matched_terms);
+  const supportLevel = normalizeEvidenceSupportLevel(data.supportLevel ?? data.support_level);
+  const reasoningZhTw = cleanUnknownText(data.reasoningZhTw ?? data.reasoning_zh_tw ?? data.reasoning);
+  const score = typeof data.score === "number" && Number.isFinite(data.score)
+    ? data.score
+    : null;
+
+  if (!originalSnippet || !snippetZhTw || !matchedFacet || !matchedTerms || !supportLevel || !reasoningZhTw || score === null) {
+    return null;
+  }
+
+  return {
+    originalSnippet,
+    snippetZhTw,
+    matchedFacet,
+    matchedTerms,
+    supportLevel,
+    reasoningZhTw,
+    score,
+  };
+}
+
+function normalizeEvidenceChainEntry(value: unknown): SourceEvidenceChainEntry | null {
+  if (!value || typeof value !== "object") return null;
+  const data = value as Record<string, unknown>;
+  const facetLabelZhTw = cleanUnknownText(data.facetLabelZhTw ?? data.facetLabel ?? data.facet);
+  const matchedTerms = normalizeStringList(data.matchedTerms ?? data.matched_terms);
+  const supportLevel = normalizeEvidenceSupportLevel(data.supportLevel ?? data.support_level);
+  const reasoningZhTw = cleanUnknownText(data.reasoningZhTw ?? data.reasoning_zh_tw ?? data.reasoning);
+
+  if (!facetLabelZhTw || !matchedTerms || !supportLevel || !reasoningZhTw) {
+    return null;
+  }
+
+  return {
+    facetLabelZhTw,
+    matchedTerms,
+    supportLevel,
+    reasoningZhTw,
+  };
+}
+
+function normalizeEvidenceSnippetList(value: unknown): SourceEvidenceSnippet[] | null {
+  if (!Array.isArray(value)) return null;
+  const snippets = value
+    .map((item) => normalizeEvidenceSnippet(item))
+    .filter((item): item is SourceEvidenceSnippet => Boolean(item));
+  return snippets.length ? snippets : null;
+}
+
+function normalizeEvidenceChainList(value: unknown): SourceEvidenceChainEntry[] | null {
+  if (!Array.isArray(value)) return null;
+  const entries = value
+    .map((item) => normalizeEvidenceChainEntry(item))
+    .filter((item): item is SourceEvidenceChainEntry => Boolean(item));
+  return entries.length ? entries : null;
 }
 
 function normalizeRelevanceLevel(value: unknown): SourceRecordMetadata["relevanceLevel"] {
@@ -369,6 +466,10 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     authorityLabel: cleanText(source.authorityLabel),
     sourceLanguage: normalizeSourceLanguage(source.sourceLanguage),
     sourceLanguageLabel: cleanText(source.sourceLanguageLabel),
+    mainEvidenceFacet: cleanText(source.mainEvidenceFacet),
+    evidenceSummaryZhTw: cleanText(source.evidenceSummaryZhTw),
+    evidenceSnippets: normalizeEvidenceSnippetList(source.evidenceSnippets),
+    evidenceChain: normalizeEvidenceChainList(source.evidenceChain),
   };
   return {
     ...normalized,

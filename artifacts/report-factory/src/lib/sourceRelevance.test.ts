@@ -184,6 +184,15 @@ test("climate source relevance separates primary causes and current-status sourc
   assert.equal(byId.get("primary-causes")?.relevanceLevel, "primary");
   assert.equal(byId.get("primary-status")?.relevanceLevel, "primary");
   assert.equal(byId.get("primary-ipcc")?.relevanceLevel, "primary");
+  assert.ok(byId.get("primary-causes")?.evidenceSnippets?.some((snippet) =>
+    snippet.matchedFacet === "成因分析" && snippet.supportLevel === "direct"
+  ));
+  assert.ok(byId.get("primary-status")?.evidenceSnippets?.some((snippet) =>
+    snippet.matchedFacet === "現況分析" && snippet.supportLevel === "direct"
+  ));
+  assert.ok(byId.get("primary-ipcc")?.evidenceChain?.some((entry) =>
+    entry.supportLevel === "direct"
+  ));
   assert.equal(byId.get("forest-impact")?.relevanceLevel, "secondary");
   assert.notEqual(byId.get("financial-risk")?.relevanceLevel, "primary");
   assert.notEqual(byId.get("policy-committee")?.relevanceLevel, "primary");

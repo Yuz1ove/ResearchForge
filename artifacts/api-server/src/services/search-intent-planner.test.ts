@@ -195,6 +195,40 @@ test("reranking promotes campus thermal comfort over generic student learning re
   assert.ok((schoolDebug?.score ?? 0) < (relevanceDebug[0]?.score ?? 0));
 });
 
+test("climate reranking promotes direct evidence snippets over metadata-only climate matches", () => {
+  const plan = buildRuleBasedSearchIntent({ topic: climateCausesTopic, language: "zh-TW" });
+  const sources = [
+    sourceRecord({
+      id: "metadata-title",
+      title: "Climate change causes greenhouse gas emissions and observed warming",
+      abstract: null,
+      doi: "10.1000/metadata-title",
+    }),
+    sourceRecord({
+      id: "policy-committee",
+      title: "Climate change policy committee governance",
+      abstract:
+        "This article discusses climate change policy, committee governance, and institutional response functions without emissions or observed climate indicator evidence.",
+    }),
+    sourceRecord({
+      id: "direct-evidence",
+      title: "Observed climate change and anthropogenic greenhouse gas emissions",
+      abstract:
+        "Human activities, principally through greenhouse gas emissions from fossil fuel combustion, have caused global warming. Observed warming is reflected in global temperature trends and CO2 concentration.",
+      doi: "10.1000/direct-climate",
+    }),
+  ];
+
+  const { sources: ranked, relevanceDebug } = rerankSourcesBySearchIntent(sources, plan);
+  const metadataDebug = relevanceDebug.find((item) => item.sourceId === "metadata-title");
+  const directDebug = relevanceDebug.find((item) => item.sourceId === "direct-evidence");
+
+  assert.equal(ranked[0]?.id, "direct-evidence");
+  assert.ok(metadataDebug?.penalties.includes("metadata_only"));
+  assert.ok(metadataDebug?.penalties.includes("no_direct_evidence_snippet"));
+  assert.ok(!directDebug?.penalties.includes("no_direct_evidence_snippet"));
+});
+
 test("source intent search returns planner output and provider failures without crashing", async () => {
   const result = await searchIntentSources(
     { topic: urbanHeatTopic, reportType: "研究報告", audience: "高中", language: "zh-TW" },
