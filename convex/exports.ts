@@ -17,7 +17,14 @@ export const createExportRecord = mutation({
     const timestamp = now();
 
     return await ctx.db.insert("exports", {
-      ...args,
+      reportId: args.reportId,
+      ...(args.generationRunId !== undefined
+        ? { generationRunId: args.generationRunId }
+        : {}),
+      format: args.format,
+      ...(args.fileName !== undefined ? { fileName: args.fileName } : {}),
+      ...(args.storageId !== undefined ? { storageId: args.storageId } : {}),
+      ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
       status: "pending",
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -41,10 +48,10 @@ export const updateExportRecord = mutation({
   handler: async (ctx, args) => {
     await ctx.db.patch(args.exportId, {
       status: args.status,
-      fileName: args.fileName,
-      storageId: args.storageId,
-      error: args.error,
-      metadata: args.metadata,
+      ...(args.fileName !== undefined ? { fileName: args.fileName } : {}),
+      ...(args.storageId !== undefined ? { storageId: args.storageId } : {}),
+      ...(args.error !== undefined ? { error: args.error } : {}),
+      ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
       updatedAt: now(),
     });
 
