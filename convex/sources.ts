@@ -23,7 +23,22 @@ export const addSource = mutation({
     const timestamp = now();
 
     return await ctx.db.insert("sources", {
-      ...args,
+      reportId: args.reportId,
+      title: args.title,
+      ...(args.url !== undefined ? { url: args.url } : {}),
+      ...(args.doi !== undefined ? { doi: args.doi } : {}),
+      ...(args.provider !== undefined ? { provider: args.provider } : {}),
+      ...(args.authors !== undefined ? { authors: args.authors } : {}),
+      ...(args.year !== undefined ? { year: args.year } : {}),
+      ...(args.abstract !== undefined ? { abstract: args.abstract } : {}),
+      ...(args.summary !== undefined ? { summary: args.summary } : {}),
+      ...(args.relevanceScore !== undefined
+        ? { relevanceScore: args.relevanceScore }
+        : {}),
+      ...(args.authorityScore !== undefined
+        ? { authorityScore: args.authorityScore }
+        : {}),
+      ...(args.order !== undefined ? { order: args.order } : {}),
       status: "pending",
       collapsed: false,
       createdAt: timestamp,
