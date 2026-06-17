@@ -847,6 +847,12 @@ function sourceAuthorShortLabel(authors: string[]): string {
   return `${authors[0]} 等`;
 }
 
+function compactSourceLine(text: string, maxLength = 80): string {
+  const chars = Array.from(text.replace(/\s+/g, " ").trim());
+  if (chars.length <= maxLength) return chars.join("");
+  return `${chars.slice(0, maxLength - 1).join("").trim()}…`;
+}
+
 function parseAuthorsInput(value: string): string[] {
   return value
     .split(/[、,，;]/)
@@ -902,7 +908,7 @@ function SourceReviewCard({
   const authorityLabel = source.authorityLabel ?? "權威性待確認";
   const languageLabel = source.sourceLanguageLabel ?? "來源語言待確認";
   const compactMode = reviewState !== "pending";
-  const shouldShowExpandedDetails = isExpanded && !compactMode;
+  const shouldShowExpandedDetails = isExpanded;
   const StatusIcon =
     reviewState === "accepted"
       ? CheckCircle2
@@ -923,10 +929,19 @@ function SourceReviewCard({
         : "bg-amber-100 text-amber-700";
   const compactSummary =
     reviewState === "accepted"
-      ? `已接受：${summary.contentSummary}`
+      ? compactSourceLine(summary.contentSummary)
       : reviewState === "rejected"
-        ? `已拒絕：${summary.topicRelation}`
-        : summary.contentSummary;
+        ? compactSourceLine(
+          summary.recommendation === "not_recommended"
+            ? summary.recommendationReason
+            : summary.topicRelation,
+        )
+        : compactSourceLine(summary.contentSummary);
+  const compactFacet =
+    summary.mainEvidenceFacet ??
+    summary.suitableSectionLabels[0] ??
+    summary.usableSections[0] ??
+    "支撐面向待確認";
   const acceptButtonLabel =
     summary.recommendation === "not_recommended"
       ? "仍要接受"
@@ -941,39 +956,45 @@ function SourceReviewCard({
       <article className={`rounded-lg border p-3 transition-colors sm:p-4 ${cardTone}`} data-testid={`source-card-${reviewState}`}>
         <div className="flex flex-col gap-3">
           <div className="flex min-w-0 gap-3">
-            <div
-              className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${statusTone}`}
-            >
-              <StatusIcon className="h-4 w-4" />
-            </div>
+            {!compactMode && (
+              <div
+                className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${statusTone}`}
+              >
+                <StatusIcon className="h-4 w-4" />
+              </div>
+            )}
             <div className="min-w-0 flex-1">
               <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0">
                   <h3 className="line-clamp-2 text-sm font-semibold leading-6 text-foreground" title={title}>
                     {title}
                   </h3>
-                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                    <span>{sourceAuthorShortLabel(source.authors)}</span>
-                    <span>{year}</span>
-                    <span>{category}</span>
-                    <span>{source.sourceType}</span>
+                  {reviewState !== "rejected" && (
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span>{sourceAuthorShortLabel(source.authors)}</span>
+                      <span>{year}</span>
+                      <span>{category}</span>
+                      <span>{source.sourceType}</span>
+                    </div>
+                  )}
+                </div>
+                {!compactMode && (
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    <Badge variant={sourceReviewBadgeVariant(reviewState)}>
+                      {reviewLabel}
+                    </Badge>
+                    <Badge variant="secondary">可信度 {confidence}</Badge>
+                    <Badge variant={hasAbstract ? "outline" : "secondary"}>
+                      {evidenceGroundingLabel(summary.groundingStatus)}
+                    </Badge>
+                    <Badge variant={sourceRelevanceBadgeVariant(relevanceLevel)}>
+                      {sourceRelevanceLabel(relevanceLevel)}
+                    </Badge>
+                    <Badge variant="outline">{authorityLabel}</Badge>
+                    <Badge variant="outline">{languageLabel}</Badge>
+                    {incomplete && <Badge variant="outline">引用資料不完整</Badge>}
                   </div>
-                </div>
-                <div className="flex shrink-0 flex-wrap items-center gap-2">
-                  <Badge variant={sourceReviewBadgeVariant(reviewState)}>
-                    {reviewLabel}
-                  </Badge>
-                  <Badge variant="secondary">可信度 {confidence}</Badge>
-                  <Badge variant={hasAbstract ? "outline" : "secondary"}>
-                    {evidenceGroundingLabel(summary.groundingStatus)}
-                  </Badge>
-                  <Badge variant={sourceRelevanceBadgeVariant(relevanceLevel)}>
-                    {sourceRelevanceLabel(relevanceLevel)}
-                  </Badge>
-                  <Badge variant="outline">{authorityLabel}</Badge>
-                  <Badge variant="outline">{languageLabel}</Badge>
-                  {incomplete && <Badge variant="outline">引用資料不完整</Badge>}
-                </div>
+                )}
               </div>
             </div>
           </div>
@@ -981,16 +1002,14 @@ function SourceReviewCard({
           <div className="space-y-2 rounded-md border border-border/70 bg-background/70 px-3 py-3">
             {compactMode ? (
               <div className="space-y-2">
-                <p className="line-clamp-2 text-sm leading-6 text-foreground/90">
-                  <span className="font-medium text-foreground">繁中摘要：</span>
+                {reviewState === "accepted" && (
+                  <p className="text-xs font-medium text-muted-foreground">
+                    主要支撐面向：{compactFacet}
+                  </p>
+                )}
+                <p className="line-clamp-1 text-sm leading-6 text-foreground/90">
                   {compactSummary}
                 </p>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="outline">
-                    {reviewState === "accepted" ? "已收合" : "已收合待檢視"}
-                  </Badge>
-                  <Badge variant="outline">{summary.mainEvidenceFacet ?? "證據鏈待確認"}</Badge>
-                </div>
               </div>
             ) : (
               <>
@@ -1056,9 +1075,9 @@ function SourceReviewCard({
                 className="min-h-[36px]"
                 onClick={() => onReview(sourceId, "pending")}
               >
-                取消接受
+                取消採用
               </Button>
-            ) : (
+            ) : reviewState === "pending" ? (
               <Button
                 type="button"
                 size="sm"
@@ -1070,7 +1089,7 @@ function SourceReviewCard({
                 <CheckCircle2 className="mr-2 h-4 w-4" />
                 {acceptButtonLabel}
               </Button>
-            )}
+            ) : null}
             {reviewState === "rejected" ? (
               <Button
                 type="button"
@@ -1081,7 +1100,7 @@ function SourceReviewCard({
               >
                 還原為待審
               </Button>
-            ) : (
+            ) : reviewState === "pending" ? (
               <Button
                 type="button"
                 size="sm"
@@ -1092,38 +1111,36 @@ function SourceReviewCard({
               >
                 <XCircle className="mr-2 h-4 w-4" /> 拒絕
               </Button>
-            )}
-            {!compactMode && (
-              <CollapsibleTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="min-h-[36px]"
-                  data-testid="button-source-expand"
-                  aria-label={shouldShowExpandedDetails ? "收合來源細節" : "展開來源細節"}
-                  title={shouldShowExpandedDetails ? "收合來源細節" : "展開來源細節"}
-                >
-                  {shouldShowExpandedDetails ? (
-                    <ChevronUp className="mr-2 h-4 w-4" />
-                  ) : (
-                    <ChevronDown className="mr-2 h-4 w-4" />
-                  )}
-                  展開詳情
-                </Button>
-              </CollapsibleTrigger>
-            )}
-            {source.url ? (
+            ) : null}
+            <CollapsibleTrigger asChild>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="min-h-[36px]"
+                data-testid="button-source-expand"
+                aria-label={shouldShowExpandedDetails ? "收合來源細節" : "展開來源細節"}
+                title={shouldShowExpandedDetails ? "收合來源細節" : "展開來源細節"}
+              >
+                {shouldShowExpandedDetails ? (
+                  <ChevronUp className="mr-2 h-4 w-4" />
+                ) : (
+                  <ChevronDown className="mr-2 h-4 w-4" />
+                )}
+                展開詳情
+              </Button>
+            </CollapsibleTrigger>
+            {!compactMode && source.url ? (
               <Button asChild type="button" size="sm" variant="ghost" className="min-h-[36px]">
                 <a href={source.url} target="_blank" rel="noreferrer">
                   <ExternalLink className="mr-2 h-4 w-4" /> 查看原始來源
                 </a>
               </Button>
-            ) : (
+            ) : !compactMode ? (
               <Button type="button" size="sm" variant="ghost" className="min-h-[36px]" disabled>
                 查看原始來源
               </Button>
-            )}
+            ) : null}
           </div>
         </div>
 
