@@ -1,4 +1,5 @@
 export * from "./source-record";
+export * from "./research-workflow";
 export * from "./generated/api";
 export * from "./generated/types/errorResponse";
 export * from "./generated/types/healthStatus";
