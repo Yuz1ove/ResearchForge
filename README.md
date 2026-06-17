@@ -47,7 +47,7 @@ ResearchForge is under active development. The main engineering focus is the sou
 
 - Frontend: React, Vite, TypeScript, Tailwind CSS, Radix UI
 - Routing: wouter
-- Data layer: TanStack Query, Zod
+- Data layer: TanStack Query, Zod, Convex
 - Backend: Node.js API workspace
 - Source providers: Crossref and Semantic Scholar integrations
 - Export: DOCX, Markdown, TXT, JSON, print/PDF workflow
@@ -58,6 +58,7 @@ ResearchForge is under active development. The main engineering focus is the sou
 artifacts/
   api-server/        # source search and backend services
   report-factory/    # ResearchForge frontend and report workflow
+convex/              # durable report, source, evidence, run, and export records
 lib/                 # shared workspace utilities
 scripts/             # maintenance scripts
 ```
@@ -88,6 +89,38 @@ Open the generator:
 ```text
 http://localhost:22067/generator
 ```
+
+## Convex data layer
+
+ResearchForge uses Convex as a durable data layer for report workspace state. The first integration stage stores:
+
+- `reports`
+- `sources`
+- `evidenceCards`
+- `generationRuns`
+- `exports`
+
+The existing Node.js API still owns source search, document generation, file export, and other heavier workflows.
+
+Create or connect a Convex project from the repository root:
+
+```bash
+pnpm dlx convex dev
+```
+
+Install Convex AI coding guidelines after initialization:
+
+```bash
+pnpm dlx convex ai-files install
+```
+
+Copy `.env.example` to `.env.local`, then set the public Vite Convex URL:
+
+```bash
+VITE_CONVEX_URL=https://your-project-name.convex.cloud
+```
+
+Do not commit secret keys. Keep `CONVEX_DEPLOY_KEY`, OpenAI keys, Vercel tokens, and other secrets in the relevant dashboard or local-only environment files.
 
 ## Quality checks
 
