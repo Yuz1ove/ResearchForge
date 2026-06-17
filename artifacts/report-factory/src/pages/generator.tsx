@@ -1083,7 +1083,6 @@ function SourceReviewCard({
                 size="sm"
                 variant={summary.recommendation === "recommended" ? "default" : "outline"}
                 className="min-h-[36px]"
-                disabled={reviewState === "rejected"}
                 onClick={() => onReview(sourceId, "accepted")}
               >
                 <CheckCircle2 className="mr-2 h-4 w-4" />
@@ -1106,7 +1105,6 @@ function SourceReviewCard({
                 size="sm"
                 variant="outline"
                 className="min-h-[36px]"
-                disabled={reviewState === "accepted"}
                 onClick={() => onReview(sourceId, "rejected")}
               >
                 <XCircle className="mr-2 h-4 w-4" /> 拒絕
