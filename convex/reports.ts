@@ -15,7 +15,11 @@ export const createReport = mutation({
     const timestamp = now();
 
     return await ctx.db.insert("reports", {
-      ...args,
+      title: args.title,
+      topic: args.topic,
+      ...(args.reportType !== undefined ? { reportType: args.reportType } : {}),
+      ...(args.language !== undefined ? { language: args.language } : {}),
+      ...(args.ownerKey !== undefined ? { ownerKey: args.ownerKey } : {}),
       status: "active",
       createdAt: timestamp,
       updatedAt: timestamp,
