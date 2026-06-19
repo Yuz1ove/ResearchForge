@@ -77,7 +77,7 @@ test("accepted source digest creates metadata-driven gap reminders", () => {
     { currentYear: 2026 },
   );
 
-  assert.ok(digest.gaps.includes("部分來源摘要不足，建議開啟原文確認"));
+  assert.ok(digest.gaps.includes("部分來源摘要不足，已降為保守證據"));
   assert.ok(digest.gaps.includes("缺少近三年研究"));
   assert.ok(digest.gaps.includes("缺少官方資料"));
 });

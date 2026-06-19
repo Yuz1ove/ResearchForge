@@ -264,6 +264,13 @@ export interface TopicExpansionCard {
   title: string;
   angle: string;
   reason: string;
+  researchValue?: string;
+  dataDirections?: string[];
+  chineseKeywords?: string[];
+  englishKeywords?: string[];
+  suggestedQuery?: string;
+  searchBoundary?: string;
+  excludedTerms?: string[];
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -389,6 +396,7 @@ export function detectTopicCategory(
       // beverages
       "咖啡", "茶葉", "奶茶", "果汁", "飲料", "啤酒", "紅酒", "白酒", "牛奶",
       // culinary / food industry
+      "水餃", "餃子", "dumpling", "薯條", "炸薯條", "速食薯條", "馬鈴薯條", "french fries", "fries",
       "料理", "烹飪", "烹調", "飲食", "食品", "食物", "食材", "餐廳", "餐飲", "烘焙",
       "甜點", "零食", "麵包", "點心", "外食", "速食", "有機食", "素食", "純素",
       "食安", "食品安全", "農產品", "熟成", "發酵食", "醃製", "保存食",
@@ -513,7 +521,7 @@ function topicExpansionKind(topic: string, category?: TopicCategory): TopicExpan
 
   if (has(t, ["花語", "茶文化", "廟宇", "動漫", "流行音樂", "藝術", "文化"])) return "culture";
   if (has(t, ["花朵", "植物", "蜜蜂", "細菌", "海龜", "昆蟲", "生態", "物種"])) return "nature";
-  if (has(t, ["可樂", "咖啡", "泡麵", "手搖飲", "早餐", "飲料", "奶茶", "速食", "食品"])) return "food";
+  if (has(t, ["水餃", "餃子", "dumpling", "薯條", "炸薯條", "速食薯條", "馬鈴薯條", "french fries", "fries", "可樂", "咖啡", "泡麵", "手搖飲", "早餐", "飲料", "奶茶", "速食", "食品"])) return "food";
   if (has(lower, ["ai"]) || has(t, ["短影音", "手機", "社群媒體", "電動車", "人工智慧", "演算法", "平台"])) return "tech";
   if (has(t, ["睡眠", "注意力", "考試壓力", "補習", "閱讀", "學習", "壓力"])) return "education";
   if (has(t, ["氣候變遷", "都市熱島", "空氣污染", "少子化", "夜市文化", "環境", "污染", "永續"])) return "environment";
@@ -543,65 +551,401 @@ function topicExpansionKind(topic: string, category?: TopicCategory): TopicExpan
 }
 
 function expansionCard(title: string, angle: string, reason: string): TopicExpansionCard {
-  return { title, angle, reason };
+  const topicTerms = normalizeTerms(
+    title
+      .replace(/[「」《》〈〉]/g, " ")
+      .split(/[\s，,、：:；;。！？!?（）()]+/)
+      .filter((term) => chars(term) >= 2),
+  );
+  return {
+    title,
+    angle,
+    reason,
+    researchValue: reason,
+    dataDirections: [angle, "官方統計或資料庫", "期刊／機構研究", "案例或標示資料"],
+    chineseKeywords: normalizeTerms([...topicTerms.slice(0, 3), angle]),
+    englishKeywords: ["official data", "systematic review", "case study"],
+    suggestedQuery: buildSuggestedQuery(title, [angle], ["official data", "systematic review"]),
+    searchBoundary: "保持研究對象與題目一致，避免只做作文式聯想或個人心得。",
+  };
+}
+
+function normalizeTerms(terms: string[]): string[] {
+  return Array.from(new Set(terms.map((term) => term.trim()).filter(Boolean)));
+}
+
+function buildSuggestedQuery(
+  topic: string,
+  chineseKeywords: string[] = [],
+  englishKeywords: string[] = [],
+): string {
+  return normalizeTerms([topic, ...chineseKeywords.slice(0, 3), ...englishKeywords.slice(0, 2)]).join(" ");
+}
+
+function plannerCard(
+  title: string,
+  angle: string,
+  reason: string,
+  extras: Omit<TopicExpansionCard, "title" | "angle" | "reason"> = {},
+): TopicExpansionCard {
+  return {
+    title,
+    angle,
+    reason,
+    ...extras,
+  };
 }
 
 function natureExpansionCards(topic: string): TopicExpansionCard[] {
   const t = topic || "自然主題";
   if (has(t, ["花朵", "植物"])) {
     return [
-      expansionCard(`${t}如何透過授粉與繁殖維持族群`, "生態", "可觀察花粉、昆蟲互動與植物繁殖方式。"),
-      expansionCard(`${t}在校園或城市環境中的生長條件`, "校園觀察", "適合做實地觀察，記錄光照、水分與季節差異。"),
-      expansionCard(`${t}與蜜蜂等昆蟲互動對生態系的影響`, "生物互動", "可連結授粉者、食物網與生物多樣性。"),
-      expansionCard(`${t}在花語、節慶與日常美感中的意義`, "文化", "可討論自然物如何被人類賦予象徵與情感。"),
-      expansionCard(`${t}面對氣候與季節變化的適應方式`, "環境變化", "可分析開花時間、溫度與降雨對生長的影響。"),
+      plannerCard(`${t}如何透過授粉與繁殖維持族群`, "生態", "可觀察花粉、昆蟲互動與植物繁殖方式。", {
+        researchValue: "釐清花朵如何靠授粉與繁殖維持族群，適合連結生態、農業與觀察資料。",
+        dataDirections: ["授粉研究", "植物繁殖", "昆蟲互動", "生態系資料"],
+        chineseKeywords: ["花朵", "授粉", "植物繁殖", "生態系"],
+        englishKeywords: ["pollination", "plant reproduction", "ecology", "flower ecology"],
+        suggestedQuery: buildSuggestedQuery(t, ["花朵", "授粉", "植物繁殖"], ["pollination", "plant reproduction", "ecology"]),
+        searchBoundary: "避免只寫花語或美感心得，需鎖定授粉與繁殖的研究資料。",
+      }),
+      plannerCard(`${t}在校園或城市環境中的生長條件`, "校園觀察", "適合做實地觀察，記錄光照、水分與季節差異。", {
+        researchValue: "把花朵放進實際場域觀察，有助比較光照、水分、季節與棲地條件。",
+        dataDirections: ["校園觀察", "城市綠化", "光照與水分", "季節變化"],
+        chineseKeywords: ["花朵", "校園觀察", "光照", "水分", "季節"],
+        englishKeywords: ["flower growth conditions", "urban ecology", "light", "water", "seasonal change"],
+        suggestedQuery: buildSuggestedQuery(t, ["校園觀察", "光照", "水分"], ["flower growth conditions", "urban ecology"]),
+        searchBoundary: "避免偏到純心得或一般生活連結，需保留可觀察條件與環境變因。",
+      }),
+      plannerCard(`${t}與蜜蜂等昆蟲互動對生態系的影響`, "生物互動", "可連結授粉者、食物網與生物多樣性。", {
+        researchValue: "花朵與授粉昆蟲的互動可對應到生物多樣性、食物網與授粉效率。",
+        dataDirections: ["授粉者研究", "食物網", "生物多樣性", "授粉效率"],
+        chineseKeywords: ["花朵", "蜜蜂", "授粉者", "生物多樣性"],
+        englishKeywords: ["pollinator", "bee", "food web", "biodiversity"],
+        suggestedQuery: buildSuggestedQuery(t, ["蜜蜂", "授粉者", "生物多樣性"], ["pollinator", "bee", "biodiversity"]),
+        searchBoundary: "避免把主題擴成所有昆蟲研究，需回到花朵與授粉互動。",
+      }),
+      plannerCard(`${t}在花卉文化與節慶中的象徵意義`, "文化", "研究自然物如何在節慶、儀式與地方生活中形成象徵意義。", {
+        researchValue: "若要連結文化面，可以研究花卉如何在節慶、儀式與地方習俗中被賦予意義。",
+        dataDirections: ["花卉文化", "節慶使用", "象徵意義", "民俗資料"],
+        chineseKeywords: ["花朵", "花卉文化", "節慶", "象徵意義"],
+        englishKeywords: ["flower culture", "festival", "symbolism", "floral meaning"],
+        suggestedQuery: buildSuggestedQuery(t, ["花卉文化", "節慶", "象徵意義"], ["flower culture", "festival", "symbolism"]),
+        searchBoundary: "避免只寫抒情心得，需連到民俗、文化或社會脈絡。",
+      }),
+      plannerCard(`${t}面對氣候與季節變化的適應方式`, "環境變化", "可分析開花時間、溫度與降雨對生長的影響。", {
+        researchValue: "可用來研究氣候、溫度與降雨變化如何影響花期與生長節奏。",
+        dataDirections: ["花期變化", "氣候因素", "溫度資料", "降雨資料"],
+        chineseKeywords: ["花朵", "花期", "氣候變化", "溫度", "降雨"],
+        englishKeywords: ["flowering time", "climate change", "temperature", "rainfall"],
+        suggestedQuery: buildSuggestedQuery(t, ["花期", "氣候變化", "溫度"], ["flowering time", "climate change"]),
+        searchBoundary: "避免把主題寫成泛用環境議題，仍需緊扣花朵與花期。",
+      }),
     ];
   }
   if (has(t, ["蜜蜂"])) {
     return [
-      expansionCard("蜜蜂授粉對農業生產與生態系的影響", "生態", "可分析作物授粉、生物多樣性與糧食安全。"),
-      expansionCard("蜜蜂族群減少可能反映哪些環境問題", "環境", "適合討論農藥、棲地變化與氣候因素。"),
-      expansionCard("蜂巢分工如何展現昆蟲社會行為", "行為科學", "可整理蜂后、工蜂與群體溝通。"),
-      expansionCard("蜂產品與人類生活的關係", "生活應用", "可連結蜂蜜、蜂蠟與食品安全。"),
-      expansionCard("校園或社區如何營造友善授粉環境", "行動方案", "可提出種植蜜源植物與減少農藥的策略。"),
+      plannerCard("蜜蜂授粉對農業生產與生態系的影響", "生態", "可分析作物授粉、生物多樣性與糧食安全。", {
+        researchValue: "從農業生產與生態系兩端看蜜蜂授粉的重要性，適合找作物產量與糧食安全資料。",
+        dataDirections: ["作物授粉", "糧食安全", "生物多樣性", "農業資料"],
+        chineseKeywords: ["蜜蜂", "授粉", "農業生產", "糧食安全"],
+        englishKeywords: ["bee pollination", "agricultural production", "biodiversity", "food security"],
+        suggestedQuery: buildSuggestedQuery(t, ["授粉", "農業生產", "糧食安全"], ["bee pollination", "food security"]),
+        searchBoundary: "避免只談養蜂趣聞，需保留農業與生態證據。",
+      }),
+      plannerCard("蜜蜂族群減少可能反映哪些環境問題", "環境", "適合討論農藥、棲地變化與氣候因素。", {
+        researchValue: "可追查蜜蜂數量變化背後的環境壓力，例如農藥、棲地變化與氣候因素。",
+        dataDirections: ["農藥影響", "棲地變化", "氣候因素", "環境監測"],
+        chineseKeywords: ["蜜蜂族群", "農藥", "棲地", "氣候因素"],
+        englishKeywords: ["bee population", "pesticides", "habitat change", "climate factors"],
+        suggestedQuery: buildSuggestedQuery(t, ["農藥", "棲地變化", "氣候因素"], ["bee population", "pesticides"]),
+        searchBoundary: "避免把問題泛化成所有昆蟲消失，重點仍是蜜蜂族群。",
+      }),
+      plannerCard("蜂巢分工如何展現昆蟲社會行為", "行為科學", "可整理蜂后、工蜂與群體溝通。", {
+        researchValue: "可從分工、溝通與群體組織理解蜜蜂的社會行為。",
+        dataDirections: ["社會性昆蟲", "分工", "群體溝通", "行為生態"],
+        chineseKeywords: ["蜂巢", "分工", "群體溝通", "社會行為"],
+        englishKeywords: ["social insects", "division of labor", "communication", "bee colony"],
+        suggestedQuery: buildSuggestedQuery(t, ["蜂巢分工", "群體溝通", "社會行為"], ["social insects", "division of labor"]),
+        searchBoundary: "避免只寫生物介紹，需落到分工與行為資料。",
+      }),
+      plannerCard("蜂產品與人類生活的關係", "生活應用", "可連結蜂蜜、蜂蠟與食品安全。", {
+        researchValue: "若要偏生活應用，可整理蜂蜜、蜂蠟與相關產品的用途、品質與食安。",
+        dataDirections: ["蜂蜜", "蜂蠟", "食品安全", "產品應用"],
+        chineseKeywords: ["蜂產品", "蜂蜜", "蜂蠟", "食品安全"],
+        englishKeywords: ["bee products", "honey", "beeswax", "food safety"],
+        suggestedQuery: buildSuggestedQuery(t, ["蜂產品", "蜂蜜", "蜂蠟"], ["bee products", "honey", "beeswax"]),
+        searchBoundary: "避免變成購物介紹，需保留品質與安全研究面向。",
+      }),
+      plannerCard("校園或社區如何營造友善授粉環境", "行動方案", "可提出種植蜜源植物與減少農藥的策略。", {
+        researchValue: "把研究延伸到行動面，可看校園與社區如何改善授粉環境。",
+        dataDirections: ["友善授粉", "蜜源植物", "農藥減量", "社區行動"],
+        chineseKeywords: ["蜜蜂", "友善授粉", "蜜源植物", "農藥減量"],
+        englishKeywords: ["pollinator friendly", "nectar plants", "pesticide reduction", "community action"],
+        suggestedQuery: buildSuggestedQuery(t, ["友善授粉", "蜜源植物", "農藥減量"], ["pollinator friendly", "community action"]),
+        searchBoundary: "避免把主題寫成活動企劃，仍要回到可查證的環境資料。",
+      }),
     ];
   }
   if (has(t, ["細菌"])) {
     return [
-      expansionCard("細菌在人體健康與腸道微生態中的角色", "健康", "可討論益菌、感染與日常衛生。"),
-      expansionCard("細菌如何參與分解與物質循環", "生態", "可連結土壤、腐敗與自然循環。"),
-      expansionCard("抗生素使用與抗藥性問題", "公共衛生", "適合討論用藥觀念與醫療挑戰。"),
-      expansionCard("食品保存如何抑制細菌生長", "食品安全", "可比較溫度、水分與保存方式。"),
-      expansionCard("細菌觀察實驗的安全設計", "實驗方法", "可規劃培養限制、變因與安全規範。"),
+      plannerCard("細菌在人體健康與腸道微生態中的角色", "健康", "研究益菌、感染風險與日常衛生之間的關係。", {
+        researchValue: "可從健康與腸道微生態兩端，研究細菌與人體共生或致病的關係。",
+        dataDirections: ["腸道微生態", "感染風險", "益菌研究", "衛生資料"],
+        chineseKeywords: ["細菌", "腸道微生態", "健康", "益菌"],
+        englishKeywords: ["bacteria", "gut microbiome", "health", "probiotics"],
+        suggestedQuery: buildSuggestedQuery(t, ["腸道微生態", "健康", "益菌"], ["bacteria", "gut microbiome"]),
+        searchBoundary: "避免只寫一般科普，需進到具體健康或微生態研究。",
+      }),
+      plannerCard("細菌如何參與分解與物質循環", "生態", "可連結土壤、腐敗與自然循環。", {
+        researchValue: "可研究細菌在分解、土壤與物質循環中的角色。",
+        dataDirections: ["分解作用", "土壤生態", "物質循環", "腐敗資料"],
+        chineseKeywords: ["細菌", "分解", "物質循環", "土壤生態"],
+        englishKeywords: ["decomposition", "nutrient cycling", "soil bacteria", "ecology"],
+        suggestedQuery: buildSuggestedQuery(t, ["分解", "物質循環", "土壤生態"], ["decomposition", "nutrient cycling"]),
+        searchBoundary: "避免離題到整個生態系統概論，仍要聚焦細菌。",
+      }),
+      plannerCard("抗生素使用與抗藥性問題", "公共衛生", "適合討論用藥觀念與醫療挑戰。", {
+        researchValue: "適合從公共衛生角度分析抗生素使用與抗藥性。",
+        dataDirections: ["抗藥性", "用藥行為", "公共衛生", "醫療資料"],
+        chineseKeywords: ["抗生素", "抗藥性", "公共衛生", "用藥"],
+        englishKeywords: ["antibiotic resistance", "antibiotic use", "public health", "drug resistance"],
+        suggestedQuery: buildSuggestedQuery(t, ["抗生素", "抗藥性", "公共衛生"], ["antibiotic resistance", "public health"]),
+        searchBoundary: "避免變成醫療宣導文，需連結研究與統計資料。",
+      }),
+      plannerCard("食品保存如何抑制細菌生長", "食品安全", "可比較溫度、水分與保存方式。", {
+        researchValue: "可比較冷藏、加熱、乾燥等保存方式如何影響細菌生長。",
+        dataDirections: ["食品保存", "溫度控制", "水分活性", "食品安全"],
+        chineseKeywords: ["細菌", "食品保存", "冷藏", "食品安全"],
+        englishKeywords: ["food preservation", "bacterial growth", "temperature control", "food safety"],
+        suggestedQuery: buildSuggestedQuery(t, ["食品保存", "食品安全", "冷藏"], ["food preservation", "bacterial growth"]),
+        searchBoundary: "避免只寫廚房常識，需保留保存條件與細菌生長資料。",
+      }),
+      plannerCard("細菌觀察實驗的安全設計", "實驗方法", "可規劃培養限制、變因與安全規範。", {
+        researchValue: "若主題需要實驗設計，可研究觀察細菌時的變因與安全規範。",
+        dataDirections: ["實驗設計", "變因控制", "培養限制", "安全規範"],
+        chineseKeywords: ["細菌觀察", "實驗設計", "變因", "安全規範"],
+        englishKeywords: ["bacteria observation", "experimental design", "variables", "biosafety"],
+        suggestedQuery: buildSuggestedQuery(t, ["細菌觀察", "實驗設計", "安全規範"], ["experimental design", "biosafety"]),
+        searchBoundary: "避免把主題寫成實作教學，仍需保留研究設計思維。",
+      }),
     ];
   }
   return [
-    expansionCard(`${t}的棲地需求與生存策略`, "生態", "可分析環境條件、食物來源與族群變化。"),
-    expansionCard(`${t}與其他生物之間的互動關係`, "生物互動", "可連結掠食、共生、競爭或授粉等關係。"),
-    expansionCard(`${t}面臨的人為威脅與保育方法`, "保育", "適合討論污染、棲地破壞與保護行動。"),
-    expansionCard(`${t}在地方文化或日常生活中的意義`, "文化", "可整理人類如何理解與使用自然資源。"),
-    expansionCard(`${t}的校園或社區觀察研究設計`, "觀察方法", "可規劃觀察地點、紀錄方式與倫理注意事項。"),
+    plannerCard(`${t}的棲地需求與生存策略`, "生態", "可分析環境條件、食物來源與族群變化。", {
+      researchValue: "先把研究對象收斂到可觀察的棲地與生存條件，再往外找證據。",
+      dataDirections: ["棲地條件", "生存策略", "族群變化", "環境因素"],
+      chineseKeywords: [t, "棲地需求", "生存策略", "生態"],
+      englishKeywords: ["habitat", "survival strategy", "ecology", "population change"],
+      suggestedQuery: buildSuggestedQuery(t, ["棲地需求", "生存策略", "生態"], ["habitat", "survival strategy"]),
+      searchBoundary: "避免只寫概念介紹，需鎖定可查證的環境與行為資料。",
+    }),
+    plannerCard(`${t}與其他生物之間的互動關係`, "生物互動", "可連結掠食、共生、競爭或授粉等關係。", {
+      researchValue: "可透過生物互動把主題放進更完整的生態關係中。",
+      dataDirections: ["掠食", "共生", "競爭", "授粉"],
+      chineseKeywords: [t, "生物互動", "掠食", "共生"],
+      englishKeywords: ["interaction", "predation", "symbiosis", "competition"],
+      suggestedQuery: buildSuggestedQuery(t, ["生物互動", "掠食", "共生"], ["interaction", "predation"]),
+      searchBoundary: "避免擴散到無關物種，仍需回到本題目本身。",
+    }),
+    plannerCard(`${t}面臨的人為威脅與保育方法`, "保育", "適合討論污染、棲地破壞與保護行動。", {
+      researchValue: "可把研究重點放在威脅來源與保育措施的比較。",
+      dataDirections: ["人為威脅", "棲地破壞", "保育方法", "政策行動"],
+      chineseKeywords: [t, "人為威脅", "保育", "棲地破壞"],
+      englishKeywords: ["conservation", "human impact", "habitat loss", "threats"],
+      suggestedQuery: buildSuggestedQuery(t, ["人為威脅", "保育", "棲地破壞"], ["conservation", "habitat loss"]),
+      searchBoundary: "避免變成單純倡議，需有威脅與措施的資料基礎。",
+    }),
+    plannerCard(`${t}在地方文化或日常生活中的意義`, "文化", "可整理人類如何理解與使用自然資源。", {
+      researchValue: "若需要文化面切入，可以從地方生活或使用習慣整理其意義。",
+      dataDirections: ["地方文化", "日常生活", "資源使用", "民俗資料"],
+      chineseKeywords: [t, "地方文化", "日常生活", "民俗"],
+      englishKeywords: ["local culture", "daily life", "cultural meaning", "folk practice"],
+      suggestedQuery: buildSuggestedQuery(t, ["地方文化", "日常生活", "民俗"], ["local culture", "daily life"]),
+      searchBoundary: "避免只寫心得或作文式聯想，需保留文化研究脈絡。",
+    }),
+    plannerCard(`${t}的校園或社區觀察研究設計`, "觀察方法", "可規劃觀察地點、紀錄方式與倫理注意事項。", {
+      researchValue: "可把題目轉成可實作的觀察型研究，明確規劃觀察方法。",
+      dataDirections: ["觀察設計", "紀錄方式", "場域選擇", "倫理注意"],
+      chineseKeywords: [t, "觀察研究", "校園", "社區"],
+      englishKeywords: ["observation study", "fieldwork", "research design", "ethics"],
+      suggestedQuery: buildSuggestedQuery(t, ["觀察研究", "校園", "社區"], ["observation study", "research design"]),
+      searchBoundary: "避免把主題做成單純活動設計，仍需可蒐證。",
+    }),
   ];
 }
 
 function foodExpansionCards(topic: string): TopicExpansionCard[] {
   const t = topic || "食品";
+  if (has(t, ["水餃", "餃子", "dumpling"])) {
+    return [
+      plannerCard("水餃在台灣飲食文化中的演變", "飲食文化", "可追查家常料理、節慶與地方飲食的變化。", {
+        researchValue: "把水餃視為飲食文化與地方生活的一部分，而不是只當成日常食物。",
+        dataDirections: ["飲食文化", "地方飲食", "歷史資料", "民俗資料"],
+        chineseKeywords: ["水餃", "飲食文化", "台灣", "地方料理"],
+        englishKeywords: ["dumpling", "food culture", "Taiwan", "culinary history"],
+        suggestedQuery: buildSuggestedQuery(t, ["水餃", "飲食文化", "台灣"], ["dumpling", "food culture", "Taiwan"]),
+        searchBoundary: "避免只寫口味或個人喜好，需查文化與歷史資料。",
+        excludedTerms: ["食譜", "料理教學", "餐廳推薦"],
+      }),
+      plannerCard("冷凍水餃與現包水餃的營養差異", "營養比較", "可比較營養標示、鈉含量與加工差異。", {
+        researchValue: "這是一個可直接查營養資料與食品標示的研究題目。",
+        dataDirections: ["營養標示", "鈉含量", "加工方式", "食品資料庫"],
+        chineseKeywords: ["冷凍水餃", "現包水餃", "營養標示", "鈉含量"],
+        englishKeywords: ["frozen dumpling", "fresh dumpling", "nutrition label", "sodium"],
+        suggestedQuery: buildSuggestedQuery(t, ["冷凍水餃", "營養標示", "鈉含量"], ["frozen dumpling", "nutrition label"]),
+        searchBoundary: "避免只做口感比較，需保留營養與加工差異。",
+        excludedTerms: ["食譜", "手作教學", "餐廳推薦"],
+      }),
+      plannerCard("水餃內餡組成對熱量與營養的影響", "成分分析", "可分析豬肉、蔬菜、海鮮等內餡差異。", {
+        researchValue: "可把研究焦點放在內餡組成如何改變熱量、脂肪與蛋白質。",
+        dataDirections: ["內餡組成", "熱量", "脂肪", "蛋白質"],
+        chineseKeywords: ["水餃內餡", "熱量", "脂肪", "蛋白質"],
+        englishKeywords: ["dumpling filling", "calories", "fat", "protein"],
+        suggestedQuery: buildSuggestedQuery(t, ["水餃內餡", "熱量", "脂肪"], ["dumpling filling", "calories"]),
+        searchBoundary: "避免變成菜單介紹，需回到營養成分資料。",
+        excludedTerms: ["料理做法", "包餡技巧"],
+      }),
+      plannerCard("市售冷凍水餃鈉含量與健康風險比較", "健康風險", "可比較不同品牌或口味的鈉含量與攝取風險。", {
+        researchValue: "可直接找食品標示與健康建議，形成可查證的研究方向。",
+        dataDirections: ["鈉含量", "品牌比較", "健康風險", "食品標示"],
+        chineseKeywords: ["冷凍水餃", "鈉含量", "健康風險", "食品標示"],
+        englishKeywords: ["frozen dumpling", "sodium intake", "health risk", "food label"],
+        suggestedQuery: buildSuggestedQuery(t, ["冷凍水餃", "鈉含量", "健康風險"], ["frozen dumpling", "sodium intake"]),
+        searchBoundary: "避免把主題變成減肥建議文，需依據標示與資料比較。",
+        excludedTerms: ["減肥神話", "個人偏方"],
+      }),
+    ];
+  }
+  if (has(t, ["薯條", "炸薯條", "速食薯條", "馬鈴薯條", "french fries", "fries"])) {
+    return [
+      plannerCard("速食薯條的營養成分與鈉含量分析", "營養標示", "可比較熱量、脂肪、鈉含量與份量差異。", {
+        researchValue: "把薯條從日常食物轉成可查食品標示與營養資料的研究題目。",
+        dataDirections: ["營養標示", "鈉含量", "熱量", "速食資料"],
+        chineseKeywords: ["薯條", "速食", "營養成分", "鈉含量", "熱量"],
+        englishKeywords: ["french fries", "fast food", "nutrition", "sodium", "calories"],
+        suggestedQuery: buildSuggestedQuery(t, ["薯條", "營養成分", "鈉含量"], ["french fries", "nutrition", "sodium"]),
+        searchBoundary: "避免只寫口味或餐廳推薦，需保留營養與標示資料。",
+        excludedTerms: ["餐廳推薦", "食譜", "口味排行"],
+      }),
+      plannerCard("油炸方式與薯條食品安全風險", "食品安全", "可討論油炸溫度、用油品質與丙烯醯胺。", {
+        researchValue: "可連到食品安全研究與機構風險說明，比單純健康口號更可蒐證。",
+        dataDirections: ["油炸溫度", "用油品質", "丙烯醯胺", "食品安全"],
+        chineseKeywords: ["薯條", "油炸", "丙烯醯胺", "食品安全"],
+        englishKeywords: ["french fries", "frying", "acrylamide", "food safety"],
+        suggestedQuery: buildSuggestedQuery(t, ["油炸", "丙烯醯胺", "食品安全"], ["french fries", "acrylamide"]),
+        searchBoundary: "避免變成恐嚇式健康文，需引用食品安全研究或機構資料。",
+        excludedTerms: ["減肥偏方", "網路傳言"],
+      }),
+      plannerCard("青少年速食薯條攝取與飲食習慣", "飲食行為", "可分析外食、速食配餐與營養攝取。", {
+        researchValue: "把薯條放進青少年外食與速食消費情境，適合學校報告。",
+        dataDirections: ["青少年", "速食", "外食", "飲食調查"],
+        chineseKeywords: ["薯條", "青少年", "速食", "飲食習慣"],
+        englishKeywords: ["french fries", "adolescents", "fast food", "dietary habits"],
+        suggestedQuery: buildSuggestedQuery(t, ["青少年", "速食", "飲食習慣"], ["french fries", "dietary habits"]),
+        searchBoundary: "避免只寫個人喜好，需回到飲食調查或公共衛生資料。",
+      }),
+      plannerCard("薯條包裝與速食供應鏈的環境負荷", "環境", "可從冷凍馬鈴薯、包裝與廢棄物切入。", {
+        researchValue: "若要延伸環境面，可研究包裝、冷凍食品供應鏈與生命週期資料。",
+        dataDirections: ["包裝廢棄物", "供應鏈", "冷凍馬鈴薯", "生命週期"],
+        chineseKeywords: ["薯條", "包裝", "供應鏈", "環境負荷"],
+        englishKeywords: ["french fries", "frozen potato products", "packaging", "life cycle assessment"],
+        suggestedQuery: buildSuggestedQuery(t, ["包裝", "供應鏈", "環境"], ["frozen potato products", "life cycle assessment"]),
+        searchBoundary: "避免泛化成所有速食環境問題，仍需回到薯條或馬鈴薯製品。",
+      }),
+    ];
+  }
+  if (has(t, ["可樂", "cola", "soda", "soft drink"])) {
+    return [
+      plannerCard("可樂成分與青少年健康影響", "健康", "可分析糖分、咖啡因與青少年飲用情境。", {
+        researchValue: "這是最直接的健康研究方向，可對應含糖飲料與青少年資料。",
+        dataDirections: ["糖分", "咖啡因", "青少年", "健康風險"],
+        chineseKeywords: ["可樂", "含糖飲料", "青少年", "健康"],
+        englishKeywords: ["cola", "sugar-sweetened beverage", "adolescent health", "caffeine"],
+        suggestedQuery: buildSuggestedQuery(t, ["可樂", "含糖飲料", "青少年"], ["cola", "adolescent health", "caffeine"]),
+        searchBoundary: "避免只寫健康口號，需回到成分與研究證據。",
+        excludedTerms: ["減肥偏方", "網路傳言"],
+      }),
+      plannerCard("無糖可樂與含糖可樂成分比較", "成分比較", "可比較甜味劑、咖啡因與熱量差異。", {
+        researchValue: "可以用產品標示直接比較，資料取得相對容易。",
+        dataDirections: ["成分標示", "人工甜味劑", "熱量", "咖啡因"],
+        chineseKeywords: ["無糖可樂", "含糖可樂", "成分比較", "人工甜味劑"],
+        englishKeywords: ["diet cola", "regular cola", "ingredient comparison", "artificial sweeteners"],
+        suggestedQuery: buildSuggestedQuery(t, ["無糖可樂", "成分比較", "人工甜味劑"], ["diet cola", "regular cola"]),
+        searchBoundary: "避免只寫味道差異，需保留成分與標示比較。",
+        excludedTerms: ["盲測心得", "口味排行"],
+      }),
+      plannerCard("可樂包裝與環境廢棄物問題", "環境", "可從塑膠瓶、鋁罐與回收制度切入。", {
+        researchValue: "把飲料研究延伸到包裝廢棄物與回收行為，兼顧環境議題。",
+        dataDirections: ["包裝材料", "回收制度", "塑膠廢棄物", "鋁罐"],
+        chineseKeywords: ["可樂", "包裝", "回收", "塑膠瓶", "鋁罐"],
+        englishKeywords: ["cola packaging", "recycling", "plastic bottle", "aluminum can"],
+        suggestedQuery: buildSuggestedQuery(t, ["包裝", "回收", "塑膠瓶"], ["cola packaging", "recycling"]),
+        searchBoundary: "避免只談環保口號，需保留包裝與廢棄物資料。",
+        excludedTerms: ["資源回收標語", "環保宣傳"],
+      }),
+      plannerCard("可樂品牌廣告如何影響消費偏好", "廣告與消費", "可分析品牌形象、廣告語言與消費心理。", {
+        researchValue: "這個題目適合找廣告、品牌與消費心理研究。",
+        dataDirections: ["品牌形象", "廣告內容", "消費心理", "市場調查"],
+        chineseKeywords: ["可樂廣告", "品牌形象", "消費心理", "消費偏好"],
+        englishKeywords: ["cola advertising", "brand image", "consumer behavior", "marketing"],
+        suggestedQuery: buildSuggestedQuery(t, ["可樂廣告", "品牌形象", "消費心理"], ["cola advertising", "consumer behavior"]),
+        searchBoundary: "避免只寫廣告印象，需保留消費研究與市場資料。",
+        excludedTerms: ["口號收集", "廣告片段欣賞"],
+      }),
+    ];
+  }
   return [
     expansionCard(`${t}中的成分與攝取習慣對健康的影響`, "健康", "可分析營養標示、攝取量與青少年飲食習慣。"),
     expansionCard(`${t}品牌如何透過廣告塑造消費印象`, "行銷", "適合討論品牌、廣告語言與消費心理。"),
     expansionCard(`${t}包裝、製程與廢棄物對環境的影響`, "環境", "可連結回收、塑膠污染與企業責任。"),
-    expansionCard(`${t}在日常飲食文化中的流行原因`, "文化", "可討論生活方式、同儕影響與地方飲食習慣。"),
+    expansionCard(`${t}在日常飲食文化中的流行原因`, "文化", "分析生活方式、同儕影響與地方飲食習慣。"),
     expansionCard(`${t}的替代選擇是否真的比較健康`, "科學比較", "可比較糖分、添加物、營養標示或加工方式。"),
   ];
 }
 
 function techExpansionCards(topic: string): TopicExpansionCard[] {
   const t = topic || "科技主題";
+  if (has(t, ["短影音", "短視頻", "tiktok", "reels", "youtube shorts", "社群媒體"])) {
+    return [
+      plannerCard(`${t}對注意力與學習效率的影響`, "注意力", "研究使用時間、分心情境與自我管理的關係。", {
+        researchValue: "從認知與學習成效切入，最能直接支撐學生研究報告。",
+        dataDirections: ["注意力", "學習效率", "使用時間", "自我管理"],
+        chineseKeywords: ["短影音", "注意力", "學習效率", "學生"],
+        englishKeywords: ["short video", "attention", "learning efficiency", "student"],
+        suggestedQuery: buildSuggestedQuery(t, ["注意力", "學習效率", "學生"], ["short video", "attention"]),
+        searchBoundary: "避免只寫抱怨或心得，需有學習與認知研究。",
+      }),
+      plannerCard(`${t}背後的演算法如何影響內容選擇`, "演算法", "適合分析推薦機制、資訊泡泡與平台責任。", {
+        researchValue: "可研究平台推薦如何塑造使用者接觸到的內容。",
+        dataDirections: ["推薦機制", "資訊泡泡", "平台責任", "內容暴露"],
+        chineseKeywords: ["短影音", "演算法", "推薦機制", "內容選擇"],
+        englishKeywords: ["recommendation algorithm", "filter bubble", "platform responsibility", "content exposure"],
+        suggestedQuery: buildSuggestedQuery(t, ["演算法", "推薦機制", "資訊泡泡"], ["recommendation algorithm", "filter bubble"]),
+        searchBoundary: "避免只談平台功能介紹，需保留資訊暴露與平台責任。",
+      }),
+      plannerCard(`${t}使用時間與睡眠品質的關係`, "睡眠", "可連結夜間使用、藍光與生活作息。", {
+        researchValue: "這是和青少年生活最容易連結、也最容易找研究資料的方向。",
+        dataDirections: ["使用時間", "睡眠品質", "藍光", "作息"],
+        chineseKeywords: ["短影音", "睡眠品質", "藍光", "作息"],
+        englishKeywords: ["screen time", "sleep quality", "blue light", "sleep habits"],
+        suggestedQuery: buildSuggestedQuery(t, ["睡眠品質", "藍光", "作息"], ["screen time", "sleep quality"]),
+        searchBoundary: "避免把問題泛化成所有手機使用，需保留短影音情境。",
+      }),
+      plannerCard(`${t}在青少年生活中的角色與風險`, "青少年", "分析社交、娛樂、隱私與心理壓力等青少年使用情境。", {
+        researchValue: "若要聚焦族群，可把青少年當作研究對象而非課堂程度。",
+        dataDirections: ["青少年", "社交", "隱私", "心理壓力"],
+        chineseKeywords: ["短影音", "青少年", "心理壓力", "社交"],
+        englishKeywords: ["adolescent", "social media", "privacy", "psychological stress"],
+        suggestedQuery: buildSuggestedQuery(t, ["青少年", "心理壓力", "社交"], ["adolescent", "social media"]),
+        searchBoundary: "避免只寫生活現象，需保留心理與社會風險資料。",
+      }),
+    ];
+  }
   return [
-    expansionCard(`${t}對注意力與學習習慣的影響`, "注意力", "可討論使用時間、分心情境與自我管理。"),
+    expansionCard(`${t}對注意力與學習習慣的影響`, "注意力", "分析使用時間、分心情境與自我管理。"),
     expansionCard(`${t}背後的演算法如何影響內容選擇`, "演算法", "適合分析推薦機制、資訊泡泡與平台責任。"),
     expansionCard(`${t}使用時間與睡眠品質的關係`, "睡眠", "可連結夜間使用、藍光與生活作息。"),
-    expansionCard(`${t}在青少年生活中的角色與風險`, "青少年", "可討論社交、娛樂、隱私與心理壓力。"),
+    expansionCard(`${t}在青少年生活中的角色與風險`, "青少年", "分析社交、娛樂、隱私與心理壓力。"),
     expansionCard(`${t}的產業發展與倫理議題`, "科技社會", "可整理創新應用、商業模式與監管問題。"),
   ];
 }
@@ -622,9 +966,9 @@ function environmentExpansionCards(topic: string): TopicExpansionCard[] {
   return [
     expansionCard(`${t}的成因與日常生活關聯`, "背景脈絡", "可整理自然因素、人為活動與生活場景。"),
     expansionCard(`${t}對不同族群或地區的影響`, "社會影響", "適合比較年齡、職業、城鄉或地方差異。"),
-    expansionCard(`${t}的台灣在地案例與公共政策`, "在地案例", "可補充政府資料、地方新聞與政策措施。"),
+    expansionCard(`${t}的台灣在地案例與公共政策`, "在地案例", "整理政府資料、地方新聞與政策措施。"),
     expansionCard(`${t}可用哪些數據或指標觀察`, "統計資料", "可找近年統計、監測資料或官方報告。"),
-    expansionCard(`面對${t}的可行改善策略`, "解決策略", "可討論個人、學校、企業與政府的責任。"),
+    expansionCard(`面對${t}的可行改善策略`, "解決策略", "分析個人、學校、企業與政府的責任分工。"),
   ];
 }
 
@@ -633,7 +977,7 @@ function cultureExpansionCards(topic: string): TopicExpansionCard[] {
   return [
     expansionCard(`${t}的歷史脈絡與形成原因`, "歷史", "可整理起源、時代背景與重要轉變。"),
     expansionCard(`${t}在日常生活中的象徵與功能`, "文化意義", "適合分析儀式、社群認同與生活方式。"),
-    expansionCard(`${t}如何受到媒體與商業化影響`, "媒體與產業", "可討論傳播、品牌化與消費文化。"),
+    expansionCard(`${t}如何受到媒體與商業化影響`, "媒體與產業", "分析傳播、品牌化與消費文化的影響。"),
     expansionCard(`${t}在不同世代之間的理解差異`, "世代觀點", "可比較年輕族群、家庭與地方社群。"),
     expansionCard(`${t}的保存、創新與未來發展`, "文化保存", "可提出教育、展演、社區參與或數位化方向。"),
   ];
@@ -658,7 +1002,7 @@ export function expandTopicCards(topic: string, category?: TopicCategory): Topic
       return [
         expansionCard(`不同條件對「${t}」的影響之實驗探討`, "實驗設計", "可設定自變因、應變因與控制變因。"),
         expansionCard(`「${t}」的變因分析與量化測量`, "數據", "適合規劃表格、重複測量與圖表呈現。"),
-        expansionCard(`「${t}」實驗誤差來源與改進方法`, "誤差分析", "可討論測量工具、環境干擾與操作差異。"),
+        expansionCard(`「${t}」實驗誤差來源與改進方法`, "誤差分析", "分析測量工具、環境干擾與操作差異。"),
         expansionCard(`「${t}」的原理驗證與生活應用`, "科學原理", "可把課本概念連結到日常現象。"),
         expansionCard(`「${t}」實驗安全與倫理注意事項`, "安全", "可列出材料限制、操作規範與風險管理。"),
       ];
@@ -666,7 +1010,7 @@ export function expandTopicCards(topic: string, category?: TopicCategory): Topic
       return [
         expansionCard(`「${t}」的目標客群與需求情境`, "市場", "可分析使用者痛點、購買動機與族群差異。"),
         expansionCard(`「${t}」的競品比較與差異化策略`, "競爭", "適合整理功能、價格、通路與品牌定位。"),
-        expansionCard(`「${t}」的商業模式與收入來源`, "商業模式", "可討論訂閱、廣告、銷售或服務費。"),
+        expansionCard(`「${t}」的商業模式與收入來源`, "商業模式", "分析訂閱、廣告、銷售或服務費等收入來源。"),
         expansionCard(`「${t}」的成本、風險與執行限制`, "風險", "可評估資源、人力、法規與市場不確定性。"),
         expansionCard(`「${t}」未來擴張與永續經營方向`, "發展", "可提出產品迭代、合作與長期策略。"),
       ];
@@ -1100,7 +1444,7 @@ function buildBiology(topic: string): CategoryContent {
       `認識「${topic}」的生物分類與基本特徵。`,
       `了解「${topic}」的生活習性與棲息環境。`,
       `探討「${topic}」與人類生活的關係及其價值。`,
-      `整理「${topic}」相關的問題與可討論的方向。`,
+      `整理「${topic}」相關的研究問題與可蒐證方向。`,
     ],
     questions: [
       `「${topic}」具有哪些重要的生物特徵？`,

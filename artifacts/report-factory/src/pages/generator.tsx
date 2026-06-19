@@ -79,13 +79,19 @@ import { applySourceRelevanceAssessments } from "@/lib/sourceRelevance";
 import { applySourceAuthorityAndLanguage } from "@/lib/sourceAuthority";
 import { supplementTrustedClimateSources } from "@/lib/trustedClimateSources";
 import {
+  createReportWorkspace,
   generationReadiness,
   generatorWorkflowVisibility,
   loadReportWorkspace,
   reportTopicFingerprint,
-  startReportWorkspaceNavigation,
+  reportWorkspacePath,
+  saveReportWorkspace,
   workspaceMatchesTopic,
 } from "@/lib/reportWorkspace";
+import {
+  mergeLlmReportDraft,
+  requestLlmReportDraft,
+} from "@/lib/llmReportWriter";
 import {
   Wand2,
   Loader2,
@@ -120,11 +126,30 @@ type KeywordSearchDebugState = {
   searchIntent: SourceSearchResult["searchIntent"] | null;
   intentQueries: SourceSearchResult["queries"] | null;
   warnings: string[];
+  retrievalStats: {
+    rawResults: number;
+    providerGroups: number;
+    successfulProviderGroups: number;
+  };
+};
+
+type SourcePipelineStats = KeywordSearchDebugState["retrievalStats"] & {
+  dedupedResults: number;
+  primaryCandidates: number;
+  secondaryCandidates: number;
+  lowRelevance: number;
+  rejected: number;
 };
 
 type WorkspaceResumeState = {
   reportId: string;
   loaded: boolean;
+};
+
+type SourceWorkflowLock = {
+  workflowId: string;
+  topicHash: string;
+  queryPlanHash: string;
 };
 
 type GeneratorWorkflowStep = "topic" | "search" | "manage" | "generate";
@@ -156,9 +181,13 @@ const DEFAULT_INPUT: ReportInput = {
   acceptedSources: [],
 };
 
-const RESEARCH_DEPTH_OPTIONS: { label: string; value: ReportInput["researchDepth"]; recommendedSources: number }[] = [
+const RESEARCH_DEPTH_OPTIONS: {
+  label: string;
+  value: ReportInput["researchDepth"];
+  recommendedSources: number;
+}[] = [
   { label: "quick：3-5 筆", value: "quick", recommendedSources: 5 },
-  { label: "standard：6-10 筆", value: "standard", recommendedSources: 8 },
+  { label: "standard：6-10 筆", value: "standard", recommendedSources: 10 },
   { label: "deep：10-20 筆", value: "deep", recommendedSources: 12 },
 ];
 
@@ -429,6 +458,7 @@ function keywordSearchDebugFromResult(
   };
   const llmStatus =
     result.llm_status ?? result.searchIntent?.plannerStatus ?? "skipped";
+  const providerGroups = result.provider_status ?? result.groups ?? [];
 
   return {
     fallbackUsed:
@@ -445,7 +475,7 @@ function keywordSearchDebugFromResult(
       ...(result.queries?.english ?? []),
       ...(result.queries?.chinese ?? []),
     ],
-    providerErrors: (result.provider_status ?? result.groups ?? [])
+    providerErrors: providerGroups
       .filter((group) => !group.ok)
       .map((group) => {
         const detail = [group.error_type, group.error_message]
@@ -456,6 +486,14 @@ function keywordSearchDebugFromResult(
     searchIntent: result.searchIntent ?? null,
     intentQueries: result.queries ?? null,
     warnings: result.warnings ?? [],
+    retrievalStats: {
+      rawResults:
+        result.searchTrace?.candidateCount ??
+        providerGroups.reduce((sum, group) => sum + (group.results?.length ?? 0), 0),
+      providerGroups: providerGroups.length,
+      successfulProviderGroups: providerGroups.filter((group) => group.ok)
+        .length,
+    },
   };
 }
 
@@ -609,6 +647,77 @@ function safeSourceReviewCounts(
     pending: safeCount(counts.pending),
     rejected: safeCount(counts.rejected),
   };
+}
+
+function createClientWorkflowId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `wf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function sourceMatchesWorkflow(
+  source: SourceRecord,
+  lock: SourceWorkflowLock | null,
+): boolean {
+  if (!lock) return true;
+  return (
+    source.workflowId === lock.workflowId &&
+    source.topicHash === lock.topicHash &&
+    (!source.queryPlanHash || source.queryPlanHash === lock.queryPlanHash)
+  );
+}
+
+function sourceAcceptBlockReason(
+  source: SourceRecord,
+  lock: SourceWorkflowLock | null,
+): string | null {
+  if (lock && source.workflowId !== lock.workflowId) return "workflow_mismatch";
+  if (lock && source.topicHash !== lock.topicHash) return "topic_mismatch";
+  if (lock && source.queryPlanHash && source.queryPlanHash !== lock.queryPlanHash)
+    return "query_plan_mismatch";
+  if (
+    source.classification === "off_topic" ||
+    source.classification === "trusted_but_off_topic" ||
+    source.classification === "stale_topic" ||
+    source.classification === "stale_workflow"
+  )
+    return source.classification;
+  if (source.relevanceLevel === "off_topic") return "off_topic";
+  if (
+    source.relevanceLevel !== "secondary" &&
+    source.relevanceLevel !== "clue" &&
+    (source.relevanceScore ?? 0) < 20
+  )
+    return "low_topic_relevance";
+  return null;
+}
+
+function sourceCanEnterReport(
+  source: SourceRecord,
+  lock: SourceWorkflowLock | null,
+): boolean {
+  return sourceAcceptBlockReason(source, lock) === null;
+}
+
+function applyWorkflowLockToSources(
+  sources: SourceRecord[],
+  lock: SourceWorkflowLock,
+  topic: string,
+): SourceRecord[] {
+  return sources.map((source) =>
+    normalizeSourceForReview({
+      ...source,
+      workflowId: source.workflowId ?? lock.workflowId,
+      topic: source.topic ?? topic,
+      normalizedTopic: source.normalizedTopic ?? topic,
+      topicHash: source.topicHash ?? lock.topicHash,
+      queryPlanHash: source.queryPlanHash ?? lock.queryPlanHash,
+      classification:
+        source.classification ??
+        (source.relevanceLevel === "primary" ? "primary" : "review"),
+    }),
+  );
 }
 
 function workflowTransitionCopy(
@@ -832,7 +941,26 @@ function sourceRelevanceBadgeVariant(
   }
 }
 
-function evidenceGroundingLabel(status: SourceRecord["evidenceGrounding"]): string {
+function sourceRelevanceTierLabel(
+  level: SourceRecord["relevanceLevel"],
+): string {
+  switch (level) {
+    case "primary":
+      return "高";
+    case "secondary":
+    case "clue":
+      return "中";
+    case "low":
+    case "off_topic":
+      return "低";
+    default:
+      return "待確認";
+  }
+}
+
+function evidenceGroundingLabel(
+  status: SourceRecord["evidenceGrounding"],
+): string {
   switch (status) {
     case "abstract_grounded":
     case "snippet_grounded":
@@ -846,6 +974,51 @@ function evidenceGroundingLabel(status: SourceRecord["evidenceGrounding"]): stri
   }
 }
 
+function summaryQualityLabel(
+  quality: ReturnType<typeof sourceSummaryForUser>["summaryQuality"],
+): string {
+  switch (quality) {
+    case "good":
+      return "摘要品質 good";
+    case "partial":
+      return "摘要品質 partial";
+    case "poor":
+      return "摘要不足";
+    case "irrelevant":
+      return "低相關";
+    default:
+      return "摘要待確認";
+  }
+}
+
+function summaryQualityBadgeVariant(
+  quality: ReturnType<typeof sourceSummaryForUser>["summaryQuality"],
+): "default" | "secondary" | "outline" | "destructive" {
+  switch (quality) {
+    case "good":
+      return "default";
+    case "partial":
+      return "secondary";
+    case "irrelevant":
+      return "destructive";
+    case "poor":
+    default:
+      return "outline";
+  }
+}
+
+function emptyEvidenceSnippetMessage(
+  level: SourceRecord["relevanceLevel"],
+): string {
+  if (level === "primary") {
+    return "此來源目前沒有可單獨摘錄的驗證片段，系統仍保留為主要候選；接受前請以摘要與原始來源再確認。";
+  }
+  if (level === "secondary" || level === "clue") {
+    return "此來源目前沒有可單獨摘錄的驗證片段，系統先列為延伸候選。";
+  }
+  return "此來源未提供足夠片段，系統已將它降為低相關候選。";
+}
+
 function sourceAuthorShortLabel(authors: string[]): string {
   if (authors.length === 0) return "作者待確認";
   if (authors.length === 1) return authors[0];
@@ -855,7 +1028,10 @@ function sourceAuthorShortLabel(authors: string[]): string {
 function compactSourceLine(text: string, maxLength = 80): string {
   const chars = Array.from(text.replace(/\s+/g, " ").trim());
   if (chars.length <= maxLength) return chars.join("");
-  return `${chars.slice(0, maxLength - 1).join("").trim()}…`;
+  return `${chars
+    .slice(0, maxLength - 1)
+    .join("")
+    .trim()}…`;
 }
 
 function parseAuthorsInput(value: string): string[] {
@@ -880,6 +1056,46 @@ function sourcesForReviewTab(
     default:
       return sources;
   }
+}
+
+function primaryCandidateSources(sources: SourceRecord[]): SourceRecord[] {
+  return sources.filter(
+    (source) =>
+      sourceReviewState(source) === "pending" &&
+      source.relevanceLevel === "primary",
+  );
+}
+
+function secondaryCandidateSources(sources: SourceRecord[]): SourceRecord[] {
+  return sources.filter(
+    (source) =>
+      sourceReviewState(source) === "pending" &&
+      (source.relevanceLevel === "secondary" ||
+        source.relevanceLevel === "clue"),
+  );
+}
+
+function lowRelevanceCandidateSources(sources: SourceRecord[]): SourceRecord[] {
+  return sources.filter(
+    (source) =>
+      sourceReviewState(source) === "pending" &&
+      (source.relevanceLevel === "low" ||
+        source.relevanceLevel === "off_topic" ||
+        source.shouldShowInMainList === false),
+  );
+}
+
+function reviewableCandidateSources(sources: SourceRecord[]): SourceRecord[] {
+  const lowIds = new Set(
+    lowRelevanceCandidateSources(sources).map(
+      (source) => source.id || sourceRecordKey(source),
+    ),
+  );
+  return sources.filter(
+    (source) =>
+      sourceReviewState(source) === "pending" &&
+      !lowIds.has(source.id || sourceRecordKey(source)),
+  );
 }
 
 function SourceReviewCard({
@@ -937,28 +1153,35 @@ function SourceReviewCard({
       ? compactSourceLine(summary.contentSummary)
       : reviewState === "rejected"
         ? compactSourceLine(
-          summary.recommendation === "not_recommended"
-            ? summary.recommendationReason
-            : summary.topicRelation,
-        )
+            summary.recommendation === "not_recommended"
+              ? summary.recommendationReason
+              : summary.topicRelation,
+          )
         : compactSourceLine(summary.contentSummary);
   const compactFacet =
     summary.mainEvidenceFacet ??
     summary.suitableSectionLabels[0] ??
     summary.usableSections[0] ??
     "支撐面向待確認";
+  const summaryQuality = summary.summaryQuality;
   const acceptButtonLabel =
     summary.recommendation === "not_recommended"
       ? "仍要接受"
       : summary.recommendation === "supporting"
         ? "作為輔助"
-      : summary.recommendation === "check_first"
-        ? "確認後接受"
-        : "接受來源";
+        : summary.recommendation === "check_first"
+          ? "確認後接受"
+          : "接受來源";
 
   return (
-    <Collapsible open={shouldShowExpandedDetails} onOpenChange={onExpandedChange}>
-      <article className={`rounded-lg border p-3 transition-colors sm:p-4 ${cardTone}`} data-testid={`source-card-${reviewState}`}>
+    <Collapsible
+      open={shouldShowExpandedDetails}
+      onOpenChange={onExpandedChange}
+    >
+      <article
+        className={`rounded-lg border p-3 transition-colors sm:p-4 ${cardTone}`}
+        data-testid={`source-card-${reviewState}`}
+      >
         <div className="flex flex-col gap-3">
           <div className="flex min-w-0 gap-3">
             {!compactMode && (
@@ -971,7 +1194,10 @@ function SourceReviewCard({
             <div className="min-w-0 flex-1">
               <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0">
-                  <h3 className="line-clamp-2 text-sm font-semibold leading-6 text-foreground" title={title}>
+                  <h3
+                    className="line-clamp-2 text-sm font-semibold leading-6 text-foreground"
+                    title={title}
+                  >
                     {title}
                   </h3>
                   {reviewState !== "rejected" && (
@@ -989,15 +1215,22 @@ function SourceReviewCard({
                       {reviewLabel}
                     </Badge>
                     <Badge variant="secondary">可信度 {confidence}</Badge>
+                    <Badge variant={summaryQualityBadgeVariant(summaryQuality)}>
+                      {summaryQualityLabel(summaryQuality)}
+                    </Badge>
                     <Badge variant={hasAbstract ? "outline" : "secondary"}>
                       {evidenceGroundingLabel(summary.groundingStatus)}
                     </Badge>
-                    <Badge variant={sourceRelevanceBadgeVariant(relevanceLevel)}>
-                      {sourceRelevanceLabel(relevanceLevel)}
+                    <Badge
+                      variant={sourceRelevanceBadgeVariant(relevanceLevel)}
+                    >
+                      相關度 {sourceRelevanceTierLabel(relevanceLevel)}
                     </Badge>
                     <Badge variant="outline">{authorityLabel}</Badge>
                     <Badge variant="outline">{languageLabel}</Badge>
-                    {incomplete && <Badge variant="outline">引用資料不完整</Badge>}
+                    {incomplete && (
+                      <Badge variant="outline">引用資料不完整</Badge>
+                    )}
                   </div>
                 )}
               </div>
@@ -1019,12 +1252,19 @@ function SourceReviewCard({
             ) : (
               <>
                 <div className="space-y-2">
-                  <p className="text-xs font-semibold text-foreground">可驗證片段</p>
+                  <p className="text-xs font-semibold text-foreground">
+                    可驗證片段
+                  </p>
                   {summary.evidenceSnippets.length > 0 ? (
                     <ul className="space-y-1.5">
                       {summary.evidenceSnippets.slice(0, 2).map((snippet) => (
-                        <li key={`${snippet.matchedFacet}-${snippet.originalSnippet}`} className="rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-5 text-foreground/90">
-                          <div className="font-medium text-foreground">{snippet.matchedFacet} · {snippet.supportLevel}</div>
+                        <li
+                          key={`${snippet.matchedFacet}-${snippet.originalSnippet}`}
+                          className="rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-5 text-foreground/90"
+                        >
+                          <div className="font-medium text-foreground">
+                            {snippet.matchedFacet} · {snippet.supportLevel}
+                          </div>
                           <div className="mt-0.5">{snippet.snippetZhTw}</div>
                           <div className="mt-1 text-[11px] text-muted-foreground">
                             原始片段：{snippet.originalSnippet}
@@ -1040,17 +1280,32 @@ function SourceReviewCard({
                     </ul>
                   ) : (
                     <p className="text-xs leading-5 text-muted-foreground">
-                      尚未取得可驗證摘要片段。
+                      {emptyEvidenceSnippetMessage(relevanceLevel)}
                     </p>
                   )}
                 </div>
-                <p className="line-clamp-2 text-sm leading-6 text-foreground/90">
-                  <span className="font-medium text-foreground">繁中摘要：</span>
-                  {compactSummary}
+                <p className="text-sm leading-6 text-foreground/90">
+                  <span className="font-medium text-foreground">
+                    來源摘要：
+                  </span>
+                  {summary.contentSummary}
+                </p>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {summary.summaryQualityReason}
                 </p>
                 <div className="space-y-1 text-xs leading-5 text-muted-foreground">
-                  <p>主證據面向：{summary.mainEvidenceFacet ?? "待確認"}</p>
-                  <p>證據鏈：{summary.evidenceChain.length > 0 ? summary.evidenceChain.map((entry) => `${entry.facetLabelZhTw} → ${entry.matchedTerms.slice(0, 2).join("、")} → ${entry.supportLevel}`).join("；") : "待確認"}</p>
+                  <p>主證據面向：{summary.mainEvidenceFacet ?? "未列入主要證據"}</p>
+                  <p>
+                    證據鏈：
+                    {summary.evidenceChain.length > 0
+                      ? summary.evidenceChain
+                          .map(
+                            (entry) =>
+                              `${entry.facetLabelZhTw} → ${entry.matchedTerms.slice(0, 2).join("、")} → ${entry.supportLevel}`,
+                          )
+                          .join("；")
+                      : "未形成可用證據鏈"}
+                  </p>
                   <p>與主題關聯：{summary.topicRelation}</p>
                   <p>採用建議：{summary.recommendationReason}</p>
                   {relevanceReasons.length > 0 && (
@@ -1061,7 +1316,10 @@ function SourceReviewCard({
                   <span className="text-xs font-medium text-muted-foreground">
                     適合使用章節
                   </span>
-                  {(summary.suitableSectionLabels.length ? summary.suitableSectionLabels : summary.usableSections).map((section) => (
+                  {(summary.suitableSectionLabels.length
+                    ? summary.suitableSectionLabels
+                    : summary.usableSections
+                  ).map((section) => (
                     <Badge key={section} variant="outline">
                       {section}
                     </Badge>
@@ -1086,7 +1344,11 @@ function SourceReviewCard({
               <Button
                 type="button"
                 size="sm"
-                variant={summary.recommendation === "recommended" ? "default" : "outline"}
+                variant={
+                  summary.recommendation === "recommended"
+                    ? "default"
+                    : "outline"
+                }
                 className="min-h-[36px]"
                 onClick={() => onReview(sourceId, "accepted")}
               >
@@ -1122,8 +1384,12 @@ function SourceReviewCard({
                 variant="ghost"
                 className="min-h-[36px]"
                 data-testid="button-source-expand"
-                aria-label={shouldShowExpandedDetails ? "收合來源細節" : "展開來源細節"}
-                title={shouldShowExpandedDetails ? "收合來源細節" : "展開來源細節"}
+                aria-label={
+                  shouldShowExpandedDetails ? "收合來源細節" : "展開來源細節"
+                }
+                title={
+                  shouldShowExpandedDetails ? "收合來源細節" : "展開來源細節"
+                }
               >
                 {shouldShowExpandedDetails ? (
                   <ChevronUp className="mr-2 h-4 w-4" />
@@ -1134,13 +1400,25 @@ function SourceReviewCard({
               </Button>
             </CollapsibleTrigger>
             {!compactMode && source.url ? (
-              <Button asChild type="button" size="sm" variant="ghost" className="min-h-[36px]">
+              <Button
+                asChild
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="min-h-[36px]"
+              >
                 <a href={source.url} target="_blank" rel="noreferrer">
                   <ExternalLink className="mr-2 h-4 w-4" /> 查看原始來源
                 </a>
               </Button>
             ) : !compactMode ? (
-              <Button type="button" size="sm" variant="ghost" className="min-h-[36px]" disabled>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="min-h-[36px]"
+                disabled
+              >
                 查看原始來源
               </Button>
             ) : null}
@@ -1468,7 +1746,7 @@ function SearchStepPanel({
                 已找到 {sourceCount} 筆來源
               </h3>
               <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-                已整理來源，接下來會進入管理來源工作區。
+                {message || "已整理來源，接下來會進入管理來源工作區。"}
               </p>
             </>
           ) : status === "empty" ? (
@@ -1544,24 +1822,44 @@ function SourceManagePanel({
   onEdit,
   topic,
   recommendedAcceptedSourceCount,
+  pipelineStats,
 }: {
   sources: SourceRecord[];
   onReview: (sourceId: string, reviewState: SourceReviewState) => void;
   onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
   topic: string;
   recommendedAcceptedSourceCount: number;
+  pipelineStats: SourcePipelineStats | null;
 }) {
   const [activeTab, setActiveTab] = useState<SourceReviewTab>("all");
   const [expandedSourceIds, setExpandedSourceIds] = useState<string[]>([]);
   const previousReviewStates = useRef<Map<string, SourceReviewState>>(
     new Map(),
   );
-  const mainListSources = sources.filter((source) => source.shouldShowInMainList === true);
-  const lowRelevanceSources = sources.filter((source) => source.shouldShowInMainList !== true);
   const counts = sourceReviewCounts(sources);
-  const visibleSources = sourcesForReviewTab(mainListSources, activeTab);
+  const primarySources = primaryCandidateSources(sources);
+  const secondarySources = secondaryCandidateSources(sources);
+  const lowRelevanceSources = lowRelevanceCandidateSources(sources);
+  const reviewableSources = reviewableCandidateSources(sources);
+  const visibleSources =
+    activeTab === "all"
+      ? reviewableSources
+      : sourcesForReviewTab(sources, activeTab);
   const activeTabLabel =
     SOURCE_REVIEW_TABS.find((tab) => tab.value === activeTab)?.label ?? "來源";
+  const primaryPendingCount = primarySources.length;
+  const secondaryPendingCount = secondarySources.length;
+  const lowPendingCount = lowRelevanceSources.length;
+  const stats: SourcePipelineStats = pipelineStats ?? {
+    rawResults: sources.length,
+    providerGroups: 0,
+    successfulProviderGroups: 0,
+    dedupedResults: sources.length,
+    primaryCandidates: primaryPendingCount,
+    secondaryCandidates: secondaryPendingCount,
+    lowRelevance: lowPendingCount,
+    rejected: counts.rejected,
+  };
 
   useEffect(() => {
     const nextReviewStates = new Map<string, SourceReviewState>();
@@ -1576,6 +1874,14 @@ function SourceManagePanel({
         const previousState = previousReviewStates.current.get(key);
         activeIds.add(key);
         nextReviewStates.set(key, nextState);
+
+        if (
+          previousState === undefined &&
+          nextState === "pending" &&
+          source.relevanceLevel === "primary"
+        ) {
+          nextExpanded.add(key);
+        }
 
         if (previousState !== undefined && previousState !== nextState) {
           if (nextState === "pending") {
@@ -1630,12 +1936,44 @@ function SourceManagePanel({
                 : "outline"
             }
           >
-            建議至少 {recommendedAcceptedSourceCount} 筆
+            最低 3 筆 / 建議 {recommendedAcceptedSourceCount} 筆
           </Badge>
           <Badge variant={counts.rejected ? "secondary" : "outline"}>
             已拒絕 {counts.rejected} 筆
           </Badge>
-          <Badge variant="outline">主要來源 {mainListSources.length} 筆</Badge>
+          <Badge variant="outline">主要候選 {primaryPendingCount} 筆</Badge>
+          <Badge variant="outline">延伸候選 {secondaryPendingCount} 筆</Badge>
+          <Badge variant="outline">低相關 {lowPendingCount} 筆</Badge>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-3">
+          <p className="text-xs font-medium text-muted-foreground">
+            檢索資料池
+          </p>
+          <p className="mt-1 text-foreground">
+            raw {stats.rawResults} 筆，deduped {stats.dedupedResults} 筆
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            provider batches {stats.successfulProviderGroups} / {stats.providerGroups}
+          </p>
+        </div>
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-3">
+          <p className="text-xs font-medium text-muted-foreground">
+            候選分組
+          </p>
+          <p className="mt-1 text-foreground">
+            primary {stats.primaryCandidates}，secondary {stats.secondaryCandidates}
+          </p>
+        </div>
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-3">
+          <p className="text-xs font-medium text-muted-foreground">
+            降級結果
+          </p>
+          <p className="mt-1 text-foreground">
+            low relevance {stats.lowRelevance}，rejected {stats.rejected}
+          </p>
         </div>
       </div>
 
@@ -1685,9 +2023,11 @@ function SourceManagePanel({
               })}
             </div>
           ) : (
-            <p className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-3 text-sm text-muted-foreground">
-              {activeTabLabel}目前沒有來源。
-            </p>
+            <div className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-3 text-sm text-muted-foreground">
+              {activeTab === "all" && counts.all > 0
+                ? `目前沒有符合主題的主要候選；已找到 ${lowPendingCount} 筆低相關來源，預設不建議採用。`
+                : `${activeTabLabel}目前沒有來源。`}
+            </div>
           )}
           {lowRelevanceSources.length > 0 && (
             <Collapsible>
@@ -1699,7 +2039,7 @@ function SourceManagePanel({
                   >
                     <span>
                       <span className="block text-sm font-medium text-foreground">
-                        線索／延伸／低相關來源 ({lowRelevanceSources.length})
+                        低相關來源 ({lowRelevanceSources.length})
                       </span>
                       <span className="block text-xs text-muted-foreground">
                         已預設收合，不會進入主要推薦列表。
@@ -1709,7 +2049,10 @@ function SourceManagePanel({
                   </button>
                 </CollapsibleTrigger>
                 <CollapsibleContent className="pt-3">
-                  <div className="space-y-3" data-testid="sources-list-low-relevance">
+                  <div
+                    className="space-y-3"
+                    data-testid="sources-list-low-relevance"
+                  >
                     {lowRelevanceSources.map((source) => {
                       const key = source.id || sourceRecordKey(source);
                       return (
@@ -1717,7 +2060,9 @@ function SourceManagePanel({
                           key={key}
                           source={source}
                           isExpanded={expandedSourceIds.includes(key)}
-                          onExpandedChange={(open) => setSourceExpanded(key, open)}
+                          onExpandedChange={(open) =>
+                            setSourceExpanded(key, open)
+                          }
                           onReview={handleReview}
                           onEdit={onEdit}
                           topic={topic}
@@ -1811,7 +2156,14 @@ function TopicStepPanel({
 
             {expansions.length > 0 && (
               <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
-                <p className="text-xs font-medium text-muted-foreground">研究方向提示卡</p>
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold text-foreground">
+                    研究子題建議
+                  </p>
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    可搜尋研究方向與查詢規劃，套用後會清空舊來源並重新開始搜尋。
+                  </p>
+                </div>
                 {expansions.map((card, i) => (
                   <article
                     key={`${card.title}-${card.angle}`}
@@ -1829,6 +2181,11 @@ function TopicStepPanel({
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">
                           {card.reason}
                         </p>
+                        {card.researchValue && (
+                          <p className="mt-2 text-xs leading-5 text-foreground/80">
+                            研究價值：{card.researchValue}
+                          </p>
+                        )}
                       </div>
                       <Button
                         type="button"
@@ -1840,6 +2197,48 @@ function TopicStepPanel({
                         套用此題目
                       </Button>
                     </div>
+                    <div className="mt-3 grid gap-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2">
+                      {card.dataDirections?.length ? (
+                        <div>
+                          <span className="font-medium text-foreground">
+                            可找資料：
+                          </span>
+                          {card.dataDirections.join("、")}
+                        </div>
+                      ) : null}
+                      {card.chineseKeywords?.length ? (
+                        <div>
+                          <span className="font-medium text-foreground">
+                            中文關鍵詞：
+                          </span>
+                          {card.chineseKeywords.join("、")}
+                        </div>
+                      ) : null}
+                      {card.englishKeywords?.length ? (
+                        <div>
+                          <span className="font-medium text-foreground">
+                            英文關鍵詞：
+                          </span>
+                          {card.englishKeywords.join(", ")}
+                        </div>
+                      ) : null}
+                      {card.suggestedQuery ? (
+                        <div>
+                          <span className="font-medium text-foreground">
+                            建議查詢：
+                          </span>
+                          {card.suggestedQuery}
+                        </div>
+                      ) : null}
+                    </div>
+                    {card.searchBoundary && (
+                      <p className="mt-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-5 text-muted-foreground">
+                        搜尋邊界：{card.searchBoundary}
+                        {card.excludedTerms?.length
+                          ? ` 避免漂移：${card.excludedTerms.join("、")}。`
+                          : ""}
+                      </p>
+                    )}
                   </article>
                 ))}
               </div>
@@ -1877,7 +2276,11 @@ function TopicStepPanel({
                 value={input.researchDepth}
                 onValueChange={(value) => onInputChange("researchDepth", value)}
               >
-                <SelectTrigger id="researchDepth" data-testid="select-researchDepth" className="h-11">
+                <SelectTrigger
+                  id="researchDepth"
+                  data-testid="select-researchDepth"
+                  className="h-11"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -2054,6 +2457,7 @@ function ManageStepPanel({
   hasWorkspaceTopicMismatch,
   researchDepth,
   recommendedAcceptedSourceCount,
+  pipelineStats,
   onBack,
   onNext,
   onReview,
@@ -2065,18 +2469,23 @@ function ManageStepPanel({
   hasWorkspaceTopicMismatch: boolean;
   researchDepth: ReportInput["researchDepth"];
   recommendedAcceptedSourceCount: number;
+  pipelineStats: SourcePipelineStats | null;
   onBack: () => void;
   onNext: () => void;
   onReview: (sourceId: string, reviewState: SourceReviewState) => void;
   onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
   topic: string;
 }) {
-  const sourceQualityReadiness = generationReadiness(acceptedSourceRecords(sources), researchDepth);
-  const canProceedToGenerate = sourceQualityReadiness.canGenerate && !hasWorkspaceTopicMismatch;
+  const sourceQualityReadiness = generationReadiness(
+    acceptedSourceRecords(sources),
+    researchDepth,
+  );
+  const canProceedToGenerate =
+    sourceQualityReadiness.canGenerate && !hasWorkspaceTopicMismatch;
   const sourceGateWarning = hasWorkspaceTopicMismatch
     ? "目前來源屬於另一個主題，請重新搜尋後再生成。"
-    : sourceQualityReadiness.relevantSourceCount < 3
-      ? "目前主要來源不足。請重新搜尋或調整主題，至少需要 3 筆可驗證主要來源。"
+    : sourceQualityReadiness.primarySourceCount + sourceQualityReadiness.secondarySourceCount < 3
+      ? "目前主要／延伸來源不足。請重新搜尋或調整主題，至少需要 3 筆可驗證來源。"
       : sourceQualityReadiness.lowQualityAcceptedCount > 0
         ? "系統找到多筆延伸或低相關來源，但它們不足以支撐本研究主題。"
         : sourceQualityReadiness.warning;
@@ -2119,6 +2528,7 @@ function ManageStepPanel({
             onEdit={onEdit}
             topic={topic}
             recommendedAcceptedSourceCount={recommendedAcceptedSourceCount}
+            pipelineStats={pipelineStats}
           />
         ) : (
           <div className="flex min-h-[320px] flex-col items-center justify-center text-center">
@@ -2150,14 +2560,14 @@ function ManageStepPanel({
               {sourceGateWarning}
             </p>
           )}
-        <Button
-          type="button"
-          className="min-h-[42px]"
-          onClick={onNext}
-          disabled={!canProceedToGenerate}
-        >
-          下一步：生成報告 <ArrowRight className="ml-2 h-4 w-4" />
-        </Button>
+          <Button
+            type="button"
+            className="min-h-[42px]"
+            onClick={onNext}
+            disabled={!canProceedToGenerate}
+          >
+            下一步：生成報告 <ArrowRight className="ml-2 h-4 w-4" />
+          </Button>
         </div>
       </div>
     </section>
@@ -2245,7 +2655,7 @@ function GenerateStepPanel({
               {readiness.canGenerateFull
                 ? "來源品質已達完整報告門檻，可以建立完整報告工作區。"
                 : readiness.canGenerate
-                  ? "來源品質已達簡版草稿門檻，可以先建立快速草稿。"
+                  ? "來源品質已達初步報告門檻；主要來源不足時，報告會清楚標示為初步報告。"
                   : "來源品質不足，請先回到來源管理補足相關且有摘要的可信來源。"}
             </p>
           </div>
@@ -2263,13 +2673,23 @@ function GenerateStepPanel({
             }
           >
             {readiness.canGenerateFull
-              ? "可生成完整報告"
+              ? "可生成正式報告"
               : readiness.canGenerate
-                ? "可生成簡版草稿"
+                ? "可生成初步報告"
                 : "來源不足"}
           </Badge>
-          <Badge variant="outline">相關來源 {readiness.relevantSourceCount} 筆</Badge>
-          <Badge variant="outline">可用摘要 {readiness.usableSummaryCount} 筆</Badge>
+          <Badge variant="outline">
+            主要 {readiness.primarySourceCount} 筆
+          </Badge>
+          <Badge variant="outline">
+            延伸 {readiness.secondarySourceCount} 筆
+          </Badge>
+          <Badge variant="outline">
+            相關來源 {readiness.relevantSourceCount} 筆
+          </Badge>
+          <Badge variant="outline">
+            可用摘要 {readiness.usableSummaryCount} 筆
+          </Badge>
           <Badge variant="outline">涵蓋面 {readiness.coverageCount} 項</Badge>
           {isGenerating && (
             <Badge variant="outline">{readiness.progressLabel}</Badge>
@@ -2564,7 +2984,13 @@ export function Generator() {
   const [developerDebugOpen, setDeveloperDebugOpen] = useState(false);
   const [workspaceResume, setWorkspaceResume] =
     useState<WorkspaceResumeState | null>(null);
-  const [sourceWorkspaceFingerprint, setSourceWorkspaceFingerprint] = useState<string | null>(null);
+  const [sourceWorkspaceFingerprint, setSourceWorkspaceFingerprint] = useState<
+    string | null
+  >(null);
+  const [sourceWorkflowId, setSourceWorkflowId] = useState<string | null>(null);
+  const [sourceQueryPlanHash, setSourceQueryPlanHash] = useState<string | null>(
+    null,
+  );
   const [activeStep, setActiveStep] = useState<GeneratorWorkflowStep>("topic");
   const [isStepTransitioning, setIsStepTransitioning] = useState(false);
   const [transitionTargetStep, setTransitionTargetStep] = useState<
@@ -2642,33 +3068,70 @@ export function Generator() {
   const detectedCategory: TopicCategory | null = input.topic.trim()
     ? detectTopicCategory(input.topic.trim(), input.reportType, derivedPurpose)
     : null;
-  const acceptedSources = acceptedSourceRecords(sources);
+  const sourceWorkflowLock = useMemo<SourceWorkflowLock | null>(() => {
+    if (!sourceWorkflowId || !sourceWorkspaceFingerprint || !sourceQueryPlanHash)
+      return null;
+    return {
+      workflowId: sourceWorkflowId,
+      topicHash: sourceWorkspaceFingerprint,
+      queryPlanHash: sourceQueryPlanHash,
+    };
+  }, [sourceQueryPlanHash, sourceWorkflowId, sourceWorkspaceFingerprint]);
+  const currentWorkflowSources = useMemo(
+    () => sources.filter((source) => sourceMatchesWorkflow(source, sourceWorkflowLock)),
+    [sourceWorkflowLock, sources],
+  );
+  const acceptedSources = acceptedSourceRecords(currentWorkflowSources).filter(
+    (source) => sourceCanEnterReport(source, sourceWorkflowLock),
+  );
   const selectedDepthOption =
-    RESEARCH_DEPTH_OPTIONS.find((option) => option.value === input.researchDepth) ??
-    RESEARCH_DEPTH_OPTIONS[1]!;
+    RESEARCH_DEPTH_OPTIONS.find(
+      (option) => option.value === input.researchDepth,
+    ) ?? RESEARCH_DEPTH_OPTIONS[1]!;
   const readiness = generationReadiness(acceptedSources, input.researchDepth);
-  const currentTopicFingerprint = hasTopic ? reportTopicFingerprint(input.topic.trim()) : null;
+  const recommendedAcceptedSourceCount =
+    input.researchDepth === "deep" ? 10 : 10;
+  const currentTopicFingerprint = hasTopic
+    ? reportTopicFingerprint(input.topic.trim())
+    : null;
   const hasWorkspaceTopicMismatch =
-    Boolean(sources.length)
-    && Boolean(sourceWorkspaceFingerprint)
-    && Boolean(currentTopicFingerprint)
-    && sourceWorkspaceFingerprint !== currentTopicFingerprint;
+    Boolean(sources.length) &&
+    Boolean(sourceWorkspaceFingerprint) &&
+    Boolean(currentTopicFingerprint) &&
+    sourceWorkspaceFingerprint !== currentTopicFingerprint;
   const workflowVisibility = generatorWorkflowVisibility(developerDebugOpen);
-  const reviewCounts = safeSourceReviewCounts(sources);
+  const reviewCounts = safeSourceReviewCounts(currentWorkflowSources);
+  const sourcePipelineStats: SourcePipelineStats | null = currentWorkflowSources.length
+    ? {
+        rawResults:
+          keywordSearchDebug?.retrievalStats.rawResults || currentWorkflowSources.length,
+        providerGroups:
+          keywordSearchDebug?.retrievalStats.providerGroups ?? 0,
+        successfulProviderGroups:
+          keywordSearchDebug?.retrievalStats.successfulProviderGroups ?? 0,
+        dedupedResults: currentWorkflowSources.length,
+        primaryCandidates: primaryCandidateSources(currentWorkflowSources).length,
+        secondaryCandidates: secondaryCandidateSources(currentWorkflowSources).length,
+        lowRelevance: lowRelevanceCandidateSources(currentWorkflowSources).length,
+        rejected: rejectedSourceRecords(currentWorkflowSources).length,
+      }
+    : null;
   const sourceReviewAvailable =
-    sourceSearchStatus !== "idle" || sources.length > 0;
+    sourceSearchStatus !== "idle" || currentWorkflowSources.length > 0;
   const stepCompleted: Record<GeneratorWorkflowStep, boolean> = {
     topic: hasTopic && activeStep !== "topic",
     search: sourceReviewAvailable && activeStep !== "search",
-    manage: sources.length > 0 && activeStep !== "manage",
+    manage: currentWorkflowSources.length > 0 && activeStep !== "manage",
     generate: false,
   };
   const canEnterStep = (step: GeneratorWorkflowStep) => {
     if (step === "topic") return true;
     if (!hasTopic) return false;
     if (step === "search") return true;
-    if (step === "manage") return sources.length > 0 && !hasWorkspaceTopicMismatch;
-    if (step === "generate") return readiness.canGenerate && !hasWorkspaceTopicMismatch;
+    if (step === "manage")
+      return currentWorkflowSources.length > 0 && !hasWorkspaceTopicMismatch;
+    if (step === "generate")
+      return readiness.canGenerate && !hasWorkspaceTopicMismatch;
     return true;
   };
   const handleStepSelect = (step: GeneratorWorkflowStep) => {
@@ -2696,7 +3159,7 @@ export function Generator() {
         "manage",
         {
           title: "已整理來源",
-          description: `已找到 ${sourceCount} 筆候選來源，正在進入來源管理。`,
+          description: `已找到 ${sourceCount} 筆候選來源，正在進入來源管理。主要候選會預設展開，已接受來源會自動折疊。`,
         },
         620,
       );
@@ -2732,12 +3195,20 @@ export function Generator() {
     if (previousFingerprint === fingerprint) return;
 
     activeTopicFingerprintRef.current = fingerprint;
-    if (sources.length === 0 && sourceSearchStatus === "idle" && !workspaceResume) return;
+    if (
+      sources.length === 0 &&
+      sourceSearchStatus === "idle" &&
+      !workspaceResume
+    )
+      return;
 
     clearStepTransition();
     setSources([]);
     setSourceWorkspaceFingerprint(null);
+    setSourceWorkflowId(null);
+    setSourceQueryPlanHash(null);
     setKeywordSearchDebug(null);
+    setExpansions([]);
     setSourceSearchStatus("idle");
     setSourceSearchMessage("主題已變更，請重新搜尋來源。");
     setGenerateStatus("idle");
@@ -2760,10 +3231,25 @@ export function Generator() {
 
     suppressTopicResetRef.current = true;
     activeTopicFingerprintRef.current = workspace.topicFingerprint;
+    const resumeLock = {
+      workflowId: workspace.workflowId,
+      topicHash: workspace.topicHash,
+      queryPlanHash:
+        workspace.acceptedSources.find((source) => source.queryPlanHash)
+          ?.queryPlanHash ?? workspace.topicHash,
+    };
     setWorkspaceResume({ reportId, loaded: true });
     setInput(workspace.input);
-    setSources(workspace.acceptedSources);
-    setSourceWorkspaceFingerprint(workspace.topicFingerprint);
+    setSources(
+      applyWorkflowLockToSources(
+        workspace.acceptedSources,
+        resumeLock,
+        workspace.input.topic,
+      ),
+    );
+    setSourceWorkflowId(resumeLock.workflowId);
+    setSourceWorkspaceFingerprint(resumeLock.topicHash);
+    setSourceQueryPlanHash(resumeLock.queryPlanHash);
     setSourceSearchStatus("done");
     setSourceSearchMessage("已載入報告工作區來源，可調整後重新生成。");
     setActiveStep(
@@ -2798,6 +3284,8 @@ export function Generator() {
     setKeywordSearchDebug(null);
     setSources([]);
     setSourceWorkspaceFingerprint(null);
+    setSourceWorkflowId(null);
+    setSourceQueryPlanHash(null);
     if (stepDelayTimerRef.current !== null) {
       window.clearTimeout(stepDelayTimerRef.current);
       stepDelayTimerRef.current = null;
@@ -2811,30 +3299,80 @@ export function Generator() {
         sourceMode: input.sourceRequirement,
         language: input.outputLanguage,
       });
-      const normalizedSources = applySourceAuthorityAndLanguage(
-        applySourceRelevanceAssessments(
-          dedupeSourceRecords(
-            supplementTrustedClimateSources(
-              result.sources.map(normalizeSourceForReview),
-              topic,
-            ),
+      const workflowLock: SourceWorkflowLock = {
+        workflowId:
+          result.workflowId ??
+          result.searchTrace?.workflowId ??
+          createClientWorkflowId(),
+        topicHash:
+          result.topicHash ??
+          result.searchTrace?.topicHash ??
+          reportTopicFingerprint(topic),
+        queryPlanHash:
+          result.queryPlanHash ??
+          result.searchTrace?.queryPlanHash ??
+          reportTopicFingerprint(
+            result.queries
+              ? [
+                  ...result.queries.highPrecision,
+                  ...result.queries.english,
+                  ...result.queries.chinese,
+                  ...result.queries.broad,
+                ].join(" ")
+              : topic,
           ),
+      };
+      const dedupedSources = dedupeSourceRecords(
+        supplementTrustedClimateSources(
+          result.sources.map(normalizeSourceForReview),
           topic,
         ),
       );
-      setSources(normalizedSources);
-      setSourceWorkspaceFingerprint(reportTopicFingerprint(topic));
+      const relevanceAssessedSources =
+        result.searchTrace || result.planner
+          ? dedupedSources
+          : applySourceRelevanceAssessments(dedupedSources, topic);
+      const normalizedSources = applySourceAuthorityAndLanguage(
+        relevanceAssessedSources,
+      );
+      const workflowSources = applyWorkflowLockToSources(
+        normalizedSources,
+        workflowLock,
+        topic,
+      );
+      setSources(workflowSources);
+      setSourceWorkflowId(workflowLock.workflowId);
+      setSourceWorkspaceFingerprint(workflowLock.topicHash);
+      setSourceQueryPlanHash(workflowLock.queryPlanHash);
       setKeywordSearchDebug(keywordSearchDebugFromResult(result));
-      if (normalizedSources.length) {
+      if (workflowSources.length) {
         setSourceSearchStatus("done");
         const partialProviderFailure = hasProviderFailures(result);
+        const primaryCount = workflowSources.filter(
+          (source) =>
+            source.relevanceLevel === "primary" &&
+            source.shouldShowInMainList !== false,
+        ).length;
+        const lowCount = workflowSources.filter(
+          (source) =>
+            source.relevanceLevel === "low" ||
+            source.relevanceLevel === "off_topic" ||
+            source.shouldShowInMainList === false,
+        ).length;
+        const searchSummaryMessage =
+          primaryCount > 0
+            ? `已找到 ${primaryCount} 筆主要候選來源，另有 ${lowCount} 筆低相關來源已折疊。`
+            : `目前沒有符合主題的主要來源；已找到 ${lowCount} 筆低相關來源，預設不建議採用。`;
+        setSourceSearchMessage(searchSummaryMessage);
         toast({
           title: partialProviderFailure ? "部分來源搜尋失敗" : "已找到來源",
           description: partialProviderFailure
-            ? "已顯示可用來源，部分資料來源暫時無法使用。"
-            : `已套用關鍵詞搜尋策略，共找到 ${normalizedSources.length} 筆可選來源。`,
+            ? `已顯示可用來源，部分資料來源暫時無法使用。${searchSummaryMessage}`
+            : primaryCount > 0
+              ? `高相關來源不足時不會用低相關來源湊數。${searchSummaryMessage}`
+              : searchSummaryMessage,
         });
-        scheduleManageStepAfterSearch(normalizedSources.length);
+        scheduleManageStepAfterSearch(workflowSources.length);
       } else {
         setSourceSearchStatus("empty");
         setSourceSearchMessage(
@@ -2849,6 +3387,11 @@ export function Generator() {
 
       try {
         const result = await searchSources({ query: searchQuery });
+        const fallbackLock: SourceWorkflowLock = {
+          workflowId: createClientWorkflowId(),
+          topicHash: reportTopicFingerprint(topic),
+          queryPlanHash: reportTopicFingerprint(searchQuery),
+        };
         const normalizedSources = applySourceAuthorityAndLanguage(
           applySourceRelevanceAssessments(
             dedupeSourceRecords(
@@ -2860,8 +3403,15 @@ export function Generator() {
             topic,
           ),
         );
-        setSources(normalizedSources);
-        setSourceWorkspaceFingerprint(reportTopicFingerprint(topic));
+        const workflowSources = applyWorkflowLockToSources(
+          normalizedSources,
+          fallbackLock,
+          topic,
+        );
+        setSources(workflowSources);
+        setSourceWorkflowId(fallbackLock.workflowId);
+        setSourceWorkspaceFingerprint(fallbackLock.topicHash);
+        setSourceQueryPlanHash(fallbackLock.queryPlanHash);
         setKeywordSearchDebug({
           fallbackUsed: true,
           llmStatus: "skipped",
@@ -2873,14 +3423,22 @@ export function Generator() {
           searchIntent: null,
           intentQueries: null,
           warnings: [],
+          retrievalStats: {
+            rawResults: result.sources.length,
+            providerGroups:
+              result.groups?.length ?? result.provider_status?.length ?? 0,
+            successfulProviderGroups: (
+              result.groups ?? result.provider_status ?? []
+            ).filter((group) => group.ok).length,
+          },
         });
-        if (normalizedSources.length) {
+        if (workflowSources.length) {
           setSourceSearchStatus("done");
           toast({
             title: "已找到來源",
-            description: `關鍵詞搜尋端點暫不可用，已改用既有搜尋，共找到 ${normalizedSources.length} 筆可選來源。`,
+            description: `關鍵詞搜尋端點暫不可用，已改用既有搜尋。主要候選 ${workflowSources.filter((source) => source.relevanceLevel === "primary").length} 筆，低相關已折疊。`,
           });
-          scheduleManageStepAfterSearch(normalizedSources.length);
+          scheduleManageStepAfterSearch(workflowSources.length);
         } else {
           setSourceSearchStatus("empty");
           setSourceSearchMessage(
@@ -2918,6 +3476,28 @@ export function Generator() {
     sourceId: string,
     reviewState: SourceReviewState,
   ) => {
+    if (reviewState === "accepted") {
+      const source = sources.find(
+        (item) => (item.id || sourceRecordKey(item)) === sourceId,
+      );
+      const blockReason = source
+        ? sourceAcceptBlockReason(source, sourceWorkflowLock)
+        : "source_not_found";
+      if (blockReason) {
+        toast({
+          title: "無法接受此來源",
+          description:
+            blockReason === "workflow_mismatch" ||
+            blockReason === "topic_mismatch" ||
+            blockReason === "query_plan_mismatch"
+              ? "此來源不屬於目前工作流程，請重新搜尋目前主題後再接受。"
+              : "此來源未通過主題相關性門檻，不能作為主要報告來源。",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     setSources((current) =>
       updateSourceReviewState(current, sourceId, reviewState),
     );
@@ -2925,7 +3505,7 @@ export function Generator() {
 
   // ── Generate ────────────────────────────────────────────────────────────────
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (!input.topic.trim()) {
       setGenerateStatus("error");
       setActiveStep("topic");
@@ -2936,12 +3516,28 @@ export function Generator() {
       });
       return;
     }
-    const currentReadiness = generationReadiness(acceptedSources, input.researchDepth);
+    const currentReadiness = generationReadiness(
+      acceptedSources,
+      input.researchDepth,
+    );
+    const unsafeAcceptedSources = acceptedSourceRecords(currentWorkflowSources).filter(
+      (source) => !sourceCanEnterReport(source, sourceWorkflowLock),
+    );
     if (hasWorkspaceTopicMismatch) {
       setGenerateStatus("error");
       toast({
         title: "主題與來源不一致",
         description: "目前來源屬於另一個主題，請重新搜尋後再生成。",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (unsafeAcceptedSources.length > 0 || !sourceWorkflowLock) {
+      setGenerateStatus("error");
+      toast({
+        title: "來源與目前工作流程不一致",
+        description:
+          "目前已接受來源不足，或部分來源與目前主題不一致。請重新搜尋並接受相關來源後再生成報告。",
         variant: "destructive",
       });
       return;
@@ -2974,25 +3570,46 @@ export function Generator() {
       {
         title: "正在建立報告工作區",
         description:
-          "正在整理已接受來源、產生大綱與草稿，完成後會自動前往報告頁。",
+          "正在整理已接受來源、呼叫 LLM 生成正式中文段落，完成後會自動前往報告頁。",
       },
       650,
-      () => {
+      async () => {
         try {
-          const navigation = startReportWorkspaceNavigation({
-            input: effectiveInput,
+          const readinessForWorkspace = generationReadiness(
             acceptedSources,
-            existingReportId: workspaceResume?.reportId,
-            navigate,
-          });
-
-          if (!navigation) {
+            effectiveInput.researchDepth,
+          );
+          if (!readinessForWorkspace.canGenerate) {
             setGenerateStatus("error");
             setIsGenerating(false);
             return;
           }
+          let workspace = createReportWorkspace(
+            effectiveInput,
+            acceptedSources,
+            readinessForWorkspace.mode === "quick_draft"
+              ? "quick_draft"
+              : "full_report",
+          );
+          const llmDraft = await requestLlmReportDraft({
+            reportInput: effectiveInput,
+            acceptedSources,
+            evidenceCards: workspace.evidenceCards,
+            generationMode: workspace.generationMode,
+          });
+          workspace = mergeLlmReportDraft(workspace, llmDraft);
+          saveReportWorkspace(workspace);
 
           setGenerateStatus("done");
+          if (!llmDraft.ok) {
+            toast({
+              title: "已建立初稿",
+              description:
+                llmDraft.warning ??
+                "LLM 報告生成暫不可用，已保留來源導向草稿。",
+            });
+          }
+          navigate(reportWorkspacePath(workspace.id));
         } catch {
           setGenerateStatus("error");
           setIsGenerating(false);
@@ -3017,7 +3634,9 @@ export function Generator() {
       });
       return;
     }
-    setExpansions(expandTopicCards(input.topic.trim(), detectedCategory ?? undefined));
+    setExpansions(
+      expandTopicCards(input.topic.trim(), detectedCategory ?? undefined),
+    );
   };
 
   const applyExpansion = (title: string) => {
@@ -3039,6 +3658,8 @@ export function Generator() {
     setExpansions([]);
     setSources([]);
     setSourceWorkspaceFingerprint(null);
+    setSourceWorkflowId(null);
+    setSourceQueryPlanHash(null);
     setSourceSearchStatus("idle");
     setSourceSearchMessage("");
     setKeywordSearchDebug(null);
@@ -3074,7 +3695,7 @@ export function Generator() {
     goToStep("search");
   };
   const goToManageStep = () => {
-    if (!sources.length) {
+    if (!currentWorkflowSources.length) {
       goToStep("search");
       return;
     }
@@ -3137,15 +3758,13 @@ export function Generator() {
                 <Badge variant={hasTopic ? "secondary" : "outline"}>
                   {hasTopic ? "主題已設定" : "等待主題"}
                 </Badge>
-                <Badge variant={sources.length ? "secondary" : "outline"}>
+                <Badge variant={currentWorkflowSources.length ? "secondary" : "outline"}>
                   來源 {reviewCounts.all} 筆
                 </Badge>
                 <Badge variant={acceptedSources.length ? "default" : "outline"}>
                   已接受 {reviewCounts.accepted} 筆
                 </Badge>
-                <Badge variant="outline">
-                  {selectedDepthOption.label}
-                </Badge>
+                <Badge variant="outline">{selectedDepthOption.label}</Badge>
                 {reviewCounts.rejected > 0 && (
                   <Badge variant="outline">
                     已拒絕 {reviewCounts.rejected} 筆
@@ -3178,7 +3797,7 @@ export function Generator() {
               detectedCategory={detectedCategory}
               autoSearchEnabled={autoSearchEnabled}
               workspaceResume={workspaceResume}
-              researchDepthLabel={`${selectedDepthOption.label} / 建議 ${selectedDepthOption.recommendedSources} 筆`}
+              researchDepthLabel={`${selectedDepthOption.label} / 建議 ${recommendedAcceptedSourceCount} 筆`}
               onInputChange={updateInput}
               onExpandTopic={handleExpand}
               onApplyExpansion={applyExpansion}
@@ -3193,7 +3812,7 @@ export function Generator() {
               audience={input.targetAudience || input.academicLevel}
               status={sourceSearchStatus}
               message={sourceSearchMessage}
-              sourceCount={sources.length}
+              sourceCount={currentWorkflowSources.length}
               isSearching={isSearchingSources}
               hasTopic={hasTopic}
               onSearch={handleSearchSources}
@@ -3201,11 +3820,12 @@ export function Generator() {
             />
           ) : activeStep === "manage" ? (
             <ManageStepPanel
-              sources={sources}
+              sources={currentWorkflowSources}
               acceptedCount={acceptedSources.length}
               hasWorkspaceTopicMismatch={hasWorkspaceTopicMismatch}
               researchDepth={input.researchDepth}
-              recommendedAcceptedSourceCount={selectedDepthOption.recommendedSources}
+              recommendedAcceptedSourceCount={recommendedAcceptedSourceCount}
+              pipelineStats={sourcePipelineStats}
               onBack={() => goToStep("search")}
               onNext={goToGenerateStep}
               onReview={updateSourceReview}
@@ -3216,7 +3836,7 @@ export function Generator() {
             <GenerateStepPanel
               acceptedCount={acceptedSources.length}
               researchDepth={input.researchDepth}
-              recommendedAcceptedSourceCount={selectedDepthOption.recommendedSources}
+              recommendedAcceptedSourceCount={recommendedAcceptedSourceCount}
               readiness={readiness}
               isGenerating={isGenerating}
               generateButtonLabel={generateButtonLabel}

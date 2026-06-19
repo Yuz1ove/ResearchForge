@@ -18,9 +18,14 @@ import {
   regenerateReportWorkspace,
   reportWorkspacePath,
   saveReportWorkspace,
+  workspaceSnapshotIsConsistent,
   workspaceToGeneratedReport,
   type ReportWorkspace,
 } from "@/lib/reportWorkspace";
+import {
+  previewWorkspaceMatchesContext,
+  visibleReportSectionText,
+} from "@/lib/reportPreviewGuards";
 import {
   buildPlainText,
   downloadDocx,
@@ -86,6 +91,42 @@ function readinessBadgeVariant(readiness: ReportWorkspace["qualityReport"]["read
   if (readiness === "strong") return "default";
   if (readiness === "usable" || readiness === "preliminary") return "secondary";
   return "outline";
+}
+
+function evidenceCardStatusLabel(card: ReportWorkspace["evidenceCards"][number]): string {
+  if (card.derivation === "metadata-derived") return "摘要不足";
+  if (card.derivation === "fulltext-derived") return "片段可驗證";
+  return "摘要可用";
+}
+
+function sourceStatusLabels(source: ReportWorkspace["acceptedSources"][number]): string[] {
+  const labels = ["已接受", sourceCategoryLabel(source.sourceCategory)];
+  if (source.sourceLanguageLabel === "英文來源" || source.sourceLanguage === "en") {
+    labels.push("英文來源");
+  }
+  if (
+    source.evidenceGrounding === "metadata_only" ||
+    source.evidenceGrounding === "insufficient" ||
+    !source.abstract
+  ) {
+    labels.push("摘要不足");
+  }
+  return Array.from(new Set(labels));
+}
+
+function workspaceMatchesRouteContext(workspace: ReportWorkspace): boolean {
+  const params = new URLSearchParams(window.location.search);
+  return previewWorkspaceMatchesContext(
+    {
+      workflowId: workspace.workflowId,
+      topicHash: workspace.topicHash,
+      isConsistent: workspaceSnapshotIsConsistent(workspace),
+    },
+    {
+      workflowId: params.get("workflowId"),
+      topicHash: params.get("topicHash"),
+    },
+  );
 }
 
 function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWorkspace }) {
@@ -361,9 +402,8 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                     <div className="mb-2 flex flex-wrap items-center gap-2">
                       <Badge variant="outline">證據 {index + 1}</Badge>
                       <Badge variant={card.derivation === "metadata-derived" ? "outline" : "secondary"}>
-                        {card.derivation}
+                        {evidenceCardStatusLabel(card)}
                       </Badge>
-                      <Badge variant="outline">信心 {Math.round(card.confidenceScore * 100)}%</Badge>
                     </div>
                     <p className="line-clamp-2 text-sm font-medium leading-6 text-foreground">{card.summary || card.evidence}</p>
                     <p className="mt-1 text-xs leading-5 text-muted-foreground">{card.sourceTitle}</p>
@@ -390,8 +430,11 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                     <article key={source.id || `${source.sourceType}-${index}`} className="rounded-md border border-border bg-background p-3.5">
                       <div className="mb-2 flex flex-wrap items-center gap-2">
                         <Badge variant="outline">來源 {index + 1}</Badge>
-                        <Badge variant="secondary">{sourceCategoryLabel(source.sourceCategory)}</Badge>
-                        <Badge variant="outline">可信度 {source.confidence ?? "中"}</Badge>
+                        {sourceStatusLabels(source).map((label) => (
+                          <Badge key={label} variant={label === "已接受" ? "secondary" : "outline"}>
+                            {label}
+                          </Badge>
+                        ))}
                       </div>
                       <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-foreground" title={title}>{title}</h3>
                       <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
@@ -451,7 +494,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                       <Badge key={warning} variant="secondary">{warning}</Badge>
                     ))}
                   </div>
-                  <p className="mt-3 whitespace-pre-line text-sm leading-7 text-foreground/90 sm:text-[15px] sm:leading-8">{section.body}</p>
+                  <p className="mt-3 whitespace-pre-line text-sm leading-7 text-foreground/90 sm:text-[15px] sm:leading-8">{visibleReportSectionText(section)}</p>
                 </article>
               ))}
             </div>
@@ -467,6 +510,25 @@ export function ReportPreview() {
   const [, previewMatch] = useRoute("/preview/:reportId");
   const reportId = reportMatch?.reportId ?? previewMatch?.reportId;
   const workspace = reportId ? loadReportWorkspace(reportId) : null;
+
+  if (workspace && !workspaceMatchesRouteContext(workspace)) {
+    return (
+      <div className="min-h-screen bg-muted/20">
+        <Navbar />
+        <main className="container mx-auto max-w-3xl px-4 pb-12 pt-24">
+          <section className="rounded-lg border border-border bg-card p-6 text-center">
+            <h1 className="text-xl font-semibold text-foreground">此報告不屬於目前工作流程</h1>
+            <p className="mt-2 text-sm text-muted-foreground">工作流程、主題或來源快照不一致。請回到生成器重新搜尋並接受目前主題的來源後，再建立新的報告工作區。</p>
+            <Link href="/generator">
+              <Button className="mt-4">
+                <ArrowLeft className="mr-2 h-4 w-4" /> 回到生成器
+              </Button>
+            </Link>
+          </section>
+        </main>
+      </div>
+    );
+  }
 
   if (!workspace || !reportId) {
     return (

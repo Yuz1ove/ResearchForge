@@ -72,7 +72,7 @@ export function createSearchSourcesRouter({
     try {
       if (normalized.kind === "topic") {
         const result = await topicSearchHandler(normalized.input);
-        res.json(SearchSourcesResponse.parse(result));
+        res.json(result);
         return;
       }
 

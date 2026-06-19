@@ -25,6 +25,8 @@ export * from './searchKeywordsRequest';
 export * from './searchRelevanceDebug';
 export * from './searchSourcesRequest';
 export * from './sourceRecord';
+export * from './sourceRecordEvidenceGrounding';
+export * from './sourceRecordRelevanceLevel';
 export * from './sourceRecordSourceType';
 export * from './sourceReviewState';
 export * from './sourceSearchResult';

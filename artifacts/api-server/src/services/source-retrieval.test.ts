@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   dedupeSources,
   normalizeCrossrefWork,
+  normalizeOpenAlexWork,
   normalizeSemanticScholarPaper,
   searchSourceProvider,
   searchSources,
@@ -64,6 +65,39 @@ test("normalizes Semantic Scholar papers into the unified Source shape", () => {
   });
 });
 
+test("normalizes OpenAlex works and restores abstract inverted index", () => {
+  const source = normalizeOpenAlexWork({
+    id: "https://openalex.org/W123",
+    doi: "https://doi.org/10.2500/spider-habitat",
+    title: "Spider habitat selection and vegetation structure",
+    publication_year: 2022,
+    abstract_inverted_index: {
+      Spider: [0],
+      habitat: [1],
+      selection: [2],
+      is: [3],
+      related: [4],
+      to: [5],
+      vegetation: [6],
+      structure: [7],
+      and: [8],
+      microhabitat: [9],
+      conditions: [10],
+    },
+    authorships: [{ author: { display_name: "Ada Lovelace" } }],
+    primary_location: {
+      source: { display_name: "Journal of Arachnid Ecology" },
+      landing_page_url: "https://example.org/spider-habitat",
+    },
+    concepts: [{ display_name: "Ecology" }],
+  });
+
+  assert.equal(source?.sourceType, "OpenAlex");
+  assert.equal(source?.doi, "10.2500/spider-habitat");
+  assert.match(source?.abstract ?? "", /Spider habitat selection/);
+  assert.equal(source?.containerTitle, "Journal of Arachnid Ecology");
+});
+
 test("normalizes incomplete source metadata without inventing values", () => {
   const source = normalizeSemanticScholarPaper({
     title: "Incomplete but usable title",
@@ -111,6 +145,46 @@ test("dedupes sources by DOI before URL or title", () => {
 
   assert.equal(sources.length, 1);
   assert.equal(sources[0]?.sourceType, "Crossref");
+  assert.equal(sources[0]?.abstract, null);
+});
+
+test("dedupe enrichment keeps the richer abstract for duplicate DOI records", () => {
+  const sources = dedupeSources([
+    {
+      id: "doi:10.3000/example",
+      title: "Duplicate source",
+      authors: [],
+      year: 2021,
+      abstract: null,
+      doi: "10.3000/example",
+      url: "https://doi.org/10.3000/example",
+      sourceType: "Crossref",
+      reviewState: "pending",
+      publisher: null,
+      containerTitle: null,
+      accessedAt: null,
+    },
+    {
+      id: "doi:10.3000/example",
+      title: "Duplicate source from OpenAlex",
+      authors: ["Someone"],
+      year: 2021,
+      abstract:
+        "Spider habitat and microhabitat ecology abstract with enough detail for source summary.",
+      doi: "10.3000/example",
+      url: "https://openalex.org/W123",
+      sourceType: "OpenAlex",
+      reviewState: "pending",
+      publisher: null,
+      containerTitle: "Ecology Journal",
+      accessedAt: null,
+    },
+  ]);
+
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0]?.sourceType, "OpenAlex");
+  assert.match(sources[0]?.abstract ?? "", /microhabitat ecology/);
+  assert.deepEqual(sources[0]?.authors, ["Someone"]);
 });
 
 test("returns structured provider failure instead of throwing", async () => {

@@ -60,9 +60,15 @@ test("search source topic-style route response includes search intent fields", a
   const router = createSearchSourcesRouter({
     topicSearchHandler: async (input) => {
       const source = sourceRecord("Urban heat island effects on campus thermal comfort");
+      const workflowId = "00000000-0000-4000-8000-000000000001";
+      const topicHash = "topic-hash";
+      const queryPlanHash = "query-plan-hash";
       return {
         ok: true,
         topic: input.topic,
+        workflowId,
+        topicHash,
+        queryPlanHash,
         searchIntent: {
           primaryConcepts: ["urban heat island", "thermal comfort"],
           contextConcepts: ["campus"],
@@ -108,6 +114,33 @@ test("search source topic-style route response includes search intent fields", a
           reasoningNotes: ["fallback used"],
           plannerStatus: "rule_fallback",
           fallbackUsed: true,
+        },
+        searchTrace: {
+          workflowId,
+          topic: input.topic,
+          normalizedTopic: input.topic,
+          topicHash,
+          queryPlanHash,
+          providerQueries: ["urban heat island campus thermal comfort students"],
+          candidateCount: 1,
+          dedupedCount: 1,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          sourceDecisions: [
+            {
+              title: source.title,
+              provider: source.sourceType,
+              url: source.url,
+              relevanceScore: 80,
+              authorityScore: 80,
+              summaryUsabilityScore: 80,
+              finalScore: 80,
+              classification: "primary",
+              rejectReason: null,
+              matchedTerms: ["urban heat island"],
+              driftTerms: [],
+            },
+          ],
         },
         llm_status: "failed",
         keyword_expansion: {

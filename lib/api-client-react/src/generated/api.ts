@@ -127,7 +127,7 @@ export const getSearchSourcesUrl = () => {
 }
 
 /**
- * Searches Crossref and Semantic Scholar for academic/web sources related to a research topic.
+ * Searches OpenAlex, Semantic Scholar, and Crossref for academic/web sources related to a research topic.
  * @summary Search sources
  */
 export const searchSources = async (searchSourcesRequest: SearchSourcesRequest, options?: RequestInit): Promise<SourceSearchResult> => {

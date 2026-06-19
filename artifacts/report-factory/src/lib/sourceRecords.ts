@@ -11,6 +11,15 @@ export type EvidenceGroundingStatus =
   | "metadata_only"
   | "insufficient";
 
+export type SourceRelevanceClassification =
+  | "primary"
+  | "review"
+  | "low_quality"
+  | "off_topic"
+  | "trusted_but_off_topic"
+  | "stale_topic"
+  | "stale_workflow";
+
 export const SOURCE_CONFIDENCE_OPTIONS = ["高", "中", "低"] as const;
 export type SourceConfidence = (typeof SOURCE_CONFIDENCE_OPTIONS)[number];
 
@@ -76,8 +85,24 @@ export interface SourceRecordMetadata {
   sourceLanguageLabel?: string | null;
   mainEvidenceFacet?: string | null;
   evidenceSummaryZhTw?: string | null;
+  llmSummaryZhTw?: string | null;
+  llmSummaryStatus?: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped" | null;
   evidenceSnippets?: SourceEvidenceSnippet[] | null;
   evidenceChain?: SourceEvidenceChainEntry[] | null;
+  workflowId?: string | null;
+  topic?: string | null;
+  normalizedTopic?: string | null;
+  topicHash?: string | null;
+  queryPlanHash?: string | null;
+  summaryUsabilityScore?: number | null;
+  metadataCompletenessScore?: number | null;
+  recencyScore?: number | null;
+  languageFitScore?: number | null;
+  finalScore?: number | null;
+  classification?: SourceRelevanceClassification | null;
+  rejectReason?: string | null;
+  matchedTerms?: string[] | null;
+  driftTerms?: string[] | null;
 }
 
 export type SourceRecord = ApiSourceRecord & SourceRecordMetadata;
@@ -261,8 +286,37 @@ function normalizeAuthorityLevel(value: unknown): SourceRecordMetadata["authorit
   return null;
 }
 
+function normalizeSourceClassification(value: unknown): SourceRecordMetadata["classification"] {
+  if (
+    value === "primary"
+    || value === "review"
+    || value === "low_quality"
+    || value === "off_topic"
+    || value === "trusted_but_off_topic"
+    || value === "stale_topic"
+    || value === "stale_workflow"
+  ) return value;
+  return null;
+}
+
+function normalizeOptionalScore(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function normalizeSourceLanguage(value: unknown): SourceRecordMetadata["sourceLanguage"] {
   if (value === "zh-TW" || value === "zh-CN" || value === "en" || value === "other" || value === "unknown") return value;
+  return null;
+}
+
+function normalizeLlmSummaryStatus(value: unknown): SourceRecordMetadata["llmSummaryStatus"] {
+  if (
+    value === "success" ||
+    value === "timeout" ||
+    value === "quota_exceeded" ||
+    value === "failed" ||
+    value === "skipped"
+  )
+    return value;
   return null;
 }
 
@@ -344,11 +398,14 @@ export function sourceRecordKey(source: Pick<SourceRecord, "title" | "doi" | "ur
   const doi = normalizeDoi(source.doi);
   if (doi) return `doi:${doi.toLowerCase()}`;
 
+  const title = normalizeTitle(source.title)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+  if (title) return `title:${title}`;
+
   const url = cleanText(source.url);
   if (url) return `url:${url.toLowerCase()}`;
-
-  const title = normalizeTitle(source.title).toLowerCase();
-  if (title) return `title:${source.sourceType}:${title}`;
 
   return `source:${source.sourceType}:${stableHash(JSON.stringify(source))}`;
 }
@@ -468,8 +525,24 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     sourceLanguageLabel: cleanText(source.sourceLanguageLabel),
     mainEvidenceFacet: cleanText(source.mainEvidenceFacet),
     evidenceSummaryZhTw: cleanText(source.evidenceSummaryZhTw),
+    llmSummaryZhTw: cleanText(source.llmSummaryZhTw),
+    llmSummaryStatus: normalizeLlmSummaryStatus(source.llmSummaryStatus),
     evidenceSnippets: normalizeEvidenceSnippetList(source.evidenceSnippets),
     evidenceChain: normalizeEvidenceChainList(source.evidenceChain),
+    workflowId: cleanText(source.workflowId),
+    topic: cleanText(source.topic),
+    normalizedTopic: cleanText(source.normalizedTopic),
+    topicHash: cleanText(source.topicHash),
+    queryPlanHash: cleanText(source.queryPlanHash),
+    summaryUsabilityScore: normalizeOptionalScore(source.summaryUsabilityScore),
+    metadataCompletenessScore: normalizeOptionalScore(source.metadataCompletenessScore),
+    recencyScore: normalizeOptionalScore(source.recencyScore),
+    languageFitScore: normalizeOptionalScore(source.languageFitScore),
+    finalScore: normalizeOptionalScore(source.finalScore),
+    classification: normalizeSourceClassification(source.classification),
+    rejectReason: cleanText(source.rejectReason),
+    matchedTerms: normalizeStringList(source.matchedTerms),
+    driftTerms: normalizeStringList(source.driftTerms),
   };
   return {
     ...normalized,
@@ -480,15 +553,44 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
 }
 
 export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
-  const seen = new Set<string>();
+  const seen = new Map<string, SourceRecord>();
   const deduped: SourceRecord[] = [];
 
   for (const source of sources) {
     const normalized = normalizeSourceForReview(source);
     const key = sourceRecordKey(normalized);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push({ ...normalized, id: normalized.id || key });
+    const existing = seen.get(key);
+    if (existing) {
+      const existingAbstractLength = existing.abstract?.length ?? 0;
+      const incomingAbstractLength = normalized.abstract?.length ?? 0;
+      const merged: SourceRecord = normalizeSourceForReview({
+        ...existing,
+        title: existing.title.length >= normalized.title.length ? existing.title : normalized.title,
+        authors: Array.from(new Set([...existing.authors, ...normalized.authors])),
+        year: existing.year ?? normalized.year,
+        abstract: incomingAbstractLength > existingAbstractLength ? normalized.abstract : existing.abstract,
+        doi: existing.doi ?? normalized.doi,
+        url: existing.url ?? normalized.url,
+        sourceType: existingAbstractLength === 0 && incomingAbstractLength > 0 ? normalized.sourceType : existing.sourceType,
+        reviewState:
+          sourceReviewState(existing) === "accepted" || sourceReviewState(normalized) === "accepted"
+            ? "accepted"
+            : sourceReviewState(existing) === "rejected" || sourceReviewState(normalized) === "rejected"
+              ? "rejected"
+              : "pending",
+        publisher: existing.publisher ?? normalized.publisher,
+        containerTitle: existing.containerTitle ?? normalized.containerTitle,
+        accessedAt: existing.accessedAt ?? normalized.accessedAt,
+      });
+      const withStableId = { ...merged, id: existing.id || key };
+      seen.set(key, withStableId);
+      const index = deduped.findIndex((item) => item.id === existing.id);
+      if (index >= 0) deduped[index] = withStableId;
+      continue;
+    }
+    const inserted = { ...normalized, id: normalized.id || key };
+    seen.set(key, inserted);
+    deduped.push(inserted);
   }
 
   return deduped;

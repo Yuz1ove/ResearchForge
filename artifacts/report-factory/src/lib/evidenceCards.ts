@@ -83,7 +83,7 @@ function compactEvidenceText(source: SourceRecord): string {
     if (firstSentence) return firstSentence;
   }
   const locator = source.doi ? `DOI：${source.doi}` : source.url;
-  return locator ? `可由來源位置查證：${locator}` : "此來源已接受，但仍需要補充可引用的重點摘錄。";
+  return locator ? `來源位置：${locator}` : "此來源已接受，但仍缺少可驗證的重點摘錄。";
 }
 
 function confidenceScore(source: SourceRecord, hasSnippet: boolean): number {
@@ -106,9 +106,9 @@ function evidenceDerivation(source: SourceRecord, hasSnippet: boolean): Evidence
 
 function limitationForEvidence(source: SourceRecord, derivation: EvidenceDerivation): string | null {
   if (derivation === "fulltext-derived") return null;
-  if (derivation === "abstract-derived") return "目前依題名、摘要與 metadata 建立證據卡；尚未讀取全文，不能編造頁碼或超出摘要內容。";
-  if (source.abstract?.trim()) return "摘要過短，僅能作為書目與主題線索；正式結論需回查原文。";
-  return "此來源尚無摘要，僅可建立 bibliographic evidence，不可產生具體研究結論。";
+  if (derivation === "abstract-derived") return "目前依題名、摘要與書目資料整理證據；尚未讀取全文，不能編造頁碼或超出摘要內容。";
+  if (source.abstract?.trim()) return "摘要過短，僅能作為書目與主題線索；正式結論需補充更完整的可驗證摘要。";
+  return "此來源尚無摘要，僅可建立書目線索，不可產生具體研究結論。";
 }
 
 function citationText(source: SourceRecord): string {

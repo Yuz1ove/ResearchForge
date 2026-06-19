@@ -10,7 +10,7 @@ import {
   type SourceProviderName,
 } from "./source-provider-config";
 
-const MAX_RESULTS = 16;
+const MAX_RESULTS = 120;
 
 export type SourceProvider = SourceProviderName;
 export type SourceSearchErrorCode = "timeout" | "api-failure";
@@ -82,15 +82,66 @@ type SemanticScholarPaper = {
   authors?: SemanticScholarAuthor[];
   year?: number;
   abstract?: string;
+  tldr?: {
+    text?: string;
+  };
   externalIds?: {
     DOI?: string;
   };
   url?: string;
   venue?: string;
+  fieldsOfStudy?: string[];
+  citationCount?: number;
 };
 
 type SemanticScholarResponse = {
   data?: SemanticScholarPaper[];
+};
+
+type OpenAlexAuthor = {
+  author?: {
+    display_name?: string;
+  };
+};
+
+type OpenAlexInvertedIndex = Record<string, number[]>;
+
+type OpenAlexWork = {
+  id?: string;
+  doi?: string;
+  title?: string;
+  display_name?: string;
+  publication_year?: number;
+  abstract_inverted_index?: OpenAlexInvertedIndex | null;
+  authorships?: OpenAlexAuthor[];
+  primary_location?: {
+    source?: {
+      display_name?: string;
+    } | null;
+    landing_page_url?: string | null;
+    raw_source_name?: string | null;
+  } | null;
+  host_venue?: {
+    display_name?: string;
+    url?: string;
+  } | null;
+  locations?: Array<{
+    landing_page_url?: string | null;
+    raw_source_name?: string | null;
+    source?: {
+      display_name?: string;
+    } | null;
+  }>;
+  concepts?: Array<{
+    display_name?: string;
+  }>;
+  topics?: Array<{
+    display_name?: string;
+  }>;
+};
+
+type OpenAlexResponse = {
+  results?: OpenAlexWork[];
 };
 
 function firstText(value: unknown): string | null {
@@ -120,7 +171,9 @@ function stripMarkup(text: string | null | undefined): string | null {
 
 function normalizeDoi(doi: string | null | undefined): string | null {
   if (!doi) return null;
-  const trimmed = doi.trim();
+  const trimmed = doi
+    .trim()
+    .replace(/^https?:\/\/(dx\.)?doi\.org\//i, "");
   return trimmed ? trimmed : null;
 }
 
@@ -186,11 +239,15 @@ export function normalizeSemanticScholarPaper(paper: SemanticScholarPaper): Sour
   if (!title) return null;
 
   const doi = normalizeDoi(paper.externalIds?.DOI);
+  const abstract = stripMarkup(
+    paper.abstract ??
+      (paper.tldr?.text ? `TLDR: ${paper.tldr.text}` : undefined),
+  );
   return normalizeSourceRecord({
     title,
     authors: paper.authors?.map((author) => author.name?.trim()).filter((name): name is string => Boolean(name)) ?? [],
     year: typeof paper.year === "number" ? paper.year : null,
-    abstract: stripMarkup(paper.abstract),
+    abstract,
     doi,
     url: normalizeUrl(paper.url, doi),
     sourceType: "Semantic Scholar",
@@ -201,12 +258,121 @@ export function normalizeSemanticScholarPaper(paper: SemanticScholarPaper): Sour
   });
 }
 
+function restoreOpenAlexAbstract(
+  invertedIndex: OpenAlexInvertedIndex | null | undefined,
+): string | null {
+  if (!invertedIndex) return null;
+
+  const wordsByPosition: Array<{ word: string; position: number }> = [];
+  for (const [word, positions] of Object.entries(invertedIndex)) {
+    for (const position of positions) {
+      if (typeof position === "number" && Number.isFinite(position)) {
+        wordsByPosition.push({ word, position });
+      }
+    }
+  }
+
+  const restored = wordsByPosition
+    .sort((a, b) => a.position - b.position)
+    .map((item) => item.word)
+    .join(" ")
+    .replace(/\s+([,.;:!?%)])/g, "$1")
+    .replace(/([(])\s+/g, "$1")
+    .trim();
+
+  return restored || null;
+}
+
+function openAlexAuthors(authorships: OpenAlexAuthor[] | undefined): string[] {
+  return (authorships ?? [])
+    .map((authorship) => authorship.author?.display_name?.trim())
+    .filter((name): name is string => Boolean(name));
+}
+
+function openAlexVenue(work: OpenAlexWork): string | null {
+  return (
+    firstText(work.primary_location?.source?.display_name) ??
+    firstText(work.primary_location?.raw_source_name) ??
+    firstText(work.host_venue?.display_name) ??
+    firstText(
+      work.locations?.map(
+        (location) =>
+          location.source?.display_name ?? location.raw_source_name,
+      ),
+    )
+  );
+}
+
+function openAlexUrl(work: OpenAlexWork, doi: string | null): string | null {
+  return normalizeUrl(
+    firstText([
+      work.primary_location?.landing_page_url,
+      work.host_venue?.url,
+      work.locations?.map((location) => location.landing_page_url),
+      work.id,
+    ]),
+    doi,
+  );
+}
+
+function openAlexConceptText(work: OpenAlexWork): string | null {
+  const terms = [
+    ...(work.concepts ?? []).map((concept) => concept.display_name),
+    ...(work.topics ?? []).map((topic) => topic.display_name),
+  ]
+    .map((term) => term?.trim())
+    .filter((term): term is string => Boolean(term));
+
+  return terms.length ? terms.slice(0, 8).join("; ") : null;
+}
+
+export function normalizeOpenAlexWork(work: OpenAlexWork): SourceRecord | null {
+  const title = firstText(work.title ?? work.display_name);
+  if (!title) return null;
+
+  const doi = normalizeDoi(work.doi);
+  const restoredAbstract = stripMarkup(
+    restoreOpenAlexAbstract(work.abstract_inverted_index),
+  );
+  const conceptText = openAlexConceptText(work);
+  const abstract = restoredAbstract ?? (conceptText ? `OpenAlex concepts: ${conceptText}` : null);
+
+  return normalizeSourceRecord({
+    title,
+    authors: openAlexAuthors(work.authorships),
+    year: typeof work.publication_year === "number" ? work.publication_year : null,
+    abstract,
+    doi,
+    url: openAlexUrl(work, doi),
+    sourceType: "OpenAlex",
+    reviewState: "pending",
+    publisher: null,
+    containerTitle: openAlexVenue(work),
+    accessedAt: null,
+  });
+}
+
 function sourceProviderConfigs(options?: SourceSearchOptions): Record<SourceProvider, SourceProviderConfig> {
   const defaults = getSourceProviderConfigs();
   return {
+    OpenAlex: options?.providerConfigs?.OpenAlex ?? defaults.OpenAlex,
     Crossref: options?.providerConfigs?.Crossref ?? defaults.Crossref,
     "Semantic Scholar": options?.providerConfigs?.["Semantic Scholar"] ?? defaults["Semantic Scholar"],
   };
+}
+
+async function searchOpenAlex(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<SourceRecord[]> {
+  const url = new URL(config.endpoint);
+  url.searchParams.set("search", query);
+  url.searchParams.set("per-page", String(config.queryLimit));
+  url.searchParams.set("sort", "relevance_score:desc");
+  url.searchParams.set("select", "id,doi,title,display_name,publication_year,abstract_inverted_index,authorships,primary_location,locations,concepts,topics");
+  if (config.mailto) url.searchParams.set("mailto", config.mailto);
+
+  const data = await fetchJson<OpenAlexResponse>("OpenAlex", url, config, options?.fetchImpl);
+  return (data.results ?? [])
+    .map(normalizeOpenAlexWork)
+    .filter((source): source is SourceRecord => Boolean(source));
 }
 
 async function fetchJson<T>(
@@ -261,7 +427,7 @@ async function searchSemanticScholar(query: string, config: SourceProviderConfig
   const url = new URL(config.endpoint);
   url.searchParams.set("query", query);
   url.searchParams.set("limit", String(config.queryLimit));
-  url.searchParams.set("fields", "title,authors,year,abstract,externalIds,url,venue");
+  url.searchParams.set("fields", "title,authors,year,abstract,tldr,externalIds,url,venue,fieldsOfStudy,citationCount");
 
   const data = await fetchJson<SemanticScholarResponse>("Semantic Scholar", url, config, options?.fetchImpl);
 
@@ -280,6 +446,7 @@ async function searchProviderOrThrow(
   config: SourceProviderConfig,
   options?: SourceSearchOptions,
 ): Promise<SourceRecord[]> {
+  if (provider === "OpenAlex") return searchOpenAlex(query, config, options);
   if (provider === "Crossref") return searchCrossref(query, config, options);
   return searchSemanticScholar(query, config, options);
 }

@@ -31,7 +31,7 @@ paths:
       operationId: searchSources
       tags: [sources]
       summary: Search sources
-      description: Searches Crossref and Semantic Scholar for academic/web sources related to a research topic.
+      description: Searches OpenAlex, Semantic Scholar, and Crossref for academic/web sources related to a research topic.
       requestBody:
         required: true
         content:
@@ -163,6 +163,7 @@ components:
         sourceType:
           type: string
           enum:
+            - OpenAlex
             - Crossref
             - Semantic Scholar
         reviewState:
@@ -175,6 +176,60 @@ components:
           nullable: true
         accessedAt:
           type: string
+          nullable: true
+        relevanceLevel:
+          type: string
+          nullable: true
+          enum:
+            - primary
+            - secondary
+            - clue
+            - low
+            - off_topic
+        relevanceScore:
+          type: number
+          nullable: true
+        relevanceReasons:
+          type: array
+          nullable: true
+          items:
+            type: string
+        matchedCoreConcepts:
+          type: array
+          nullable: true
+          items:
+            type: string
+        missingCoreConcepts:
+          type: array
+          nullable: true
+          items:
+            type: string
+        matchedFacets:
+          type: array
+          nullable: true
+          items:
+            type: string
+        missingRequiredFacets:
+          type: array
+          nullable: true
+          items:
+            type: string
+        evidenceGrounding:
+          type: string
+          nullable: true
+          enum:
+            - abstract_grounded
+            - snippet_grounded
+            - metadata_only
+            - insufficient
+        sourceRelevanceReasonZhTw:
+          type: string
+          nullable: true
+        shouldShowInMainList:
+          type: boolean
+          nullable: true
+        shouldRecommendAccept:
+          type: boolean
           nullable: true
       required:
         - id
@@ -545,6 +600,7 @@ components:
         provider:
           type: string
           enum:
+            - OpenAlex
             - Crossref
             - Semantic Scholar
         query:

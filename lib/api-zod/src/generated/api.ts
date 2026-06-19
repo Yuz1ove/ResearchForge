@@ -18,7 +18,7 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
- * Searches Crossref and Semantic Scholar for academic/web sources related to a research topic.
+ * Searches OpenAlex, Semantic Scholar, and Crossref for academic/web sources related to a research topic.
  * @summary Search sources
  */
 
@@ -61,15 +61,26 @@ export const SearchSourcesResponse = zod.object({
   "abstract": zod.string().nullable(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
+  "sourceType": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
+  "accessedAt": zod.string().nullable(),
+  "relevanceLevel": zod.enum(['primary', 'secondary', 'clue', 'low', 'off_topic']).nullish(),
+  "relevanceScore": zod.number().nullish(),
+  "relevanceReasons": zod.array(zod.string()).nullish(),
+  "matchedCoreConcepts": zod.array(zod.string()).nullish(),
+  "missingCoreConcepts": zod.array(zod.string()).nullish(),
+  "matchedFacets": zod.array(zod.string()).nullish(),
+  "missingRequiredFacets": zod.array(zod.string()).nullish(),
+  "evidenceGrounding": zod.enum(['abstract_grounded', 'snippet_grounded', 'metadata_only', 'insufficient']).nullish(),
+  "sourceRelevanceReasonZhTw": zod.string().nullish(),
+  "shouldShowInMainList": zod.boolean().nullish(),
+  "shouldRecommendAccept": zod.boolean().nullish()
 })).optional(),
   "provider_status": zod.array(zod.object({
   "ok": zod.boolean(),
-  "provider": zod.enum(['Crossref', 'Semantic Scholar']),
+  "provider": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar']),
   "query": zod.string(),
   "results": zod.array(zod.object({
   "id": zod.string(),
@@ -79,11 +90,22 @@ export const SearchSourcesResponse = zod.object({
   "abstract": zod.string().nullable(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
+  "sourceType": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
+  "accessedAt": zod.string().nullable(),
+  "relevanceLevel": zod.enum(['primary', 'secondary', 'clue', 'low', 'off_topic']).nullish(),
+  "relevanceScore": zod.number().nullish(),
+  "relevanceReasons": zod.array(zod.string()).nullish(),
+  "matchedCoreConcepts": zod.array(zod.string()).nullish(),
+  "missingCoreConcepts": zod.array(zod.string()).nullish(),
+  "matchedFacets": zod.array(zod.string()).nullish(),
+  "missingRequiredFacets": zod.array(zod.string()).nullish(),
+  "evidenceGrounding": zod.enum(['abstract_grounded', 'snippet_grounded', 'metadata_only', 'insufficient']).nullish(),
+  "sourceRelevanceReasonZhTw": zod.string().nullish(),
+  "shouldShowInMainList": zod.boolean().nullish(),
+  "shouldRecommendAccept": zod.boolean().nullish()
 })),
   "error_type": zod.string().nullable(),
   "error_message": zod.string().nullable()
@@ -104,7 +126,7 @@ export const SearchSourcesResponse = zod.object({
 }).optional(),
   "groups": zod.array(zod.object({
   "ok": zod.boolean(),
-  "provider": zod.enum(['Crossref', 'Semantic Scholar']),
+  "provider": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar']),
   "query": zod.string(),
   "results": zod.array(zod.object({
   "id": zod.string(),
@@ -114,11 +136,22 @@ export const SearchSourcesResponse = zod.object({
   "abstract": zod.string().nullable(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
+  "sourceType": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
+  "accessedAt": zod.string().nullable(),
+  "relevanceLevel": zod.enum(['primary', 'secondary', 'clue', 'low', 'off_topic']).nullish(),
+  "relevanceScore": zod.number().nullish(),
+  "relevanceReasons": zod.array(zod.string()).nullish(),
+  "matchedCoreConcepts": zod.array(zod.string()).nullish(),
+  "missingCoreConcepts": zod.array(zod.string()).nullish(),
+  "matchedFacets": zod.array(zod.string()).nullish(),
+  "missingRequiredFacets": zod.array(zod.string()).nullish(),
+  "evidenceGrounding": zod.enum(['abstract_grounded', 'snippet_grounded', 'metadata_only', 'insufficient']).nullish(),
+  "sourceRelevanceReasonZhTw": zod.string().nullish(),
+  "shouldShowInMainList": zod.boolean().nullish(),
+  "shouldRecommendAccept": zod.boolean().nullish()
 })),
   "error_type": zod.string().nullable(),
   "error_message": zod.string().nullable()
@@ -131,11 +164,22 @@ export const SearchSourcesResponse = zod.object({
   "abstract": zod.string().nullable(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
+  "sourceType": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
+  "accessedAt": zod.string().nullable(),
+  "relevanceLevel": zod.enum(['primary', 'secondary', 'clue', 'low', 'off_topic']).nullish(),
+  "relevanceScore": zod.number().nullish(),
+  "relevanceReasons": zod.array(zod.string()).nullish(),
+  "matchedCoreConcepts": zod.array(zod.string()).nullish(),
+  "missingCoreConcepts": zod.array(zod.string()).nullish(),
+  "matchedFacets": zod.array(zod.string()).nullish(),
+  "missingRequiredFacets": zod.array(zod.string()).nullish(),
+  "evidenceGrounding": zod.enum(['abstract_grounded', 'snippet_grounded', 'metadata_only', 'insufficient']).nullish(),
+  "sourceRelevanceReasonZhTw": zod.string().nullish(),
+  "shouldShowInMainList": zod.boolean().nullish(),
+  "shouldRecommendAccept": zod.boolean().nullish()
 })),
   "planner": zod.object({
   "normalizedTopic": zod.string(),
@@ -199,7 +243,7 @@ export const SearchKeywordsResponse = zod.object({
 }),
   "groups": zod.array(zod.object({
   "ok": zod.boolean(),
-  "provider": zod.enum(['Crossref', 'Semantic Scholar']),
+  "provider": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar']),
   "query": zod.string(),
   "results": zod.array(zod.object({
   "id": zod.string(),
@@ -209,11 +253,22 @@ export const SearchKeywordsResponse = zod.object({
   "abstract": zod.string().nullable(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
+  "sourceType": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
+  "accessedAt": zod.string().nullable(),
+  "relevanceLevel": zod.enum(['primary', 'secondary', 'clue', 'low', 'off_topic']).nullish(),
+  "relevanceScore": zod.number().nullish(),
+  "relevanceReasons": zod.array(zod.string()).nullish(),
+  "matchedCoreConcepts": zod.array(zod.string()).nullish(),
+  "missingCoreConcepts": zod.array(zod.string()).nullish(),
+  "matchedFacets": zod.array(zod.string()).nullish(),
+  "missingRequiredFacets": zod.array(zod.string()).nullish(),
+  "evidenceGrounding": zod.enum(['abstract_grounded', 'snippet_grounded', 'metadata_only', 'insufficient']).nullish(),
+  "sourceRelevanceReasonZhTw": zod.string().nullish(),
+  "shouldShowInMainList": zod.boolean().nullish(),
+  "shouldRecommendAccept": zod.boolean().nullish()
 })),
   "error_type": zod.string().nullable(),
   "error_message": zod.string().nullable()
@@ -226,10 +281,21 @@ export const SearchKeywordsResponse = zod.object({
   "abstract": zod.string().nullable(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
+  "sourceType": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
+  "accessedAt": zod.string().nullable(),
+  "relevanceLevel": zod.enum(['primary', 'secondary', 'clue', 'low', 'off_topic']).nullish(),
+  "relevanceScore": zod.number().nullish(),
+  "relevanceReasons": zod.array(zod.string()).nullish(),
+  "matchedCoreConcepts": zod.array(zod.string()).nullish(),
+  "missingCoreConcepts": zod.array(zod.string()).nullish(),
+  "matchedFacets": zod.array(zod.string()).nullish(),
+  "missingRequiredFacets": zod.array(zod.string()).nullish(),
+  "evidenceGrounding": zod.enum(['abstract_grounded', 'snippet_grounded', 'metadata_only', 'insufficient']).nullish(),
+  "sourceRelevanceReasonZhTw": zod.string().nullish(),
+  "shouldShowInMainList": zod.boolean().nullish(),
+  "shouldRecommendAccept": zod.boolean().nullish()
 }))
 })

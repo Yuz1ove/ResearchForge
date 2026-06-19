@@ -5,6 +5,8 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { SourceRecordEvidenceGrounding } from './sourceRecordEvidenceGrounding';
+import type { SourceRecordRelevanceLevel } from './sourceRecordRelevanceLevel';
 import type { SourceRecordSourceType } from './sourceRecordSourceType';
 import type { SourceReviewState } from './sourceReviewState';
 
@@ -21,4 +23,15 @@ export interface SourceRecord {
   publisher: string | null;
   containerTitle: string | null;
   accessedAt: string | null;
+  relevanceLevel?: SourceRecordRelevanceLevel;
+  relevanceScore?: number | null;
+  relevanceReasons?: string[] | null;
+  matchedCoreConcepts?: string[] | null;
+  missingCoreConcepts?: string[] | null;
+  matchedFacets?: string[] | null;
+  missingRequiredFacets?: string[] | null;
+  evidenceGrounding?: SourceRecordEvidenceGrounding;
+  sourceRelevanceReasonZhTw?: string | null;
+  shouldShowInMainList?: boolean | null;
+  shouldRecommendAccept?: boolean | null;
 }

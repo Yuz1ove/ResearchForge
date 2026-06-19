@@ -45,8 +45,30 @@ export type SourceRecordSourceType = typeof SourceRecordSourceType[keyof typeof 
 
 
 export const SourceRecordSourceType = {
+  OpenAlex: 'OpenAlex',
   Crossref: 'Crossref',
   Semantic_Scholar: 'Semantic Scholar',
+} as const;
+
+export type SourceRecordRelevanceLevel = typeof SourceRecordRelevanceLevel[keyof typeof SourceRecordRelevanceLevel] | null;
+
+
+export const SourceRecordRelevanceLevel = {
+  primary: 'primary',
+  secondary: 'secondary',
+  clue: 'clue',
+  low: 'low',
+  off_topic: 'off_topic',
+} as const;
+
+export type SourceRecordEvidenceGrounding = typeof SourceRecordEvidenceGrounding[keyof typeof SourceRecordEvidenceGrounding] | null;
+
+
+export const SourceRecordEvidenceGrounding = {
+  abstract_grounded: 'abstract_grounded',
+  snippet_grounded: 'snippet_grounded',
+  metadata_only: 'metadata_only',
+  insufficient: 'insufficient',
 } as const;
 
 export interface SourceRecord {
@@ -62,6 +84,32 @@ export interface SourceRecord {
   publisher: string | null;
   containerTitle: string | null;
   accessedAt: string | null;
+  relevanceLevel?: SourceRecordRelevanceLevel;
+  relevanceScore?: number | null;
+  relevanceReasons?: string[] | null;
+  matchedCoreConcepts?: string[] | null;
+  missingCoreConcepts?: string[] | null;
+  matchedFacets?: string[] | null;
+  missingRequiredFacets?: string[] | null;
+  evidenceGrounding?: SourceRecordEvidenceGrounding;
+  sourceRelevanceReasonZhTw?: string | null;
+  shouldShowInMainList?: boolean | null;
+  shouldRecommendAccept?: boolean | null;
+  workflowId?: string | null;
+  topic?: string | null;
+  normalizedTopic?: string | null;
+  topicHash?: string | null;
+  queryPlanHash?: string | null;
+  authorityScore?: number | null;
+  summaryUsabilityScore?: number | null;
+  metadataCompletenessScore?: number | null;
+  recencyScore?: number | null;
+  languageFitScore?: number | null;
+  finalScore?: number | null;
+  classification?: 'primary' | 'review' | 'low_quality' | 'off_topic' | 'trusted_but_off_topic' | 'stale_topic' | 'stale_workflow' | null;
+  rejectReason?: string | null;
+  matchedTerms?: string[] | null;
+  driftTerms?: string[] | null;
 }
 
 export type SourceSearchResultLlmStatus = typeof SourceSearchResultLlmStatus[keyof typeof SourceSearchResultLlmStatus];
@@ -107,6 +155,7 @@ export type KeywordSourceGroupProvider = typeof KeywordSourceGroupProvider[keyof
 
 
 export const KeywordSourceGroupProvider = {
+  OpenAlex: 'OpenAlex',
   Crossref: 'Crossref',
   Semantic_Scholar: 'Semantic Scholar',
 } as const;
@@ -186,6 +235,9 @@ export interface SearchRelevanceDebug {
 export interface SourceSearchResult {
   ok?: boolean;
   topic?: string;
+  workflowId?: string;
+  topicHash?: string;
+  queryPlanHash?: string;
   searchIntent?: SearchIntentSummary;
   queries?: SearchIntentQuerySet;
   results?: SourceRecord[];
@@ -197,6 +249,35 @@ export interface SourceSearchResult {
   sources: SourceRecord[];
   planner?: SearchIntentPlan;
   relevance_debug?: SearchRelevanceDebug[];
+  searchTrace?: SearchTrace;
+}
+
+export interface SourceDecisionTrace {
+  title: string;
+  provider: string;
+  url: string | null;
+  relevanceScore: number;
+  authorityScore: number;
+  summaryUsabilityScore: number;
+  finalScore: number;
+  classification: string;
+  rejectReason: string | null;
+  matchedTerms: string[];
+  driftTerms: string[];
+}
+
+export interface SearchTrace {
+  workflowId: string;
+  topic: string;
+  normalizedTopic: string;
+  topicHash: string;
+  queryPlanHash: string;
+  providerQueries: string[];
+  candidateCount: number;
+  dedupedCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  sourceDecisions: SourceDecisionTrace[];
 }
 
 export type SearchIntentSourceSearchResultLlmStatus = typeof SearchIntentSourceSearchResultLlmStatus[keyof typeof SearchIntentSourceSearchResultLlmStatus];

@@ -152,7 +152,7 @@ function buildGaps(sources: SourceRecord[], currentYear: number): string[] {
   const gaps: string[] = [];
 
   if (sources.some((source) => !sourceHasUsableAbstract(source))) {
-    gaps.push("部分來源摘要不足，建議開啟原文確認");
+    gaps.push("部分來源摘要不足，已降為保守證據");
   }
   if (!hasTaiwanContext(sources)) gaps.push("缺少台灣在地資料");
   if (!hasRecentSource(sources, currentYear)) gaps.push("缺少近三年研究");
@@ -167,11 +167,11 @@ function buildGaps(sources: SourceRecord[], currentYear: number): string[] {
 
 function nextStepFromGaps(gaps: string[]): string {
   if (gaps.includes("尚未接受來源")) return "請先接受至少一筆可信來源，再建立報告草稿。";
-  if (gaps.some((gap) => gap.includes("摘要不足"))) return "建議先開啟摘要不足的原始來源確認研究內容。";
+  if (gaps.some((gap) => gap.includes("摘要不足"))) return "建議再補充具可用摘要或片段的高相關來源。";
   if (gaps.includes("缺少官方資料")) return "建議再補充政府統計資料或可信機構資料。";
   if (gaps.includes("缺少近三年研究")) return "建議加入一篇近三年研究。";
   if (gaps.includes("缺少台灣在地資料")) return "建議補充台灣案例或在地資料。";
-  if (gaps.includes("缺少統計數據")) return "建議補充可引用的統計數據或調查資料。";
+  if (gaps.includes("缺少統計數據")) return "目前仍缺少可驗證的統計數據或調查資料。";
   return "可開始依研究問題整理段落，並逐段確認引用是否足夠。";
 }
 
@@ -206,8 +206,8 @@ export function buildAcceptedSourceDigest(
     `目前已接受 ${accepted.length} 筆來源，資料類型主要包含${sourceTypeText}。`,
     `整體可先支撐${topicText}的${coverageText}等方向，但只能作為草稿前的資料基礎判斷。`,
     insufficientSummary
-      ? "目前來源摘要不足，建議開啟原文確認研究內容；正式報告不應假裝已取得完整證據。"
-      : "後續撰寫時應依研究問題整合來源，而不是逐篇排列來源摘要。",
+      ? "目前部分來源摘要不足，系統會保守使用其書目與主題線索；正式報告不應假裝已取得完整證據。"
+      : "這些來源可依研究問題整合為背景、證據與限制，不適合被視為完整結論。",
   ].join("");
 
   return {

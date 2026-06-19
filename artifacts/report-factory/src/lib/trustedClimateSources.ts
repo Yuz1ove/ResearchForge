@@ -8,6 +8,10 @@ import { buildTopicFacets } from "./topicFacets.ts";
 
 const TARGET_PRIMARY_CLIMATE_SOURCES = 8;
 
+function isClimateTopic(topic: string): boolean {
+  return /氣候變遷|全球暖化|溫室氣體|climate change|global warming|greenhouse gas/i.test(topic);
+}
+
 function climateOfficialSource(source: {
   id: string;
   title: string;
@@ -135,6 +139,8 @@ export function supplementTrustedClimateSources(
   sources: SourceRecord[],
   topic: string,
 ): SourceRecord[] {
+  if (!isClimateTopic(topic)) return sources;
+
   const facets = buildTopicFacets(topic);
   if (facets.requiredFacets.length === 0) return sources;
 

@@ -121,11 +121,39 @@ test("dedupes sources by DOI before URL or title", () => {
       title: "Same DOI from another provider",
       sourceType: "Semantic Scholar",
       url: "https://www.semanticscholar.org/paper/example",
+      abstract:
+        "A richer abstract from another provider should be preserved during enrichment.",
     }),
   ]);
 
   assert.equal(deduped.length, 1);
   assert.equal(deduped[0]?.sourceType, "Crossref");
+  assert.match(deduped[0]?.abstract ?? "", /richer abstract/);
+});
+
+test("dedupes same-title sources across providers and keeps richer metadata", () => {
+  const deduped = dedupeSourceRecords([
+    source({
+      id: "title:crossref:spider habitat selection",
+      title: "Spider habitat selection",
+      doi: null,
+      abstract: null,
+      sourceType: "Crossref",
+    }),
+    source({
+      id: "title:openalex:spider habitat selection",
+      title: "Spider habitat selection",
+      doi: null,
+      abstract:
+        "Spider habitat selection and microhabitat ecology are described in the restored abstract.",
+      sourceType: "OpenAlex",
+      authors: ["Open Alex"],
+    }),
+  ]);
+
+  assert.equal(deduped.length, 1);
+  assert.equal(deduped[0]?.sourceType, "OpenAlex");
+  assert.match(deduped[0]?.abstract ?? "", /microhabitat ecology/);
 });
 
 test("filters accepted and rejected sources explicitly", () => {

@@ -6,6 +6,26 @@ import { buildReportDraft } from "./reportDraft.ts";
 import { buildReportOutline } from "./reportOutline.ts";
 import type { SourceRecord } from "./sourceRecords.ts";
 
+const INSTRUCTION_LEAK_PATTERNS = [
+  /應討論/,
+  /應比較/,
+  /可討論/,
+  /可再補充/,
+  /後續正式文/,
+  /本段可/,
+  /方法段可/,
+  /文獻探討應/,
+  /研究動機應/,
+  /資料與證據整理應/,
+  /不是逐篇摘要/,
+  /可引用的佐證包括/,
+  /後續正文/,
+  /寫作提示/,
+  /writer note/i,
+  /section goal/i,
+  /scaffold/i,
+];
+
 function source(overrides: Partial<SourceRecord> = {}): SourceRecord {
   return {
     id: "source-1",
@@ -60,7 +80,7 @@ test("draft generator includes section headings, source markers, and reference l
   });
 
   assert.match(draft.text, /研究背景與動機/);
-  assert.match(draft.text, /（證據 1）/);
+  assert.match(draft.text, /（來源 1）/);
   assert.match(draft.text, /資料缺口/);
   assert.doesNotMatch(draft.sections.find((section) => section.sectionId === "abstract")?.body ?? "", /來源 1 可支持/);
   assert.doesNotMatch(draft.sections.find((section) => section.sectionId === "abstract")?.body ?? "", /來源 1[：:]/);
@@ -97,7 +117,8 @@ test("draft generator flags accepted sources with insufficient abstracts", () =>
     citationFormat: "APA",
   });
 
-  assert.match(draft.text, /此段仍需補充原文細節/);
+  assert.match(draft.text, /摘要不足|保守草稿|保守證據/);
+  assert.doesNotMatch(draft.text, /建議開啟原文|請開啟原文|回查原文/);
 });
 
 test("draft synthesis organizes evidence by section intent instead of source-card order", () => {
@@ -138,10 +159,107 @@ test("draft synthesis organizes evidence by section intent instead of source-car
   const evidence = draft.sections.find((section) => section.sectionId === "findings")?.body ?? "";
   const discussion = draft.sections.find((section) => section.sectionId === "discussion")?.body ?? "";
 
-  assert.match(literature, /比較既有資料/);
+  assert.match(literature, /文獻基礎|共同概念|資料面向/);
   assert.doesNotMatch(literature, /來源 1 可支持|來源 2 可支持/);
   assert.match(evidence, /背景與概念脈絡/);
   assert.match(evidence, /資料與證據面向/);
   assert.doesNotMatch(evidence, /來源 1[：:].*來源 2[：:]/s);
   assert.match(discussion, /資料缺口/);
+});
+
+test("draft writer never leaks instruction or scaffold text into report body", () => {
+  const acceptedSources = [
+    source({
+      id: "cola-health",
+      title: "Soft drink intake and adolescent health",
+      abstract:
+        "Soft drink intake is associated with sugar exposure, caffeine intake, and adolescent health outcomes in nutrition research.",
+      usableSections: ["研究背景", "文獻探討", "數據分析", "結論"],
+      evidenceSnippets: [
+        {
+          originalSnippet:
+            "Soft drink intake is associated with sugar exposure and adolescent health outcomes.",
+          snippetZhTw: "此片段指出含糖飲料攝取與糖分暴露及青少年健康結果有關。",
+          matchedFacet: "健康影響",
+          matchedTerms: ["soft drink", "sugar", "adolescent health"],
+          supportLevel: "direct",
+          reasoningZhTw: "此片段直接命中健康影響，可作為主要證據。",
+          score: 42,
+        },
+      ],
+      evidenceChain: [
+        {
+          facetLabelZhTw: "健康影響",
+          matchedTerms: ["soft drink", "sugar", "health"],
+          supportLevel: "direct",
+          reasoningZhTw: "可支撐可樂成分與健康影響的討論。",
+        },
+      ],
+    }),
+    source({
+      id: "cola-packaging",
+      title: "Soft drink packaging waste",
+      abstract:
+        "Beverage packaging research compares plastic bottles, aluminum cans, recycling rates, and waste management.",
+      doi: "10.1000/packaging",
+      usableSections: ["文獻探討", "數據分析", "結論"],
+      evidenceSnippets: [
+        {
+          originalSnippet:
+            "Beverage packaging research compares plastic bottles, aluminum cans, recycling rates, and waste management.",
+          snippetZhTw: "此片段指出飲料包裝研究比較塑膠瓶、鋁罐、回收率與廢棄物管理。",
+          matchedFacet: "環境影響",
+          matchedTerms: ["packaging", "plastic bottles", "recycling"],
+          supportLevel: "direct",
+          reasoningZhTw: "此片段可支撐包裝與環境廢棄物面向。",
+          score: 38,
+        },
+      ],
+    }),
+    source({
+      id: "cola-advertising",
+      title: "Cola advertising and consumer preference",
+      abstract:
+        "Advertising and brand image influence consumer preference in soft drink markets.",
+      doi: "10.1000/advertising",
+      usableSections: ["研究背景", "文獻探討", "結論"],
+      evidenceSnippets: [
+        {
+          originalSnippet:
+            "Advertising and brand image influence consumer preference in soft drink markets.",
+          snippetZhTw: "此片段指出廣告與品牌形象會影響軟性飲料市場的消費偏好。",
+          matchedFacet: "行銷與消費",
+          matchedTerms: ["advertising", "brand image", "consumer preference"],
+          supportLevel: "direct",
+          reasoningZhTw: "此片段可支撐廣告與消費偏好面向。",
+          score: 35,
+        },
+      ],
+    }),
+  ];
+  const evidenceCards = buildEvidenceCards(acceptedSources);
+  const outline = buildReportOutline({
+    topic: "可樂成分與青少年健康影響",
+    reportType: "研究報告",
+    audience: "高中",
+    acceptedSources,
+    evidenceCards,
+  });
+  const draft = buildReportDraft({
+    project: project(),
+    topic: "可樂成分與青少年健康影響",
+    reportType: "研究報告",
+    audience: "高中",
+    evidenceCards,
+    outline,
+    acceptedSources,
+    citationFormat: "APA",
+  });
+
+  for (const pattern of INSTRUCTION_LEAK_PATTERNS) {
+    assert.doesNotMatch(draft.text, pattern);
+  }
+  assert.match(draft.text, /可樂成分與青少年健康影響/);
+  assert.match(draft.text, /（來源 1）|（來源 2）|（來源 3）/);
+  assert.match(draft.text, /文獻整理與來源審查法/);
 });
