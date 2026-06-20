@@ -15,6 +15,9 @@ export const SOURCE_EVIDENCE_GROUNDING_STATUSES = [
 ] as const;
 export type SourceEvidenceGroundingStatus = (typeof SOURCE_EVIDENCE_GROUNDING_STATUSES)[number];
 
+export const SOURCE_KINDS = ["journal", "conference", "book", "dataset", "web", "unknown"] as const;
+export type SourceKind = (typeof SOURCE_KINDS)[number];
+
 export const SOURCE_RELEVANCE_CLASSIFICATIONS = [
   "primary",
   "review",
@@ -39,6 +42,16 @@ export interface SourceRecord {
   publisher: string | null;
   containerTitle: string | null;
   accessedAt: string | null;
+  provider?: string | null;
+  queryUsed?: string | null;
+  retrievedAt?: string | null;
+  dedupeKey?: string | null;
+  sourceKind?: SourceKind | null;
+  citationCount?: number | null;
+  isOpenAccess?: boolean | null;
+  isPeerReviewed?: boolean | null;
+  sourceQualityScore?: number | null;
+  scoreReasons?: string[] | null;
   relevanceLevel?: SourceRelevanceLevel | null;
   relevanceScore?: number | null;
   relevanceReasons?: string[] | null;
@@ -85,7 +98,7 @@ function normalizeWhitespace(value: string): string {
 function normalizeDoiValue(value: string | null | undefined): string | null {
   const text = cleanText(value);
   if (!text) return null;
-  return text.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "").trim() || null;
+  return text.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "").trim().toLowerCase() || null;
 }
 
 function normalizeYearValue(value: number | null | undefined): number | null {
@@ -105,18 +118,30 @@ function normalizedTitleKey(title: string): string {
   return normalizeWhitespace(title)
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/^[\s:.]+|[\s:.]+$/g, "")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
-export function sourceRecordKey(source: Pick<SourceRecord, "title" | "doi" | "url" | "sourceType">): string {
+function normalizedAuthorKey(author: string | null | undefined): string {
+  return normalizeWhitespace(author ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+export function sourceRecordKey(
+  source: Pick<SourceRecord, "title" | "doi" | "url" | "sourceType"> &
+    Partial<Pick<SourceRecord, "authors" | "year">>,
+): string {
   const doi = normalizeDoiValue(source.doi);
   if (doi) return `doi:${doi.toLowerCase()}`;
 
   const title = normalizedTitleKey(source.title);
+  const firstAuthor = normalizedAuthorKey(source.authors?.[0]);
+  const year = normalizeYearValue(source.year);
+  if (title && firstAuthor && year) return `title:${title}|author:${firstAuthor}|year:${year}`;
   if (title) return `title:${title}`;
-
-  const url = cleanText(source.url);
-  if (url) return `url:${url.toLowerCase()}`;
 
   return `source:${source.sourceType}:${stableHash(JSON.stringify(source))}`;
 }
@@ -133,6 +158,13 @@ function cleanStringList(value: string[] | null | undefined): string[] | null {
   if (!Array.isArray(value)) return null;
   const items = uniqueStrings(value);
   return items.length ? items : null;
+}
+
+function normalizeSourceKind(value: SourceRecordInput["sourceKind"]): SourceKind | null {
+  if ((SOURCE_KINDS as readonly unknown[]).includes(value)) {
+    return value as SourceKind;
+  }
+  return null;
 }
 
 function normalizeRelevanceLevel(value: SourceRecordInput["relevanceLevel"]): SourceRecord["relevanceLevel"] {
@@ -164,6 +196,96 @@ function finiteScore(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function nonNegativeInteger(value: number | null | undefined): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.trunc(value));
+}
+
+function sourceKindFromRecord(
+  source: Pick<
+    SourceRecord,
+    "sourceKind" | "sourceType" | "containerTitle" | "publisher" | "doi" | "url"
+  >,
+): SourceKind {
+  if (source.sourceKind && (SOURCE_KINDS as readonly string[]).includes(source.sourceKind)) {
+    return source.sourceKind;
+  }
+
+  const text = `${source.containerTitle ?? ""} ${source.publisher ?? ""} ${source.url ?? ""}`.toLowerCase();
+  if (/dataset|data set|資料集/.test(text)) return "dataset";
+  if (/book|isbn|monograph|chapter|出版社|書籍|專書/.test(text)) return "book";
+  if (/conference|proceedings|symposium|會議|研討會/.test(text)) return "conference";
+  if (/journal|期刊|transactions|letters|review/.test(text)) return "journal";
+  if (source.doi && source.sourceType !== "Semantic Scholar") return "journal";
+  if (source.url && !source.doi) return "web";
+  return "unknown";
+}
+
+export function sourceQualityAssessment(
+  source: Pick<
+    SourceRecord,
+    | "title"
+    | "authors"
+    | "year"
+    | "abstract"
+    | "doi"
+    | "containerTitle"
+    | "publisher"
+    | "citationCount"
+    | "isOpenAccess"
+    | "sourceKind"
+    | "sourceType"
+    | "url"
+  >,
+): { sourceQualityScore: number; scoreReasons: string[]; sourceKind: SourceKind } {
+  const reasons: string[] = [];
+  let score = 0;
+  const sourceKind = sourceKindFromRecord(source);
+
+  if (source.doi) {
+    score += 20;
+    reasons.push("has DOI");
+  }
+  if (source.title?.trim()) {
+    score += 10;
+    reasons.push("has title");
+  }
+  if (source.authors.length > 0) {
+    score += 10;
+    reasons.push("has authors");
+  }
+  if (source.year) {
+    score += 10;
+    reasons.push("has year");
+  }
+  if (source.containerTitle?.trim() || source.publisher?.trim()) {
+    score += 10;
+    reasons.push("has venue");
+  }
+  if (source.abstract?.trim()) {
+    score += 15;
+    reasons.push("has abstract");
+  }
+  if (typeof source.citationCount === "number" && source.citationCount > 0) {
+    score += Math.min(15, Math.log10(source.citationCount + 1) * 5);
+    reasons.push("citation count available");
+  }
+  if (source.isOpenAccess) {
+    score += 5;
+    reasons.push("open access");
+  }
+  if (sourceKind === "journal" || sourceKind === "conference") {
+    score += 5;
+    reasons.push("journal/conference source");
+  }
+
+  return {
+    sourceQualityScore: Math.min(100, Math.round(score)),
+    scoreReasons: reasons,
+    sourceKind,
+  };
+}
+
 function mergeOptionalStringLists(
   existing: string[] | null | undefined,
   incoming: string[] | null | undefined,
@@ -184,6 +306,16 @@ function mergeOptionalScore(
 
 function metadataFields(source: Pick<
   SourceRecord,
+  | "provider"
+  | "queryUsed"
+  | "retrievedAt"
+  | "dedupeKey"
+  | "sourceKind"
+  | "citationCount"
+  | "isOpenAccess"
+  | "isPeerReviewed"
+  | "sourceQualityScore"
+  | "scoreReasons"
   | "relevanceLevel"
   | "relevanceScore"
   | "relevanceReasons"
@@ -212,6 +344,18 @@ function metadataFields(source: Pick<
   | "driftTerms"
 >): Partial<SourceRecord> {
   return {
+    ...(source.provider != null ? { provider: source.provider } : {}),
+    ...(source.queryUsed != null ? { queryUsed: source.queryUsed } : {}),
+    ...(source.retrievedAt != null ? { retrievedAt: source.retrievedAt } : {}),
+    ...(source.dedupeKey != null ? { dedupeKey: source.dedupeKey } : {}),
+    ...(source.sourceKind != null ? { sourceKind: source.sourceKind } : {}),
+    ...(source.citationCount != null ? { citationCount: source.citationCount } : {}),
+    ...(source.isOpenAccess != null ? { isOpenAccess: source.isOpenAccess } : {}),
+    ...(source.isPeerReviewed != null ? { isPeerReviewed: source.isPeerReviewed } : {}),
+    ...(source.sourceQualityScore != null
+      ? { sourceQualityScore: source.sourceQualityScore }
+      : {}),
+    ...(source.scoreReasons != null ? { scoreReasons: source.scoreReasons } : {}),
     ...(source.relevanceLevel != null ? { relevanceLevel: source.relevanceLevel } : {}),
     ...(source.relevanceScore != null ? { relevanceScore: source.relevanceScore } : {}),
     ...(source.relevanceReasons != null ? { relevanceReasons: source.relevanceReasons } : {}),
@@ -260,10 +404,7 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
     incomingAbstractLength > existingAbstractLength
       ? incoming.abstract
       : existing.abstract;
-  const sourceType =
-    existingAbstractLength === 0 && incomingAbstractLength > 0
-      ? incoming.sourceType
-      : existing.sourceType;
+  const sourceType = existing.sourceType;
 
   const metadata = metadataFields({
     relevanceLevel: existing.relevanceLevel ?? incoming.relevanceLevel ?? null,
@@ -313,9 +454,27 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
     rejectReason: existing.rejectReason ?? incoming.rejectReason ?? null,
     matchedTerms: mergeOptionalStringLists(existing.matchedTerms, incoming.matchedTerms),
     driftTerms: mergeOptionalStringLists(existing.driftTerms, incoming.driftTerms),
+    provider: existing.provider ?? incoming.provider ?? existing.sourceType,
+    queryUsed: existing.queryUsed ?? incoming.queryUsed ?? null,
+    retrievedAt: existing.retrievedAt ?? incoming.retrievedAt ?? null,
+    dedupeKey: existing.dedupeKey ?? incoming.dedupeKey ?? null,
+    sourceKind: existing.sourceKind ?? incoming.sourceKind ?? null,
+    citationCount: mergeOptionalScore(existing.citationCount, incoming.citationCount),
+    isOpenAccess:
+      typeof existing.isOpenAccess === "boolean" || typeof incoming.isOpenAccess === "boolean"
+        ? Boolean(existing.isOpenAccess || incoming.isOpenAccess)
+        : null,
+    isPeerReviewed:
+      typeof existing.isPeerReviewed === "boolean" || typeof incoming.isPeerReviewed === "boolean"
+        ? Boolean(existing.isPeerReviewed || incoming.isPeerReviewed)
+        : null,
+    sourceQualityScore: mergeOptionalScore(existing.sourceQualityScore, incoming.sourceQualityScore),
+    scoreReasons: mergeOptionalStringLists(existing.scoreReasons, incoming.scoreReasons),
   });
 
-  return {
+  const doi = existing.doi ?? incoming.doi;
+  const doiUrl = doi ? `https://doi.org/${doi}` : null;
+  const mergedBase: SourceRecord = {
     ...existing,
     title:
       existing.title.length >= incoming.title.length
@@ -324,8 +483,8 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
     authors: uniqueStrings([...existing.authors, ...incoming.authors]),
     year: existing.year ?? incoming.year,
     abstract,
-    doi: existing.doi ?? incoming.doi,
-    url: existing.url ?? incoming.url,
+    doi,
+    url: doiUrl ?? existing.url ?? incoming.url,
     sourceType,
     reviewState:
       existing.reviewState === "accepted" || incoming.reviewState === "accepted"
@@ -337,6 +496,23 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
     containerTitle: existing.containerTitle ?? incoming.containerTitle,
     accessedAt: existing.accessedAt ?? incoming.accessedAt,
     ...metadata,
+  };
+  const quality = sourceQualityAssessment(mergedBase);
+  const mergedProviders =
+    existing.sourceType === incoming.sourceType
+      ? []
+      : [`merged providers: ${uniqueStrings([existing.sourceType, incoming.sourceType]).join(", ")}`];
+
+  return {
+    ...mergedBase,
+    dedupeKey: sourceRecordKey(mergedBase),
+    sourceKind: quality.sourceKind,
+    sourceQualityScore: quality.sourceQualityScore,
+    scoreReasons: uniqueStrings([
+      ...quality.scoreReasons,
+      ...(metadata.scoreReasons ?? []),
+      ...mergedProviders,
+    ]),
   };
 }
 
@@ -361,7 +537,33 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     containerTitle: cleanText(source.containerTitle),
     accessedAt: cleanText(source.accessedAt),
   };
+  const citationCount = nonNegativeInteger(source.citationCount);
+  const isOpenAccess =
+    typeof source.isOpenAccess === "boolean" ? source.isOpenAccess : null;
+  const isPeerReviewed =
+    typeof source.isPeerReviewed === "boolean" ? source.isPeerReviewed : null;
+  const sourceKind = normalizeSourceKind(source.sourceKind);
+  const dedupeKey = cleanText(source.dedupeKey) ?? sourceRecordKey(record);
+  const quality = sourceQualityAssessment({
+    ...record,
+    citationCount,
+    isOpenAccess,
+    sourceKind,
+  });
   const metadata = metadataFields({
+    provider: cleanText(source.provider),
+    queryUsed: cleanText(source.queryUsed),
+    retrievedAt: cleanText(source.retrievedAt),
+    dedupeKey,
+    sourceKind: quality.sourceKind,
+    citationCount,
+    isOpenAccess,
+    isPeerReviewed,
+    sourceQualityScore: finiteScore(source.sourceQualityScore) ?? quality.sourceQualityScore,
+    scoreReasons: uniqueStrings([
+      ...quality.scoreReasons,
+      ...(cleanStringList(source.scoreReasons) ?? []),
+    ]),
     relevanceLevel: normalizeRelevanceLevel(source.relevanceLevel),
     relevanceScore:
       typeof source.relevanceScore === "number" && Number.isFinite(source.relevanceScore)
@@ -402,7 +604,7 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
   return {
     ...record,
     ...metadata,
-    id: record.id || sourceRecordKey(record),
+    id: record.id || dedupeKey,
   };
 }
 

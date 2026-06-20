@@ -65,6 +65,8 @@ type CrossrefWork = {
   URL?: string;
   publisher?: string;
   "container-title"?: string[];
+  type?: string;
+  "is-referenced-by-count"?: number;
 };
 
 type CrossrefResponse = {
@@ -92,6 +94,8 @@ type SemanticScholarPaper = {
   venue?: string;
   fieldsOfStudy?: string[];
   citationCount?: number;
+  publicationTypes?: string[];
+  isOpenAccess?: boolean;
 };
 
 type SemanticScholarResponse = {
@@ -113,6 +117,8 @@ type OpenAlexWork = {
   display_name?: string;
   publication_year?: number;
   abstract_inverted_index?: OpenAlexInvertedIndex | null;
+  cited_by_count?: number;
+  type?: string;
   authorships?: OpenAlexAuthor[];
   primary_location?: {
     source?: {
@@ -138,6 +144,9 @@ type OpenAlexWork = {
   topics?: Array<{
     display_name?: string;
   }>;
+  open_access?: {
+    is_oa?: boolean;
+  };
 };
 
 type OpenAlexResponse = {
@@ -174,21 +183,37 @@ function normalizeDoi(doi: string | null | undefined): string | null {
   const trimmed = doi
     .trim()
     .replace(/^https?:\/\/(dx\.)?doi\.org\//i, "");
-  return trimmed ? trimmed : null;
+  return trimmed ? trimmed.toLowerCase() : null;
 }
 
 function normalizeUrl(url: string | null | undefined, doi: string | null): string | null {
-  if (url?.trim()) return url.trim();
   if (doi) return `https://doi.org/${doi}`;
+  if (url?.trim()) return url.trim();
   return null;
+}
+
+function sourceKindFromProviderType(value: string | null | undefined): SourceRecord["sourceKind"] {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return null;
+  if (/(journal|article|posted-content|peer-review)/.test(normalized)) return "journal";
+  if (/(proceedings|conference)/.test(normalized)) return "conference";
+  if (/(book|chapter|monograph)/.test(normalized)) return "book";
+  if (/(dataset|data)/.test(normalized)) return "dataset";
+  if (/(web|reference-entry)/.test(normalized)) return "web";
+  return null;
+}
+
+function citationCount(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.trunc(value));
 }
 
 function crossrefYear(work: CrossrefWork): number | null {
   const dates = [
-    work.published,
     work["published-print"],
     work["published-online"],
     work.issued,
+    work.published,
   ];
 
   for (const date of dates) {
@@ -214,7 +239,7 @@ function crossrefAuthors(authors: CrossrefAuthor[] | undefined): string[] {
     .filter((name): name is string => Boolean(name));
 }
 
-export function normalizeCrossrefWork(work: CrossrefWork): SourceRecord | null {
+export function normalizeCrossrefWork(work: CrossrefWork, queryUsed?: string): SourceRecord | null {
   const title = firstText(work.title);
   if (!title) return null;
 
@@ -231,18 +256,21 @@ export function normalizeCrossrefWork(work: CrossrefWork): SourceRecord | null {
     publisher: work.publisher ?? null,
     containerTitle: firstText(work["container-title"]),
     accessedAt: null,
+    provider: "Crossref",
+    queryUsed,
+    retrievedAt: new Date().toISOString(),
+    sourceKind: sourceKindFromProviderType(work.type),
+    citationCount: citationCount(work["is-referenced-by-count"]),
+    isPeerReviewed: sourceKindFromProviderType(work.type) === "journal",
   });
 }
 
-export function normalizeSemanticScholarPaper(paper: SemanticScholarPaper): SourceRecord | null {
+export function normalizeSemanticScholarPaper(paper: SemanticScholarPaper, queryUsed?: string): SourceRecord | null {
   const title = firstText(paper.title);
   if (!title) return null;
 
   const doi = normalizeDoi(paper.externalIds?.DOI);
-  const abstract = stripMarkup(
-    paper.abstract ??
-      (paper.tldr?.text ? `TLDR: ${paper.tldr.text}` : undefined),
-  );
+  const abstract = stripMarkup(paper.abstract);
   return normalizeSourceRecord({
     title,
     authors: paper.authors?.map((author) => author.name?.trim()).filter((name): name is string => Boolean(name)) ?? [],
@@ -255,6 +283,12 @@ export function normalizeSemanticScholarPaper(paper: SemanticScholarPaper): Sour
     publisher: null,
     containerTitle: paper.venue ?? null,
     accessedAt: null,
+    provider: "Semantic Scholar",
+    queryUsed,
+    retrievedAt: new Date().toISOString(),
+    sourceKind: sourceKindFromProviderType(firstText(paper.publicationTypes)),
+    citationCount: citationCount(paper.citationCount),
+    isOpenAccess: typeof paper.isOpenAccess === "boolean" ? paper.isOpenAccess : null,
   });
 }
 
@@ -315,18 +349,7 @@ function openAlexUrl(work: OpenAlexWork, doi: string | null): string | null {
   );
 }
 
-function openAlexConceptText(work: OpenAlexWork): string | null {
-  const terms = [
-    ...(work.concepts ?? []).map((concept) => concept.display_name),
-    ...(work.topics ?? []).map((topic) => topic.display_name),
-  ]
-    .map((term) => term?.trim())
-    .filter((term): term is string => Boolean(term));
-
-  return terms.length ? terms.slice(0, 8).join("; ") : null;
-}
-
-export function normalizeOpenAlexWork(work: OpenAlexWork): SourceRecord | null {
+export function normalizeOpenAlexWork(work: OpenAlexWork, queryUsed?: string): SourceRecord | null {
   const title = firstText(work.title ?? work.display_name);
   if (!title) return null;
 
@@ -334,14 +357,12 @@ export function normalizeOpenAlexWork(work: OpenAlexWork): SourceRecord | null {
   const restoredAbstract = stripMarkup(
     restoreOpenAlexAbstract(work.abstract_inverted_index),
   );
-  const conceptText = openAlexConceptText(work);
-  const abstract = restoredAbstract ?? (conceptText ? `OpenAlex concepts: ${conceptText}` : null);
 
   return normalizeSourceRecord({
     title,
     authors: openAlexAuthors(work.authorships),
     year: typeof work.publication_year === "number" ? work.publication_year : null,
-    abstract,
+    abstract: restoredAbstract,
     doi,
     url: openAlexUrl(work, doi),
     sourceType: "OpenAlex",
@@ -349,6 +370,12 @@ export function normalizeOpenAlexWork(work: OpenAlexWork): SourceRecord | null {
     publisher: null,
     containerTitle: openAlexVenue(work),
     accessedAt: null,
+    provider: "OpenAlex",
+    queryUsed,
+    retrievedAt: new Date().toISOString(),
+    sourceKind: sourceKindFromProviderType(work.type),
+    citationCount: citationCount(work.cited_by_count),
+    isOpenAccess: typeof work.open_access?.is_oa === "boolean" ? work.open_access.is_oa : null,
   });
 }
 
@@ -366,12 +393,12 @@ async function searchOpenAlex(query: string, config: SourceProviderConfig, optio
   url.searchParams.set("search", query);
   url.searchParams.set("per-page", String(config.queryLimit));
   url.searchParams.set("sort", "relevance_score:desc");
-  url.searchParams.set("select", "id,doi,title,display_name,publication_year,abstract_inverted_index,authorships,primary_location,locations,concepts,topics");
+  url.searchParams.set("select", "id,doi,title,display_name,publication_year,abstract_inverted_index,authorships,primary_location,locations,concepts,topics,cited_by_count,type,open_access");
   if (config.mailto) url.searchParams.set("mailto", config.mailto);
 
   const data = await fetchJson<OpenAlexResponse>("OpenAlex", url, config, options?.fetchImpl);
   return (data.results ?? [])
-    .map(normalizeOpenAlexWork)
+    .map((work) => normalizeOpenAlexWork(work, query))
     .filter((source): source is SourceRecord => Boolean(source));
 }
 
@@ -414,12 +441,12 @@ async function searchCrossref(query: string, config: SourceProviderConfig, optio
   const url = new URL(config.endpoint);
   url.searchParams.set("query", query);
   url.searchParams.set("rows", String(config.queryLimit));
-  url.searchParams.set("select", "title,author,issued,published,published-print,published-online,abstract,DOI,URL,publisher,container-title");
+  url.searchParams.set("select", "title,author,issued,published,published-print,published-online,abstract,DOI,URL,publisher,container-title,type,is-referenced-by-count");
   if (config.mailto) url.searchParams.set("mailto", config.mailto);
 
   const data = await fetchJson<CrossrefResponse>("Crossref", url, config, options?.fetchImpl);
   return (data.message?.items ?? [])
-    .map(normalizeCrossrefWork)
+    .map((work) => normalizeCrossrefWork(work, query))
     .filter((source): source is SourceRecord => Boolean(source));
 }
 
@@ -427,12 +454,12 @@ async function searchSemanticScholar(query: string, config: SourceProviderConfig
   const url = new URL(config.endpoint);
   url.searchParams.set("query", query);
   url.searchParams.set("limit", String(config.queryLimit));
-  url.searchParams.set("fields", "title,authors,year,abstract,tldr,externalIds,url,venue,fieldsOfStudy,citationCount");
+  url.searchParams.set("fields", "title,authors,year,abstract,tldr,externalIds,url,venue,fieldsOfStudy,citationCount,publicationTypes,isOpenAccess");
 
   const data = await fetchJson<SemanticScholarResponse>("Semantic Scholar", url, config, options?.fetchImpl);
 
   return (data.data ?? [])
-    .map(normalizeSemanticScholarPaper)
+    .map((paper) => normalizeSemanticScholarPaper(paper, query))
     .filter((source): source is SourceRecord => Boolean(source));
 }
 

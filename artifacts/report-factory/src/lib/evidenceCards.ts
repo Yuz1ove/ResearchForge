@@ -25,6 +25,12 @@ export interface EvidenceCard {
   sourceDomain: string;
   sourceProvider: string;
   sourceCategory: string | null;
+  doi: string | null;
+  abstract: string | null;
+  provider: string;
+  relevanceScore: number | null;
+  sourceQualityScore: number | null;
+  finalScore: number | null;
   year: number | null;
   usableSections: WorkflowReportSection[];
   confidence: string | null;
@@ -147,6 +153,12 @@ function sourceToEvidenceCards(
         sourceDomain: sourceDomain(source.url),
         sourceProvider: source.sourceType,
         sourceCategory: source.sourceCategory?.trim() || null,
+        doi: source.doi,
+        abstract: source.abstract,
+        provider: source.provider || source.sourceType,
+        relevanceScore: source.relevanceScore ?? null,
+        sourceQualityScore: source.sourceQualityScore ?? null,
+        finalScore: source.finalScore ?? null,
         year: source.year,
         usableSections: baseSections,
         confidence: source.confidence?.trim() || null,
@@ -178,6 +190,12 @@ function sourceToEvidenceCards(
     sourceDomain: sourceDomain(source.url),
     sourceProvider: source.sourceType,
     sourceCategory: source.sourceCategory?.trim() || null,
+    doi: source.doi,
+    abstract: source.abstract,
+    provider: source.provider || source.sourceType,
+    relevanceScore: source.relevanceScore ?? null,
+    sourceQualityScore: source.sourceQualityScore ?? null,
+    finalScore: source.finalScore ?? null,
     year: source.year,
     usableSections: baseSections,
     confidence: source.confidence?.trim() || null,
@@ -224,6 +242,12 @@ export function buildEvidenceCards(
         summary: options.resetText ? generated.summary : existing.summary || generated.summary,
         relevance: options.resetText ? generated.relevance : existing.relevance || generated.relevance,
         sourceCategory: options.resetText ? generated.sourceCategory : existing.sourceCategory ?? generated.sourceCategory,
+        doi: generated.doi,
+        abstract: generated.abstract,
+        provider: generated.provider,
+        relevanceScore: generated.relevanceScore,
+        sourceQualityScore: generated.sourceQualityScore,
+        finalScore: generated.finalScore,
         usableSections: options.resetText ? generated.usableSections : existing.usableSections ?? generated.usableSections,
         confidence: options.resetText ? generated.confidence : existing.confidence ?? generated.confidence,
         confidenceScore: options.resetText ? generated.confidenceScore : existing.confidenceScore ?? generated.confidenceScore,

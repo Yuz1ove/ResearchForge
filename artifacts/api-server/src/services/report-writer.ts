@@ -33,6 +33,12 @@ export interface ReportWriterEvidenceCard {
   relevance: string;
   sourceTitle: string;
   sourceProvider: string;
+  doi?: string | null;
+  abstract?: string | null;
+  provider?: string | null;
+  relevanceScore?: number | null;
+  sourceQualityScore?: number | null;
+  finalScore?: number | null;
   year: number | null;
   usableSections: string[];
   citationText: string;
@@ -111,7 +117,8 @@ function compactEvidenceCard(card: ReportWriterEvidenceCard, index: number): str
     `evidence: ${(card.evidence || card.summary || "證據摘要不足").slice(0, 700)}`,
     `relevance: ${card.relevance || "研究背景"}`,
     `source: ${card.sourceTitle || "標題待確認"}`,
-    `provider: ${card.sourceProvider || "unknown"}`,
+    `provider: ${card.provider || card.sourceProvider || "unknown"}`,
+    `scores: relevance=${card.relevanceScore ?? "n/a"}, sourceQuality=${card.sourceQualityScore ?? "n/a"}, final=${card.finalScore ?? "n/a"}`,
     `citationText: ${card.citationText || "引用資訊待確認"}`,
     `limitation: ${card.limitation || "目前依已接受來源與證據卡整理，不可超出證據內容。"}`,
   ].join("\n");
@@ -134,6 +141,12 @@ function fallbackEvidenceCards(sources: SourceRecord[]): ReportWriterEvidenceCar
       relevance: "研究背景",
       sourceTitle: title,
       sourceProvider: source.sourceType,
+      doi: source.doi,
+      abstract: source.abstract,
+      provider: source.provider || source.sourceType,
+      relevanceScore: source.relevanceScore ?? null,
+      sourceQualityScore: source.sourceQualityScore ?? null,
+      finalScore: source.finalScore ?? null,
       year: source.year,
       usableSections: [],
       citationText: `${citation}（${source.year ?? "年份待確認"}）`,

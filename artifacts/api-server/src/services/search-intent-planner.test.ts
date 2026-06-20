@@ -17,6 +17,7 @@ const colaPlainTopic = "可樂";
 const colaHealthTopic = "可樂中的成分與攝取習慣對健康的影響";
 const llmWritingTopic = "大型語言模型對英文寫作學習的影響";
 const climateCausesTopic = "「氣候變遷」的成因與現況分析";
+const marineMicroplasticsTopic = "塑膠微粒對海洋生態的影響";
 const spiderEcologyTopic = "蜘蛛的棲地需求與生存策略";
 const spiderHabitatTopic = "蜘蛛與其棲地相關研究";
 
@@ -125,6 +126,47 @@ test("rule fallback turns LLM English writing learning into education and writin
   assert.match(queryText, /大型語言模型 英文寫作學習/);
   assert.ok(plan.penaltyTerms.includes("software engineering"));
   assert.ok(!/大型語言模型對英文寫作學習的影響 peer reviewed research/i.test(queryText));
+});
+
+test("rule fallback turns marine microplastics into ecological search queries", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: marineMicroplasticsTopic,
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = [
+    ...queries.highPrecision,
+    ...queries.english,
+    ...queries.chinese,
+    ...queries.broad,
+    ...(plan.narrowedResearchQuestions ?? []).flatMap((question) => [
+      question.title,
+      question.zhKeywords.join(" "),
+      question.enKeywords.join(" "),
+      question.primaryQueries.join(" "),
+    ]),
+  ].join(" ");
+
+  assert.equal(plan.topicType, "marine_microplastics_ecology");
+  for (const term of [
+    "microplastics",
+    "plastic pollution",
+    "marine ecosystem",
+    "海洋生態",
+  ]) {
+    assert.ok(plan.primaryConcepts.includes(term), `expected ${term}`);
+  }
+  for (const term of ["microplastic", "marine", "ocean", "塑膠微粒", "海洋"]) {
+    assert.ok(plan.mustHaveTerms.includes(term), `expected must-have ${term}`);
+  }
+  assert.match(queryText, /microplastics marine ecosystem ecological effects/i);
+  assert.match(queryText, /microplastics marine organisms ingestion toxicity/i);
+  assert.match(queryText, /plastic pollution marine food web bioaccumulation/i);
+  assert.match(queryText, /微塑膠 海洋生態 影響/);
+  assert.ok(plan.penaltyTerms.includes("熱環境"));
+  assert.ok(!/塑膠微粒對海洋生態的影響 peer reviewed research/i.test(queryText));
 });
 
 test("rule fallback turns dumpling into a research-ready query planner without climate drift", () => {
@@ -651,6 +693,115 @@ test("secondary candidates stay reviewable instead of being rejected", () => {
   assert.notEqual(source.reviewState, "rejected");
   assert.equal(source.shouldShowInMainList, true);
   assert.equal(source.shouldRecommendAccept, true);
+});
+
+test("ranking prefers high relevance and source quality before recency", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: llmWritingTopic,
+    language: "zh-TW",
+  });
+  const { sources } = rerankSourcesBySearchIntent(
+    [
+      sourceRecord({
+        id: "newer-weak",
+        title: "Generative AI writing tools commentary",
+        abstract:
+          "This commentary mentions generative AI and writing tools but provides limited education evidence and no empirical details.",
+        year: 2025,
+        doi: null,
+        authors: [],
+        sourceQualityScore: 35,
+        citationCount: 0,
+      }),
+      sourceRecord({
+        id: "strong-evidence",
+        title: "Large language models and English writing feedback in EFL learning",
+        abstract:
+          "Large language models are used in English writing learning to provide writing feedback, revision support, and second language writing instruction evidence for EFL learners.",
+        year: 2022,
+        doi: "10.1000/llm-writing-feedback",
+        authors: ["Ada Lovelace"],
+        containerTitle: "Journal of Language Education",
+        sourceQualityScore: 95,
+        citationCount: 128,
+      }),
+    ],
+    plan,
+  );
+
+  assert.equal(sources[0]?.id, "strong-evidence");
+  assert.equal(sources[0]?.sourceQualityScore, 100);
+  assert.equal(sources[0]?.finalScore, Math.round((sources[0]?.relevanceScore ?? 0) * 0.6 + 100 * 0.4));
+  assert.ok((sources[0]?.finalScore ?? 0) > (sources[1]?.finalScore ?? 0));
+});
+
+test("marine microplastics reranking promotes marine ecology over unrelated heat or sports sources", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: marineMicroplasticsTopic,
+    language: "zh-TW",
+  });
+  const { sources, relevanceDebug } = rerankSourcesBySearchIntent(
+    [
+      sourceRecord({
+        id: "thermal-comfort",
+        title: "Thermal comfort and elderly exercise in urban environments",
+        abstract:
+          "This study examines heat stress, sports participation, exercise, and thermal environment comfort among elderly residents.",
+        year: 2025,
+        doi: "10.1000/thermal-exercise",
+        authors: ["Heat Researcher"],
+        containerTitle: "Journal of Thermal Comfort",
+        sourceQualityScore: 100,
+      }),
+      sourceRecord({
+        id: "soil-microplastics",
+        title: "Source, migration and toxicology of microplastics in soil",
+        abstract:
+          "Microplastics in agricultural soil and terrestrial environments are analyzed for source migration and toxicity, without marine ecosystem, ocean, coastal, or seawater evidence.",
+        year: 2024,
+        doi: "10.1000/soil-microplastics",
+        authors: ["Soil Scientist"],
+        containerTitle: "Environmental Toxicology",
+        sourceQualityScore: 100,
+        citationCount: 500,
+      }),
+      sourceRecord({
+        id: "marine-microplastics",
+        title:
+          "Microplastics in marine ecosystems: ingestion, toxicity, and ecological risk",
+        abstract:
+          "Microplastics and plastic pollution affect marine organisms through ingestion, toxicity, bioaccumulation, and food web transfer. Evidence from ocean and coastal ecosystems shows ecological risk to biodiversity.",
+        year: 2021,
+        doi: "10.1000/marine-microplastics",
+        authors: ["Marine Ecologist"],
+        containerTitle: "Marine Pollution Bulletin",
+        sourceQualityScore: 95,
+        citationCount: 320,
+      }),
+    ],
+    plan,
+  );
+
+  assert.equal(sources[0]?.id, "marine-microplastics");
+  assert.equal(sources[0]?.relevanceLevel, "primary");
+  assert.equal(sources[0]?.shouldShowInMainList, true);
+  assert.ok((sources[0]?.finalScore ?? 0) > (sources[1]?.finalScore ?? 0));
+  assert.ok(
+    (sources.find((source) => source.id === "soil-microplastics")?.finalScore ?? 100) <
+      (sources[0]?.finalScore ?? 0),
+  );
+  assert.ok(
+    relevanceDebug
+      .find((item) => item.sourceId === "thermal-comfort")
+      ?.penalties.includes("missing_must_have_terms"),
+  );
+  assert.ok(
+    relevanceDebug
+      .find((item) => item.sourceId === "soil-microplastics")
+      ?.penalties.some((penalty) =>
+        penalty.startsWith("non_marine_microplastics_context"),
+      ),
+  );
 });
 
 test("spider reranking rejects generic strategy papers that miss the spider subject", () => {

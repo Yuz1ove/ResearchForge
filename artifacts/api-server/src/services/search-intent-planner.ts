@@ -677,6 +677,94 @@ const CLIMATE_CAUSES_PENALTIES = [
   "圖書館推薦",
 ];
 
+const MARINE_MICROPLASTICS_PRIMARY = [
+  "microplastic",
+  "microplastics",
+  "plastic pollution",
+  "marine ecosystem",
+  "marine ecology",
+  "ocean pollution",
+  "微塑膠",
+  "塑膠微粒",
+  "塑膠污染",
+  "海洋生態",
+];
+
+const MARINE_MICROPLASTICS_CONTEXT = [
+  "marine organisms",
+  "marine environment",
+  "ocean",
+  "seawater",
+  "sediment",
+  "coastal ecosystem",
+  "fish",
+  "plankton",
+  "food web",
+  "海洋生物",
+  "海水",
+  "沉積物",
+  "沿岸生態系",
+  "食物網",
+];
+
+const MARINE_MICROPLASTICS_OUTCOMES = [
+  "ingestion",
+  "toxicity",
+  "bioaccumulation",
+  "biodiversity",
+  "ecological risk",
+  "ecosystem effects",
+  "攝食",
+  "毒性",
+  "生物累積",
+  "生物多樣性",
+  "生態風險",
+  "生態影響",
+];
+
+const MARINE_MICROPLASTICS_MUST_HAVE = [
+  "microplastic",
+  "microplastics",
+  "plastic pollution",
+  "marine",
+  "ocean",
+  "marine ecosystem",
+  "微塑膠",
+  "塑膠微粒",
+  "塑膠污染",
+  "海洋",
+  "海洋生態",
+];
+
+const MARINE_MICROPLASTICS_LOW_WEIGHT = [
+  "impact",
+  "effect",
+  "research",
+  "study",
+  "影響",
+  "研究",
+  "高中",
+];
+
+const MARINE_MICROPLASTICS_PENALTIES = [
+  "urban heat island",
+  "thermal comfort",
+  "athlete",
+  "exercise",
+  "sports",
+  "baseball",
+  "elderly thermal environment",
+  "language learning",
+  "writing feedback",
+  "熱島效應",
+  "熱舒適",
+  "熱環境",
+  "運動",
+  "棒球",
+  "高齡者",
+  "英文寫作",
+];
+
 const SPIDER_ECOLOGY_PRIMARY = [
   "spider",
   "spiders",
@@ -931,6 +1019,27 @@ function isClimateChangeCauseTopic(input: SearchIntentPlannerInput): boolean {
     /cause|causes|current status|observed|warming|trend|fossil fuel|emission|industrialization|land use|anthropogenic|co2 concentration/i,
   ]);
   return hasClimateCue && hasCauseCue;
+}
+
+function isMarineMicroplasticsEcologyTopic(
+  input: SearchIntentPlannerInput,
+): boolean {
+  const text = normalizeText(
+    `${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`,
+  );
+  const hasMicroplasticsCue = hasAny(text, [
+    /塑膠微粒|微塑膠|塑料微粒|塑膠污染/,
+    /microplastic|microplastics|plastic pollution/i,
+  ]);
+  const hasMarineCue = hasAny(text, [
+    /海洋|海水|海域|沿岸|海岸|海洋生態/,
+    /marine|ocean|seawater|coastal|estuarine/i,
+  ]);
+  const hasEcologyCue = hasAny(text, [
+    /生態|生物|食物鏈|食物網|毒性|攝食|累積|生物多樣性/,
+    /ecology|ecosystem|organism|food web|toxicity|ingestion|bioaccumulation|biodiversity/i,
+  ]);
+  return hasMicroplasticsCue && (hasMarineCue || hasEcologyCue);
 }
 
 function isSpiderEcologyTopic(input: SearchIntentPlannerInput): boolean {
@@ -1416,6 +1525,93 @@ export function buildRuleBasedSearchIntent(
     };
   }
 
+  if (isMarineMicroplasticsEcologyTopic(input)) {
+    return {
+      normalizedTopic,
+      topicType: "marine_microplastics_ecology",
+      primaryConcepts: MARINE_MICROPLASTICS_PRIMARY,
+      contextConcepts: MARINE_MICROPLASTICS_CONTEXT,
+      outcomeConcepts: MARINE_MICROPLASTICS_OUTCOMES,
+      populationConcepts: [],
+      lowWeightTerms: MARINE_MICROPLASTICS_LOW_WEIGHT,
+      mustHaveTerms: MARINE_MICROPLASTICS_MUST_HAVE,
+      shouldHaveTerms: [
+        "marine organisms",
+        "food web",
+        "bioaccumulation",
+        "toxicity",
+        "ecological risk",
+        "海洋生物",
+        "食物網",
+        "生物累積",
+        "生態風險",
+      ],
+      penaltyTerms: MARINE_MICROPLASTICS_PENALTIES,
+      negativeTerms: [
+        "urban heat island",
+        "elderly thermal comfort",
+        "sports physiology",
+        "language writing education",
+      ],
+      chineseQueries: [
+        "微塑膠 海洋生態 影響",
+        "塑膠微粒 海洋生物 攝食 毒性",
+        "塑膠污染 海洋 食物網 生物累積",
+        "微塑膠 海洋生態風險 文獻回顧",
+      ],
+      englishQueries: [
+        "microplastics marine ecosystem ecological effects",
+        "microplastics marine organisms ingestion toxicity",
+        "plastic pollution marine food web bioaccumulation",
+        "microplastics ocean ecology systematic review",
+        "microplastics marine environment ecological risk",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "微塑膠如何影響海洋生物攝食與毒性風險",
+          researchAngle: "整理海洋生物攝入微塑膠後的物理、化學與毒性影響。",
+          whyResearchable: "可使用海洋污染、生態毒理與海洋生物研究文獻。",
+          suggestedSourceTypes: ["academic_paper", "systematic_review", "ecotoxicology_study"],
+          zhKeywords: ["微塑膠", "海洋生物", "攝食", "毒性", "塑膠污染"],
+          enKeywords: ["microplastics", "marine organisms", "ingestion", "toxicity"],
+          primaryQueries: [
+            "microplastics marine organisms ingestion toxicity",
+            "微塑膠 海洋生物 攝食 毒性",
+          ],
+          secondaryQueries: [
+            "microplastics marine ecosystem ecological effects",
+            "microplastics ocean ecology systematic review",
+          ],
+          excludedDriftTerms: MARINE_MICROPLASTICS_PENALTIES,
+        },
+        {
+          title: "海洋微塑膠在食物網中的累積與生態風險",
+          researchAngle: "分析微塑膠在食物網、沉積物與沿岸生態系中的傳遞。",
+          whyResearchable: "可查找海洋食物網、生物累積與生態風險評估研究。",
+          suggestedSourceTypes: ["academic_paper", "review", "risk_assessment"],
+          zhKeywords: ["微塑膠", "食物網", "生物累積", "海洋生態風險"],
+          enKeywords: ["microplastics", "food web", "bioaccumulation", "ecological risk"],
+          primaryQueries: [
+            "plastic pollution marine food web bioaccumulation",
+            "microplastics marine ecosystem ecological risk",
+          ],
+          secondaryQueries: [
+            "微塑膠 海洋 食物網 生物累積",
+            "microplastics sediment marine ecology",
+          ],
+          excludedDriftTerms: MARINE_MICROPLASTICS_PENALTIES,
+        },
+      ],
+      excludedDriftTerms: MARINE_MICROPLASTICS_PENALTIES,
+      reasoningNotes: planReason(
+        reason,
+        "Marine microplastics searches must keep microplastic/plastic-pollution terms tied to marine, ocean, ecosystem, food-web, toxicity, or ecological-risk evidence; heat, sports, and writing-learning matches are drift.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
   if (isClimateChangeCauseTopic(input)) {
     return {
       normalizedTopic,
@@ -1626,6 +1822,7 @@ function mergeFamilyCriticalTerms(
     !isDumplingTopic(input) &&
     !isFrenchFriesTopic(input) &&
     !isColaHealthTopic(input) &&
+    !isMarineMicroplasticsEcologyTopic(input) &&
     !isClimateChangeCauseTopic(input) &&
     !isSpiderEcologyTopic(input)
   )
@@ -2013,6 +2210,25 @@ function isFrenchFriesPlan(plan: SearchIntentPlan): boolean {
   );
 }
 
+function isMarineMicroplasticsPlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.outcomeConcepts,
+    ].join(" "),
+  );
+  return (
+    /microplastic|microplastics|plastic pollution|微塑膠|塑膠微粒/.test(
+      concepts,
+    ) &&
+    /marine|ocean|seawater|coastal|海洋|海水|沿岸|海域|海洋生態/.test(
+      concepts,
+    )
+  );
+}
+
 function sourceYearBonus(year: number | null): number {
   if (!year) return 0;
   if (year >= 2020) return 1.5;
@@ -2246,6 +2462,60 @@ export function scoreSourceRelevance(
     }
   }
 
+  if (isMarineMicroplasticsPlan(plan)) {
+    const microplasticTerms = [
+      "microplastic",
+      "microplastics",
+      "plastic pollution",
+      "微塑膠",
+      "塑膠微粒",
+      "塑膠污染",
+    ];
+    const marineTerms = [
+      "marine",
+      "ocean",
+      "seawater",
+      "coastal",
+      "estuarine",
+      "sea",
+      "marine ecosystem",
+      "marine organisms",
+      "海洋",
+      "海水",
+      "海域",
+      "沿岸",
+      "海洋生態",
+      "海洋生物",
+    ];
+    const nonMarineTitleDrift = matchedTerms(title, [
+      "soil",
+      "terrestrial",
+      "freshwater",
+      "agricultural soil",
+      "wastewater sludge",
+      "landfill",
+      "土壤",
+      "陸域",
+      "淡水",
+      "農地",
+    ]);
+    const microplasticHits = matchedTerms(combined, microplasticTerms);
+    const marineHits = matchedTerms(combined, marineTerms);
+    const marineTitleHits = matchedTerms(title, marineTerms);
+    if (microplasticHits.length === 0) {
+      score -= 40;
+      penalties.push("missing_microplastic_subject");
+    }
+    if (marineHits.length === 0) {
+      score -= 45;
+      penalties.push("missing_marine_context");
+    }
+    if (nonMarineTitleDrift.length > 0 && marineTitleHits.length === 0) {
+      score = Math.min(score - 60, 45);
+      penalties.push(`non_marine_microplastics_context:${nonMarineTitleDrift.join(",")}`);
+    }
+  }
+
   if (isFrenchFriesPlan(plan)) {
     const foodTerms = [
       "french fries",
@@ -2453,19 +2723,11 @@ function sourceDriftTerms(
 
 function sourceFinalScore(scores: {
   relevanceScore: number;
-  authorityScore: number;
-  summaryUsabilityScore: number;
-  metadataCompletenessScore: number;
-  recencyScore: number;
-  languageFitScore: number;
+  sourceQualityScore: number;
 }): number {
   return Math.round(
-    scores.relevanceScore * 0.5 +
-      scores.authorityScore * 0.2 +
-      scores.summaryUsabilityScore * 0.15 +
-      scores.metadataCompletenessScore * 0.05 +
-      scores.recencyScore * 0.05 +
-      scores.languageFitScore * 0.05,
+    scores.relevanceScore * 0.6 +
+      scores.sourceQualityScore * 0.4,
   );
 }
 
@@ -2523,13 +2785,12 @@ function sourceWithRelevanceMetadata(
   const metadataCompletenessScore = sourceMetadataCompletenessScore(source);
   const recencyScore = sourceRecencyScore(source.year);
   const languageFitScore = sourceLanguageFitScore(source, plan);
+  const sourceQualityScore = clampScore(
+    source.sourceQualityScore ?? metadataCompletenessScore,
+  );
   const finalScore = sourceFinalScore({
     relevanceScore,
-    authorityScore,
-    summaryUsabilityScore,
-    metadataCompletenessScore,
-    recencyScore,
-    languageFitScore,
+    sourceQualityScore,
   });
   const classification = sourceClassification({
     relevanceScore,
@@ -2571,6 +2832,8 @@ function sourceWithRelevanceMetadata(
     recencyScore,
     languageFitScore,
     finalScore,
+    sourceQualityScore,
+    scoreReasons: source.scoreReasons,
     classification: classification.classification,
     rejectReason: classification.rejectReason,
     matchedTerms: matchedTermsForSource,
@@ -2596,21 +2859,37 @@ export function rerankSourcesBySearchIntent(
   sources: SearchIntentRankedSource[];
   relevanceDebug: SourceRelevanceDebug[];
 } {
-  const scored = sources.map((source, index) => ({
-    source,
-    index,
-    debug: scoreSourceRelevance(source, plan),
-  }));
+  const scored = sources.map((source, index) => {
+    const debug = scoreSourceRelevance(source, plan);
+    const ranked = sourceWithRelevanceMetadata(source, plan, debug, workflow);
+    return {
+      source: ranked,
+      index,
+      debug,
+    };
+  });
 
   scored.sort((a, b) => {
-    if (b.debug.score !== a.debug.score) return b.debug.score - a.debug.score;
+    if ((b.source.finalScore ?? 0) !== (a.source.finalScore ?? 0)) {
+      return (b.source.finalScore ?? 0) - (a.source.finalScore ?? 0);
+    }
+    if ((b.source.relevanceScore ?? 0) !== (a.source.relevanceScore ?? 0)) {
+      return (b.source.relevanceScore ?? 0) - (a.source.relevanceScore ?? 0);
+    }
+    if ((b.source.sourceQualityScore ?? 0) !== (a.source.sourceQualityScore ?? 0)) {
+      return (b.source.sourceQualityScore ?? 0) - (a.source.sourceQualityScore ?? 0);
+    }
+    if ((b.source.year ?? 0) !== (a.source.year ?? 0)) {
+      return (b.source.year ?? 0) - (a.source.year ?? 0);
+    }
+    if ((b.source.citationCount ?? 0) !== (a.source.citationCount ?? 0)) {
+      return (b.source.citationCount ?? 0) - (a.source.citationCount ?? 0);
+    }
     return a.index - b.index;
   });
 
   return {
-    sources: scored.map((item) =>
-      sourceWithRelevanceMetadata(item.source, plan, item.debug, workflow),
-    ),
+    sources: scored.map((item) => item.source),
     relevanceDebug: scored.map((item) => item.debug),
   };
 }

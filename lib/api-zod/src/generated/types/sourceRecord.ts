@@ -7,6 +7,7 @@
  */
 import type { SourceRecordEvidenceGrounding } from './sourceRecordEvidenceGrounding';
 import type { SourceRecordRelevanceLevel } from './sourceRecordRelevanceLevel';
+import type { SourceRecordSourceKind } from './sourceRecordSourceKind';
 import type { SourceRecordSourceType } from './sourceRecordSourceType';
 import type { SourceReviewState } from './sourceReviewState';
 
@@ -23,6 +24,16 @@ export interface SourceRecord {
   publisher: string | null;
   containerTitle: string | null;
   accessedAt: string | null;
+  provider?: string | null;
+  queryUsed?: string | null;
+  retrievedAt?: string | null;
+  dedupeKey?: string | null;
+  sourceKind?: SourceRecordSourceKind;
+  citationCount?: number | null;
+  isOpenAccess?: boolean | null;
+  isPeerReviewed?: boolean | null;
+  sourceQualityScore?: number | null;
+  scoreReasons?: string[] | null;
   relevanceLevel?: SourceRecordRelevanceLevel;
   relevanceScore?: number | null;
   relevanceReasons?: string[] | null;

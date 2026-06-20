@@ -177,6 +177,45 @@ components:
         accessedAt:
           type: string
           nullable: true
+        provider:
+          type: string
+          nullable: true
+        queryUsed:
+          type: string
+          nullable: true
+        retrievedAt:
+          type: string
+          nullable: true
+        dedupeKey:
+          type: string
+          nullable: true
+        sourceKind:
+          type: string
+          nullable: true
+          enum:
+            - journal
+            - conference
+            - book
+            - dataset
+            - web
+            - unknown
+        citationCount:
+          type: integer
+          nullable: true
+        isOpenAccess:
+          type: boolean
+          nullable: true
+        isPeerReviewed:
+          type: boolean
+          nullable: true
+        sourceQualityScore:
+          type: number
+          nullable: true
+        scoreReasons:
+          type: array
+          nullable: true
+          items:
+            type: string
         relevanceLevel:
           type: string
           nullable: true
@@ -251,6 +290,12 @@ components:
           type: boolean
         topic:
           type: string
+        workflowId:
+          type: string
+        topicHash:
+          type: string
+        queryPlanHash:
+          type: string
         searchIntent:
           $ref: "#/components/schemas/SearchIntentSummary"
         queries:
@@ -291,6 +336,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SearchRelevanceDebug"
+        searchTrace:
+          $ref: "#/components/schemas/SearchTrace"
       required:
         - sources
     KeywordExpansionResult:
@@ -423,6 +470,12 @@ components:
           type: boolean
         topic:
           type: string
+        workflowId:
+          type: string
+        topicHash:
+          type: string
+        queryPlanHash:
+          type: string
         searchIntent:
           $ref: "#/components/schemas/SearchIntentSummary"
         queries:
@@ -449,6 +502,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SearchRelevanceDebug"
+        searchTrace:
+          $ref: "#/components/schemas/SearchTrace"
         llm_status:
           type: string
           enum:
@@ -466,6 +521,9 @@ components:
       required:
         - ok
         - topic
+        - workflowId
+        - topicHash
+        - queryPlanHash
         - searchIntent
         - queries
         - results
@@ -473,6 +531,7 @@ components:
         - provider_status
         - warnings
         - planner
+        - searchTrace
         - llm_status
         - keyword_expansion
         - groups
@@ -592,6 +651,90 @@ components:
         - matchedContextConcepts
         - matchedOutcomeConcepts
         - penalties
+    SourceDecisionTrace:
+      type: object
+      properties:
+        title:
+          type: string
+        provider:
+          type: string
+        url:
+          type: string
+          nullable: true
+        relevanceScore:
+          type: number
+        authorityScore:
+          type: number
+        summaryUsabilityScore:
+          type: number
+        finalScore:
+          type: number
+        classification:
+          type: string
+        rejectReason:
+          type: string
+          nullable: true
+        matchedTerms:
+          type: array
+          items:
+            type: string
+        driftTerms:
+          type: array
+          items:
+            type: string
+      required:
+        - title
+        - provider
+        - url
+        - relevanceScore
+        - authorityScore
+        - summaryUsabilityScore
+        - finalScore
+        - classification
+        - rejectReason
+        - matchedTerms
+        - driftTerms
+    SearchTrace:
+      type: object
+      properties:
+        workflowId:
+          type: string
+        topic:
+          type: string
+        normalizedTopic:
+          type: string
+        topicHash:
+          type: string
+        queryPlanHash:
+          type: string
+        providerQueries:
+          type: array
+          items:
+            type: string
+        candidateCount:
+          type: integer
+        dedupedCount:
+          type: integer
+        acceptedCount:
+          type: integer
+        rejectedCount:
+          type: integer
+        sourceDecisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceDecisionTrace"
+      required:
+        - workflowId
+        - topic
+        - normalizedTopic
+        - topicHash
+        - queryPlanHash
+        - providerQueries
+        - candidateCount
+        - dedupedCount
+        - acceptedCount
+        - rejectedCount
+        - sourceDecisions
     KeywordSourceGroup:
       type: object
       properties:

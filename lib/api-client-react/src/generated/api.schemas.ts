@@ -50,6 +50,18 @@ export const SourceRecordSourceType = {
   Semantic_Scholar: 'Semantic Scholar',
 } as const;
 
+export type SourceRecordSourceKind = typeof SourceRecordSourceKind[keyof typeof SourceRecordSourceKind] | null;
+
+
+export const SourceRecordSourceKind = {
+  journal: 'journal',
+  conference: 'conference',
+  book: 'book',
+  dataset: 'dataset',
+  web: 'web',
+  unknown: 'unknown',
+} as const;
+
 export type SourceRecordRelevanceLevel = typeof SourceRecordRelevanceLevel[keyof typeof SourceRecordRelevanceLevel] | null;
 
 
@@ -84,6 +96,16 @@ export interface SourceRecord {
   publisher: string | null;
   containerTitle: string | null;
   accessedAt: string | null;
+  provider?: string | null;
+  queryUsed?: string | null;
+  retrievedAt?: string | null;
+  dedupeKey?: string | null;
+  sourceKind?: SourceRecordSourceKind;
+  citationCount?: number | null;
+  isOpenAccess?: boolean | null;
+  isPeerReviewed?: boolean | null;
+  sourceQualityScore?: number | null;
+  scoreReasons?: string[] | null;
   relevanceLevel?: SourceRecordRelevanceLevel;
   relevanceScore?: number | null;
   relevanceReasons?: string[] | null;
@@ -95,21 +117,6 @@ export interface SourceRecord {
   sourceRelevanceReasonZhTw?: string | null;
   shouldShowInMainList?: boolean | null;
   shouldRecommendAccept?: boolean | null;
-  workflowId?: string | null;
-  topic?: string | null;
-  normalizedTopic?: string | null;
-  topicHash?: string | null;
-  queryPlanHash?: string | null;
-  authorityScore?: number | null;
-  summaryUsabilityScore?: number | null;
-  metadataCompletenessScore?: number | null;
-  recencyScore?: number | null;
-  languageFitScore?: number | null;
-  finalScore?: number | null;
-  classification?: 'primary' | 'review' | 'low_quality' | 'off_topic' | 'trusted_but_off_topic' | 'stale_topic' | 'stale_workflow' | null;
-  rejectReason?: string | null;
-  matchedTerms?: string[] | null;
-  driftTerms?: string[] | null;
 }
 
 export type SourceSearchResultLlmStatus = typeof SourceSearchResultLlmStatus[keyof typeof SourceSearchResultLlmStatus];
@@ -232,26 +239,6 @@ export interface SearchRelevanceDebug {
   penalties: string[];
 }
 
-export interface SourceSearchResult {
-  ok?: boolean;
-  topic?: string;
-  workflowId?: string;
-  topicHash?: string;
-  queryPlanHash?: string;
-  searchIntent?: SearchIntentSummary;
-  queries?: SearchIntentQuerySet;
-  results?: SourceRecord[];
-  provider_status?: KeywordSourceGroup[];
-  warnings?: string[];
-  llm_status?: SourceSearchResultLlmStatus;
-  keyword_expansion?: KeywordExpansionResult;
-  groups?: KeywordSourceGroup[];
-  sources: SourceRecord[];
-  planner?: SearchIntentPlan;
-  relevance_debug?: SearchRelevanceDebug[];
-  searchTrace?: SearchTrace;
-}
-
 export interface SourceDecisionTrace {
   title: string;
   provider: string;
@@ -280,6 +267,26 @@ export interface SearchTrace {
   sourceDecisions: SourceDecisionTrace[];
 }
 
+export interface SourceSearchResult {
+  ok?: boolean;
+  topic?: string;
+  workflowId?: string;
+  topicHash?: string;
+  queryPlanHash?: string;
+  searchIntent?: SearchIntentSummary;
+  queries?: SearchIntentQuerySet;
+  results?: SourceRecord[];
+  provider_status?: KeywordSourceGroup[];
+  warnings?: string[];
+  llm_status?: SourceSearchResultLlmStatus;
+  keyword_expansion?: KeywordExpansionResult;
+  groups?: KeywordSourceGroup[];
+  sources: SourceRecord[];
+  planner?: SearchIntentPlan;
+  relevance_debug?: SearchRelevanceDebug[];
+  searchTrace?: SearchTrace;
+}
+
 export type SearchIntentSourceSearchResultLlmStatus = typeof SearchIntentSourceSearchResultLlmStatus[keyof typeof SearchIntentSourceSearchResultLlmStatus];
 
 
@@ -294,6 +301,9 @@ export const SearchIntentSourceSearchResultLlmStatus = {
 export interface SearchIntentSourceSearchResult {
   ok: boolean;
   topic: string;
+  workflowId: string;
+  topicHash: string;
+  queryPlanHash: string;
   searchIntent: SearchIntentSummary;
   queries: SearchIntentQuerySet;
   results: SourceRecord[];
@@ -302,6 +312,7 @@ export interface SearchIntentSourceSearchResult {
   warnings: string[];
   planner: SearchIntentPlan;
   relevance_debug?: SearchRelevanceDebug[];
+  searchTrace: SearchTrace;
   llm_status: SearchIntentSourceSearchResultLlmStatus;
   keyword_expansion: KeywordExpansionResult;
   groups: KeywordSourceGroup[];
@@ -329,3 +340,4 @@ export interface KeywordSourceSearchResult {
 export interface ErrorResponse {
   message: string;
 }
+

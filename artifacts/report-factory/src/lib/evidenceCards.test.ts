@@ -20,6 +20,10 @@ function source(overrides: Partial<SourceRecord> = {}): SourceRecord {
     sourceCategory: "學術論文",
     usableSections: ["研究背景", "文獻探討"],
     confidence: "高",
+    provider: "Crossref",
+    sourceQualityScore: 92,
+    relevanceScore: 84,
+    finalScore: 87,
     reviewNotes: "樣本描述清楚。",
     ...overrides,
   };
@@ -31,6 +35,12 @@ test("builds evidence cards from accepted sources and inherits metadata", () => 
   assert.equal(cards.length, 1);
   assert.equal(cards[0]?.sourceId, "source-1");
   assert.equal(cards[0]?.sourceCategory, "學術論文");
+  assert.equal(cards[0]?.doi, "10.1000/sleep");
+  assert.equal(cards[0]?.abstract, "Students report lower sleep quality when screen time is high.");
+  assert.equal(cards[0]?.provider, "Crossref");
+  assert.equal(cards[0]?.sourceQualityScore, 92);
+  assert.equal(cards[0]?.relevanceScore, 84);
+  assert.equal(cards[0]?.finalScore, 87);
   assert.deepEqual(cards[0]?.usableSections, ["研究背景", "文獻探討"]);
   assert.equal(cards[0]?.confidence, "高");
   assert.equal(cards[0]?.derivation, "abstract-derived");

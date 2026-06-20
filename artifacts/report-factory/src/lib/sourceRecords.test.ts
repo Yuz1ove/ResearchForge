@@ -131,7 +131,7 @@ test("dedupes sources by DOI before URL or title", () => {
   assert.match(deduped[0]?.abstract ?? "", /richer abstract/);
 });
 
-test("dedupes same-title sources across providers and keeps richer metadata", () => {
+test("dedupes same title, first author, and year across providers and keeps richer metadata", () => {
   const deduped = dedupeSourceRecords([
     source({
       id: "title:crossref:spider habitat selection",
@@ -147,13 +147,14 @@ test("dedupes same-title sources across providers and keeps richer metadata", ()
       abstract:
         "Spider habitat selection and microhabitat ecology are described in the restored abstract.",
       sourceType: "OpenAlex",
-      authors: ["Open Alex"],
+      authors: ["Ada Lovelace", "Open Alex"],
     }),
   ]);
 
   assert.equal(deduped.length, 1);
-  assert.equal(deduped[0]?.sourceType, "OpenAlex");
+  assert.equal(deduped[0]?.sourceType, "Crossref");
   assert.match(deduped[0]?.abstract ?? "", /microhabitat ecology/);
+  assert.equal(deduped[0]?.dedupeKey, "title:spider habitat selection|author:ada lovelace|year:2020");
 });
 
 test("filters accepted and rejected sources explicitly", () => {

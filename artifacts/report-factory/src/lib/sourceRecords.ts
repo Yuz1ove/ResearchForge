@@ -11,6 +11,8 @@ export type EvidenceGroundingStatus =
   | "metadata_only"
   | "insufficient";
 
+export type SourceKind = "journal" | "conference" | "book" | "dataset" | "web" | "unknown";
+
 export type SourceRelevanceClassification =
   | "primary"
   | "review"
@@ -63,6 +65,16 @@ export const SOURCE_CATEGORY_LABELS: Record<SourceCategory, string> = {
 };
 
 export interface SourceRecordMetadata {
+  provider?: string | null;
+  queryUsed?: string | null;
+  retrievedAt?: string | null;
+  dedupeKey?: string | null;
+  sourceKind?: SourceKind | string | null;
+  citationCount?: number | null;
+  isOpenAccess?: boolean | null;
+  isPeerReviewed?: boolean | null;
+  sourceQualityScore?: number | null;
+  scoreReasons?: string[] | null;
   sourceCategory?: SourceCategory | string | null;
   usableSections?: WorkflowReportSection[] | string[] | null;
   confidence?: SourceConfidence | string | null;
@@ -303,6 +315,34 @@ function normalizeOptionalScore(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function normalizeNonNegativeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : null;
+}
+
+function normalizeSourceKind(value: unknown): SourceKind | null {
+  if (
+    value === "journal" ||
+    value === "conference" ||
+    value === "book" ||
+    value === "dataset" ||
+    value === "web" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function mergeScore(existing: number | null | undefined, incoming: number | null | undefined): number | null {
+  if (typeof existing === "number" && typeof incoming === "number") return Math.max(existing, incoming);
+  return existing ?? incoming ?? null;
+}
+
+function mergeStringList(existing: string[] | null | undefined, incoming: string[] | null | undefined): string[] | null {
+  const merged = Array.from(new Set([...(existing ?? []), ...(incoming ?? [])].map((item) => item.trim()).filter(Boolean)));
+  return merged.length ? merged : null;
+}
+
 function normalizeSourceLanguage(value: unknown): SourceRecordMetadata["sourceLanguage"] {
   if (value === "zh-TW" || value === "zh-CN" || value === "en" || value === "other" || value === "unknown") return value;
   return null;
@@ -379,7 +419,7 @@ export function sourceReviewState(source: SourceRecord): SourceReviewState {
 function normalizeDoi(value: string | null | undefined): string | null {
   const doi = cleanText(value);
   if (!doi) return null;
-  return doi.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "").trim() || null;
+  return doi.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "").trim().toLowerCase() || null;
 }
 
 function normalizeTitle(value: string): string {
@@ -394,18 +434,32 @@ function stableHash(text: string): string {
   return Math.abs(hash).toString(36);
 }
 
-export function sourceRecordKey(source: Pick<SourceRecord, "title" | "doi" | "url" | "sourceType">): string {
+function normalizedAuthorKey(author: string | null | undefined): string {
+  return normalizeTitle(author ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+export function sourceRecordKey(
+  source: Pick<SourceRecord, "title" | "doi" | "url" | "sourceType"> &
+    Partial<Pick<SourceRecord, "authors" | "year">>,
+): string {
   const doi = normalizeDoi(source.doi);
   if (doi) return `doi:${doi.toLowerCase()}`;
 
   const title = normalizeTitle(source.title)
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/^[\s:.]+|[\s:.]+$/g, "")
+    .replace(/\s+/g, " ")
     .trim();
+  const firstAuthor = normalizedAuthorKey(source.authors?.[0]);
+  const year = typeof source.year === "number" && Number.isFinite(source.year)
+    ? Math.trunc(source.year)
+    : null;
+  if (title && firstAuthor && year) return `title:${title}|author:${firstAuthor}|year:${year}`;
   if (title) return `title:${title}`;
-
-  const url = cleanText(source.url);
-  if (url) return `url:${url.toLowerCase()}`;
 
   return `source:${source.sourceType}:${stableHash(JSON.stringify(source))}`;
 }
@@ -499,6 +553,16 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     publisher: cleanText(source.publisher),
     containerTitle: cleanText(source.containerTitle),
     accessedAt: cleanText(source.accessedAt),
+    provider: cleanText(source.provider),
+    queryUsed: cleanText(source.queryUsed),
+    retrievedAt: cleanText(source.retrievedAt),
+    dedupeKey: cleanText(source.dedupeKey) ?? "",
+    sourceKind: normalizeSourceKind(source.sourceKind),
+    citationCount: normalizeNonNegativeInteger(source.citationCount),
+    isOpenAccess: typeof source.isOpenAccess === "boolean" ? source.isOpenAccess : null,
+    isPeerReviewed: typeof source.isPeerReviewed === "boolean" ? source.isPeerReviewed : null,
+    sourceQualityScore: normalizeOptionalScore(source.sourceQualityScore),
+    scoreReasons: normalizeStringList(source.scoreReasons),
     sourceCategory: normalizeSourceCategory(source.sourceCategory),
     usableSections: normalizeUsableSections(source.usableSections),
     confidence: normalizeSourceConfidence(source.confidence),
@@ -547,6 +611,7 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
   return {
     ...normalized,
     id: normalized.id || sourceRecordKey(normalized),
+    dedupeKey: normalized.dedupeKey || sourceRecordKey(normalized),
     sourceCategory: normalized.sourceCategory ?? classifySourceRecord(normalized),
     confidence: normalized.confidence ?? calculateSourceConfidence(normalized),
   };
@@ -563,15 +628,17 @@ export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
     if (existing) {
       const existingAbstractLength = existing.abstract?.length ?? 0;
       const incomingAbstractLength = normalized.abstract?.length ?? 0;
+      const doi = existing.doi ?? normalized.doi;
+      const doiUrl = doi ? `https://doi.org/${doi}` : null;
       const merged: SourceRecord = normalizeSourceForReview({
         ...existing,
         title: existing.title.length >= normalized.title.length ? existing.title : normalized.title,
         authors: Array.from(new Set([...existing.authors, ...normalized.authors])),
         year: existing.year ?? normalized.year,
         abstract: incomingAbstractLength > existingAbstractLength ? normalized.abstract : existing.abstract,
-        doi: existing.doi ?? normalized.doi,
-        url: existing.url ?? normalized.url,
-        sourceType: existingAbstractLength === 0 && incomingAbstractLength > 0 ? normalized.sourceType : existing.sourceType,
+        doi,
+        url: doiUrl ?? existing.url ?? normalized.url,
+        sourceType: existing.sourceType,
         reviewState:
           sourceReviewState(existing) === "accepted" || sourceReviewState(normalized) === "accepted"
             ? "accepted"
@@ -581,6 +648,30 @@ export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
         publisher: existing.publisher ?? normalized.publisher,
         containerTitle: existing.containerTitle ?? normalized.containerTitle,
         accessedAt: existing.accessedAt ?? normalized.accessedAt,
+        provider: existing.provider ?? normalized.provider ?? existing.sourceType,
+        queryUsed: existing.queryUsed ?? normalized.queryUsed,
+        retrievedAt: existing.retrievedAt ?? normalized.retrievedAt,
+        dedupeKey: existing.dedupeKey ?? normalized.dedupeKey,
+        sourceKind: existing.sourceKind ?? normalized.sourceKind,
+        citationCount: mergeScore(existing.citationCount, normalized.citationCount),
+        isOpenAccess:
+          typeof existing.isOpenAccess === "boolean" || typeof normalized.isOpenAccess === "boolean"
+            ? Boolean(existing.isOpenAccess || normalized.isOpenAccess)
+            : null,
+        isPeerReviewed:
+          typeof existing.isPeerReviewed === "boolean" || typeof normalized.isPeerReviewed === "boolean"
+            ? Boolean(existing.isPeerReviewed || normalized.isPeerReviewed)
+            : null,
+        sourceQualityScore: mergeScore(existing.sourceQualityScore, normalized.sourceQualityScore),
+        scoreReasons: mergeStringList(
+          existing.scoreReasons,
+          existing.sourceType === normalized.sourceType
+            ? normalized.scoreReasons
+            : [
+                ...(normalized.scoreReasons ?? []),
+                `merged providers: ${Array.from(new Set([existing.sourceType, normalized.sourceType])).join(", ")}`,
+              ],
+        ),
       });
       const withStableId = { ...merged, id: existing.id || key };
       seen.set(key, withStableId);

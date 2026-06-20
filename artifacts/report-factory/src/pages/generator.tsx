@@ -1034,6 +1034,18 @@ function compactSourceLine(text: string, maxLength = 80): string {
     .trim()}…`;
 }
 
+function scoreLabel(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? String(Math.round(value))
+    : "待評";
+}
+
+function abstractSnippet(source: SourceRecord): string | null {
+  const abstract = source.abstract?.trim();
+  if (!abstract) return null;
+  return compactSourceLine(abstract, 180);
+}
+
 function parseAuthorsInput(value: string): string[] {
   return value
     .split(/[、,，;]/)
@@ -1126,6 +1138,10 @@ function SourceReviewCard({
   const hasAbstract = sourceHasUsableAbstract(source);
   const relevanceLevel = source.relevanceLevel ?? null;
   const relevanceReasons = source.relevanceReasons ?? [];
+  const scoreReasons = source.scoreReasons ?? [];
+  const snippet = abstractSnippet(source);
+  const providerLabel = source.provider || source.sourceType;
+  const venueLabel = source.containerTitle || source.publisher || "出處待確認";
   const authorityLabel = source.authorityLabel ?? "權威性待確認";
   const languageLabel = source.sourceLanguageLabel ?? "來源語言待確認";
   const compactMode = reviewState !== "pending";
@@ -1205,7 +1221,8 @@ function SourceReviewCard({
                       <span>{sourceAuthorShortLabel(source.authors)}</span>
                       <span>{year}</span>
                       <span>{category}</span>
-                      <span>{source.sourceType}</span>
+                      <span>{venueLabel}</span>
+                      <span>{providerLabel}</span>
                     </div>
                   )}
                 </div>
@@ -1228,6 +1245,9 @@ function SourceReviewCard({
                     </Badge>
                     <Badge variant="outline">{authorityLabel}</Badge>
                     <Badge variant="outline">{languageLabel}</Badge>
+                    <Badge variant="secondary">{providerLabel}</Badge>
+                    {source.doi && <Badge variant="outline">DOI</Badge>}
+                    {source.isOpenAccess && <Badge variant="outline">Open Access</Badge>}
                     {incomplete && (
                       <Badge variant="outline">引用資料不完整</Badge>
                     )}
@@ -1290,6 +1310,26 @@ function SourceReviewCard({
                   </span>
                   {summary.contentSummary}
                 </p>
+                {snippet && (
+                  <p className="line-clamp-3 text-xs leading-5 text-muted-foreground">
+                    <span className="font-medium text-foreground">Abstract：</span>
+                    {snippet}
+                  </p>
+                )}
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="rounded-md border border-border/70 bg-muted/20 px-2 py-1.5">
+                    <span className="block text-[11px] text-muted-foreground">相關性</span>
+                    <span className="font-medium text-foreground">{scoreLabel(source.relevanceScore)}</span>
+                  </div>
+                  <div className="rounded-md border border-border/70 bg-muted/20 px-2 py-1.5">
+                    <span className="block text-[11px] text-muted-foreground">來源品質</span>
+                    <span className="font-medium text-foreground">{scoreLabel(source.sourceQualityScore)}</span>
+                  </div>
+                  <div className="rounded-md border border-border/70 bg-muted/20 px-2 py-1.5">
+                    <span className="block text-[11px] text-muted-foreground">總分</span>
+                    <span className="font-medium text-foreground">{scoreLabel(source.finalScore)}</span>
+                  </div>
+                </div>
                 <p className="text-xs leading-5 text-muted-foreground">
                   {summary.summaryQualityReason}
                 </p>
@@ -1310,6 +1350,9 @@ function SourceReviewCard({
                   <p>採用建議：{summary.recommendationReason}</p>
                   {relevanceReasons.length > 0 && (
                     <p>主題相關性：{relevanceReasons.slice(0, 2).join("；")}</p>
+                  )}
+                  {scoreReasons.length > 0 && (
+                    <p>評分原因：{scoreReasons.slice(0, 4).join("；")}</p>
                   )}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">

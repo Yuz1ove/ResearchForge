@@ -21,6 +21,10 @@ function cleanString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function optionalScore(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function normalizeAcceptedSources(value: unknown): SourceRecord[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -39,7 +43,7 @@ function normalizeAcceptedSources(value: unknown): SourceRecord[] {
 function normalizeEvidenceCards(value: unknown): ReportWriterEvidenceCard[] {
   if (!Array.isArray(value)) return [];
   return value
-    .map((card) => {
+    .map((card): ReportWriterEvidenceCard | null => {
       if (!card || typeof card !== "object") return null;
       const data = card as Record<string, unknown>;
       const id = cleanString(data.id);
@@ -54,6 +58,12 @@ function normalizeEvidenceCards(value: unknown): ReportWriterEvidenceCard[] {
         relevance: cleanString(data.relevance) ?? "",
         sourceTitle: cleanString(data.sourceTitle) ?? "",
         sourceProvider: cleanString(data.sourceProvider) ?? "",
+        doi: cleanString(data.doi) ?? null,
+        abstract: cleanString(data.abstract) ?? null,
+        provider: cleanString(data.provider) ?? cleanString(data.sourceProvider) ?? null,
+        relevanceScore: optionalScore(data.relevanceScore),
+        sourceQualityScore: optionalScore(data.sourceQualityScore),
+        finalScore: optionalScore(data.finalScore),
         year: typeof data.year === "number" ? data.year : null,
         usableSections: Array.isArray(data.usableSections)
           ? data.usableSections
