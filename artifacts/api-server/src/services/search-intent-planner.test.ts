@@ -17,6 +17,10 @@ const friesTopic = "薯條";
 const colaPlainTopic = "可樂";
 const colaHealthTopic = "可樂中的成分與攝取習慣對健康的影響";
 const guineaPigTopic = "天竺鼠";
+const bmwTopic = "BMW";
+const classicalGuitarTopic = "古典吉他";
+const waterBottleTopic = "水壺";
+const eggTopic = "雞蛋";
 const guineaPigBiomedicalTopic = "天竺鼠作為實驗動物在醫學研究中的應用";
 const llmWritingTopic = "大型語言模型對英文寫作學習的影響";
 const climateCausesTopic = "「氣候變遷」的成因與現況分析";
@@ -87,6 +91,90 @@ test("topic understanding classifies guinea pig, fries, and bubble before search
   assert.equal(bubble.needsClarification, true);
   assert.match(JSON.stringify(bubble), /表面張力|光學干涉|幼兒學習|材料應用/);
   assert.match(JSON.stringify(bubble), /surface tension|soap bubble/);
+});
+
+test("topic understanding resolves short entities into domain-specific research angles", () => {
+  const cases = [
+    {
+      topic: bmwTopic,
+      topicKind: "brand_or_product",
+      domain: "automotive_business",
+      expected: /電動化策略|品牌定位|永續製造|BMW electric vehicle/i,
+    },
+    {
+      topic: classicalGuitarTopic,
+      topicKind: "cultural_artifact",
+      domain: "music_culture",
+      expected: /音色與結構|教育與練習|文化史|classical guitar/i,
+    },
+    {
+      topic: waterBottleTopic,
+      topicKind: "broad_common_noun",
+      domain: "household_safety",
+      expected: /材料安全|重複使用與衛生|環境效益|water bottle/i,
+    },
+    {
+      topic: eggTopic,
+      topicKind: "broad_common_noun",
+      domain: "food_nutrition",
+      expected: /營養價值|食品安全|生產與價格|egg nutrition/i,
+    },
+  ];
+
+  for (const item of cases) {
+    const understanding = understandTopic(item.topic);
+    const text = JSON.stringify(understanding);
+    assert.equal(understanding.topicKind, item.topicKind);
+    assert.equal(understanding.domain, item.domain);
+    assert.equal(understanding.needsClarification, true);
+    assert.equal(understanding.shouldSearchNow, false);
+    assert.ok(understanding.researchAngles.length >= 3);
+    assert.match(text, item.expected);
+    assert.doesNotMatch(
+      text,
+      /research direction|research question|searchable topic|academic research/i,
+    );
+  }
+});
+
+test("rule fallback uses topic understanding angles for short topics without generic template terms", () => {
+  for (const topic of [
+    bmwTopic,
+    classicalGuitarTopic,
+    waterBottleTopic,
+    eggTopic,
+    guineaPigTopic,
+  ]) {
+    const plan = buildRuleBasedSearchIntent({
+      topic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    });
+    const text = [
+      plan.normalizedTopic,
+      plan.topicType,
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.outcomeConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.chineseQueries,
+      ...plan.englishQueries,
+      ...(plan.narrowedResearchQuestions ?? []).flatMap((question) => [
+        question.title,
+        question.zhKeywords.join(" "),
+        question.enKeywords.join(" "),
+        question.primaryQueries.join(" "),
+      ]),
+    ].join(" ");
+
+    assert.equal(plan.topicUnderstanding?.needsClarification, true);
+    assert.ok(plan.narrowedResearchQuestions?.length);
+    assert.doesNotMatch(
+      text,
+      /research direction|research question|searchable topic|academic research/i,
+    );
+  }
 });
 
 test("rule fallback keeps cola health core concepts ahead of generic education terms", () => {
@@ -347,6 +435,38 @@ test("rule fallback lets specific guinea pig topics search with English and scie
   assert.ok(plan.mustHaveTerms.includes("Cavia porcellus"));
   assert.ok(plan.penaltyTerms.includes("India"));
   assert.ok(!/Tang dynasty|Buddhism/.test(queryText));
+});
+
+test("applying a research angle produces search-ready queries", () => {
+  for (const baseTopic of [bmwTopic, classicalGuitarTopic, waterBottleTopic, eggTopic]) {
+    const understanding = understandTopic(baseTopic);
+    const suggestedTopic = understanding.clarificationCards[0]?.suggestedTopic;
+    assert.ok(suggestedTopic, `expected suggested topic for ${baseTopic}`);
+
+    const plan = buildRuleBasedSearchIntent({
+      topic: suggestedTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    });
+    const queryText = [
+      ...plan.chineseQueries,
+      ...plan.englishQueries,
+      ...(plan.narrowedResearchQuestions ?? []).flatMap((question) => [
+        question.title,
+        question.zhKeywords.join(" "),
+        question.enKeywords.join(" "),
+        question.primaryQueries.join(" "),
+      ]),
+    ].join(" ");
+
+    assert.equal(plan.topicUnderstanding?.needsClarification, false);
+    assert.ok(plan.chineseQueries.length > 0 || plan.englishQueries.length > 0);
+    assert.doesNotMatch(
+      queryText,
+      /research direction|research question|searchable topic|academic research/i,
+    );
+  }
 });
 
 test("rule fallback keeps climate change cause concepts in every main query family", () => {
@@ -742,7 +862,7 @@ test("dumpling relevance gate keeps relevant nutrition and labeling sources", ()
   assert.ok(source.matchedTerms?.some((term) => /dumpling|sodium|nutrition/i.test(term)));
 });
 
-test("secondary candidates stay reviewable instead of being rejected", () => {
+test("secondary candidates stay available for preliminary reports but out of the main list", () => {
   const plan = buildRuleBasedSearchIntent({
     topic: friesTopic,
     language: "zh-TW",
@@ -751,9 +871,10 @@ test("secondary candidates stay reviewable instead of being rejected", () => {
     [
       sourceRecord({
         id: "fries-secondary",
-        title: "Fast food intake and adolescent dietary habits",
+        title:
+          "French fries nutrition sodium calories fat and acrylamide in fast food dietary surveys",
         abstract:
-          "Fast food consumption among adolescents is associated with dietary habits, sodium intake, calories, fat, and restaurant meal patterns. French fries are discussed as a common side item in fast-food meals.",
+          "French fries are discussed in fast-food dietary surveys.",
         doi: "10.1000/fries-secondary",
         url: "https://doi.org/10.1000/fries-secondary",
         publisher: "Journal of Public Health Nutrition",
@@ -767,7 +888,7 @@ test("secondary candidates stay reviewable instead of being rejected", () => {
   assert.notEqual(source.relevanceLevel, "off_topic");
   assert.notEqual(source.classification, "off_topic");
   assert.notEqual(source.reviewState, "rejected");
-  assert.equal(source.shouldShowInMainList, true);
+  assert.equal(source.shouldShowInMainList, false);
   assert.equal(source.shouldRecommendAccept, true);
 });
 
@@ -1174,57 +1295,72 @@ test("source intent search returns planner output and provider failures without 
 });
 
 test("source intent search does not hit providers when topic needs clarification", async () => {
-  let providerCalled = false;
-  const result = await searchIntentSources(
-    {
-      topic: guineaPigTopic,
-      reportType: "研究報告",
-      audience: "高中",
-      language: "zh-TW",
-    },
-    {
-      llm: { apiKey: "" },
-      queryLimit: 2,
-      sourceSearch: {
-        providerConfigs: {
-          OpenAlex: {
-            provider: "OpenAlex",
-            endpoint: "https://example.test/openalex/works",
-            timeoutMs: 50,
-            queryLimit: 1,
-            headers: { Accept: "application/json" },
+  const topics = [
+    guineaPigTopic,
+    bmwTopic,
+    classicalGuitarTopic,
+    waterBottleTopic,
+    eggTopic,
+  ];
+
+  for (const topic of topics) {
+    let providerCalled = false;
+    const result = await searchIntentSources(
+      {
+        topic,
+        reportType: "研究報告",
+        audience: "高中",
+        language: "zh-TW",
+      },
+      {
+        llm: { apiKey: "" },
+        queryLimit: 2,
+        sourceSearch: {
+          providerConfigs: {
+            OpenAlex: {
+              provider: "OpenAlex",
+              endpoint: "https://example.test/openalex/works",
+              timeoutMs: 50,
+              queryLimit: 1,
+              headers: { Accept: "application/json" },
+            },
+            Crossref: {
+              provider: "Crossref",
+              endpoint: "https://example.test/works",
+              timeoutMs: 50,
+              queryLimit: 1,
+              headers: { Accept: "application/json" },
+            },
+            "Semantic Scholar": {
+              provider: "Semantic Scholar",
+              endpoint: "https://example.test/paper/search",
+              timeoutMs: 50,
+              queryLimit: 1,
+              headers: { Accept: "application/json" },
+            },
           },
-          Crossref: {
-            provider: "Crossref",
-            endpoint: "https://example.test/works",
-            timeoutMs: 50,
-            queryLimit: 1,
-            headers: { Accept: "application/json" },
+          fetchImpl: async () => {
+            providerCalled = true;
+            return new Response(JSON.stringify({ results: [] }));
           },
-          "Semantic Scholar": {
-            provider: "Semantic Scholar",
-            endpoint: "https://example.test/paper/search",
-            timeoutMs: 50,
-            queryLimit: 1,
-            headers: { Accept: "application/json" },
-          },
-        },
-        fetchImpl: async () => {
-          providerCalled = true;
-          return new Response(JSON.stringify({ results: [] }));
         },
       },
-    },
-  );
+    );
 
-  assert.equal(result.ok, true);
-  assert.equal(providerCalled, false);
-  assert.equal(result.searchIntent.needsClarification, true);
-  assert.equal(result.sources.length, 0);
-  assert.equal(result.provider_status.length, 0);
-  assert.ok(result.planner.narrowedResearchQuestions?.length);
-  assert.match(JSON.stringify(result.planner), /guinea pig|Cavia porcellus/i);
-  assert.ok(
-    result.warnings.some((warning) => warning.includes("需要先選擇具體研究方向")),
-  );
+    assert.equal(result.ok, true, topic);
+    assert.equal(providerCalled, false, topic);
+    assert.equal(result.searchIntent.needsClarification, true, topic);
+    assert.equal(result.sources.length, 0, topic);
+    assert.equal(result.provider_status.length, 0, topic);
+    assert.ok(result.planner.narrowedResearchQuestions?.length, topic);
+    assert.doesNotMatch(
+      JSON.stringify(result.planner),
+      /research direction|research question|searchable topic|academic research/i,
+      topic,
+    );
+    assert.ok(
+      result.warnings.some((warning) => warning.includes("需要先選擇具體研究方向")),
+      topic,
+    );
+  }
 });

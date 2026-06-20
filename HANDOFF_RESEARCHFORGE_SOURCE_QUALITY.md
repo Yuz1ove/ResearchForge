@@ -166,3 +166,53 @@ Browser smoke：
 
 - 若要再強化，優先把 `TopicUnderstandingResult` 回傳到前端 debug panel，讓人工驗收可直接看到 `topicKind`、`needsClarification`、entity aliases 與 generated queries。
 - 之後再擴 lexicon 時，應先補測試，再補 entity card，不要把 rule fallback 重新變成模板生成器。
+
+## 2026-06-21 Topic Understanding / Planner / Source Display Gate 收尾
+
+本輪接續 entity understanding 修復，重點是把 `TopicUnderstandingResult` 真正接進 planner、retrieval gate 與一般使用者來源畫面，不再只停在單一 helper。
+
+完成內容：
+
+- `search-intent-planner.ts` 會優先使用 `TopicUnderstandingResult` 的 `topicKind`、`domain`、`aliases`、`englishTerms`、`scientificNames`、`researchAngles` 與 `excludedDriftTerms` 建立 search intent。
+- 短題目或需釐清題目若 `needsClarification=true`，`searchIntentSources(...)` 直接回傳 research angles / narrowed questions，不呼叫 Crossref、OpenAlex 或 Semantic Scholar。
+- 套用 research angle 後，前端 topic 會更新為 `suggestedTopic`，planner 才用該方向的 `zhQueries` / `enQueries` 進入來源搜尋。
+- 擴充 topic lexicon 與 domain-aware angles：`BMW`、`古典吉他`、`水壺`、`雞蛋`、`天竺鼠`、`薯條`、`水餃`、`可樂`、`泡泡`。
+- 移除舊的 generic fallback template；短題目輸出不得出現 `research direction`、`research question`、`searchable topic`、`academic research` 這類舊模板詞。
+- 明確研究題仍走既有高精度 planner：`都市熱島`、`LLM 英文寫作`、`塑膠微粒` 保持主題專用 query 與 relevance gate。
+- `source-retrieval.ts` 支援 provider allow-list，避免泛生活實體在澄清前打到不合適的 provider。
+- `generator.tsx` 一般使用者畫面不顯示 raw / deduped / low relevance / rejected funnel count；只顯示主要候選、已接受與收合的延伸來源。
+- 若 `primarySources.length === 0`，一般畫面與 toast 只顯示：`目前沒有找到足夠相關來源，請改寫題目或選擇更具體研究方向`。
+- `/generator` 中裸 `BMW` 擴寫後，「下一步」按鈕會變成 `請先套用研究方向` 並停留在步驟 1；套用 `BMW 在電動車轉型中的產品與供應鏈策略` 後才解鎖來源搜尋。
+
+新增 / 更新測試：
+
+- `BMW`
+- `古典吉他`
+- `水壺`
+- `雞蛋`
+- `天竺鼠`
+- `都市熱島`
+- `LLM 英文寫作`
+- `塑膠微粒`
+- `needsClarification=true` 不呼叫 provider
+- 套用 research angle 後產生 search-ready queries
+- secondary / clue 來源可保留為初步報告候選，但不進一般主要來源列表
+
+驗證結果：
+
+- `CI=true pnpm --filter @workspace/api-server test`：69 passed
+- `CI=true pnpm --filter @workspace/report-factory test`：100 passed
+- `pnpm typecheck`：passed
+- `CI=true pnpm run build`：passed
+
+Browser smoke：
+
+- 使用本 repo 的 Vite server：`http://127.0.0.1:22068/generator`。
+- `BMW` 擴寫後顯示 `電動化策略`、`品牌定位`、`永續製造`，沒有舊模板詞。
+- 裸 `BMW` 的下一步為 disabled，文字為 `請先套用研究方向`。
+- 套用第一張研究方向卡後，topic 變成 `BMW 在電動車轉型中的產品與供應鏈策略`，下一步恢復為 `下一步：搜尋來源`。
+
+注意：
+
+- `http://127.0.0.1:22067/generator` 仍是另一份 `/Users/Yuz1ove/ResearchForge-main` checkout 的 server；本輪驗收使用 22068。
+- build 仍有既有 Vite sourcemap 與 chunk-size warning，但 build exit code 為 0。

@@ -19,7 +19,6 @@ import {
   type SourceRecord,
 } from "./sourceRecords.ts";
 import {
-  entitySearchTerms,
   understandTopic,
   type TopicClarificationCard,
 } from "@workspace/api-zod/topic-understanding";
@@ -1036,7 +1035,16 @@ export function expandTopicCards(topic: string, category?: TopicCategory): Topic
   const t = topic.trim() || "主題";
   const understanding = understandTopic(t);
 
-  if (understanding.clarificationCards.length > 0) {
+  const shouldUseUnderstandingCards =
+    understanding.clarificationCards.length > 0 &&
+    (understanding.entity ||
+      understanding.topicKind === "brand_or_product" ||
+      understanding.topicKind === "cultural_artifact" ||
+      understanding.domain === "household_safety" ||
+      understanding.domain === "automotive_business" ||
+      understanding.domain === "music_culture");
+
+  if (shouldUseUnderstandingCards) {
     return understanding.clarificationCards.map((card) =>
       cardFromClarification(card, t),
     );
@@ -1089,61 +1097,16 @@ export function expandTopicCards(topic: string, category?: TopicCategory): Topic
       ];
     default:
       if (understanding.entity) {
-        const searchTerms = entitySearchTerms(understanding.entity);
-        return [
-          plannerCard(
-            `${t}的核心研究方向整理`,
-            "研究方向",
-            "先把主題縮成可搜尋、可蒐證的問題，再開始找來源。",
-            {
-              researchValue:
-                "主題目前仍偏寬，建議先選一個具體研究面向再進入來源搜尋。",
-              dataDirections: [
-                "學術論文",
-                "官方或機構資料",
-                "中英文對照關鍵詞",
-                "摘要可驗證研究",
-              ],
-              chineseKeywords: normalizeTerms([
-                t,
-                understanding.entity.canonicalName,
-                ...understanding.entity.aliases,
-              ]).slice(0, 6),
-              englishKeywords: normalizeTerms(searchTerms).slice(0, 6),
-              suggestedQuery: normalizeTerms(searchTerms).slice(0, 5).join(" "),
-              searchBoundary:
-                "避免只用原始短詞搜尋；請先補上研究方向、研究對象或研究變項。",
-              excludedTerms: understanding.excludedDriftTerms,
-            },
-          ),
-        ];
+        return understanding.clarificationCards.map((card) =>
+          cardFromClarification(card, t),
+        );
       }
 
-      return [
-        plannerCard(
-          `${t}的具體研究方向建議`,
-          "研究方向",
-          "先補上研究面向，再開始搜尋，避免主題過寬導致來源漂移。",
-          {
-            researchValue:
-              "主題目前仍偏寬，建議收斂到變因、對象、應用或影響面向。",
-            dataDirections: [
-              "研究面向",
-              "研究對象",
-              "可搜尋中英文關鍵詞",
-              "官方或學術來源",
-            ],
-            chineseKeywords: normalizeTerms([t, "研究方向", "研究問題", "具體面向"]),
-            englishKeywords: ["research direction", "research question", "searchable topic"],
-            suggestedQuery: buildSuggestedQuery(t, ["研究方向", "研究問題"], [
-              "research direction",
-              "research question",
-            ]),
-            searchBoundary:
-              "不要直接用過寬短詞搜尋；請先選定具體問題後再進入來源搜尋。",
-          },
-        ),
-      ];
+      return understanding.clarificationCards.length > 0
+        ? understanding.clarificationCards.map((card) =>
+            cardFromClarification(card, t),
+          )
+        : [];
   }
 }
 

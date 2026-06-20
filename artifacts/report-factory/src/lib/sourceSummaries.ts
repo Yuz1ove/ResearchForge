@@ -355,8 +355,7 @@ function metadataBackedAssessment(
       source.missingRequiredFacets ?? fallback.missingRequiredFacets,
     evidenceGrounding: source.evidenceGrounding ?? fallback.evidenceGrounding,
     reasonZhTw: source.sourceRelevanceReasonZhTw ?? fallback.reasonZhTw,
-    shouldShowInMainList:
-      source.shouldShowInMainList ?? relevanceLevel === "primary",
+    shouldShowInMainList: relevanceLevel === "primary",
     shouldRecommendAccept:
       source.shouldRecommendAccept ??
       (source.classification === "primary" &&

@@ -175,3 +175,9 @@ Smoke 覆蓋：
 - 若要完整 LLM 正式段落，需先讓 report writer 在本地模型上穩定輸出 JSON；目前 qwen3 timeout 時仍使用 accepted-source fallback draft。
 - 若來源品質仍不足，再微調 source provider weighting，不要再過早 reject。
 - 若要提交 PR，先清點既有 dirty worktree，分辨本輪主流程修復與前輪已存在的變更。
+
+## 2026-06-21 接續索引
+
+- 已完成 Topic Understanding / Planner / Source Display Gate 收尾，詳細內容記錄在 `HANDOFF_RESEARCHFORGE_SOURCE_QUALITY.md` 的 `2026-06-21 Topic Understanding / Planner / Source Display Gate 收尾`。
+- 核心結果：`search-intent-planner.ts` 真正使用 `TopicUnderstandingResult`；`needsClarification=true` 不呼叫 provider；套用 research angle 後才進入來源搜尋；`generator.tsx` 一般使用者畫面不再顯示 raw / deduped / low relevance / rejected 漏斗數。
+- 驗證：API 69 passed、Report Factory 100 passed、`pnpm typecheck` passed、`CI=true pnpm run build` passed；Browser smoke 使用 `http://127.0.0.1:22068/generator` 驗證 `BMW` 裸題需先套用研究方向。

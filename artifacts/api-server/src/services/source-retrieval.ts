@@ -20,6 +20,7 @@ export type SourceFetch = (input: string | URL, init?: RequestInit) => Promise<R
 export interface SourceSearchOptions {
   fetchImpl?: SourceFetch;
   providerConfigs?: Partial<Record<SourceProvider, SourceProviderConfig>>;
+  providers?: SourceProvider[];
 }
 
 export interface SourceProviderSearchResult {
@@ -542,8 +543,11 @@ export async function searchSourceProviders(
   query: string,
   options?: SourceSearchOptions,
 ): Promise<SourceProviderSearchResult[]> {
+  const providers = options?.providers?.length
+    ? options.providers
+    : SOURCE_PROVIDER_NAMES;
   return Promise.all(
-    SOURCE_PROVIDER_NAMES.map((provider) => searchSourceProvider(provider, query, options)),
+    providers.map((provider) => searchSourceProvider(provider, query, options)),
   );
 }
 

@@ -11,6 +11,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import {
   searchSourceProviders,
+  type SourceProvider,
   type SourceFetch,
   type SourceProviderSearchResult,
   type SourceSearchOptions,
@@ -1126,6 +1127,135 @@ function researchQuestionFromClarificationCard(
   };
 }
 
+function termsFromQueries(queries: string[]): string[] {
+  return unique(
+    queries.flatMap((query) =>
+      query
+        .split(/[\s，,、：:；;。！？!?（）()/-]+/)
+        .map((term) => term.trim())
+        .filter((term) => {
+          if (!term) return false;
+          if (/^[A-Za-z]+$/.test(term)) return term.length >= 3;
+          return Array.from(term).length >= 2;
+        }),
+    ),
+  );
+}
+
+function sourceTypesFromUnderstanding(
+  understanding: TopicUnderstandingResult,
+): string[] {
+  const fromAngles = understanding.researchAngles.flatMap(
+    (angle) => angle.suggestedSourceTypes,
+  );
+  const domainDefaults: Record<string, string[]> = {
+    animal_science: ["veterinary_or_biomedical_study", "animal_welfare_guideline"],
+    automotive_business: ["company_report", "industry_report", "market_research"],
+    beverage_health: ["nutrition_guideline", "public_health_study", "food_labeling"],
+    consumer_product: ["product_safety_standard", "consumer_research", "life_cycle_assessment"],
+    food_nutrition: ["nutrition_database", "food_safety_report", "public_health_study"],
+    household_safety: ["product_safety_standard", "public_health_study", "consumer_guideline"],
+    materials_design: ["materials_science_study", "engineering_or_design_study"],
+    music_culture: ["musicology_study", "music_education_study", "instrument_acoustics_study"],
+  };
+  return unique([
+    ...(domainDefaults[understanding.domain] ?? ["academic_paper", "official_or_research_institution"]),
+    ...fromAngles,
+  ]).slice(0, 10);
+}
+
+function buildUnderstandingSearchIntent(
+  input: SearchIntentPlannerInput,
+  understanding: TopicUnderstandingResult,
+  reason: string,
+  plannerStatus: SearchIntentPlannerStatus,
+): SearchIntentPlan {
+  const angleCards = understanding.clarificationCards;
+  const questions = angleCards.map((card) =>
+    researchQuestionFromClarificationCard(card, understanding.excludedDriftTerms),
+  );
+  const zhQueries = unique([
+    ...angleCards.flatMap((card) => card.zhQueries),
+    ...questions.flatMap((question) => question.primaryQueries),
+  ]).slice(0, MAX_QUERY_COUNT);
+  const enQueries = unique([
+    ...angleCards.flatMap((card) => card.enQueries),
+    ...questions.flatMap((question) => question.secondaryQueries),
+  ]).slice(0, MAX_QUERY_COUNT);
+  const conceptTerms = unique([
+    ...understanding.canonicalTerms,
+    ...understanding.aliases,
+    ...understanding.englishTerms,
+    ...understanding.scientificNames,
+    ...(understanding.entity ? entitySearchTerms(understanding.entity) : []),
+  ]);
+  const queryTerms = termsFromQueries([...zhQueries, ...enQueries]);
+  const angleLabels = understanding.researchAngles.map((angle) => angle.label);
+  const domainContext = sourceTypesFromUnderstanding(understanding);
+  const fallbackTerms = topicTerms(input.topic);
+  const primaryConcepts = unique(
+    conceptTerms.length ? conceptTerms : fallbackTerms.length ? fallbackTerms : [input.topic.trim()],
+  ).slice(0, 14);
+  const mustHaveTerms = unique([
+    ...primaryConcepts,
+    ...understanding.scientificNames,
+  ]).slice(0, 18);
+
+  return {
+    normalizedTopic: understanding.normalizedTopic || input.topic.trim(),
+    topicUnderstanding: understanding,
+    topicType: `${understanding.domain}_${understanding.topicKind}`,
+    primaryConcepts,
+    contextConcepts: unique([
+      ...domainContext,
+      ...angleLabels,
+      ...queryTerms,
+    ]).slice(0, 14),
+    outcomeConcepts: unique([
+      ...understanding.researchAngles.map((angle) => angle.researchQuestion),
+      ...understanding.researchAngles.map((angle) => angle.whyResearchable),
+      ...queryTerms.slice(0, 8),
+    ]).slice(0, 12),
+    populationConcepts: [],
+    lowWeightTerms: [
+      "research",
+      "study",
+      "overview",
+      "文獻",
+      "研究",
+      "影響",
+      "策略",
+    ],
+    mustHaveTerms,
+    shouldHaveTerms: unique([
+      ...queryTerms,
+      ...angleLabels,
+      ...domainContext,
+    ]).slice(0, 18),
+    penaltyTerms: understanding.excludedDriftTerms,
+    negativeTerms: understanding.excludedDriftTerms,
+    chineseQueries: zhQueries.length
+      ? zhQueries
+      : unique([
+          ...primaryConcepts.map((term) => `${term} 安全 營養 市場 文化`.trim()),
+          ...fallbackTerms,
+        ]).slice(0, MAX_QUERY_COUNT),
+    englishQueries: enQueries.length
+      ? enQueries
+      : unique([
+          ...primaryConcepts.map((term) => `${term} safety nutrition market culture`.trim()),
+        ]).slice(0, MAX_QUERY_COUNT),
+    narrowedResearchQuestions: questions,
+    excludedDriftTerms: understanding.excludedDriftTerms,
+    reasoningNotes: planReason(
+      reason,
+      `Topic understanding classified "${input.topic}" as ${understanding.topicKind} in ${understanding.domain}; queries were generated from researchAngles, aliases, English terms, and excluded meanings.`,
+    ),
+    plannerStatus,
+    fallbackUsed: true,
+  };
+}
+
 function buildEntityAwareSearchIntent(
   input: SearchIntentPlannerInput,
   reason: string,
@@ -1204,22 +1334,10 @@ export function buildRuleBasedSearchIntent(
   const normalizedTopic = input.topic.trim();
   const understanding = understandTopic(normalizedTopic);
 
-  if (
-    understanding.entity &&
-    (understanding.entity.category === "animal" ||
-      understanding.entity.category === "unknown" ||
-      understanding.topicKind === "specific_research_topic") &&
-    !isDumplingTopic(input) &&
-    !isFrenchFriesTopic(input) &&
-    !isColaHealthTopic(input)
-  ) {
-    const entityPlan = buildEntityAwareSearchIntent(input, reason, plannerStatus);
-    if (entityPlan) return entityPlan;
-  }
-
   if (isUrbanHeatIslandTopic(input)) {
     return {
       normalizedTopic,
+      topicUnderstanding: understanding,
       primaryConcepts: URBAN_HEAT_PRIMARY,
       contextConcepts: URBAN_HEAT_CONTEXT,
       outcomeConcepts: URBAN_HEAT_OUTCOMES,
@@ -1263,6 +1381,7 @@ export function buildRuleBasedSearchIntent(
   if (isShortVideoSleepAttentionTopic(input)) {
     return {
       normalizedTopic,
+      topicUnderstanding: understanding,
       primaryConcepts: SHORT_VIDEO_PRIMARY,
       contextConcepts: SHORT_VIDEO_CONTEXT,
       outcomeConcepts: SHORT_VIDEO_OUTCOMES,
@@ -1302,6 +1421,7 @@ export function buildRuleBasedSearchIntent(
   if (isLlmEnglishWritingLearningTopic(input)) {
     return {
       normalizedTopic,
+      topicUnderstanding: understanding,
       topicType: "ai_language_learning",
       primaryConcepts: LLM_WRITING_PRIMARY,
       contextConcepts: LLM_WRITING_CONTEXT,
@@ -1429,6 +1549,7 @@ export function buildRuleBasedSearchIntent(
 
     return {
       normalizedTopic,
+      topicUnderstanding: understanding,
       topicType: "food_nutrition_and_culture",
       primaryConcepts: DUMPLING_PRIMARY,
       contextConcepts: DUMPLING_CONTEXT,
@@ -1521,6 +1642,7 @@ export function buildRuleBasedSearchIntent(
 
     return {
       normalizedTopic,
+      topicUnderstanding: understanding,
       topicType: "food_nutrition_and_safety",
       primaryConcepts: FRENCH_FRIES_PRIMARY,
       contextConcepts: FRENCH_FRIES_CONTEXT,
@@ -1568,6 +1690,7 @@ export function buildRuleBasedSearchIntent(
   if (isColaHealthTopic(input)) {
     return {
       normalizedTopic,
+      topicUnderstanding: understanding,
       topicType: "beverage_health_and_consumption",
       primaryConcepts: COLA_HEALTH_PRIMARY,
       contextConcepts: COLA_HEALTH_CONTEXT,
@@ -1663,6 +1786,7 @@ export function buildRuleBasedSearchIntent(
   if (isMarineMicroplasticsEcologyTopic(input)) {
     return {
       normalizedTopic,
+      topicUnderstanding: understanding,
       topicType: "marine_microplastics_ecology",
       primaryConcepts: MARINE_MICROPLASTICS_PRIMARY,
       contextConcepts: MARINE_MICROPLASTICS_CONTEXT,
@@ -1750,6 +1874,7 @@ export function buildRuleBasedSearchIntent(
   if (isClimateChangeCauseTopic(input)) {
     return {
       normalizedTopic,
+      topicUnderstanding: understanding,
       primaryConcepts: CLIMATE_CAUSES_PRIMARY,
       contextConcepts: CLIMATE_CAUSES_CONTEXT,
       outcomeConcepts: CLIMATE_CAUSES_OUTCOMES,
@@ -1804,6 +1929,7 @@ export function buildRuleBasedSearchIntent(
   if (isSpiderEcologyTopic(input)) {
     return {
       normalizedTopic,
+      topicUnderstanding: understanding,
       primaryConcepts: SPIDER_ECOLOGY_PRIMARY,
       contextConcepts: SPIDER_ECOLOGY_CONTEXT,
       outcomeConcepts: SPIDER_ECOLOGY_OUTCOMES,
@@ -1861,10 +1987,26 @@ export function buildRuleBasedSearchIntent(
     };
   }
 
+  if (
+    understanding.researchAngles.length > 0 ||
+    understanding.topicKind === "known_entity" ||
+    understanding.topicKind === "brand_or_product" ||
+    understanding.topicKind === "cultural_artifact" ||
+    understanding.topicKind === "broad_common_noun"
+  ) {
+    return buildUnderstandingSearchIntent(
+      input,
+      understanding,
+      reason,
+      plannerStatus,
+    );
+  }
+
   const genericTerms = topicTerms(normalizedTopic);
   const audience = cleanString(input.audience);
   return {
     normalizedTopic,
+    topicUnderstanding: understanding,
     primaryConcepts: genericTerms.length ? genericTerms : [normalizedTopic],
     contextConcepts: [cleanString(input.reportType)].filter(
       (term): term is string => Boolean(term),
@@ -1884,13 +2026,13 @@ export function buildRuleBasedSearchIntent(
     penaltyTerms: [],
     negativeTerms: [],
     chineseQueries: unique([
-      normalizedTopic,
-      `${normalizedTopic} 文獻回顧`,
-      `${normalizedTopic} 實證研究`,
+      `${normalizedTopic} 現況 背景`,
+      `${normalizedTopic} 影響 風險`,
+      `${normalizedTopic} 應用 案例`,
     ]).slice(0, 4),
     englishQueries: unique([
-      `${normalizedTopic} peer reviewed research`,
-      `${normalizedTopic} systematic review`,
+      `${normalizedTopic} current status impact`,
+      `${normalizedTopic} risk application case study`,
     ]).slice(0, 3),
     reasoningNotes: planReason(reason),
     plannerStatus,
@@ -2085,6 +2227,10 @@ function coerceSearchIntentPlan(
 
   const merged: SearchIntentPlan = {
     ...plan,
+    topicUnderstanding: fallback.topicUnderstanding ?? understandTopic(input.topic),
+    topicType: cleanString(data.topicType ?? data.topic_type) ?? fallback.topicType,
+    narrowedResearchQuestions: fallback.narrowedResearchQuestions,
+    excludedDriftTerms: fallback.excludedDriftTerms,
     primaryConcepts: plan.primaryConcepts.length
       ? plan.primaryConcepts
       : fallback.primaryConcepts,
@@ -2130,6 +2276,7 @@ async function requestLlmSearchIntentPlan(
   input: SearchIntentPlannerInput,
   options?: SearchIntentPlannerOptions,
 ): Promise<SearchIntentPlan> {
+  const topicUnderstanding = understandTopic(input.topic);
   try {
     const content = await requestOpenAICompatibleChatCompletion({
       purpose: "planner",
@@ -2145,6 +2292,8 @@ async function requestLlmSearchIntentPlan(
             "You are ResearchForge's research planner.",
             "Output valid JSON only. No markdown. No explanation.",
             "Use concrete searchable terms, never generic academic/evidence/source wording.",
+            "You will receive topicUnderstanding. Respect its topicKind, domain, canonicalTerms, aliases, englishTerms, excludedMeanings, and researchAngles.",
+            "For short topics, derive queries from researchAngles only. Do not write research direction, research question, searchable topic, academic research, evidence, or source as query terms.",
             "Keys: normalizedTopic, primaryConcepts, contextConcepts, outcomeConcepts, populationConcepts, lowWeightTerms, mustHaveTerms, shouldHaveTerms, penaltyTerms, negativeTerms, chineseQueries, englishQueries, reasoningNotes.",
             "All keys except normalizedTopic are short string arrays.",
           ].join(" "),
@@ -2153,11 +2302,12 @@ async function requestLlmSearchIntentPlan(
           role: "user",
           content: [
             `topic: ${input.topic}`,
+            `topicUnderstanding: ${JSON.stringify(topicUnderstanding)}`,
             `reportType: ${input.reportType ?? "研究報告"}`,
             `audience: ${input.audience ?? "高中"}`,
             `language: ${input.language ?? "zh-TW"}`,
             "Return 4-6 Chinese queries and 4-6 English queries.",
-            "For short food or drink topics, include nutrition, labeling, public health, consumption, safety, culture, or packaging angles when relevant.",
+            "Use suggested zhQueries/enQueries from researchAngles when they exist.",
           ].join("\n"),
         },
       ],
@@ -2977,10 +3127,7 @@ function sourceWithRelevanceMetadata(
     matchedTerms: matchedTermsForSource,
     driftTerms,
     reviewState: forcedRejected ? "rejected" : source.reviewState,
-    shouldShowInMainList:
-      classification.classification === "primary" ||
-      (classification.classification === "review" &&
-        (relevanceLevel === "secondary" || relevanceLevel === "clue")),
+    shouldShowInMainList: classification.classification === "primary",
     shouldRecommendAccept:
       (classification.classification === "primary" ||
         classification.classification === "review") &&
@@ -3062,6 +3209,8 @@ function resultWarnings(
   }
   if (sources.length === 0) {
     warnings.push("目前沒有找到符合搜尋意圖的來源。");
+  } else if (!sources.some((source) => source.relevanceLevel === "primary")) {
+    warnings.push("目前沒有找到足夠相關來源，請改寫題目或選擇更具體研究方向");
   }
   return unique(warnings);
 }
@@ -3140,6 +3289,18 @@ function preferredSourceTypes(plan: SearchIntentPlan): string[] {
   if (isUrbanHeatPlan(plan))
     types.push("urban_climate_or_built_environment_study");
   return unique(types);
+}
+
+function providerPolicyForPlan(plan: SearchIntentPlan): SourceProvider[] {
+  const topicKind = plan.topicUnderstanding?.topicKind;
+  const shortOrEntity =
+    topicKind === "known_entity" ||
+    topicKind === "brand_or_product" ||
+    topicKind === "cultural_artifact" ||
+    topicKind === "broad_common_noun" ||
+    topicKind === "ambiguous";
+  if (shortOrEntity) return ["OpenAlex", "Semantic Scholar"];
+  return ["OpenAlex", "Semantic Scholar", "Crossref"];
 }
 
 function sourceDecisionTrace(source: SourceRecord): SourceDecisionTrace {
@@ -3248,7 +3409,12 @@ export async function searchIntentSources(
       queries.map((query) =>
         searchSourceProviders(
           query,
-          options?.sourceSearch ?? { fetchImpl: options?.fetchImpl },
+          {
+            ...(options?.sourceSearch ?? {}),
+            fetchImpl: options?.sourceSearch?.fetchImpl ?? options?.fetchImpl,
+            providers:
+              options?.sourceSearch?.providers ?? providerPolicyForPlan(plan),
+          },
         ),
       ),
     )

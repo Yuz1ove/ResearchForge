@@ -142,6 +142,8 @@ type SourcePipelineStats = KeywordSearchDebugState["retrievalStats"] & {
   rejected: number;
 };
 
+type SourceDisplayGate = "primary" | "secondary" | "hidden";
+
 type WorkspaceResumeState = {
   reportId: string;
   loaded: boolean;
@@ -584,13 +586,12 @@ function SearchIntentDebugPanel({ debug }: { debug: KeywordSearchDebugState }) {
   );
 }
 
-type SourceReviewTab = "all" | "accepted" | "pending" | "rejected";
+type SourceReviewTab = "all" | "accepted" | "pending";
 
 const SOURCE_REVIEW_TABS: { value: SourceReviewTab; label: string }[] = [
   { value: "all", label: "全部" },
   { value: "accepted", label: "已接受" },
   { value: "pending", label: "待審核" },
-  { value: "rejected", label: "已拒絕" },
 ];
 
 const WORKFLOW_STEPS: {
@@ -1062,20 +1063,42 @@ function sourcesForReviewTab(
     case "accepted":
       return acceptedSourceRecords(sources);
     case "pending":
-      return candidateSourceRecords(sources);
-    case "rejected":
-      return rejectedSourceRecords(sources);
+      return primaryCandidateSources(sources);
     case "all":
     default:
       return sources;
   }
 }
 
+function sourceDisplayGate(source: SourceRecord): SourceDisplayGate {
+  const state = sourceReviewState(source);
+  if (state === "accepted") return "primary";
+  if (state === "rejected") return "hidden";
+  if (
+    source.classification === "off_topic" ||
+    source.classification === "trusted_but_off_topic" ||
+    source.classification === "stale_topic" ||
+    source.classification === "stale_workflow" ||
+    source.relevanceLevel === "low" ||
+    source.relevanceLevel === "off_topic"
+  ) {
+    return "hidden";
+  }
+  if (source.relevanceLevel === "secondary" || source.relevanceLevel === "clue")
+    return "secondary";
+  if (source.shouldShowInMainList === false) return "hidden";
+  return "primary";
+}
+
+function visiblePrimarySourceRecords(sources: SourceRecord[]): SourceRecord[] {
+  return sources.filter((source) => sourceDisplayGate(source) === "primary");
+}
+
 function primaryCandidateSources(sources: SourceRecord[]): SourceRecord[] {
   return sources.filter(
     (source) =>
       sourceReviewState(source) === "pending" &&
-      source.relevanceLevel === "primary",
+      sourceDisplayGate(source) === "primary",
   );
 }
 
@@ -1083,8 +1106,7 @@ function secondaryCandidateSources(sources: SourceRecord[]): SourceRecord[] {
   return sources.filter(
     (source) =>
       sourceReviewState(source) === "pending" &&
-      (source.relevanceLevel === "secondary" ||
-        source.relevanceLevel === "clue"),
+      sourceDisplayGate(source) === "secondary",
   );
 }
 
@@ -1092,22 +1114,14 @@ function lowRelevanceCandidateSources(sources: SourceRecord[]): SourceRecord[] {
   return sources.filter(
     (source) =>
       sourceReviewState(source) === "pending" &&
-      (source.relevanceLevel === "low" ||
-        source.relevanceLevel === "off_topic" ||
-        source.shouldShowInMainList === false),
+      sourceDisplayGate(source) === "hidden",
   );
 }
 
 function reviewableCandidateSources(sources: SourceRecord[]): SourceRecord[] {
-  const lowIds = new Set(
-    lowRelevanceCandidateSources(sources).map(
-      (source) => source.id || sourceRecordKey(source),
-    ),
-  );
   return sources.filter(
     (source) =>
-      sourceReviewState(source) === "pending" &&
-      !lowIds.has(source.id || sourceRecordKey(source)),
+      sourceReviewState(source) === "pending" && sourceDisplayGate(source) === "primary",
   );
 }
 
@@ -1883,8 +1897,8 @@ function SourceManagePanel({
   const counts = sourceReviewCounts(sources);
   const primarySources = primaryCandidateSources(sources);
   const secondarySources = secondaryCandidateSources(sources);
-  const lowRelevanceSources = lowRelevanceCandidateSources(sources);
   const reviewableSources = reviewableCandidateSources(sources);
+  const visiblePrimaryCount = visiblePrimarySourceRecords(sources).length;
   const visibleSources =
     activeTab === "all"
       ? reviewableSources
@@ -1893,7 +1907,6 @@ function SourceManagePanel({
     SOURCE_REVIEW_TABS.find((tab) => tab.value === activeTab)?.label ?? "來源";
   const primaryPendingCount = primarySources.length;
   const secondaryPendingCount = secondarySources.length;
-  const lowPendingCount = lowRelevanceSources.length;
   const stats: SourcePipelineStats = pipelineStats ?? {
     rawResults: sources.length,
     providerGroups: 0,
@@ -1901,7 +1914,7 @@ function SourceManagePanel({
     dedupedResults: sources.length,
     primaryCandidates: primaryPendingCount,
     secondaryCandidates: secondaryPendingCount,
-    lowRelevance: lowPendingCount,
+    lowRelevance: lowRelevanceCandidateSources(sources).length,
     rejected: counts.rejected,
   };
 
@@ -1965,8 +1978,7 @@ function SourceManagePanel({
         <div>
           <h2 className="text-base font-semibold text-foreground">研究來源</h2>
           <p className="text-sm text-muted-foreground">
-            接受的來源會進入參考文獻，拒絕的來源不會匯出；展開卡片可補
-            metadata。
+            只保留要進入參考文獻的來源；展開卡片可補 metadata。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -1977,46 +1989,44 @@ function SourceManagePanel({
             variant={
               counts.accepted >= recommendedAcceptedSourceCount
                 ? "secondary"
-                : "outline"
+              : "outline"
             }
           >
             最低 3 筆 / 建議 {recommendedAcceptedSourceCount} 筆
           </Badge>
-          <Badge variant={counts.rejected ? "secondary" : "outline"}>
-            已拒絕 {counts.rejected} 筆
-          </Badge>
           <Badge variant="outline">主要候選 {primaryPendingCount} 筆</Badge>
-          <Badge variant="outline">延伸候選 {secondaryPendingCount} 筆</Badge>
-          <Badge variant="outline">低相關 {lowPendingCount} 筆</Badge>
         </div>
       </div>
 
       <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
         <div className="rounded-md border border-border bg-muted/20 px-3 py-3">
           <p className="text-xs font-medium text-muted-foreground">
-            檢索資料池
+            可審查來源
           </p>
           <p className="mt-1 text-foreground">
-            raw {stats.rawResults} 筆，deduped {stats.dedupedResults} 筆
+            主要候選 {stats.primaryCandidates} 筆
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            provider batches {stats.successfulProviderGroups} / {stats.providerGroups}
+            接受後才會進入正式報告資料基礎。
           </p>
         </div>
         <div className="rounded-md border border-border bg-muted/20 px-3 py-3">
           <p className="text-xs font-medium text-muted-foreground">
-            候選分組
+            延伸來源
           </p>
           <p className="mt-1 text-foreground">
-            primary {stats.primaryCandidates}，secondary {stats.secondaryCandidates}
+            {stats.secondaryCandidates} 筆已收合
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            延伸來源只作為改寫題目或補搜尋方向參考。
           </p>
         </div>
         <div className="rounded-md border border-border bg-muted/20 px-3 py-3">
           <p className="text-xs font-medium text-muted-foreground">
-            降級結果
+            報告門檻
           </p>
           <p className="mt-1 text-foreground">
-            low relevance {stats.lowRelevance}，rejected {stats.rejected}
+            至少接受 3 筆可用來源
           </p>
         </div>
       </div>
@@ -2032,16 +2042,13 @@ function SourceManagePanel({
           >
             <TabsList className="h-auto flex-wrap justify-start gap-1">
               <TabsTrigger value="all" data-testid="tab-sources-all">
-                全部 ({counts.all})
+                全部 ({visiblePrimaryCount})
               </TabsTrigger>
               <TabsTrigger value="accepted" data-testid="tab-sources-accepted">
                 已接受 ({counts.accepted})
               </TabsTrigger>
               <TabsTrigger value="pending" data-testid="tab-sources-pending">
-                待審核 ({counts.pending})
-              </TabsTrigger>
-              <TabsTrigger value="rejected" data-testid="tab-sources-rejected">
-                已拒絕 ({counts.rejected})
+                待審核 ({primaryPendingCount})
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -2068,12 +2075,12 @@ function SourceManagePanel({
             </div>
           ) : (
             <div className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-3 text-sm text-muted-foreground">
-              {activeTab === "all" && counts.all > 0
-                ? `目前沒有符合主題的主要候選；已找到 ${lowPendingCount} 筆低相關來源，預設不建議採用。`
+              {activeTab === "all" && sources.length > 0
+                ? "目前沒有找到足夠相關來源，請改寫題目或選擇更具體研究方向"
                 : `${activeTabLabel}目前沒有來源。`}
             </div>
           )}
-          {lowRelevanceSources.length > 0 && (
+          {secondarySources.length > 0 && primaryPendingCount > 0 && (
             <Collapsible>
               <div className="rounded-md border border-border bg-muted/10 px-3 py-3">
                 <CollapsibleTrigger asChild>
@@ -2083,37 +2090,35 @@ function SourceManagePanel({
                   >
                     <span>
                       <span className="block text-sm font-medium text-foreground">
-                        低相關來源 ({lowRelevanceSources.length})
+                        延伸來源 ({secondarySources.length})
                       </span>
                       <span className="block text-xs text-muted-foreground">
-                        已預設收合，不會進入主要推薦列表。
+                        這些來源目前不列入主要候選；可用來判斷是否要改寫題目。
                       </span>
                     </span>
                     <ChevronDown className="h-4 w-4 text-muted-foreground" />
                   </button>
                 </CollapsibleTrigger>
                 <CollapsibleContent className="pt-3">
-                  <div
-                    className="space-y-3"
-                    data-testid="sources-list-low-relevance"
+                  <ul
+                    className="space-y-2 text-xs text-muted-foreground"
+                    data-testid="sources-list-secondary-collapsed"
                   >
-                    {lowRelevanceSources.map((source) => {
-                      const key = source.id || sourceRecordKey(source);
-                      return (
-                        <SourceReviewCard
-                          key={key}
-                          source={source}
-                          isExpanded={expandedSourceIds.includes(key)}
-                          onExpandedChange={(open) =>
-                            setSourceExpanded(key, open)
-                          }
-                          onReview={handleReview}
-                          onEdit={onEdit}
-                          topic={topic}
-                        />
-                      );
-                    })}
-                  </div>
+                    {secondarySources.slice(0, 5).map((source) => (
+                      <li
+                        key={source.id || sourceRecordKey(source)}
+                        className="rounded-md border border-border bg-background px-3 py-2"
+                      >
+                        <span className="font-medium text-foreground">
+                          {source.title || "標題待確認"}
+                        </span>
+                        <span className="ml-2">
+                          {source.sourceRelevanceReasonZhTw ||
+                            "與主題有延伸關聯，但不作為主要證據候選。"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
                 </CollapsibleContent>
               </div>
             </Collapsible>
@@ -2129,6 +2134,7 @@ function TopicStepPanel({
   expansions,
   advancedOpen,
   detectedCategory,
+  needsClarification,
   autoSearchEnabled,
   workspaceResume,
   researchDepthLabel,
@@ -2143,6 +2149,7 @@ function TopicStepPanel({
   expansions: TopicExpansionCard[];
   advancedOpen: boolean;
   detectedCategory: TopicCategory | null;
+  needsClarification: boolean;
   autoSearchEnabled: boolean;
   workspaceResume: WorkspaceResumeState | null;
   researchDepthLabel: string;
@@ -2155,6 +2162,7 @@ function TopicStepPanel({
 }) {
   const AUTO = "自動偵測";
   const hasTopic = Boolean(input.topic.trim());
+  const canContinueToSearch = hasTopic && !needsClarification;
 
   return (
     <section className="mx-auto max-w-3xl" data-testid="generator-topic-step">
@@ -2483,10 +2491,11 @@ function TopicStepPanel({
               type="button"
               size="lg"
               className="min-h-[46px]"
-              disabled={!hasTopic}
+              disabled={!canContinueToSearch}
               onClick={onNext}
             >
-              下一步：搜尋來源 <ArrowRight className="ml-2 h-4 w-4" />
+              {needsClarification ? "請先套用研究方向" : "下一步：搜尋來源"}
+              <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -2531,7 +2540,7 @@ function ManageStepPanel({
     : sourceQualityReadiness.primarySourceCount + sourceQualityReadiness.secondarySourceCount < 3
       ? "目前主要／延伸來源不足。請重新搜尋或調整主題，至少需要 3 筆可驗證來源。"
       : sourceQualityReadiness.lowQualityAcceptedCount > 0
-        ? "系統找到多筆延伸或低相關來源，但它們不足以支撐本研究主題。"
+        ? "目前接受的來源不足以支撐本研究主題，請重新審查來源或改寫題目。"
         : sourceQualityReadiness.warning;
 
   return (
@@ -2855,6 +2864,14 @@ function DeveloperDebugPanel({
             <p>查詢關鍵詞</p>
             <PreflightPills items={keywordDebug.queries.slice(0, 6)} />
           </div>
+          <div className="mt-2 space-y-1">
+            <p>來源漏斗</p>
+            <p>
+              raw {keywordDebug.retrievalStats.rawResults}，provider batches{" "}
+              {keywordDebug.retrievalStats.successfulProviderGroups} /{" "}
+              {keywordDebug.retrievalStats.providerGroups}
+            </p>
+          </div>
           {keywordDebug.warnings.length > 0 && (
             <div className="mt-2 space-y-1">
               <p>搜尋提醒</p>
@@ -3149,6 +3166,9 @@ export function Generator() {
     sourceWorkspaceFingerprint !== currentTopicFingerprint;
   const workflowVisibility = generatorWorkflowVisibility(developerDebugOpen);
   const reviewCounts = safeSourceReviewCounts(currentWorkflowSources);
+  const visiblePrimarySourceCount = visiblePrimarySourceRecords(
+    currentWorkflowSources,
+  ).length;
   const sourcePipelineStats: SourcePipelineStats | null = currentWorkflowSources.length
     ? {
         rawResults:
@@ -3394,31 +3414,35 @@ export function Generator() {
       setSourceQueryPlanHash(workflowLock.queryPlanHash);
       setKeywordSearchDebug(keywordSearchDebugFromResult(result));
       if (workflowSources.length) {
-        setSourceSearchStatus("done");
         const partialProviderFailure = hasProviderFailures(result);
         const primaryCount = workflowSources.filter(
           (source) =>
+            sourceDisplayGate(source) === "primary" &&
             source.relevanceLevel === "primary" &&
             source.shouldShowInMainList !== false,
         ).length;
-        const lowCount = workflowSources.filter(
-          (source) =>
-            source.relevanceLevel === "low" ||
-            source.relevanceLevel === "off_topic" ||
-            source.shouldShowInMainList === false,
-        ).length;
+        if (primaryCount === 0) {
+          setSourceSearchStatus("empty");
+          setSourceSearchMessage(
+            "目前沒有找到足夠相關來源，請改寫題目或選擇更具體研究方向",
+          );
+          toast({
+            title: partialProviderFailure ? "部分來源搜尋失敗" : "尚未找到可用來源",
+            description:
+              "目前沒有找到足夠相關來源，請改寫題目或選擇更具體研究方向",
+            variant: partialProviderFailure ? undefined : "destructive",
+          });
+          return;
+        }
+        setSourceSearchStatus("done");
         const searchSummaryMessage =
-          primaryCount > 0
-            ? `已找到 ${primaryCount} 筆主要候選來源，另有 ${lowCount} 筆低相關來源已折疊。`
-            : `目前沒有符合主題的主要來源；已找到 ${lowCount} 筆低相關來源，預設不建議採用。`;
+          `已找到 ${primaryCount} 筆主要候選來源，延伸與低相關結果不會進入一般來源列表。`;
         setSourceSearchMessage(searchSummaryMessage);
         toast({
           title: partialProviderFailure ? "部分來源搜尋失敗" : "已找到來源",
           description: partialProviderFailure
             ? `已顯示可用來源，部分資料來源暫時無法使用。${searchSummaryMessage}`
-            : primaryCount > 0
-              ? `高相關來源不足時不會用低相關來源湊數。${searchSummaryMessage}`
-              : searchSummaryMessage,
+            : searchSummaryMessage,
         });
         scheduleManageStepAfterSearch(workflowSources.length);
       } else {
@@ -3822,18 +3846,13 @@ export function Generator() {
                 <Badge variant={hasTopic ? "secondary" : "outline"}>
                   {hasTopic ? "主題已設定" : "等待主題"}
                 </Badge>
-                <Badge variant={currentWorkflowSources.length ? "secondary" : "outline"}>
-                  來源 {reviewCounts.all} 筆
+                <Badge variant={visiblePrimarySourceCount ? "secondary" : "outline"}>
+                  主要候選 {visiblePrimarySourceCount} 筆
                 </Badge>
                 <Badge variant={acceptedSources.length ? "default" : "outline"}>
                   已接受 {reviewCounts.accepted} 筆
                 </Badge>
                 <Badge variant="outline">{selectedDepthOption.label}</Badge>
-                {reviewCounts.rejected > 0 && (
-                  <Badge variant="outline">
-                    已拒絕 {reviewCounts.rejected} 筆
-                  </Badge>
-                )}
               </div>
             </div>
           </div>
@@ -3859,6 +3878,7 @@ export function Generator() {
               expansions={expansions}
               advancedOpen={advancedOpen}
               detectedCategory={detectedCategory}
+              needsClarification={Boolean(topicUnderstanding?.needsClarification)}
               autoSearchEnabled={autoSearchEnabled}
               workspaceResume={workspaceResume}
               researchDepthLabel={`${selectedDepthOption.label} / 建議 ${recommendedAcceptedSourceCount} 筆`}
