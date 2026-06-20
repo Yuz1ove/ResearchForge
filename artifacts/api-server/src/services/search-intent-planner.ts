@@ -1,4 +1,13 @@
-import { dedupeSourceRecords, type SourceRecord } from "@workspace/api-zod";
+import {
+  dedupeSourceRecords,
+  type SourceRecord,
+} from "@workspace/api-zod";
+import {
+  entitySearchTerms,
+  understandTopic,
+  type TopicClarificationCard,
+  type TopicUnderstandingResult,
+} from "@workspace/api-zod/topic-understanding";
 import { createHash, randomUUID } from "node:crypto";
 import {
   searchSourceProviders,
@@ -47,6 +56,7 @@ export interface SearchIntentPlan {
   topicType?: string;
   narrowedResearchQuestions?: ResearchReadyQuestion[];
   excludedDriftTerms?: string[];
+  topicUnderstanding?: TopicUnderstandingResult;
 }
 
 export interface SearchIntentQuerySet {
@@ -131,6 +141,8 @@ export interface SearchIntentSummary {
   mustHaveTerms: string[];
   plannerStatus: SearchIntentPlannerStatus;
   fallbackUsed: boolean;
+  topicKind?: string;
+  needsClarification?: boolean;
 }
 
 export interface SearchIntentSourceSearchResult {
@@ -1075,12 +1087,135 @@ function planReason(reason: string, extra?: string): string[] {
   ];
 }
 
+function researchQuestionFromClarificationCard(
+  card: TopicClarificationCard,
+  excludedDriftTerms: string[],
+): ResearchReadyQuestion {
+  const zhKeywords = unique(
+    card.zhQueries.flatMap((query) =>
+      query
+        .split(/[\s，,、：:；;。！？!?（）()]+/)
+        .map((term) => term.trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, 10);
+  const enKeywords = unique(
+    card.enQueries.flatMap((query) =>
+      query
+        .split(/[\s,;:()/-]+/)
+        .map((term) => term.trim())
+        .filter((term) => term.length >= 2),
+    ),
+  ).slice(0, 12);
+
+  return {
+    title: card.suggestedTopic,
+    researchAngle: card.description,
+    whyResearchable:
+      "此方向已補上研究對象與查詢詞，可用學術論文或可信機構資料交叉搜尋。",
+    suggestedSourceTypes: [
+      "academic_paper",
+      "systematic_review",
+      "official_or_research_institution",
+    ],
+    zhKeywords,
+    enKeywords,
+    primaryQueries: unique([...card.enQueries, ...card.zhQueries]).slice(0, 6),
+    secondaryQueries: unique([...card.zhQueries, ...card.enQueries]).slice(0, 6),
+    excludedDriftTerms,
+  };
+}
+
+function buildEntityAwareSearchIntent(
+  input: SearchIntentPlannerInput,
+  reason: string,
+  plannerStatus: SearchIntentPlannerStatus,
+): SearchIntentPlan | null {
+  const understanding = understandTopic(input.topic);
+  if (!understanding.entity) return null;
+
+  const entityTerms = entitySearchTerms(understanding.entity);
+  const clarificationQuestions = understanding.clarificationCards.map((card) =>
+    researchQuestionFromClarificationCard(card, understanding.excludedDriftTerms),
+  );
+  const zhQueries = unique([
+    ...understanding.clarificationCards.flatMap((card) => card.zhQueries),
+    ...clarificationQuestions.flatMap((question) => question.primaryQueries),
+  ]).slice(0, MAX_QUERY_COUNT);
+  const enQueries = unique([
+    ...understanding.clarificationCards.flatMap((card) => card.enQueries),
+    ...clarificationQuestions.flatMap((question) => question.secondaryQueries),
+  ]).slice(0, MAX_QUERY_COUNT);
+  const categoryConcepts: Record<string, string[]> = {
+    animal: ["animal model", "husbandry", "animal welfare", "behavior"],
+    food: ["nutrition", "food safety", "consumption", "food labeling"],
+    unknown: ["physics", "materials", "learning", "application"],
+  };
+
+  return {
+    normalizedTopic: understanding.normalizedTopic,
+    topicUnderstanding: understanding,
+    topicType:
+      understanding.topicKind === "specific_research_topic"
+        ? `${understanding.entity.category}_specific_entity_topic`
+        : `${understanding.entity.category}_entity_clarification`,
+    primaryConcepts: unique(entityTerms),
+    contextConcepts: unique([
+      ...(categoryConcepts[understanding.entity.category] ?? []),
+      ...clarificationQuestions.flatMap((question) => question.enKeywords.slice(0, 4)),
+      ...clarificationQuestions.flatMap((question) => question.zhKeywords.slice(0, 4)),
+    ]).slice(0, 14),
+    outcomeConcepts: unique(
+      clarificationQuestions.flatMap((question) => [
+        question.researchAngle,
+        ...question.zhKeywords.slice(0, 3),
+      ]),
+    ).slice(0, 12),
+    populationConcepts: [],
+    lowWeightTerms: ["research", "study", "文獻", "研究", "影響"],
+    mustHaveTerms: unique([
+      ...entityTerms,
+      ...(understanding.entity.scientificNames ?? []),
+    ]).slice(0, 18),
+    shouldHaveTerms: unique([
+      ...clarificationQuestions.flatMap((question) => question.enKeywords),
+      ...clarificationQuestions.flatMap((question) => question.zhKeywords),
+    ]).slice(0, 18),
+    penaltyTerms: understanding.excludedDriftTerms,
+    negativeTerms: understanding.excludedDriftTerms,
+    chineseQueries: zhQueries.length ? zhQueries : entityTerms.slice(0, 4),
+    englishQueries: enQueries.length ? enQueries : entityTerms.slice(0, 4),
+    narrowedResearchQuestions: clarificationQuestions,
+    excludedDriftTerms: understanding.excludedDriftTerms,
+    reasoningNotes: planReason(
+      reason,
+      `Topic understanding classified "${input.topic}" as ${understanding.topicKind}; entity aliases and English/scientific names were used before search.`,
+    ),
+    plannerStatus,
+    fallbackUsed: true,
+  };
+}
+
 export function buildRuleBasedSearchIntent(
   input: SearchIntentPlannerInput,
   reason = "LLM planner unavailable; deterministic search intent fallback used.",
   plannerStatus: SearchIntentPlannerStatus = "rule_fallback",
 ): SearchIntentPlan {
   const normalizedTopic = input.topic.trim();
+  const understanding = understandTopic(normalizedTopic);
+
+  if (
+    understanding.entity &&
+    (understanding.entity.category === "animal" ||
+      understanding.entity.category === "unknown" ||
+      understanding.topicKind === "specific_research_topic") &&
+    !isDumplingTopic(input) &&
+    !isFrenchFriesTopic(input) &&
+    !isColaHealthTopic(input)
+  ) {
+    const entityPlan = buildEntityAwareSearchIntent(input, reason, plannerStatus);
+    if (entityPlan) return entityPlan;
+  }
 
   if (isUrbanHeatIslandTopic(input)) {
     return {
@@ -2160,7 +2295,10 @@ function escapeRegExp(value: string): string {
 function textContains(text: string, term: string): boolean {
   const cleanedTerm = normalizeText(term);
   if (!cleanedTerm) return false;
-  const normalizedText = normalizeText(text);
+  let normalizedText = normalizeText(text);
+  if (cleanedTerm === "天竺") {
+    normalizedText = normalizedText.replace(/天竺鼠/g, "");
+  }
   if (/^[a-z0-9][a-z0-9\s-]*$/i.test(cleanedTerm)) {
     const pattern = escapeRegExp(cleanedTerm).replace(/\s+/g, "\\s+");
     return new RegExp(`(^|[^a-z0-9])${pattern}($|[^a-z0-9])`, "i").test(
@@ -2904,6 +3042,8 @@ function searchIntentSummary(plan: SearchIntentPlan): SearchIntentSummary {
     mustHaveTerms: plan.mustHaveTerms,
     plannerStatus: plan.plannerStatus,
     fallbackUsed: plan.fallbackUsed,
+    topicKind: plan.topicUnderstanding?.topicKind,
+    needsClarification: plan.topicUnderstanding?.needsClarification,
   };
 }
 
@@ -3022,7 +3162,11 @@ export async function searchIntentSources(
   input: SearchIntentPlannerInput,
   options?: SearchIntentSourceSearchOptions,
 ): Promise<SearchIntentSourceSearchResult> {
-  const plan = await planSearchIntent(input, options);
+  let plan = await planSearchIntent(input, options);
+  const topicUnderstanding = plan.topicUnderstanding ?? understandTopic(input.topic);
+  if (!plan.topicUnderstanding) {
+    plan = { ...plan, topicUnderstanding };
+  }
   const querySet = buildSearchIntentQueries(plan);
   const workflowId = randomUUID();
   const topicHash = topicHashForSearch(plan.normalizedTopic);
@@ -3039,6 +3183,66 @@ export async function searchIntentSources(
     (Number(process.env.SEARCH_INTENT_QUERY_LIMIT) ||
       DEFAULT_SEARCH_INTENT_QUERY_LIMIT);
   const queries = orderedQueries(querySet, queryLimit);
+  const plannerLlmStatus = llmStatusFromPlannerStatus(plan);
+
+  if (topicUnderstanding.needsClarification) {
+    const searchTrace: SearchTrace = {
+      workflowId,
+      topic: input.topic.trim(),
+      normalizedTopic: plan.normalizedTopic,
+      topicHash,
+      queryPlanHash,
+      providerQueries: [],
+      candidateCount: 0,
+      dedupedCount: 0,
+      acceptedCount: 0,
+      rejectedCount: 0,
+      sourceDecisions: [],
+    };
+    const warnings = unique([
+      "此主題需要先選擇具體研究方向，暫不直接搜尋來源。",
+      ...(plan.fallbackUsed
+        ? ["LLM 搜尋意圖規劃不可用，已使用 deterministic fallback。"]
+        : []),
+    ]);
+
+    return {
+      ok: true,
+      topic: plan.normalizedTopic,
+      workflowId,
+      topicHash,
+      queryPlanHash,
+      searchIntent: searchIntentSummary(plan),
+      queries: querySet,
+      results: [],
+      sources: [],
+      provider_status: [],
+      warnings,
+      planner: plan,
+      relevance_debug: [],
+      searchTrace,
+      llm_status: plannerLlmStatus,
+      keyword_expansion: {
+        normalized_topic: plan.normalizedTopic,
+        domains: domainsFromPlan(plan),
+        search_queries: queries,
+        english_queries: plan.englishQueries,
+        chinese_queries: plan.chineseQueries,
+        preferred_source_types: preferredSourceTypes(plan),
+        avoid_source_types: [
+          "uncited_blog",
+          "marketing_article",
+          "content_farm",
+          "ai_generated_article_without_sources",
+        ],
+        reasoning_notes: plan.reasoningNotes,
+        fallback_used: plan.fallbackUsed,
+        llm_status: plannerLlmStatus,
+      },
+      groups: [],
+    };
+  }
+
   const groups = (
     await Promise.all(
       queries.map((query) =>
@@ -3073,7 +3277,6 @@ export async function searchIntentSources(
     (source) =>
       source.relevanceLevel === "low" || source.relevanceLevel === "off_topic",
   ).length;
-  const plannerLlmStatus = llmStatusFromPlannerStatus(plan);
   const rejectedCount = sources.filter(
     (source) =>
       source.reviewState === "rejected" ||

@@ -118,3 +118,51 @@ LLM 狀態：
 - 若要再往前，優先處理 LLM JSON 穩定性，不要先擴 UI。
 - 若來源品質又出現過度拒絕，先調整 relevance gate / penalty，而不是重寫 planner。
 - 若需要更廣 smoke，可再補一題偏 marine / ecological 但非 microplastics 的題目，驗證規則不會過度外溢。
+
+## 2026-06-20 Entity Understanding 緊急修正
+
+本輪修正短詞與陌生詞在 Research Planner 前被套用泛模板的問題。新增共用 topic grounding 層，先判斷主題是否是已知實體、生活泛詞、明確研究題或噪音，再決定是否可進入搜尋。
+
+完成內容：
+
+- 新增 `lib/api-zod/src/topic-understanding.ts`，提供 `TopicUnderstandingResult`、entity lexicon、`understandTopic(...)` 與 `entitySearchTerms(...)`。
+- Entity lexicon 先覆蓋 `天竺鼠`、`薯條`、`泡泡`、`水餃`、`可樂`。
+- `天竺鼠` 會被解析為 `天竺鼠 / 豚鼠 / 荷蘭豬 / guinea pig / Cavia porcellus`，並避開 `天竺`、`印度史`、`玄奘`、`佛教` 等語義漂移詞。
+- `薯條` 會產生營養標示、食品安全、飲食行為、環境負荷等方向，不直接用短詞搜尋。
+- `泡泡` 會產生表面張力、光學干涉、幼兒感官學習、材料應用等方向，不直接用短詞搜尋。
+- 前端 `expandTopicCards(...)` 先使用 topic grounding 的 clarification cards，不再回落到 `研究問題 / 生活連結 / 比較 / 資料策略 / 研究限制` 泛模板。
+- `/generator` 的 `下一步：搜尋來源` 會檢查 `needsClarification`；裸詞如 `天竺鼠`、`薯條`、`泡泡` 會停在步驟 1，提示使用者先套用研究方向卡。
+- 套用研究方向卡後，topic 會更新成完整研究題，例如 `天竺鼠作為實驗動物在醫學研究中的應用`，再允許進入步驟 2 搜尋。
+- 後端 `searchIntentSources(...)` 也加入同一層 gate：若 topic 仍需釐清，會回傳空來源與 warning，不打 provider，避免把低相關來源塞進後續 ranking。
+- 明確研究題仍可正常搜尋，例如 `天竺鼠作為實驗動物在醫學研究中的應用` 會帶入 `guinea pig` 與 `Cavia porcellus` 相關 query。
+
+驗證結果：
+
+- `CI=true pnpm --filter @workspace/api-server run test`
+- `CI=true pnpm --filter @workspace/report-factory run test`
+- `pnpm run typecheck`
+- `CI=true pnpm run build`
+
+API smoke：
+
+- `天竺鼠`：`topicKind=known_entity`、`needsClarification=true`、來源數 0、warning 為需先選擇具體研究方向。
+- `薯條`：`topicKind=known_entity`、`needsClarification=true`、來源數 0，query plan 含 `french fries` / `acrylamide` / nutrition 等方向。
+- `泡泡`：`topicKind=known_entity`、`needsClarification=true`、來源數 0，query plan 含 `surface tension` / `soap bubble` / `microbubble`。
+- `天竺鼠作為實驗動物在醫學研究中的應用`：`topicKind=specific_research_topic`、`needsClarification=false`，可進入來源搜尋，候選包含 guinea pig / biomedical model 相關來源。
+- `都市熱島效應對台灣城市生活的影響`：仍可正常進入搜尋，確認既有明確研究題流程未被 entity gate 擋住。
+
+Browser smoke：
+
+- 注意：`http://127.0.0.1:22067/generator` 當時是另一份 `/Users/Yuz1ove/ResearchForge-main` checkout 的 Vite server，不是本輪修改的 checkout。
+- 使用本 repo 的 fresh Vite server：`PORT=22068 pnpm --filter @workspace/report-factory dev`。
+- 在 `http://127.0.0.1:22068/generator` 驗證：
+  - `天竺鼠` 顯示 `實驗動物 / 飼養健康 / 動物行為` cards，含 `guinea pig` 與 `Cavia porcellus`，點下一步仍停在步驟 1。
+  - `薯條` 顯示營養、食品安全、青少年飲食、環境負荷方向，未出現舊模板詞，點下一步仍停在步驟 1。
+  - `泡泡` 顯示表面張力、光學干涉、幼兒感官學習、氣泡材料方向，未出現舊模板詞，點下一步仍停在步驟 1。
+  - 套用 `天竺鼠` 第一張卡後，topic 變成 `天竺鼠作為實驗動物在醫學研究中的應用`，可進入步驟 2。
+  - 直接輸入完整題目 `天竺鼠作為實驗動物在醫學研究中的應用` 或 `都市熱島效應對台灣城市生活的影響`，可進入步驟 2。
+
+下一步建議：
+
+- 若要再強化，優先把 `TopicUnderstandingResult` 回傳到前端 debug panel，讓人工驗收可直接看到 `topicKind`、`needsClarification`、entity aliases 與 generated queries。
+- 之後再擴 lexicon 時，應先補測試，再補 entity card，不要把 rule fallback 重新變成模板生成器。

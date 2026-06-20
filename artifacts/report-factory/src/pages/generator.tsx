@@ -26,6 +26,7 @@ import {
   searchSources,
   type SourceSearchResult,
 } from "@workspace/api-client-react";
+import { understandTopic } from "@workspace/api-zod/topic-understanding";
 import {
   expandTopicCards,
   isShortTopic,
@@ -3108,6 +3109,10 @@ export function Generator() {
         : null,
     [hasTopic, input.reportType, input.topic],
   );
+  const topicUnderstanding = useMemo(
+    () => (hasTopic ? understandTopic(input.topic.trim()) : null),
+    [hasTopic, input.topic],
+  );
   const detectedCategory: TopicCategory | null = input.topic.trim()
     ? detectTopicCategory(input.topic.trim(), input.reportType, derivedPurpose)
     : null;
@@ -3691,6 +3696,12 @@ export function Generator() {
     });
   };
 
+  const ensureClarificationCards = () => {
+    setExpansions(
+      expandTopicCards(input.topic.trim(), detectedCategory ?? undefined),
+    );
+  };
+
   // ── Clear ────────────────────────────────────────────────────────────────────
 
   const handleClear = () => {
@@ -3732,6 +3743,16 @@ export function Generator() {
         title: "請先輸入主題",
         description: "設定主題後才能進入來源搜尋。",
         variant: "destructive",
+      });
+      return;
+    }
+    if (topicUnderstanding?.needsClarification) {
+      ensureClarificationCards();
+      setActiveStep("topic");
+      toast({
+        title: "請先選擇研究方向",
+        description:
+          "這個主題需要先收斂成具體研究問題，套用一張研究方向卡後再搜尋來源。",
       });
       return;
     }
@@ -3821,7 +3842,7 @@ export function Generator() {
             <div className="mx-auto flex max-w-3xl gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               <Lightbulb className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
-                你的主題較簡短。若要提高報告品質，建議補充研究方向、老師要求、資料來源或個人觀點，或先使用「擴寫主題」。
+                這個主題需要先收斂成具體研究方向。請先使用「擴寫主題」或套用一張研究方向卡，再進入來源搜尋。
               </span>
             </div>
           )}

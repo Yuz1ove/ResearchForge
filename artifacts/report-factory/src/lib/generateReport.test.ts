@@ -4,7 +4,7 @@ import { expandTopicCards } from "./generateReport.ts";
 
 const TEMPLATE_PHRASES = ["背景與重要性", "現況分析", "主要面向"];
 const OLD_TEMPLATE_TERMS = ["academic research", "evidence", "source"];
-const GENERIC_LABELS = ["生活連結", "比較", "行銷", "環境", "資料策略"];
+const GENERIC_LABELS = ["生活連結", "資料策略", "研究限制"];
 
 function joinedCards(topic: string): string {
   return expandTopicCards(topic)
@@ -112,4 +112,24 @@ test("expands french fries topics into nutrition, food safety, dietary, and envi
   for (const label of GENERIC_LABELS) {
     assert.notEqual(cards.some((card) => card.title === label), true);
   }
+});
+
+test("expands guinea pig entity into animal-aware clarification cards", () => {
+  const cards = expandTopicCards("天竺鼠");
+  const text = joinedCards("天竺鼠");
+
+  assert.equal(cards.length >= 3, true);
+  assert.match(text, /實驗動物|飼養環境|社會行為|動物福利/);
+  assert.match(text, /guinea pig|Cavia porcellus/i);
+  assert.ok(!/生活連結|資料策略|研究限制/.test(text));
+});
+
+test("expands bubble broad noun into concrete physics, learning, and material directions", () => {
+  const cards = expandTopicCards("泡泡");
+  const text = joinedCards("泡泡");
+
+  assert.equal(cards.length >= 4, true);
+  assert.match(text, /表面張力|光學干涉|幼兒感官學習|氣泡材料/);
+  assert.match(text, /surface tension|soap bubble|microbubble/i);
+  assert.ok(!/生活連結|資料策略|研究限制/.test(text));
 });

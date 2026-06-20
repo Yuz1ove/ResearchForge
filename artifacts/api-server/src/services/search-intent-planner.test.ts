@@ -8,6 +8,7 @@ import {
   rerankSourcesBySearchIntent,
   searchIntentSources,
 } from "./search-intent-planner";
+import { understandTopic } from "@workspace/api-zod/topic-understanding";
 
 const shortVideoTopic = "短影音使用對高中生注意力與睡眠品質之影響";
 const urbanHeatTopic = "都市熱島效應對校園環境與學生學習舒適度之影響";
@@ -15,6 +16,8 @@ const dumplingTopic = "水餃";
 const friesTopic = "薯條";
 const colaPlainTopic = "可樂";
 const colaHealthTopic = "可樂中的成分與攝取習慣對健康的影響";
+const guineaPigTopic = "天竺鼠";
+const guineaPigBiomedicalTopic = "天竺鼠作為實驗動物在醫學研究中的應用";
 const llmWritingTopic = "大型語言模型對英文寫作學習的影響";
 const climateCausesTopic = "「氣候變遷」的成因與現況分析";
 const marineMicroplasticsTopic = "塑膠微粒對海洋生態的影響";
@@ -63,6 +66,27 @@ test("rule fallback returns digital media, sleep, and attention concepts for sho
   assert.ok(plan.chineseQueries.some((query) => query.includes("短影音")));
   assert.equal(plan.plannerStatus, "rule_fallback");
   assert.equal(plan.fallbackUsed, true);
+});
+
+test("topic understanding classifies guinea pig, fries, and bubble before search planning", () => {
+  const guineaPig = understandTopic(guineaPigTopic);
+  const fries = understandTopic(friesTopic);
+  const bubble = understandTopic("泡泡");
+
+  assert.equal(guineaPig.topicKind, "known_entity");
+  assert.equal(guineaPig.needsClarification, true);
+  assert.ok(guineaPig.entity?.englishNames.includes("guinea pig"));
+  assert.ok(guineaPig.entity?.scientificNames?.includes("Cavia porcellus"));
+  assert.match(JSON.stringify(guineaPig), /實驗動物|飼養健康|動物行為/);
+
+  assert.equal(fries.entity?.category, "food");
+  assert.equal(fries.needsClarification, true);
+  assert.match(JSON.stringify(fries), /食品安全|營養標示|飲食行為/);
+  assert.match(JSON.stringify(fries), /french fries|acrylamide/);
+
+  assert.equal(bubble.needsClarification, true);
+  assert.match(JSON.stringify(bubble), /表面張力|光學干涉|幼兒學習|材料應用/);
+  assert.match(JSON.stringify(bubble), /surface tension|soap bubble/);
 });
 
 test("rule fallback keeps cola health core concepts ahead of generic education terms", () => {
@@ -271,6 +295,58 @@ test("rule fallback turns plain cola into concrete research queries", () => {
   assert.match(text, /cola|soft drink|sugar intake|diet cola/i);
   assert.match(text, /青少年健康|成分比較|包裝|廣告/);
   assert.ok(!/\bcoal\b|coke fuel/i.test(queries.english.join(" ")));
+});
+
+test("rule fallback understands bare guinea pig as known entity requiring clarification", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: guineaPigTopic,
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const text = [
+    plan.normalizedTopic,
+    ...plan.primaryConcepts,
+    ...plan.mustHaveTerms,
+    ...plan.englishQueries,
+    ...(plan.narrowedResearchQuestions ?? []).flatMap((question) => [
+      question.title,
+      question.zhKeywords.join(" "),
+      question.enKeywords.join(" "),
+      question.primaryQueries.join(" "),
+    ]),
+  ].join(" ");
+
+  assert.equal(plan.topicUnderstanding?.topicKind, "known_entity");
+  assert.equal(plan.topicUnderstanding?.needsClarification, true);
+  assert.match(text, /guinea pig|Cavia porcellus/i);
+  assert.match(text, /實驗動物|飼養環境|社會行為/);
+  assert.ok(plan.excludedDriftTerms?.includes("India"));
+  assert.ok(plan.excludedDriftTerms?.includes("Buddhism"));
+});
+
+test("rule fallback lets specific guinea pig topics search with English and scientific names", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: guineaPigBiomedicalTopic,
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = [
+    ...queries.highPrecision,
+    ...queries.english,
+    ...queries.chinese,
+    ...queries.broad,
+  ].join(" ");
+
+  assert.equal(plan.topicUnderstanding?.topicKind, "specific_research_topic");
+  assert.equal(plan.topicUnderstanding?.needsClarification, false);
+  assert.match(queryText, /guinea pig|Cavia porcellus/i);
+  assert.ok(plan.mustHaveTerms.includes("guinea pig"));
+  assert.ok(plan.mustHaveTerms.includes("Cavia porcellus"));
+  assert.ok(plan.penaltyTerms.includes("India"));
+  assert.ok(!/Tang dynasty|Buddhism/.test(queryText));
 });
 
 test("rule fallback keeps climate change cause concepts in every main query family", () => {
@@ -1094,5 +1170,61 @@ test("source intent search returns planner output and provider failures without 
   assert.ok(result.sources.every((source) => source.workflowId === result.workflowId));
   assert.ok(
     result.warnings.some((warning) => warning.includes("部分來源提供者")),
+  );
+});
+
+test("source intent search does not hit providers when topic needs clarification", async () => {
+  let providerCalled = false;
+  const result = await searchIntentSources(
+    {
+      topic: guineaPigTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    {
+      llm: { apiKey: "" },
+      queryLimit: 2,
+      sourceSearch: {
+        providerConfigs: {
+          OpenAlex: {
+            provider: "OpenAlex",
+            endpoint: "https://example.test/openalex/works",
+            timeoutMs: 50,
+            queryLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+          Crossref: {
+            provider: "Crossref",
+            endpoint: "https://example.test/works",
+            timeoutMs: 50,
+            queryLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+          "Semantic Scholar": {
+            provider: "Semantic Scholar",
+            endpoint: "https://example.test/paper/search",
+            timeoutMs: 50,
+            queryLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+        },
+        fetchImpl: async () => {
+          providerCalled = true;
+          return new Response(JSON.stringify({ results: [] }));
+        },
+      },
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(providerCalled, false);
+  assert.equal(result.searchIntent.needsClarification, true);
+  assert.equal(result.sources.length, 0);
+  assert.equal(result.provider_status.length, 0);
+  assert.ok(result.planner.narrowedResearchQuestions?.length);
+  assert.match(JSON.stringify(result.planner), /guinea pig|Cavia porcellus/i);
+  assert.ok(
+    result.warnings.some((warning) => warning.includes("需要先選擇具體研究方向")),
   );
 });

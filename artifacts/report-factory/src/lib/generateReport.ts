@@ -18,6 +18,11 @@ import {
   type BibliographyEntry,
   type SourceRecord,
 } from "./sourceRecords.ts";
+import {
+  entitySearchTerms,
+  understandTopic,
+  type TopicClarificationCard,
+} from "@workspace/api-zod/topic-understanding";
 
 // ─── Form option lists (single source of truth, imported by the UI) ──────────
 
@@ -273,6 +278,46 @@ export interface TopicExpansionCard {
   excludedTerms?: string[];
 }
 
+function cardFromClarification(
+  card: TopicClarificationCard,
+  originalTopic: string,
+): TopicExpansionCard {
+  const zhKeywords = normalizeTerms([
+    ...card.zhQueries.flatMap((query) =>
+      query.split(/[\s，,、：:；;。！？!?（）()]+/),
+    ),
+    originalTopic,
+  ]).slice(0, 8);
+  const enKeywords = normalizeTerms([
+    ...card.enQueries.flatMap((query) =>
+      query.split(/[\s,;:()/-]+/),
+    ),
+  ]).slice(0, 8);
+
+  return {
+    title: card.suggestedTopic,
+    angle: card.label,
+    reason: card.description,
+    researchValue: card.description,
+    dataDirections: [
+      "學術論文",
+      "可信機構資料",
+      "摘要可驗證來源",
+      "中英文關鍵詞交叉搜尋",
+    ],
+    chineseKeywords: zhKeywords,
+    englishKeywords: enKeywords,
+    suggestedQuery: normalizeTerms([
+      card.suggestedTopic,
+      ...card.zhQueries,
+      ...card.enQueries,
+    ])
+      .slice(0, 6)
+      .join(" "),
+    searchBoundary: "先沿著這個具體研究方向搜尋，不要只用原始短詞直接找來源。",
+  };
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function chars(s: string): number {
@@ -499,7 +544,11 @@ const BROAD_TOPICS = ["鵝", "ai", "咖啡", "手機", "社工", "長照", "台�
 export function isShortTopic(topic: string): boolean {
   const t = topic.trim();
   if (!t) return false;
-  return chars(t) <= 4 || BROAD_TOPICS.includes(t.toLowerCase());
+  const understanding = understandTopic(t);
+  return (
+    understanding.needsClarification ||
+    BROAD_TOPICS.includes(t.toLowerCase())
+  );
 }
 
 type TopicExpansionKind =
@@ -985,6 +1034,14 @@ function cultureExpansionCards(topic: string): TopicExpansionCard[] {
 
 export function expandTopicCards(topic: string, category?: TopicCategory): TopicExpansionCard[] {
   const t = topic.trim() || "主題";
+  const understanding = understandTopic(t);
+
+  if (understanding.clarificationCards.length > 0) {
+    return understanding.clarificationCards.map((card) =>
+      cardFromClarification(card, t),
+    );
+  }
+
   switch (topicExpansionKind(t, category ?? detectTopicCategory(t, "", ""))) {
     case "nature":
       return natureExpansionCards(t);
@@ -1031,12 +1088,61 @@ export function expandTopicCards(topic: string, category?: TopicCategory): Topic
         expansionCard(`從《${t}》延伸出的行動或提問`, "延伸", "可連結課程、社會議題或後續閱讀。"),
       ];
     default:
+      if (understanding.entity) {
+        const searchTerms = entitySearchTerms(understanding.entity);
+        return [
+          plannerCard(
+            `${t}的核心研究方向整理`,
+            "研究方向",
+            "先把主題縮成可搜尋、可蒐證的問題，再開始找來源。",
+            {
+              researchValue:
+                "主題目前仍偏寬，建議先選一個具體研究面向再進入來源搜尋。",
+              dataDirections: [
+                "學術論文",
+                "官方或機構資料",
+                "中英文對照關鍵詞",
+                "摘要可驗證研究",
+              ],
+              chineseKeywords: normalizeTerms([
+                t,
+                understanding.entity.canonicalName,
+                ...understanding.entity.aliases,
+              ]).slice(0, 6),
+              englishKeywords: normalizeTerms(searchTerms).slice(0, 6),
+              suggestedQuery: normalizeTerms(searchTerms).slice(0, 5).join(" "),
+              searchBoundary:
+                "避免只用原始短詞搜尋；請先補上研究方向、研究對象或研究變項。",
+              excludedTerms: understanding.excludedDriftTerms,
+            },
+          ),
+        ];
+      }
+
       return [
-        expansionCard(`「${t}」可以從哪些具體問題切入`, "研究問題", "先把大題目縮成可搜尋、可回答的問題。"),
-        expansionCard(`「${t}」與日常生活或課程內容的關聯`, "生活連結", "可找出讀者容易理解的情境。"),
-        expansionCard(`「${t}」有哪些可比較的不同觀點`, "比較", "適合整理支持、反對或不同族群看法。"),
-        expansionCard(`「${t}」可用哪些資料類型佐證`, "資料策略", "可規劃官方資料、學術文章、新聞或案例。"),
-        expansionCard(`「${t}」的限制與下一步研究方向`, "研究限制", "可先標示缺口，避免過度推論。"),
+        plannerCard(
+          `${t}的具體研究方向建議`,
+          "研究方向",
+          "先補上研究面向，再開始搜尋，避免主題過寬導致來源漂移。",
+          {
+            researchValue:
+              "主題目前仍偏寬，建議收斂到變因、對象、應用或影響面向。",
+            dataDirections: [
+              "研究面向",
+              "研究對象",
+              "可搜尋中英文關鍵詞",
+              "官方或學術來源",
+            ],
+            chineseKeywords: normalizeTerms([t, "研究方向", "研究問題", "具體面向"]),
+            englishKeywords: ["research direction", "research question", "searchable topic"],
+            suggestedQuery: buildSuggestedQuery(t, ["研究方向", "研究問題"], [
+              "research direction",
+              "research question",
+            ]),
+            searchBoundary:
+              "不要直接用過寬短詞搜尋；請先選定具體問題後再進入來源搜尋。",
+          },
+        ),
       ];
   }
 }
