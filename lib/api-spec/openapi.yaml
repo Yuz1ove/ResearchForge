@@ -164,7 +164,9 @@ components:
           type: string
           enum:
             - Crossref
+            - OpenAlex
             - Semantic Scholar
+            - Web
         reviewState:
           $ref: "#/components/schemas/SourceReviewState"
         publisher:
@@ -236,6 +238,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SearchRelevanceDebug"
+        diagnostics:
+          $ref: "#/components/schemas/SourceSearchDiagnostics"
       required:
         - sources
     KeywordExpansionResult:
@@ -408,6 +412,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/KeywordSourceGroup"
+        diagnostics:
+          $ref: "#/components/schemas/SourceSearchDiagnostics"
       required:
         - ok
         - topic
@@ -546,7 +552,9 @@ components:
           type: string
           enum:
             - Crossref
+            - OpenAlex
             - Semantic Scholar
+            - Web
         query:
           type: string
         results:
@@ -566,6 +574,86 @@ components:
         - results
         - error_type
         - error_message
+    SourceSearchDiagnostics:
+      type: object
+      properties:
+        resultCount:
+          type: integer
+        resultTarget:
+          type: integer
+        queryCount:
+          type: integer
+        providerCount:
+          type: integer
+        fallbackUsed:
+          type: boolean
+        status:
+          type: string
+          enum:
+            - success
+            - partial
+            - empty
+            - failed
+        providerFailures:
+          type: array
+          items:
+            type: object
+            properties:
+              provider:
+                type: string
+                enum:
+                  - Crossref
+                  - OpenAlex
+                  - Semantic Scholar
+                  - Web
+              query:
+                type: string
+              error_type:
+                type: string
+              error_message:
+                type: string
+            required:
+              - provider
+              - query
+              - error_type
+              - error_message
+        providerResultCounts:
+          type: array
+          items:
+            type: object
+            properties:
+              provider:
+                type: string
+                enum:
+                  - Crossref
+                  - OpenAlex
+                  - Semantic Scholar
+                  - Web
+              query:
+                type: string
+              resultCount:
+                type: integer
+              ok:
+                type: boolean
+            required:
+              - provider
+              - query
+              - resultCount
+              - ok
+        warnings:
+          type: array
+          items:
+            type: string
+      required:
+        - resultCount
+        - resultTarget
+        - queryCount
+        - providerCount
+        - fallbackUsed
+        - status
+        - providerFailures
+        - providerResultCounts
+        - warnings
     KeywordSourceSearchResult:
       type: object
       properties:

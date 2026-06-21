@@ -168,7 +168,7 @@ test("returns structured provider timeout instead of throwing", async () => {
 
 test("returns deduped partial results when one provider succeeds and another fails", async () => {
   const configs = getSourceProviderConfigs();
-  const sources = await searchSources("student sleep quality", {
+  const result = await searchSources("student sleep quality", {
     providerConfigs: {
       Crossref: {
         ...configs.Crossref,
@@ -205,7 +205,9 @@ test("returns deduped partial results when one provider succeeds and another fai
     },
   });
 
-  assert.equal(sources.length, 1);
-  assert.equal(sources[0]?.sourceType, "Crossref");
-  assert.equal(sources[0]?.doi, "10.4000/student-sleep");
+  assert.equal(result.sources.length, 1);
+  assert.equal(result.sources[0]?.sourceType, "Crossref");
+  assert.equal(result.sources[0]?.doi, "10.4000/student-sleep");
+  assert.equal(result.diagnostics.resultTarget, 20);
+  assert.ok(result.diagnostics.warnings.some((warning) => warning.includes("目前取得")));
 });

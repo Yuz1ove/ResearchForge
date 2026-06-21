@@ -11,5 +11,7 @@ export type KeywordSourceGroupProvider = typeof KeywordSourceGroupProvider[keyof
 
 export const KeywordSourceGroupProvider = {
   Crossref: 'Crossref',
+  OpenAlex: 'OpenAlex',
   Semantic_Scholar: 'Semantic Scholar',
+  Web: 'Web',
 } as const;

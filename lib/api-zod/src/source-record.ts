@@ -1,4 +1,4 @@
-export const SOURCE_PROVIDERS = ["Crossref", "Semantic Scholar"] as const;
+export const SOURCE_PROVIDERS = ["Crossref", "OpenAlex", "Semantic Scholar", "Web"] as const;
 export type SourceProvider = (typeof SOURCE_PROVIDERS)[number];
 
 export const SOURCE_REVIEW_STATES = ["pending", "accepted", "rejected"] as const;

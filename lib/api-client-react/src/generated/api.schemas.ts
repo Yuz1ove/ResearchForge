@@ -46,7 +46,9 @@ export type SourceRecordSourceType = typeof SourceRecordSourceType[keyof typeof 
 
 export const SourceRecordSourceType = {
   Crossref: 'Crossref',
+  OpenAlex: 'OpenAlex',
   Semantic_Scholar: 'Semantic Scholar',
+  Web: 'Web',
 } as const;
 
 export interface SourceRecord {
@@ -108,7 +110,9 @@ export type KeywordSourceGroupProvider = typeof KeywordSourceGroupProvider[keyof
 
 export const KeywordSourceGroupProvider = {
   Crossref: 'Crossref',
+  OpenAlex: 'OpenAlex',
   Semantic_Scholar: 'Semantic Scholar',
+  Web: 'Web',
 } as const;
 
 export interface KeywordSourceGroup {
@@ -183,6 +187,62 @@ export interface SearchRelevanceDebug {
   penalties: string[];
 }
 
+export type SourceSearchDiagnosticsStatus = typeof SourceSearchDiagnosticsStatus[keyof typeof SourceSearchDiagnosticsStatus];
+
+
+export const SourceSearchDiagnosticsStatus = {
+  success: 'success',
+  partial: 'partial',
+  empty: 'empty',
+  failed: 'failed',
+} as const;
+
+export type SourceSearchDiagnosticsProviderFailuresItemProvider = typeof SourceSearchDiagnosticsProviderFailuresItemProvider[keyof typeof SourceSearchDiagnosticsProviderFailuresItemProvider];
+
+
+export const SourceSearchDiagnosticsProviderFailuresItemProvider = {
+  Crossref: 'Crossref',
+  OpenAlex: 'OpenAlex',
+  Semantic_Scholar: 'Semantic Scholar',
+  Web: 'Web',
+} as const;
+
+export type SourceSearchDiagnosticsProviderResultCountsItemProvider = typeof SourceSearchDiagnosticsProviderResultCountsItemProvider[keyof typeof SourceSearchDiagnosticsProviderResultCountsItemProvider];
+
+
+export const SourceSearchDiagnosticsProviderResultCountsItemProvider = {
+  Crossref: 'Crossref',
+  OpenAlex: 'OpenAlex',
+  Semantic_Scholar: 'Semantic Scholar',
+  Web: 'Web',
+} as const;
+
+export type SourceSearchDiagnosticsProviderFailuresItem = {
+  provider: SourceSearchDiagnosticsProviderFailuresItemProvider;
+  query: string;
+  error_type: string;
+  error_message: string;
+};
+
+export type SourceSearchDiagnosticsProviderResultCountsItem = {
+  provider: SourceSearchDiagnosticsProviderResultCountsItemProvider;
+  query: string;
+  resultCount: number;
+  ok: boolean;
+};
+
+export interface SourceSearchDiagnostics {
+  resultCount: number;
+  resultTarget: number;
+  queryCount: number;
+  providerCount: number;
+  fallbackUsed: boolean;
+  status: SourceSearchDiagnosticsStatus;
+  providerFailures: SourceSearchDiagnosticsProviderFailuresItem[];
+  providerResultCounts: SourceSearchDiagnosticsProviderResultCountsItem[];
+  warnings: string[];
+}
+
 export interface SourceSearchResult {
   ok?: boolean;
   topic?: string;
@@ -197,6 +257,7 @@ export interface SourceSearchResult {
   sources: SourceRecord[];
   planner?: SearchIntentPlan;
   relevance_debug?: SearchRelevanceDebug[];
+  diagnostics?: SourceSearchDiagnostics;
 }
 
 export type SearchIntentSourceSearchResultLlmStatus = typeof SearchIntentSourceSearchResultLlmStatus[keyof typeof SearchIntentSourceSearchResultLlmStatus];
@@ -224,6 +285,7 @@ export interface SearchIntentSourceSearchResult {
   llm_status: SearchIntentSourceSearchResultLlmStatus;
   keyword_expansion: KeywordExpansionResult;
   groups: KeywordSourceGroup[];
+  diagnostics?: SourceSearchDiagnostics;
 }
 
 export type KeywordSourceSearchResultLlmStatus = typeof KeywordSourceSearchResultLlmStatus[keyof typeof KeywordSourceSearchResultLlmStatus];
@@ -248,3 +310,4 @@ export interface KeywordSourceSearchResult {
 export interface ErrorResponse {
   message: string;
 }
+

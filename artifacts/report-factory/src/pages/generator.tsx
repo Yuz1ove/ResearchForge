@@ -353,9 +353,29 @@ function sourceErrorMessage(error: unknown): string {
         return message;
       }
     }
+    if (data && typeof data === "object" && "diagnostics" in data) {
+      const diagnostics = (data as { diagnostics?: { warnings?: string[]; resultCount?: number; resultTarget?: number } }).diagnostics;
+      const warnings = diagnostics?.warnings?.filter((warning) => warning.trim()) ?? [];
+      const countMessage =
+        typeof diagnostics?.resultCount === "number" && typeof diagnostics?.resultTarget === "number"
+          ? `目前取得 ${diagnostics.resultCount}/${diagnostics.resultTarget} 筆。`
+          : null;
+      return [...warnings, countMessage].filter((item): item is string => Boolean(item)).join(" ");
+    }
   }
 
   return "來源搜尋暫時無法使用，請稍後再試。";
+}
+
+function sourceSearchDiagnosticsMessage(result: SourceSearchResult): string {
+  const diagnostics = result.diagnostics;
+  if (!diagnostics) return "";
+  const messages: string[] = [];
+  if (diagnostics.warnings.length > 0) messages.push(...diagnostics.warnings);
+  if (diagnostics.resultCount < diagnostics.resultTarget) {
+    messages.push(`目前取得 ${diagnostics.resultCount}/${diagnostics.resultTarget} 筆。`);
+  }
+  return messages.filter((item, index, array) => array.indexOf(item) === index).join(" ");
 }
 
 function sourceTechnicalErrorMessage(error: unknown): string {
@@ -2780,17 +2800,20 @@ export function Generator() {
       if (normalizedSources.length) {
         setSourceSearchStatus("done");
         const partialProviderFailure = hasProviderFailures(result);
+        const diagnosticsMessage = sourceSearchDiagnosticsMessage(result);
         toast({
           title: partialProviderFailure ? "部分來源搜尋失敗" : "已找到來源",
-          description: partialProviderFailure
-            ? "已顯示可用來源，部分資料來源暫時無法使用。"
-            : `已套用關鍵詞搜尋策略，共找到 ${normalizedSources.length} 筆可選來源。`,
+          description: diagnosticsMessage || (
+            partialProviderFailure
+              ? "已顯示可用來源，部分資料來源暫時無法使用。"
+              : `已套用關鍵詞搜尋策略，共找到 ${normalizedSources.length} 筆可選來源。`
+          ),
         });
         scheduleManageStepAfterSearch(normalizedSources.length);
       } else {
         setSourceSearchStatus("empty");
         setSourceSearchMessage(
-          "已產生搜尋關鍵詞，但目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。",
+          sourceSearchDiagnosticsMessage(result) || "已產生搜尋關鍵詞，但目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。",
         );
       }
     } catch (error) {
@@ -2836,7 +2859,8 @@ export function Generator() {
         } else {
           setSourceSearchStatus("empty");
           setSourceSearchMessage(
-            "目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。",
+            sourceErrorMessage(error) ||
+              "目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。",
           );
         }
       } catch (fallbackError) {

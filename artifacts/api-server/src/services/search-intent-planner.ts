@@ -110,6 +110,27 @@ export interface SearchIntentSourceSearchResult {
     llm_status: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped";
   };
   groups: SourceProviderSearchResult[];
+  diagnostics?: {
+    resultCount: number;
+    resultTarget: number;
+    queryCount: number;
+    providerCount: number;
+    fallbackUsed: boolean;
+    status: "success" | "partial" | "empty" | "failed";
+    providerFailures: Array<{
+      provider: string;
+      query: string;
+      error_type: string;
+      error_message: string;
+    }>;
+    providerResultCounts: Array<{
+      provider: string;
+      query: string;
+      resultCount: number;
+      ok: boolean;
+    }>;
+    warnings: string[];
+  };
 }
 
 type SearchIntentPlannerErrorCode =
@@ -1211,9 +1232,40 @@ export async function searchIntentSources(
   const queryLimit = options?.queryLimit
     ?? (Number(process.env.SEARCH_INTENT_QUERY_LIMIT) || DEFAULT_SEARCH_INTENT_QUERY_LIMIT);
   const queries = orderedQueries(querySet, queryLimit);
-  const groups = (await Promise.all(
-    queries.map((query) => searchSourceProviders(query, options?.sourceSearch ?? { fetchImpl: options?.fetchImpl })),
+  const searchOptions = options?.sourceSearch ?? { fetchImpl: options?.fetchImpl };
+  const academicGroups = (await Promise.all(
+    queries.map((query) => searchSourceProviders(query, {
+      ...searchOptions,
+      stage: "academic",
+    })),
   )).flat();
+  let groups = academicGroups;
+  let fallbackUsed = false;
+
+  const academicCount = dedupeSourceRecords(academicGroups.flatMap((group) => group.results)).length;
+  if (academicCount < 10) {
+    fallbackUsed = true;
+    const officialGroups = (await Promise.all(
+      queries.map((query) => searchSourceProviders(query, {
+        ...searchOptions,
+        stage: "official",
+      })),
+    )).flat();
+    groups = [...groups, ...officialGroups];
+  }
+
+  const afterOfficialCount = dedupeSourceRecords(groups.flatMap((group) => group.results)).length;
+  if (afterOfficialCount < 20) {
+    fallbackUsed = true;
+    const mediaGroups = (await Promise.all(
+      queries.map((query) => searchSourceProviders(query, {
+        ...searchOptions,
+        stage: "media",
+      })),
+    )).flat();
+    groups = [...groups, ...mediaGroups];
+  }
+
   const dedupedSources = dedupeSourceRecords(groups.flatMap((group) => group.results));
   const reranked = rerankSourcesBySearchIntent(dedupedSources, plan);
   const sources = reranked.sources.slice(0, 24);
@@ -1246,5 +1298,28 @@ export async function searchIntentSources(
       llm_status: plannerLlmStatus,
     },
     groups,
+    diagnostics: {
+      resultCount: sources.length,
+      resultTarget: 20,
+      queryCount: queries.length,
+      providerCount: groups.length ? new Set(groups.map((group) => group.provider)).size : 0,
+      fallbackUsed,
+      status: sources.length === 0 ? "empty" : fallbackUsed ? "partial" : "success",
+      providerFailures: groups
+        .filter((group) => !group.ok)
+        .map((group) => ({
+          provider: group.provider,
+          query: group.query,
+          error_type: group.error_type ?? "api-failure",
+          error_message: group.error_message ?? `${group.provider} request failed`,
+        })),
+      providerResultCounts: groups.map((group) => ({
+        provider: group.provider,
+        query: group.query,
+        resultCount: group.results.length,
+        ok: group.ok,
+      })),
+      warnings: resultWarnings(groups, sources, plan),
+    },
   };
 }

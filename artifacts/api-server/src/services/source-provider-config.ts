@@ -1,4 +1,4 @@
-export const SOURCE_PROVIDER_NAMES = ["Crossref", "Semantic Scholar"] as const;
+export const SOURCE_PROVIDER_NAMES = ["Crossref", "OpenAlex", "Semantic Scholar", "Web"] as const;
 
 export type SourceProviderName = (typeof SOURCE_PROVIDER_NAMES)[number];
 
@@ -9,6 +9,11 @@ export interface SourceProviderConfig {
   queryLimit: number;
   headers: Record<string, string>;
   mailto?: string;
+  queryParam?: string;
+  selectParam?: string;
+  acceptHeader?: string;
+  extraParams?: Record<string, string>;
+  searchStage?: "academic" | "official" | "media";
 }
 
 const DEFAULT_SOURCE_TIMEOUT_MS = 8000;
@@ -31,6 +36,18 @@ export function getSourceProviderConfigs(env: NodeJS.ProcessEnv = process.env): 
       },
       mailto: env.CROSSREF_MAILTO?.trim() || undefined,
     },
+    OpenAlex: {
+      provider: "OpenAlex",
+      endpoint: env.OPENALEX_WORKS_URL?.trim() || "https://api.openalex.org/works",
+      timeoutMs: Number(env.OPENALEX_TIMEOUT_MS) || DEFAULT_SOURCE_TIMEOUT_MS,
+      queryLimit: Number(env.OPENALEX_QUERY_LIMIT) || DEFAULT_RESULTS_PER_PROVIDER,
+      headers: {
+        Accept: "application/json",
+        "User-Agent": userAgent,
+      },
+      queryParam: "search",
+      selectParam: "display_name,authorships,publication_year,abstract_inverted_index,doi,id,primary_location,host_venue",
+    },
     "Semantic Scholar": {
       provider: "Semantic Scholar",
       endpoint: env.SEMANTIC_SCHOLAR_SEARCH_URL?.trim() || "https://api.semanticscholar.org/graph/v1/paper/search",
@@ -41,6 +58,18 @@ export function getSourceProviderConfigs(env: NodeJS.ProcessEnv = process.env): 
         "User-Agent": userAgent,
         ...(semanticScholarApiKey ? { "x-api-key": semanticScholarApiKey } : {}),
       },
+    },
+    Web: {
+      provider: "Web",
+      endpoint: env.PUBLIC_WEB_SEARCH_URL?.trim() || "https://r.jina.ai/http://www.bing.com/search",
+      timeoutMs: Number(env.PUBLIC_WEB_TIMEOUT_MS) || DEFAULT_SOURCE_TIMEOUT_MS,
+      queryLimit: Number(env.PUBLIC_WEB_QUERY_LIMIT) || DEFAULT_RESULTS_PER_PROVIDER,
+      headers: {
+        Accept: "text/plain",
+        "User-Agent": userAgent,
+      },
+      queryParam: "q",
+      searchStage: "official",
     },
   };
 }

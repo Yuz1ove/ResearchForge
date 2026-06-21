@@ -61,7 +61,7 @@ export const SearchSourcesResponse = zod.object({
   "abstract": zod.string().nullable(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
+  "sourceType": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
@@ -69,7 +69,7 @@ export const SearchSourcesResponse = zod.object({
 })).optional(),
   "provider_status": zod.array(zod.object({
   "ok": zod.boolean(),
-  "provider": zod.enum(['Crossref', 'Semantic Scholar']),
+  "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "query": zod.string(),
   "results": zod.array(zod.object({
   "id": zod.string(),
@@ -79,7 +79,7 @@ export const SearchSourcesResponse = zod.object({
   "abstract": zod.string().nullable(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
+  "sourceType": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
@@ -104,7 +104,7 @@ export const SearchSourcesResponse = zod.object({
 }).optional(),
   "groups": zod.array(zod.object({
   "ok": zod.boolean(),
-  "provider": zod.enum(['Crossref', 'Semantic Scholar']),
+  "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "query": zod.string(),
   "results": zod.array(zod.object({
   "id": zod.string(),
@@ -114,7 +114,7 @@ export const SearchSourcesResponse = zod.object({
   "abstract": zod.string().nullable(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
+  "sourceType": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
@@ -131,7 +131,7 @@ export const SearchSourcesResponse = zod.object({
   "abstract": zod.string().nullable(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
+  "sourceType": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
@@ -163,7 +163,28 @@ export const SearchSourcesResponse = zod.object({
   "matchedContextConcepts": zod.array(zod.string()),
   "matchedOutcomeConcepts": zod.array(zod.string()),
   "penalties": zod.array(zod.string())
-})).optional()
+})).optional(),
+  "diagnostics": zod.object({
+  "resultCount": zod.number(),
+  "resultTarget": zod.number(),
+  "queryCount": zod.number(),
+  "providerCount": zod.number(),
+  "fallbackUsed": zod.boolean(),
+  "status": zod.enum(['success', 'partial', 'empty', 'failed']),
+  "providerFailures": zod.array(zod.object({
+  "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
+  "query": zod.string(),
+  "error_type": zod.string(),
+  "error_message": zod.string()
+})),
+  "providerResultCounts": zod.array(zod.object({
+  "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
+  "query": zod.string(),
+  "resultCount": zod.number(),
+  "ok": zod.boolean()
+})),
+  "warnings": zod.array(zod.string())
+}).optional()
 })
 
 
@@ -199,7 +220,7 @@ export const SearchKeywordsResponse = zod.object({
 }),
   "groups": zod.array(zod.object({
   "ok": zod.boolean(),
-  "provider": zod.enum(['Crossref', 'Semantic Scholar']),
+  "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "query": zod.string(),
   "results": zod.array(zod.object({
   "id": zod.string(),
@@ -209,7 +230,7 @@ export const SearchKeywordsResponse = zod.object({
   "abstract": zod.string().nullable(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
+  "sourceType": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
@@ -226,10 +247,12 @@ export const SearchKeywordsResponse = zod.object({
   "abstract": zod.string().nullable(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'Semantic Scholar']),
+  "sourceType": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
   "accessedAt": zod.string().nullable()
 }))
 })
+
+

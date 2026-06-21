@@ -13,6 +13,7 @@ import type { SearchIntentSourceSearchResultLlmStatus } from './searchIntentSour
 import type { SearchIntentSummary } from './searchIntentSummary';
 import type { SearchRelevanceDebug } from './searchRelevanceDebug';
 import type { SourceRecord } from './sourceRecord';
+import type { SourceSearchDiagnostics } from './sourceSearchDiagnostics';
 
 export interface SearchIntentSourceSearchResult {
   ok: boolean;
@@ -28,4 +29,5 @@ export interface SearchIntentSourceSearchResult {
   llm_status: SearchIntentSourceSearchResultLlmStatus;
   keyword_expansion: KeywordExpansionResult;
   groups: KeywordSourceGroup[];
+  diagnostics?: SourceSearchDiagnostics;
 }

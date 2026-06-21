@@ -91,7 +91,7 @@ test("search source topic-style route response includes search intent fields", a
             error_message: "Semantic Scholar returned HTTP 503",
           },
         ],
-        warnings: ["部分來源提供者暫時無法使用，已顯示可用結果。"],
+        warnings: ["外部學術 API 暫時不可用。", "目前取得 1/20 筆來源。"],
         planner: {
           normalizedTopic: input.topic,
           primaryConcepts: ["urban heat island", "thermal comfort"],
@@ -167,6 +167,6 @@ test("search source topic-style route response includes search intent fields", a
   assert.ok(result.searchIntent?.lowWeightTerms.includes("learning"));
   assert.equal(result.searchIntent?.plannerStatus, "rule_fallback");
   assert.ok(result.provider_status?.some((group) => !group.ok));
-  assert.ok(result.warnings?.some((warning) => warning.includes("部分來源提供者")));
+  assert.ok(result.warnings?.some((warning) => warning.includes("學術 API") || warning.includes("可用結果")));
   assert.equal(result.sources?.length, 1);
 });
