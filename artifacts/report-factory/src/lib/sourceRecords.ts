@@ -353,6 +353,17 @@ export function sourceRecordKey(source: Pick<SourceRecord, "title" | "doi" | "ur
   return `source:${source.sourceType}:${stableHash(JSON.stringify(source))}`;
 }
 
+function sourceDedupeKey(source: Pick<SourceRecord, "title" | "doi" | "url">): string {
+  const doi = normalizeDoi(source.doi);
+  if (doi) return `doi:${doi.toLowerCase()}`;
+
+  const url = cleanText(source.url);
+  if (url) return `url:${url.toLowerCase()}`;
+
+  const title = normalizeTitle(source.title).toLowerCase();
+  return title ? `title:${title}` : `source:${stableHash(JSON.stringify(source))}`;
+}
+
 function textForClassification(source: SourceRecord): string {
   return [
     source.title,
@@ -479,16 +490,84 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
   };
 }
 
+function preferLongerText(primary: string | null | undefined, secondary: string | null | undefined): string | null {
+  const first = cleanText(primary);
+  const second = cleanText(secondary);
+  if (!first) return second;
+  if (!second) return first;
+  return second.length > first.length ? second : first;
+}
+
+function preferAuthors(primary: string[], secondary: string[]): string[] {
+  if (primary.length === 0) return secondary;
+  if (secondary.length > primary.length) return secondary;
+  return primary;
+}
+
+function preferUrl(primary: string | null | undefined, secondary: string | null | undefined): string | null {
+  const first = cleanText(primary);
+  const second = cleanText(secondary);
+  if (!first) return second;
+  if (!second) return first;
+  return first;
+}
+
+function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): SourceRecord {
+  return normalizeSourceForReview({
+    ...existing,
+    title: cleanText(existing.title) || cleanText(incoming.title) || "",
+    authors: preferAuthors(existing.authors, incoming.authors),
+    year: existing.year ?? incoming.year,
+    abstract: preferLongerText(existing.abstract, incoming.abstract),
+    doi: existing.doi ?? incoming.doi,
+    url: preferUrl(existing.url, incoming.url),
+    sourceType: existing.sourceType,
+    reviewState: existing.reviewState,
+    publisher: cleanText(existing.publisher) ?? cleanText(incoming.publisher),
+    containerTitle: cleanText(existing.containerTitle) ?? cleanText(incoming.containerTitle),
+    accessedAt: cleanText(existing.accessedAt) ?? cleanText(incoming.accessedAt),
+    sourceCategory: existing.sourceCategory ?? incoming.sourceCategory,
+    usableSections: existing.usableSections ?? incoming.usableSections,
+    confidence: existing.confidence ?? incoming.confidence,
+    reviewNotes: cleanText(existing.reviewNotes) ?? cleanText(incoming.reviewNotes),
+    relevanceLevel: existing.relevanceLevel ?? incoming.relevanceLevel,
+    relevanceScore: existing.relevanceScore ?? incoming.relevanceScore,
+    relevanceReasons: existing.relevanceReasons ?? incoming.relevanceReasons,
+    matchedCoreConcepts: existing.matchedCoreConcepts ?? incoming.matchedCoreConcepts,
+    missingCoreConcepts: existing.missingCoreConcepts ?? incoming.missingCoreConcepts,
+    matchedFacets: existing.matchedFacets ?? incoming.matchedFacets,
+    missingRequiredFacets: existing.missingRequiredFacets ?? incoming.missingRequiredFacets,
+    evidenceGrounding: existing.evidenceGrounding ?? incoming.evidenceGrounding,
+    sourceRelevanceReasonZhTw: cleanText(existing.sourceRelevanceReasonZhTw) ?? cleanText(incoming.sourceRelevanceReasonZhTw),
+    shouldShowInMainList: typeof existing.shouldShowInMainList === "boolean" ? existing.shouldShowInMainList : incoming.shouldShowInMainList,
+    shouldRecommendAccept: typeof existing.shouldRecommendAccept === "boolean" ? existing.shouldRecommendAccept : incoming.shouldRecommendAccept,
+    authorityLevel: existing.authorityLevel ?? incoming.authorityLevel,
+    authorityScore: existing.authorityScore ?? incoming.authorityScore,
+    authorityLabel: cleanText(existing.authorityLabel) ?? cleanText(incoming.authorityLabel),
+    sourceLanguage: existing.sourceLanguage ?? incoming.sourceLanguage,
+    sourceLanguageLabel: cleanText(existing.sourceLanguageLabel) ?? cleanText(incoming.sourceLanguageLabel),
+    mainEvidenceFacet: cleanText(existing.mainEvidenceFacet) ?? cleanText(incoming.mainEvidenceFacet),
+    evidenceSummaryZhTw: cleanText(existing.evidenceSummaryZhTw) ?? cleanText(incoming.evidenceSummaryZhTw),
+    evidenceSnippets: existing.evidenceSnippets ?? incoming.evidenceSnippets,
+    evidenceChain: existing.evidenceChain ?? incoming.evidenceChain,
+  });
+}
+
 export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
-  const seen = new Set<string>();
   const deduped: SourceRecord[] = [];
+  const indexByKey = new Map<string, number>();
 
   for (const source of sources) {
     const normalized = normalizeSourceForReview(source);
-    const key = sourceRecordKey(normalized);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push({ ...normalized, id: normalized.id || key });
+    const key = sourceDedupeKey(normalized);
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex === undefined) {
+      indexByKey.set(key, deduped.length);
+      deduped.push({ ...normalized, id: normalized.id || key });
+      continue;
+    }
+
+    deduped[existingIndex] = mergeSourceRecords(deduped[existingIndex], normalized);
   }
 
   return deduped;

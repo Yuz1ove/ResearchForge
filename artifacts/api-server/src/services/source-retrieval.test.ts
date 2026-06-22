@@ -211,3 +211,41 @@ test("returns deduped partial results when one provider succeeds and another fai
   assert.equal(result.diagnostics.resultTarget, 20);
   assert.ok(result.diagnostics.warnings.some((warning) => warning.includes("目前取得")));
 });
+
+test("merges duplicate source metadata so longer abstracts survive dedupe", () => {
+  const merged = dedupeSources([
+    {
+      id: "crossref-duplicate",
+      title: "Salmonella and food safety",
+      authors: ["A. Author"],
+      year: 2024,
+      abstract: null,
+      doi: "10.5000/salmonella",
+      url: "https://doi.org/10.5000/salmonella",
+      sourceType: "Crossref",
+      reviewState: "pending",
+      publisher: "Example Press",
+      containerTitle: "Example Journal",
+      accessedAt: null,
+    },
+    {
+      id: "openalex-duplicate",
+      title: "Salmonella and food safety",
+      authors: ["A. Author", "B. Researcher"],
+      year: 2024,
+      abstract: "This paper examines Salmonella cross-contamination, food poisoning risk, and storage temperature in food safety practice.",
+      doi: "10.5000/salmonella",
+      url: "https://openalex.org/W123",
+      sourceType: "OpenAlex",
+      reviewState: "pending",
+      publisher: "Example Press",
+      containerTitle: "Example Journal",
+      accessedAt: null,
+    },
+  ]);
+
+  assert.equal(merged.length, 1);
+  assert.match(merged[0]?.abstract ?? "", /cross-contamination/);
+  assert.equal(merged[0]?.url, "https://doi.org/10.5000/salmonella");
+  assert.deepEqual(merged[0]?.authors, ["A. Author", "B. Researcher"]);
+});

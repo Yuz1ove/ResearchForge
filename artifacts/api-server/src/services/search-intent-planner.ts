@@ -410,6 +410,153 @@ const CLIMATE_CAUSES_PENALTIES = [
   "圖書館推薦",
 ];
 
+const FOOD_SAFETY_PRIMARY = [
+  "食品安全",
+  "food safety",
+  "Salmonella",
+  "沙門氏桿菌",
+  "foodborne illness",
+  "食源性疾病",
+];
+
+const FOOD_SAFETY_CONTEXT = [
+  "cross-contamination",
+  "交叉污染",
+  "storage temperature",
+  "保存溫度",
+  "food poisoning",
+  "公共衛生",
+  "public health",
+  "hygiene",
+  "kitchen safety",
+];
+
+const FOOD_SAFETY_OUTCOMES = [
+  "food poisoning",
+  "salmonellosis",
+  "gastroenteritis",
+  "outbreak",
+  "infection risk",
+  "prevention",
+  "risk reduction",
+  "大腸桿菌",
+  "其他食源性病原體",
+];
+
+const FOOD_SAFETY_MUST_HAVE = [
+  "食品安全",
+  "沙門氏桿菌",
+  "food safety",
+  "Salmonella",
+  "foodborne illness",
+  "cross-contamination",
+  "storage temperature",
+  "food poisoning",
+  "public health",
+];
+
+const FOOD_SAFETY_LOW_WEIGHT = [
+  "students",
+  "education",
+  "learning",
+  "school",
+  "research",
+];
+
+const SWINE_PRIMARY = [
+  "豬隻",
+  "swine",
+  "pig farming",
+  "livestock",
+  "agriculture",
+  "ecology",
+];
+
+const SWINE_CONTEXT = [
+  "畜牧管理",
+  "疾病防治",
+  "antimicrobial use",
+  "manure",
+  "soil nutrient cycle",
+  "environmental impact",
+  "生態系統",
+];
+
+const SWINE_OUTCOMES = [
+  "economic value",
+  "環境影響",
+  "soil nutrients",
+  "nutrient cycling",
+  "public health",
+  "biosecurity",
+  "ecosystem services",
+];
+
+const SWINE_MUST_HAVE = [
+  "豬隻",
+  "swine",
+  "pig farming",
+  "livestock manure",
+  "soil nutrient cycle",
+  "antimicrobial use",
+  "disease prevention",
+  "ecology",
+];
+
+const SWINE_LOW_WEIGHT = [
+  "students",
+  "education",
+  "learning",
+  "school",
+];
+
+const BMW_PRIMARY = [
+  "BMW",
+  "electric vehicle strategy",
+  "電動車轉型",
+  "luxury car market",
+  "brand positioning",
+];
+
+const BMW_CONTEXT = [
+  "Mercedes-Benz",
+  "Audi",
+  "Tesla",
+  "供應鏈",
+  "ESG",
+  "supply chain",
+  "sustainability",
+  "consumer positioning",
+];
+
+const BMW_OUTCOMES = [
+  "market competition",
+  "competitive strategy",
+  "EV adoption",
+  "brand equity",
+  "premium segment",
+  "consumer preference",
+];
+
+const BMW_MUST_HAVE = [
+  "BMW",
+  "electric vehicle strategy",
+  "luxury car market competition",
+  "brand positioning",
+  "Mercedes-Benz",
+  "Audi",
+  "Tesla",
+  "supply chain",
+  "ESG",
+];
+
+const BMW_LOW_WEIGHT = [
+  "students",
+  "education",
+  "learning",
+  "school",
+];
+
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -473,6 +620,30 @@ function isClimateChangeCauseTopic(input: SearchIntentPlannerInput): boolean {
     /cause|causes|current status|observed|warming|trend|fossil fuel|emission|industrialization|land use|anthropogenic|co2 concentration/i,
   ]);
   return hasClimateCue && hasCauseCue;
+}
+
+function isFoodSafetySalmonellaTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /食品安全|沙門氏桿菌|食源性疾病|交叉污染|食品中毒|食物中毒|保存溫度|公共衛生/,
+    /food safety|salmonella|foodborne illness|cross-contamination|food poisoning|storage temperature|public health/i,
+  ]);
+}
+
+function isSwineAgricultureEcologyTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /豬隻|養豬|畜牧管理|生態系統|農業|糞便|土壤循環|抗生素使用|疾病防治/,
+    /swine|pig farming|livestock|manure|soil nutrient cycle|ecology|antimicrobial use|disease prevention/i,
+  ]);
+}
+
+function isBMWEvLuxuryTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /BMW|電動車轉型|豪華車市場|豪華車|品牌定位|Mercedes-Benz|Mercedes|Audi|Tesla|供應鏈|ESG/,
+    /bmw|electric vehicle strategy|luxury car market|brand positioning|mercedes-benz|mercedes|audi|tesla|supply chain|esg/i,
+  ]);
 }
 
 function topicTerms(topic: string): string[] {
@@ -663,6 +834,139 @@ export function buildRuleBasedSearchIntent(
     };
   }
 
+  if (isFoodSafetySalmonellaTopic(input)) {
+    return {
+      normalizedTopic,
+      primaryConcepts: FOOD_SAFETY_PRIMARY,
+      contextConcepts: FOOD_SAFETY_CONTEXT,
+      outcomeConcepts: FOOD_SAFETY_OUTCOMES,
+      populationConcepts: ["general public", "consumers", "students"],
+      lowWeightTerms: FOOD_SAFETY_LOW_WEIGHT,
+      mustHaveTerms: FOOD_SAFETY_MUST_HAVE,
+      shouldHaveTerms: [
+        "Salmonella foodborne illness",
+        "cross-contamination prevention",
+        "storage temperature",
+        "public health",
+        "Escherichia coli",
+        "other foodborne pathogens",
+      ],
+      penaltyTerms: ["generic education", "student achievement", "library recommendation"],
+      negativeTerms: ["unrelated school learning", "marketing only"],
+      chineseQueries: [
+        "食品安全 沙門氏桿菌",
+        "沙門氏桿菌 食品中毒",
+        "食源性疾病 交叉污染",
+        "食品保存 溫度 沙門氏桿菌",
+        "公共衛生 食品中毒 沙門氏桿菌",
+        "大腸桿菌 食源性病原體 比較",
+      ],
+      englishQueries: [
+        "food safety Salmonella",
+        "Salmonella foodborne illness",
+        "Salmonella cross-contamination",
+        "Salmonella storage temperature",
+        "food poisoning public health",
+        "foodborne pathogens Escherichia coli comparison",
+      ],
+      reasoningNotes: planReason(
+        reason,
+        "Food-safety searches must keep Salmonella, food poisoning, cross-contamination, storage temperature, and public health terms together.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isSwineAgricultureEcologyTopic(input)) {
+    return {
+      normalizedTopic,
+      primaryConcepts: SWINE_PRIMARY,
+      contextConcepts: SWINE_CONTEXT,
+      outcomeConcepts: SWINE_OUTCOMES,
+      populationConcepts: ["livestock", "farm management", "agriculture"],
+      lowWeightTerms: SWINE_LOW_WEIGHT,
+      mustHaveTerms: SWINE_MUST_HAVE,
+      shouldHaveTerms: [
+        "animal disease control",
+        "environmental impact",
+        "manure management",
+        "soil nutrient cycle",
+        "antimicrobial resistance",
+        "public health",
+      ],
+      penaltyTerms: ["generic education", "school performance"],
+      negativeTerms: ["unrelated city policy", "marketing only"],
+      chineseQueries: [
+        "豬隻 農業 生態",
+        "畜牧管理 豬隻",
+        "豬隻 疾病防治",
+        "豬隻 糞便 土壤 循環",
+        "抗生素使用 豬隻 養殖",
+        "豬隻 環境影響 生態系統",
+      ],
+      englishQueries: [
+        "swine agriculture ecology",
+        "pig farming environmental impact",
+        "livestock manure soil nutrient cycle",
+        "antimicrobial use swine farming",
+        "swine disease prevention agricultural management",
+        "pig farming ecosystem services",
+      ],
+      reasoningNotes: planReason(
+        reason,
+        "Swine searches must keep livestock management, disease prevention, antimicrobial use, manure, and soil nutrient cycling together.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isBMWEvLuxuryTopic(input)) {
+    return {
+      normalizedTopic,
+      primaryConcepts: BMW_PRIMARY,
+      contextConcepts: BMW_CONTEXT,
+      outcomeConcepts: BMW_OUTCOMES,
+      populationConcepts: ["premium consumers", "luxury car buyers", "EV shoppers"],
+      lowWeightTerms: BMW_LOW_WEIGHT,
+      mustHaveTerms: BMW_MUST_HAVE,
+      shouldHaveTerms: [
+        "luxury car market competition",
+        "brand positioning",
+        "consumer positioning",
+        "electric vehicle strategy",
+        "supply chain",
+        "ESG",
+        "premium segment",
+      ],
+      penaltyTerms: ["generic education", "school performance"],
+      negativeTerms: ["unrelated urban traffic", "fleet logistics only"],
+      chineseQueries: [
+        "BMW 電動車 轉型",
+        "BMW 豪華車市場 競爭",
+        "BMW Mercedes Audi Tesla 比較",
+        "BMW 品牌定位",
+        "BMW 供應鏈 ESG",
+        "BMW 電動車 策略",
+      ],
+      englishQueries: [
+        "BMW electric vehicle strategy",
+        "BMW luxury car market competition",
+        "BMW Mercedes Audi Tesla comparison",
+        "BMW brand positioning",
+        "BMW supply chain ESG",
+        "BMW consumer positioning premium segment",
+      ],
+      reasoningNotes: planReason(
+        reason,
+        "BMW searches must keep EV strategy, luxury competition, Mercedes-Benz, Audi, Tesla, supply chain, ESG, and brand positioning together.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
   const genericTerms = topicTerms(normalizedTopic);
   const audience = cleanString(input.audience);
   return {
@@ -779,6 +1083,9 @@ function mergeFamilyCriticalTerms(
     && !isShortVideoSleepAttentionTopic(input)
     && !isColaHealthTopic(input)
     && !isClimateChangeCauseTopic(input)
+    && !isFoodSafetySalmonellaTopic(input)
+    && !isSwineAgricultureEcologyTopic(input)
+    && !isBMWEvLuxuryTopic(input)
   ) return plan;
 
   return {
@@ -1070,6 +1377,44 @@ function sourceEvidenceScore(source: SourceRecord, plan: SearchIntentPlan): {
   };
 }
 
+function genericReferencePenalty(source: SourceRecord): { penalty: number; reasons: string[] } {
+  const text = [
+    source.title,
+    source.abstract,
+    source.publisher,
+    source.containerTitle,
+    source.url,
+  ]
+    .map((value) => (typeof value === "string" ? value : ""))
+    .join(" ")
+    .toLowerCase();
+
+  let penalty = 0;
+  const reasons: string[] = [];
+
+  if (/\b(wikipedia|wiktionary|dictionary|definition|meaning|encyclopedia|britannica|cambridge dictionary|merriam-webster)\b/.test(text)) {
+    penalty += 40;
+    reasons.push("generic_reference_page");
+  }
+
+  if (/\b(dealer|dealership|inventory|service center|service department|showroom|motorcycles|used cars|new inventory|shop now|buy now|lease offer)\b/.test(text)) {
+    penalty += 35;
+    reasons.push("promotional_or_dealer_page");
+  }
+
+  if (/\b(facebook|instagram|youtube|tiktok)\b/.test(text)) {
+    penalty += 20;
+    reasons.push("social_media_page");
+  }
+
+  if (!hasUsableAbstract(source) && reasons.length > 0) {
+    penalty += 10;
+    reasons.push("metadata_only_reference_page");
+  }
+
+  return { penalty, reasons };
+}
+
 export function scoreSourceRelevance(source: SourceRecord, plan: SearchIntentPlan): SourceRelevanceDebug {
   const title = source.title ?? "";
   const abstract = source.abstract ?? "";
@@ -1102,6 +1447,10 @@ export function scoreSourceRelevance(source: SourceRecord, plan: SearchIntentPla
   score += source.doi ? 1 : 0;
   score += hasUsableAbstract(source) ? 18 : -18;
   score += sourceYearBonus(source.year);
+
+  const genericPenalty = genericReferencePenalty(source);
+  score -= genericPenalty.penalty;
+  penalties.push(...genericPenalty.reasons);
 
   if (matchedMustHaveTerms.length === 0) {
     score -= 12;
@@ -1268,7 +1617,7 @@ export async function searchIntentSources(
 
   const dedupedSources = dedupeSourceRecords(groups.flatMap((group) => group.results));
   const reranked = rerankSourcesBySearchIntent(dedupedSources, plan);
-  const sources = reranked.sources.slice(0, 24);
+  const sources = reranked.sources.slice(0, 20);
   const plannerLlmStatus = llmStatusFromPlannerStatus(plan.plannerStatus, plan.fallbackUsed);
 
   return {
@@ -1282,7 +1631,7 @@ export async function searchIntentSources(
     warnings: resultWarnings(groups, sources, plan),
     planner: plan,
     ...(options?.includeDebug ?? process.env.NODE_ENV === "development"
-      ? { relevance_debug: reranked.relevanceDebug.slice(0, 24) }
+      ? { relevance_debug: reranked.relevanceDebug.slice(0, 20) }
       : {}),
     llm_status: plannerLlmStatus,
     keyword_expansion: {

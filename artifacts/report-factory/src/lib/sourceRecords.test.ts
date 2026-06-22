@@ -128,6 +128,30 @@ test("dedupes sources by DOI before URL or title", () => {
   assert.equal(deduped[0]?.sourceType, "Crossref");
 });
 
+test("dedupe keeps richer metadata when duplicate records are merged", () => {
+  const deduped = dedupeSourceRecords([
+    source({
+      id: "crossref-metadata",
+      abstract: null,
+      url: "https://doi.org/10.1000/example",
+      sourceType: "Crossref",
+    }),
+    source({
+      id: "openalex-rich",
+      title: "Short video use and attention",
+      abstract: "This study examines attention and sleep quality among students with a longer abstract to preserve.",
+      authors: ["Ada Lovelace", "Grace Hopper"],
+      url: "https://openalex.org/W123",
+      sourceType: "OpenAlex",
+    }),
+  ]);
+
+  assert.equal(deduped.length, 1);
+  assert.match(deduped[0]?.abstract ?? "", /longer abstract/);
+  assert.equal(deduped[0]?.url, "https://doi.org/10.1000/example");
+  assert.deepEqual(deduped[0]?.authors, ["Ada Lovelace", "Grace Hopper"]);
+});
+
 test("filters accepted and rejected sources explicitly", () => {
   const accepted = source({ id: "accepted", reviewState: "accepted" });
   const rejected = source({ id: "rejected", reviewState: "rejected", doi: "10.1000/rejected" });

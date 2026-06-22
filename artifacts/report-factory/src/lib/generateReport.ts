@@ -389,6 +389,11 @@ export function detectTopicCategory(
   ) {
     return "食品／飲食文化";
   }
+  if (
+    has(tt, ["沙門氏桿菌", "食品安全", "食源性疾病", "食品中毒", "交叉污染", "保存溫度"])
+  ) {
+    return "食品／飲食文化";
+  }
 
   // Chemistry / materials / nutrition science
   if (
@@ -426,6 +431,9 @@ export function detectTopicCategory(
       "上市公司", "股市", "產業鏈", "供應鏈", "企業策略", "競爭力",
     ])
   ) {
+    return "商業／產品分析";
+  }
+  if (has(tt, ["BMW", "Mercedes", "Mercedes-Benz", "Audi", "Tesla", "電動車轉型", "豪華車市場", "品牌定位"])) {
     return "商業／產品分析";
   }
 
@@ -505,6 +513,7 @@ function topicExpansionKind(topic: string, category?: TopicCategory): TopicExpan
   const lower = t.toLowerCase();
 
   if (has(t, ["花語", "茶文化", "廟宇", "動漫", "流行音樂", "藝術", "文化"])) return "culture";
+  if (has(t, ["豬隻", "養豬", "swine", "pig farming", "畜牧管理", "生態系統"])) return "environment";
   if (has(t, ["花朵", "植物", "蜜蜂", "細菌", "海龜", "昆蟲", "生態", "物種"])) return "nature";
   if (has(t, ["可樂", "咖啡", "泡麵", "手搖飲", "早餐", "飲料", "奶茶", "速食", "食品"])) return "food";
   if (has(lower, ["ai"]) || has(t, ["短影音", "手機", "社群媒體", "電動車", "人工智慧", "演算法", "平台"])) return "tech";
@@ -579,6 +588,15 @@ function natureExpansionCards(topic: string): TopicExpansionCard[] {
 
 function foodExpansionCards(topic: string): TopicExpansionCard[] {
   const t = topic || "食品";
+  if (/沙門氏桿菌|食品安全|食源性疾病|食品中毒|交叉污染|保存溫度/i.test(t)) {
+    return [
+      expansionCard("沙門氏桿菌與食品中毒的關聯", "病原體", "可分析感染途徑、常見食材與公共衛生案例。"),
+      expansionCard("交叉污染如何在廚房與加工流程中發生", "交叉污染", "可討論生熟食分流、器具清潔與手部衛生。"),
+      expansionCard("保存溫度如何影響沙門氏桿菌風險", "保存溫度", "可比較冷藏、加熱與常溫暴露的差異。"),
+      expansionCard("食品安全與公共衛生的監測與通報", "公共衛生", "可補充政府通報、檢驗制度與風險管理。"),
+      expansionCard("沙門氏桿菌與大腸桿菌等食源性病原體比較", "比較", "可整理不同病原體的感染途徑與預防重點。"),
+    ];
+  }
   return [
     expansionCard(`${t}中的成分與攝取習慣對健康的影響`, "健康", "可分析營養標示、攝取量與青少年飲食習慣。"),
     expansionCard(`${t}品牌如何透過廣告塑造消費印象`, "行銷", "適合討論品牌、廣告語言與消費心理。"),
@@ -612,12 +630,41 @@ function educationExpansionCards(topic: string): TopicExpansionCard[] {
 
 function environmentExpansionCards(topic: string): TopicExpansionCard[] {
   const t = topic || "社會議題";
+  if (/豬隻|養豬|swine|pig farming|畜牧管理|生態系統/i.test(t)) {
+    return [
+      expansionCard("豬隻在農業生產中的經濟價值", "經濟價值", "可分析肉品供應、農村收入與產業鏈。"),
+      expansionCard("畜牧管理與豬隻疾病防治", "畜牧管理", "可討論飼養環境、防疫與生物安全。"),
+      expansionCard("抗生素使用與豬隻養殖風險", "抗生素使用", "可連結抗藥性、用藥管理與公共衛生。"),
+      expansionCard("豬隻糞便、土壤與養分循環", "土壤循環", "可分析糞肥利用、污染控制與土壤 nutrient cycle。"),
+      expansionCard("豬隻對生態系統與環境影響", "生態影響", "可討論廢棄物、溫室氣體與周邊生態。"),
+    ];
+  }
   return [
     expansionCard(`${t}的成因與日常生活關聯`, "背景脈絡", "可整理自然因素、人為活動與生活場景。"),
     expansionCard(`${t}對不同族群或地區的影響`, "社會影響", "適合比較年齡、職業、城鄉或地方差異。"),
     expansionCard(`${t}的台灣在地案例與公共政策`, "在地案例", "可補充政府資料、地方新聞與政策措施。"),
     expansionCard(`${t}可用哪些數據或指標觀察`, "統計資料", "可找近年統計、監測資料或官方報告。"),
     expansionCard(`面對${t}的可行改善策略`, "解決策略", "可討論個人、學校、企業與政府的責任。"),
+  ];
+}
+
+function businessExpansionCards(topic: string): TopicExpansionCard[] {
+  const t = topic || "商業主題";
+  if (/BMW|電動車轉型|豪華車市場|Mercedes|Audi|Tesla/i.test(t)) {
+    return [
+      expansionCard("BMW 電動車轉型與品牌定位", "品牌定位", "可分析 BMW 如何在豪華車市場中重新定位電動車。"),
+      expansionCard("BMW 與 Mercedes-Benz、Audi、Tesla 的競爭差異", "競品比較", "可比較產品線、價格帶、技術與消費者定位。"),
+      expansionCard("BMW 電動車策略與供應鏈挑戰", "供應鏈", "可討論電池、零組件、製造節奏與產能風險。"),
+      expansionCard("BMW 的 ESG 與永續敘事", "ESG", "可連結減碳、供應鏈責任與品牌形象。"),
+      expansionCard("BMW 在豪華車市場的消費者定位", "市場", "可整理高端客群、品牌資產與市場競爭壓力。"),
+    ];
+  }
+  return [
+    expansionCard(`「${t}」的目標客群與需求情境`, "市場", "可分析使用者痛點、購買動機與族群差異。"),
+    expansionCard(`「${t}」的競品比較與差異化策略`, "競爭", "適合整理功能、價格、通路與品牌定位。"),
+    expansionCard(`「${t}」的商業模式與收入來源`, "商業模式", "可討論訂閱、廣告、銷售或服務費。"),
+    expansionCard(`「${t}」的成本、風險與執行限制`, "風險", "可評估資源、人力、法規與市場不確定性。"),
+    expansionCard(`「${t}」未來擴張與永續經營方向`, "發展", "可提出產品迭代、合作與長期策略。"),
   ];
 }
 
@@ -656,13 +703,7 @@ export function expandTopicCards(topic: string, category?: TopicCategory): Topic
         expansionCard(`「${t}」實驗安全與倫理注意事項`, "安全", "可列出材料限制、操作規範與風險管理。"),
       ];
     case "business":
-      return [
-        expansionCard(`「${t}」的目標客群與需求情境`, "市場", "可分析使用者痛點、購買動機與族群差異。"),
-        expansionCard(`「${t}」的競品比較與差異化策略`, "競爭", "適合整理功能、價格、通路與品牌定位。"),
-        expansionCard(`「${t}」的商業模式與收入來源`, "商業模式", "可討論訂閱、廣告、銷售或服務費。"),
-        expansionCard(`「${t}」的成本、風險與執行限制`, "風險", "可評估資源、人力、法規與市場不確定性。"),
-        expansionCard(`「${t}」未來擴張與永續經營方向`, "發展", "可提出產品迭代、合作與長期策略。"),
-      ];
+      return businessExpansionCards(t);
     case "care":
       return [
         expansionCard(`「${t}」的服務對象與需求分析`, "需求", "可整理使用者處境、照顧壓力與資源落差。"),
