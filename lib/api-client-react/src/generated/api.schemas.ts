@@ -46,7 +46,9 @@ export type SourceRecordSourceType = typeof SourceRecordSourceType[keyof typeof 
 
 export const SourceRecordSourceType = {
   Crossref: 'Crossref',
+  OpenAlex: 'OpenAlex',
   Semantic_Scholar: 'Semantic Scholar',
+  Web: 'Web',
 } as const;
 
 export interface SourceRecord {
@@ -85,6 +87,15 @@ export const SearchIntentSummaryPlannerStatus = {
   failed: 'failed',
 } as const;
 
+export type SearchIntentSummaryDomainProfile = typeof SearchIntentSummaryDomainProfile[keyof typeof SearchIntentSummaryDomainProfile];
+
+
+export const SearchIntentSummaryDomainProfile = {
+  academic: 'academic',
+  'business-industry': 'business-industry',
+  'automotive-industry': 'automotive-industry',
+} as const;
+
 export interface SearchIntentSummary {
   primaryConcepts: string[];
   contextConcepts: string[];
@@ -94,6 +105,7 @@ export interface SearchIntentSummary {
   mustHaveTerms: string[];
   plannerStatus: SearchIntentSummaryPlannerStatus;
   fallbackUsed: boolean;
+  domainProfile: SearchIntentSummaryDomainProfile;
 }
 
 export interface SearchIntentQuerySet {
@@ -108,13 +120,25 @@ export type KeywordSourceGroupProvider = typeof KeywordSourceGroupProvider[keyof
 
 export const KeywordSourceGroupProvider = {
   Crossref: 'Crossref',
+  OpenAlex: 'OpenAlex',
   Semantic_Scholar: 'Semantic Scholar',
+  Web: 'Web',
+} as const;
+
+export type KeywordSourceGroupStage = typeof KeywordSourceGroupStage[keyof typeof KeywordSourceGroupStage];
+
+
+export const KeywordSourceGroupStage = {
+  academic: 'academic',
+  official: 'official',
+  media: 'media',
 } as const;
 
 export interface KeywordSourceGroup {
   ok: boolean;
   provider: KeywordSourceGroupProvider;
   query: string;
+  stage: KeywordSourceGroupStage;
   results: SourceRecord[];
   error_type: string | null;
   error_message: string | null;
@@ -144,6 +168,15 @@ export interface KeywordExpansionResult {
   llm_status: KeywordExpansionResultLlmStatus;
 }
 
+export type SearchIntentPlanDomainProfile = typeof SearchIntentPlanDomainProfile[keyof typeof SearchIntentPlanDomainProfile];
+
+
+export const SearchIntentPlanDomainProfile = {
+  academic: 'academic',
+  'business-industry': 'business-industry',
+  'automotive-industry': 'automotive-industry',
+} as const;
+
 export type SearchIntentPlanPlannerStatus = typeof SearchIntentPlanPlannerStatus[keyof typeof SearchIntentPlanPlannerStatus];
 
 
@@ -156,6 +189,7 @@ export const SearchIntentPlanPlannerStatus = {
 
 export interface SearchIntentPlan {
   normalizedTopic: string;
+  domainProfile: SearchIntentPlanDomainProfile;
   primaryConcepts: string[];
   contextConcepts: string[];
   outcomeConcepts: string[];
@@ -183,6 +217,85 @@ export interface SearchRelevanceDebug {
   penalties: string[];
 }
 
+export type SourceSearchDiagnosticsStatus = typeof SourceSearchDiagnosticsStatus[keyof typeof SourceSearchDiagnosticsStatus];
+
+
+export const SourceSearchDiagnosticsStatus = {
+  success: 'success',
+  partial_success: 'partial_success',
+  insufficient_sources: 'insufficient_sources',
+  empty: 'empty',
+  failed: 'failed',
+} as const;
+
+export type SourceSearchDiagnosticsProviderFailuresItemProvider = typeof SourceSearchDiagnosticsProviderFailuresItemProvider[keyof typeof SourceSearchDiagnosticsProviderFailuresItemProvider];
+
+
+export const SourceSearchDiagnosticsProviderFailuresItemProvider = {
+  Crossref: 'Crossref',
+  OpenAlex: 'OpenAlex',
+  Semantic_Scholar: 'Semantic Scholar',
+  Web: 'Web',
+} as const;
+
+export type SourceSearchDiagnosticsProviderFailuresItemStage = typeof SourceSearchDiagnosticsProviderFailuresItemStage[keyof typeof SourceSearchDiagnosticsProviderFailuresItemStage];
+
+
+export const SourceSearchDiagnosticsProviderFailuresItemStage = {
+  academic: 'academic',
+  official: 'official',
+  media: 'media',
+} as const;
+
+export type SourceSearchDiagnosticsProviderResultCountsItemProvider = typeof SourceSearchDiagnosticsProviderResultCountsItemProvider[keyof typeof SourceSearchDiagnosticsProviderResultCountsItemProvider];
+
+
+export const SourceSearchDiagnosticsProviderResultCountsItemProvider = {
+  Crossref: 'Crossref',
+  OpenAlex: 'OpenAlex',
+  Semantic_Scholar: 'Semantic Scholar',
+  Web: 'Web',
+} as const;
+
+export type SourceSearchDiagnosticsProviderResultCountsItemStage = typeof SourceSearchDiagnosticsProviderResultCountsItemStage[keyof typeof SourceSearchDiagnosticsProviderResultCountsItemStage];
+
+
+export const SourceSearchDiagnosticsProviderResultCountsItemStage = {
+  academic: 'academic',
+  official: 'official',
+  media: 'media',
+} as const;
+
+export type SourceSearchDiagnosticsProviderFailuresItem = {
+  provider: SourceSearchDiagnosticsProviderFailuresItemProvider;
+  query: string;
+  stage: SourceSearchDiagnosticsProviderFailuresItemStage;
+  error_type: string;
+  error_message: string;
+};
+
+export type SourceSearchDiagnosticsProviderResultCountsItem = {
+  provider: SourceSearchDiagnosticsProviderResultCountsItemProvider;
+  query: string;
+  stage: SourceSearchDiagnosticsProviderResultCountsItemStage;
+  resultCount: number;
+  ok: boolean;
+};
+
+export interface SourceSearchDiagnostics {
+  resultCount: number;
+  resultTarget: number;
+  minSources: number;
+  targetSources: number;
+  queryCount: number;
+  providerCount: number;
+  fallbackUsed: boolean;
+  status: SourceSearchDiagnosticsStatus;
+  providerFailures: SourceSearchDiagnosticsProviderFailuresItem[];
+  providerResultCounts: SourceSearchDiagnosticsProviderResultCountsItem[];
+  warnings: string[];
+}
+
 export interface SourceSearchResult {
   ok?: boolean;
   topic?: string;
@@ -197,6 +310,7 @@ export interface SourceSearchResult {
   sources: SourceRecord[];
   planner?: SearchIntentPlan;
   relevance_debug?: SearchRelevanceDebug[];
+  diagnostics?: SourceSearchDiagnostics;
 }
 
 export type SearchIntentSourceSearchResultLlmStatus = typeof SearchIntentSourceSearchResultLlmStatus[keyof typeof SearchIntentSourceSearchResultLlmStatus];
@@ -224,6 +338,7 @@ export interface SearchIntentSourceSearchResult {
   llm_status: SearchIntentSourceSearchResultLlmStatus;
   keyword_expansion: KeywordExpansionResult;
   groups: KeywordSourceGroup[];
+  diagnostics?: SourceSearchDiagnostics;
 }
 
 export type KeywordSourceSearchResultLlmStatus = typeof KeywordSourceSearchResultLlmStatus[keyof typeof KeywordSourceSearchResultLlmStatus];
@@ -248,3 +363,4 @@ export interface KeywordSourceSearchResult {
 export interface ErrorResponse {
   message: string;
 }
+

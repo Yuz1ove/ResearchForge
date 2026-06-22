@@ -12,7 +12,7 @@ import {
 const shortVideoTopic = "短影音使用對高中生注意力與睡眠品質之影響";
 const urbanHeatTopic = "都市熱島效應對校園環境與學生學習舒適度之影響";
 const colaHealthTopic = "可樂中的成分與攝取習慣對健康的影響";
-const climateCausesTopic = "氣候變遷成因";
+const climateCausesTopic = "「氣候變遷」的成因與現況分析";
 
 function sourceRecord(patch: Partial<SourceRecord> & { title: string }): SourceRecord {
   return {
@@ -90,11 +90,36 @@ test("rule fallback keeps climate change cause concepts in every main query fami
     assert.ok(plan.mustHaveTerms.includes(term), `expected must-have ${term}`);
   }
   assert.ok(plan.contextConcepts.includes("land use"));
+  assert.ok(plan.outcomeConcepts.includes("observed warming"));
+  assert.ok(plan.mustHaveTerms.includes("CO2 concentration"));
   assert.ok(plan.penaltyTerms.includes("北京話"));
   assert.match(queryText, /climate change|氣候變遷/);
   assert.match(queryText, /greenhouse gas|溫室氣體/);
   assert.match(queryText, /fossil fuel|化石燃料/);
+  assert.match(queryText, /observed warming|CO2 concentration|IPCC/);
   assert.ok(!/education students peer reviewed research/i.test(queryText));
+});
+
+test("rule fallback expands BMW business topics toward annual reports, sustainability, and competition", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: "BMW 電動車轉型與豪華車市場競爭",
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = [...queries.highPrecision, ...queries.english, ...queries.chinese].join(" ");
+
+  assert.equal(plan.domainProfile, "automotive-industry");
+  for (const term of ["BMW", "Mercedes-Benz", "Audi", "Tesla", "annual report", "sustainability report"]) {
+    assert.ok(plan.mustHaveTerms.some((value) => value.includes(term) || term.includes(value)), `expected must-have ${term}`);
+  }
+  assert.match(queryText, /BMW Group electric vehicle transition annual report/i);
+  assert.match(queryText, /BMW Group sustainability report electric vehicles/i);
+  assert.match(queryText, /BMW EV transition competition Mercedes Tesla Audi/i);
+  assert.match(queryText, /BMW 電動車 轉型/);
+  assert.match(queryText, /BMW 豪華車市場 競爭/);
+  assert.ok(!/dealer|used car|parts catalog/i.test(queryText));
 });
 
 test("rule fallback weights urban heat island, thermal comfort, and microclimate over generic learning terms", () => {
@@ -192,6 +217,40 @@ test("reranking promotes campus thermal comfort over generic student learning re
   assert.ok((schoolDebug?.score ?? 0) < (relevanceDebug[0]?.score ?? 0));
 });
 
+test("climate reranking promotes direct evidence snippets over metadata-only climate matches", () => {
+  const plan = buildRuleBasedSearchIntent({ topic: climateCausesTopic, language: "zh-TW" });
+  const sources = [
+    sourceRecord({
+      id: "metadata-title",
+      title: "Climate change causes greenhouse gas emissions and observed warming",
+      abstract: null,
+      doi: "10.1000/metadata-title",
+    }),
+    sourceRecord({
+      id: "policy-committee",
+      title: "Climate change policy committee governance",
+      abstract:
+        "This article discusses climate change policy, committee governance, and institutional response functions without emissions or observed climate indicator evidence.",
+    }),
+    sourceRecord({
+      id: "direct-evidence",
+      title: "Observed climate change and anthropogenic greenhouse gas emissions",
+      abstract:
+        "Human activities, principally through greenhouse gas emissions from fossil fuel combustion, have caused global warming. Observed warming is reflected in global temperature trends and CO2 concentration.",
+      doi: "10.1000/direct-climate",
+    }),
+  ];
+
+  const { sources: ranked, relevanceDebug } = rerankSourcesBySearchIntent(sources, plan);
+  const metadataDebug = relevanceDebug.find((item) => item.sourceId === "metadata-title");
+  const directDebug = relevanceDebug.find((item) => item.sourceId === "direct-evidence");
+
+  assert.equal(ranked[0]?.id, "direct-evidence");
+  assert.ok(metadataDebug?.penalties.includes("metadata_only"));
+  assert.ok(metadataDebug?.penalties.includes("no_direct_evidence_snippet"));
+  assert.ok(!directDebug?.penalties.includes("no_direct_evidence_snippet"));
+});
+
 test("source intent search returns planner output and provider failures without crashing", async () => {
   const result = await searchIntentSources(
     { topic: urbanHeatTopic, reportType: "研究報告", audience: "高中", language: "zh-TW" },
@@ -245,8 +304,8 @@ test("source intent search returns planner output and provider failures without 
   assert.equal(result.searchIntent.plannerStatus, "skipped");
   assert.ok(result.searchIntent.primaryConcepts.includes("urban heat island"));
   assert.ok(result.queries.highPrecision.some((query) => query.includes("urban heat island")));
-  assert.equal(result.provider_status.length, 2);
+  assert.ok(result.provider_status.length >= 2);
   assert.ok(result.provider_status.some((group) => group.ok === false));
   assert.equal(result.sources[0]?.doi, "10.1000/uhi-campus");
-  assert.ok(result.warnings.some((warning) => warning.includes("部分來源提供者")));
+  assert.ok(result.warnings.some((warning) => warning.includes("來源提供者") || warning.includes("可用結果")));
 });

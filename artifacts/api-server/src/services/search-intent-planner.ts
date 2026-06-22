@@ -19,9 +19,11 @@ export interface SearchIntentPlannerInput {
 }
 
 export type SearchIntentPlannerStatus = "llm" | "rule_fallback" | "skipped" | "failed";
+export type SearchSourceDomainProfile = "academic" | "business-industry" | "automotive-industry";
 
 export interface SearchIntentPlan {
   normalizedTopic: string;
+  domainProfile: SearchSourceDomainProfile;
   primaryConcepts: string[];
   contextConcepts: string[];
   outcomeConcepts: string[];
@@ -75,6 +77,7 @@ export interface SearchIntentSourceSearchOptions extends SearchIntentPlannerOpti
 }
 
 export interface SearchIntentSummary {
+  domainProfile: SearchSourceDomainProfile;
   primaryConcepts: string[];
   contextConcepts: string[];
   outcomeConcepts: string[];
@@ -110,6 +113,31 @@ export interface SearchIntentSourceSearchResult {
     llm_status: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped";
   };
   groups: SourceProviderSearchResult[];
+  diagnostics?: {
+    resultCount: number;
+    resultTarget: number;
+    minSources: number;
+    targetSources: number;
+    queryCount: number;
+    providerCount: number;
+    fallbackUsed: boolean;
+    status: "success" | "partial_success" | "insufficient_sources" | "empty" | "failed";
+    providerFailures: Array<{
+      provider: string;
+      query: string;
+      stage: string;
+      error_type: string;
+      error_message: string;
+    }>;
+    providerResultCounts: Array<{
+      provider: string;
+      query: string;
+      stage: string;
+      resultCount: number;
+      ok: boolean;
+    }>;
+    warnings: string[];
+  };
 }
 
 type SearchIntentPlannerErrorCode =
@@ -131,7 +159,7 @@ class SearchIntentPlannerError extends Error {
 }
 
 const DEFAULT_SEARCH_INTENT_LLM_TIMEOUT_MS = 8000;
-const DEFAULT_SEARCH_INTENT_QUERY_LIMIT = 6;
+const DEFAULT_SEARCH_INTENT_QUERY_LIMIT = 8;
 const MAX_QUERY_COUNT = 8;
 
 const URBAN_HEAT_PRIMARY = [
@@ -308,6 +336,8 @@ const CLIMATE_CAUSES_PRIMARY = [
   "溫室氣體",
   "氣候變遷",
   "全球暖化",
+  "observed climate change",
+  "climate indicators",
 ];
 
 const CLIMATE_CAUSES_CONTEXT = [
@@ -319,6 +349,10 @@ const CLIMATE_CAUSES_CONTEXT = [
   "土地利用",
   "deforestation",
   "森林砍伐",
+  "IPCC",
+  "WMO",
+  "NASA",
+  "NOAA",
 ];
 
 const CLIMATE_CAUSES_OUTCOMES = [
@@ -326,10 +360,18 @@ const CLIMATE_CAUSES_OUTCOMES = [
   "carbon dioxide",
   "methane",
   "radiative forcing",
+  "observed warming",
+  "global temperature",
+  "CO2 concentration",
+  "sea level",
+  "emissions trend",
   "排放",
   "二氧化碳",
   "甲烷",
   "人為活動",
+  "全球升溫",
+  "溫室氣體濃度",
+  "海平面",
 ];
 
 const CLIMATE_CAUSES_MUST_HAVE = [
@@ -342,6 +384,9 @@ const CLIMATE_CAUSES_MUST_HAVE = [
   "溫室氣體",
   "化石燃料",
   "emissions",
+  "observed warming",
+  "CO2 concentration",
+  "IPCC",
   "排放",
 ];
 
@@ -370,6 +415,235 @@ const CLIMATE_CAUSES_PENALTIES = [
   "宗教稱號",
   "招生",
   "圖書館推薦",
+];
+
+const FOOD_SAFETY_PRIMARY = [
+  "食品安全",
+  "food safety",
+  "Salmonella",
+  "沙門氏桿菌",
+  "foodborne illness",
+  "食源性疾病",
+];
+
+const FOOD_SAFETY_CONTEXT = [
+  "cross-contamination",
+  "交叉污染",
+  "storage temperature",
+  "保存溫度",
+  "food poisoning",
+  "公共衛生",
+  "public health",
+  "hygiene",
+  "kitchen safety",
+];
+
+const FOOD_SAFETY_OUTCOMES = [
+  "food poisoning",
+  "salmonellosis",
+  "gastroenteritis",
+  "outbreak",
+  "infection risk",
+  "prevention",
+  "risk reduction",
+  "大腸桿菌",
+  "其他食源性病原體",
+];
+
+const FOOD_SAFETY_MUST_HAVE = [
+  "食品安全",
+  "沙門氏桿菌",
+  "food safety",
+  "Salmonella",
+  "foodborne illness",
+  "cross-contamination",
+  "storage temperature",
+  "food poisoning",
+  "public health",
+];
+
+const FOOD_SAFETY_LOW_WEIGHT = [
+  "students",
+  "education",
+  "learning",
+  "school",
+  "research",
+];
+
+const SWINE_PRIMARY = [
+  "豬隻",
+  "swine",
+  "pig farming",
+  "livestock",
+  "agriculture",
+  "ecology",
+];
+
+const SWINE_CONTEXT = [
+  "畜牧管理",
+  "疾病防治",
+  "antimicrobial use",
+  "manure",
+  "soil nutrient cycle",
+  "environmental impact",
+  "生態系統",
+];
+
+const SWINE_OUTCOMES = [
+  "economic value",
+  "環境影響",
+  "soil nutrients",
+  "nutrient cycling",
+  "public health",
+  "biosecurity",
+  "ecosystem services",
+];
+
+const SWINE_MUST_HAVE = [
+  "豬隻",
+  "swine",
+  "pig farming",
+  "livestock manure",
+  "soil nutrient cycle",
+  "antimicrobial use",
+  "disease prevention",
+  "ecology",
+];
+
+const SWINE_LOW_WEIGHT = [
+  "students",
+  "education",
+  "learning",
+  "school",
+];
+
+const BMW_PRIMARY = [
+  "BMW",
+  "electric vehicle strategy",
+  "電動車轉型",
+  "luxury car market",
+  "brand positioning",
+];
+
+const BMW_CONTEXT = [
+  "Mercedes-Benz",
+  "Audi",
+  "Tesla",
+  "供應鏈",
+  "ESG",
+  "supply chain",
+  "sustainability",
+  "consumer positioning",
+  "annual report",
+  "sustainability report",
+  "market analysis",
+];
+
+const BMW_OUTCOMES = [
+  "market competition",
+  "competitive strategy",
+  "EV adoption",
+  "brand equity",
+  "premium segment",
+  "consumer preference",
+];
+
+const BMW_MUST_HAVE = [
+  "BMW",
+  "electric vehicle strategy",
+  "luxury car market competition",
+  "brand positioning",
+  "Mercedes-Benz",
+  "Audi",
+  "Tesla",
+  "supply chain",
+  "ESG",
+  "annual report",
+  "sustainability report",
+];
+
+const BMW_LOW_WEIGHT = [
+  "students",
+  "education",
+  "learning",
+  "school",
+];
+
+const BUSINESS_PRIMARY = [
+  "BMW",
+  "Mercedes-Benz",
+  "Audi",
+  "Tesla",
+  "electric vehicle strategy",
+  "luxury car market",
+  "brand positioning",
+];
+
+const BUSINESS_CONTEXT = [
+  "annual report",
+  "sustainability report",
+  "company report",
+  "market competition",
+  "supply chain",
+  "ESG",
+  "policy",
+  "industry analysis",
+  "automotive industry",
+  "electric vehicle",
+  "market outlook",
+  "strategy report",
+  "sector analysis",
+];
+
+const BUSINESS_OUTCOMES = [
+  "market share",
+  "competitive strategy",
+  "premium segment",
+  "consumer positioning",
+  "transition strategy",
+  "investment",
+];
+
+const BUSINESS_MUST_HAVE = [
+  "BMW",
+  "electric vehicle strategy",
+  "luxury car market competition",
+  "brand positioning",
+  "Mercedes-Benz",
+  "Audi",
+  "Tesla",
+  "annual report",
+  "sustainability report",
+];
+
+const BUSINESS_LOW_WEIGHT = [
+  "students",
+  "education",
+  "learning",
+  "school",
+];
+
+const BUSINESS_NEGATIVE = [
+  "dealer",
+  "dealership",
+  "used cars",
+  "used car",
+  "car listings",
+  "parts catalog",
+  "repair manual",
+  "generic dictionary",
+  "dictionary",
+  "wiki",
+  "wikipedia",
+  "encyclopedia",
+  "local dealership",
+  "classified",
+  "inventory",
+  "service center",
+  "test drive",
+  "buy now",
+  "lease offer",
+  "price list",
 ];
 
 function normalizeText(value: string): string {
@@ -431,10 +705,48 @@ function isClimateChangeCauseTopic(input: SearchIntentPlannerInput): boolean {
     /climate change|global warming|greenhouse gas|climate/i,
   ]);
   const hasCauseCue = hasAny(text, [
-    /成因|原因|化石燃料|排放|工業化|土地利用|人為活動/,
-    /cause|causes|fossil fuel|emission|industrialization|land use|anthropogenic/i,
+    /成因|原因|現況|現狀|觀測|升溫|化石燃料|排放|工業化|土地利用|人為活動|溫室氣體濃度/,
+    /cause|causes|current status|observed|warming|trend|fossil fuel|emission|industrialization|land use|anthropogenic|co2 concentration/i,
   ]);
   return hasClimateCue && hasCauseCue;
+}
+
+function isFoodSafetySalmonellaTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /食品安全|沙門氏桿菌|食源性疾病|交叉污染|食品中毒|食物中毒|保存溫度|公共衛生/,
+    /food safety|salmonella|foodborne illness|cross-contamination|food poisoning|storage temperature|public health/i,
+  ]);
+}
+
+function isSwineAgricultureEcologyTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /豬隻|養豬|畜牧管理|生態系統|農業|糞便|土壤循環|抗生素使用|疾病防治/,
+    /swine|pig farming|livestock|manure|soil nutrient cycle|ecology|antimicrobial use|disease prevention/i,
+  ]);
+}
+
+function isBMWEvLuxuryTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /BMW|電動車轉型|豪華車市場|豪華車|品牌定位|Mercedes-Benz|Mercedes|Audi|Tesla|供應鏈|ESG|automotive|汽車/,
+    /bmw|electric vehicle strategy|luxury car market|brand positioning|mercedes-benz|mercedes|audi|tesla|supply chain|esg|automotive|vehicle/i,
+  ]);
+}
+
+function isBusinessIndustryTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /BMW|Tesla|Mercedes|Mercedes-Benz|Audi|Toyota|EV|電動車|豪華車|汽車|automotive|vehicle|market competition|brand positioning|industry analysis|annual report|sustainability report|company report|ESG|轉型/,
+    /bmw|tesla|mercedes|mercedes-benz|audi|toyota|electric vehicle|ev|luxury car|automotive|vehicle|market competition|brand positioning|industry analysis|annual report|sustainability report|company report|esg|transition/i,
+  ]);
+}
+
+function businessDomainProfile(input: SearchIntentPlannerInput): SearchSourceDomainProfile {
+  if (isBMWEvLuxuryTopic(input)) return "automotive-industry";
+  if (isBusinessIndustryTopic(input)) return "business-industry";
+  return "academic";
 }
 
 function topicTerms(topic: string): string[] {
@@ -463,6 +775,7 @@ export function buildRuleBasedSearchIntent(
   if (isUrbanHeatIslandTopic(input)) {
     return {
       normalizedTopic,
+      domainProfile: "academic",
       primaryConcepts: URBAN_HEAT_PRIMARY,
       contextConcepts: URBAN_HEAT_CONTEXT,
       outcomeConcepts: URBAN_HEAT_OUTCOMES,
@@ -499,6 +812,7 @@ export function buildRuleBasedSearchIntent(
   if (isShortVideoSleepAttentionTopic(input)) {
     return {
       normalizedTopic,
+      domainProfile: "academic",
       primaryConcepts: SHORT_VIDEO_PRIMARY,
       contextConcepts: SHORT_VIDEO_CONTEXT,
       outcomeConcepts: SHORT_VIDEO_OUTCOMES,
@@ -529,6 +843,7 @@ export function buildRuleBasedSearchIntent(
   if (isColaHealthTopic(input)) {
     return {
       normalizedTopic,
+      domainProfile: "academic",
       primaryConcepts: COLA_HEALTH_PRIMARY,
       contextConcepts: COLA_HEALTH_CONTEXT,
       outcomeConcepts: COLA_HEALTH_OUTCOMES,
@@ -574,6 +889,7 @@ export function buildRuleBasedSearchIntent(
   if (isClimateChangeCauseTopic(input)) {
     return {
       normalizedTopic,
+      domainProfile: "academic",
       primaryConcepts: CLIMATE_CAUSES_PRIMARY,
       contextConcepts: CLIMATE_CAUSES_CONTEXT,
       outcomeConcepts: CLIMATE_CAUSES_OUTCOMES,
@@ -585,6 +901,11 @@ export function buildRuleBasedSearchIntent(
         "carbon dioxide",
         "methane",
         "land use change",
+        "observed warming",
+        "global temperature",
+        "CO2 concentration",
+        "emissions trend",
+        "WMO state of climate",
         "IPCC",
         "systematic review",
       ],
@@ -597,15 +918,19 @@ export function buildRuleBasedSearchIntent(
       ],
       chineseQueries: [
         "氣候變遷 成因 溫室氣體 化石燃料",
-        "全球暖化 成因 溫室氣體 排放",
-        "氣候變遷 人為活動 工業化 土地利用",
-        "氣候變遷 成因 IPCC 溫室氣體",
+        "全球暖化 成因 二氧化碳 甲烷 排放",
+        "氣候變遷 成因 人為活動 工業化 土地利用",
+        "氣候變遷 現況 全球升溫 溫室氣體濃度",
+        "氣候變遷 觀測 現況 IPCC",
+        "氣候變遷 排放趨勢 二氧化碳濃度",
       ],
       englishQueries: [
-        "climate change causes greenhouse gas emissions fossil fuel",
-        "global warming causes greenhouse gases fossil fuel combustion",
-        "anthropogenic climate change causes land use industrialization",
-        "climate change causes greenhouse gas emissions IPCC",
+        "climate change causes greenhouse gas emissions fossil fuels",
+        "anthropogenic climate change causes carbon dioxide methane land use",
+        "global warming attribution greenhouse gas fossil fuel combustion",
+        "current status of climate change observed warming CO2 concentration",
+        "IPCC climate change causes greenhouse gases current status",
+        "observed climate change temperature trends emissions",
       ],
       reasoningNotes: planReason(
         reason,
@@ -616,10 +941,240 @@ export function buildRuleBasedSearchIntent(
     };
   }
 
+  if (isFoodSafetySalmonellaTopic(input)) {
+    return {
+      normalizedTopic,
+      domainProfile: "academic",
+      primaryConcepts: FOOD_SAFETY_PRIMARY,
+      contextConcepts: FOOD_SAFETY_CONTEXT,
+      outcomeConcepts: FOOD_SAFETY_OUTCOMES,
+      populationConcepts: ["general public", "consumers", "students"],
+      lowWeightTerms: FOOD_SAFETY_LOW_WEIGHT,
+      mustHaveTerms: FOOD_SAFETY_MUST_HAVE,
+      shouldHaveTerms: [
+        "Salmonella foodborne illness",
+        "cross-contamination prevention",
+        "storage temperature",
+        "public health",
+        "Escherichia coli",
+        "other foodborne pathogens",
+      ],
+      penaltyTerms: ["generic education", "student achievement", "library recommendation"],
+      negativeTerms: ["unrelated school learning", "marketing only"],
+      chineseQueries: [
+        "食品安全 沙門氏桿菌",
+        "沙門氏桿菌 食品中毒",
+        "食源性疾病 交叉污染",
+        "食品保存 溫度 沙門氏桿菌",
+        "公共衛生 食品中毒 沙門氏桿菌",
+        "大腸桿菌 食源性病原體 比較",
+      ],
+      englishQueries: [
+        "food safety Salmonella",
+        "Salmonella foodborne illness",
+        "Salmonella cross-contamination",
+        "Salmonella storage temperature",
+        "food poisoning public health",
+        "foodborne pathogens Escherichia coli comparison",
+      ],
+      reasoningNotes: planReason(
+        reason,
+        "Food-safety searches must keep Salmonella, food poisoning, cross-contamination, storage temperature, and public health terms together.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isSwineAgricultureEcologyTopic(input)) {
+    return {
+      normalizedTopic,
+      domainProfile: "academic",
+      primaryConcepts: SWINE_PRIMARY,
+      contextConcepts: SWINE_CONTEXT,
+      outcomeConcepts: SWINE_OUTCOMES,
+      populationConcepts: ["livestock", "farm management", "agriculture"],
+      lowWeightTerms: SWINE_LOW_WEIGHT,
+      mustHaveTerms: SWINE_MUST_HAVE,
+      shouldHaveTerms: [
+        "animal disease control",
+        "environmental impact",
+        "manure management",
+        "soil nutrient cycle",
+        "antimicrobial resistance",
+        "public health",
+      ],
+      penaltyTerms: ["generic education", "school performance"],
+      negativeTerms: ["unrelated city policy", "marketing only"],
+      chineseQueries: [
+        "豬隻 農業 生態",
+        "畜牧管理 豬隻",
+        "豬隻 疾病防治",
+        "豬隻 糞便 土壤 循環",
+        "抗生素使用 豬隻 養殖",
+        "豬隻 環境影響 生態系統",
+      ],
+      englishQueries: [
+        "swine agriculture ecology",
+        "pig farming environmental impact",
+        "livestock manure soil nutrient cycle",
+        "antimicrobial use swine farming",
+        "swine disease prevention agricultural management",
+        "pig farming ecosystem services",
+      ],
+      reasoningNotes: planReason(
+        reason,
+        "Swine searches must keep livestock management, disease prevention, antimicrobial use, manure, and soil nutrient cycling together.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isBMWEvLuxuryTopic(input)) {
+    return {
+      normalizedTopic,
+      domainProfile: businessDomainProfile(input),
+      primaryConcepts: unique([...BMW_PRIMARY, ...BUSINESS_PRIMARY]),
+      contextConcepts: unique([...BMW_CONTEXT, ...BUSINESS_CONTEXT]),
+      outcomeConcepts: unique([...BMW_OUTCOMES, ...BUSINESS_OUTCOMES]),
+      populationConcepts: ["premium consumers", "luxury car buyers", "EV shoppers"],
+      lowWeightTerms: unique([...BMW_LOW_WEIGHT, ...BUSINESS_LOW_WEIGHT]),
+      mustHaveTerms: unique([...BMW_MUST_HAVE, ...BUSINESS_MUST_HAVE]),
+      shouldHaveTerms: [
+        "luxury car market competition",
+        "brand positioning",
+        "consumer positioning",
+        "electric vehicle strategy",
+        "supply chain",
+        "ESG",
+        "premium segment",
+        "annual report",
+        "sustainability report",
+        "industry analysis",
+        "market share",
+      ],
+      penaltyTerms: ["generic education", "school performance", ...BUSINESS_NEGATIVE],
+      negativeTerms: ["unrelated urban traffic", "fleet logistics only", ...BUSINESS_NEGATIVE],
+      chineseQueries: [
+        "BMW 電動車 轉型",
+        "BMW 豪華車市場 競爭",
+        "BMW Mercedes Audi Tesla 比較",
+        "BMW 品牌定位",
+        "BMW 供應鏈 ESG",
+        "BMW 電動車 策略",
+        "BMW 集團 年報 電動車",
+        "BMW 集團 永續報告 電動車",
+        "BMW 豪華車市場 競爭 分析",
+        "BMW 汽車產業 轉型 ESG",
+      ],
+      englishQueries: [
+        "BMW Group electric vehicle transition annual report",
+        "BMW Group sustainability report electric vehicles",
+        "BMW EV transition competition Mercedes Tesla Audi",
+        "BMW electric vehicle strategy",
+        "BMW luxury car market competition",
+        "BMW Mercedes Audi Tesla comparison",
+        "BMW brand positioning",
+        "BMW supply chain ESG",
+        "BMW consumer positioning premium segment",
+        "global electric vehicle market luxury segment BMW",
+        "automotive industry electric vehicle transition premium brands",
+        "IEA electric vehicle outlook BMW luxury market",
+        "BMW automotive industry transition ESG",
+      ],
+      reasoningNotes: planReason(
+        reason,
+        "BMW searches must keep EV strategy, luxury competition, Mercedes-Benz, Audi, Tesla, supply chain, ESG, and brand positioning together.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isBusinessIndustryTopic(input)) {
+    const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+    const hasAutomotiveCue = /BMW|Tesla|Mercedes|Mercedes-Benz|Audi|Toyota|EV|電動車|豪華車|automotive|car|vehicle/i.test(text);
+    const domainProfile = hasAutomotiveCue ? "automotive-industry" : "business-industry";
+    const businessQueries = hasAutomotiveCue
+      ? [
+          "BMW Group electric vehicle transition annual report",
+          "BMW Group sustainability report electric vehicles",
+          "BMW EV transition competition Mercedes Tesla Audi",
+          "BMW electric vehicle strategy",
+          "BMW luxury car market competition",
+          "global electric vehicle market luxury segment BMW",
+          "automotive industry electric vehicle transition premium brands",
+          "IEA electric vehicle outlook BMW luxury market",
+          "BMW Mercedes Audi Tesla comparison",
+          "BMW brand positioning",
+          "BMW supply chain ESG",
+        ]
+      : [
+          "company annual report industry analysis",
+          "sustainability report market competition",
+          "brand positioning competitive strategy",
+          "supply chain ESG transition",
+          "industry analysis annual report policy",
+          "market outlook strategy report",
+        ];
+    return {
+      normalizedTopic,
+      domainProfile,
+      primaryConcepts: hasAutomotiveCue ? unique([...BMW_PRIMARY, ...BUSINESS_PRIMARY]) : BUSINESS_PRIMARY,
+      contextConcepts: unique([
+        ...BUSINESS_CONTEXT,
+        ...(hasAutomotiveCue ? ["BMW Group", "Mercedes-Benz", "Audi", "Tesla", "automotive industry"] : []),
+      ]),
+      outcomeConcepts: BUSINESS_OUTCOMES,
+      populationConcepts: ["investors", "consumers", "industry analysts", "management"],
+      lowWeightTerms: BUSINESS_LOW_WEIGHT,
+      mustHaveTerms: hasAutomotiveCue ? BUSINESS_MUST_HAVE : ["company report", "annual report", "sustainability report", "industry analysis"],
+      shouldHaveTerms: [
+        "annual report",
+        "sustainability report",
+        "company report",
+        "industry analysis",
+        "market share",
+        "competitive strategy",
+        "supply chain",
+        "ESG",
+        "policy",
+      ],
+      penaltyTerms: BUSINESS_NEGATIVE,
+      negativeTerms: BUSINESS_NEGATIVE,
+      chineseQueries: hasAutomotiveCue
+        ? [
+          "BMW 電動車 轉型",
+          "BMW 豪華車市場 競爭",
+          "BMW 品牌定位",
+          "BMW 集團 年報 電動車",
+          "BMW 集團 永續報告 電動車",
+          "BMW 豪華車市場 競爭 分析",
+        ]
+        : [
+          "企業 年報 產業分析",
+          "公司 永續報告 市場競爭",
+          "品牌定位 市場競爭 產業分析",
+          "供應鏈 ESG 轉型",
+        ],
+      englishQueries: businessQueries,
+      reasoningNotes: planReason(
+        reason,
+        hasAutomotiveCue
+          ? "Automotive business topics should prioritize official company reports, policy and industry analysis, with academic sources as secondary support."
+          : "Business topics should prioritize company reports, annual reports, policy sources, and industry analysis before academic support.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
   const genericTerms = topicTerms(normalizedTopic);
   const audience = cleanString(input.audience);
   return {
     normalizedTopic,
+    domainProfile: "academic",
     primaryConcepts: genericTerms.length ? genericTerms : [normalizedTopic],
     contextConcepts: [audience, cleanString(input.reportType)].filter((term): term is string => Boolean(term)),
     outcomeConcepts: [],
@@ -732,6 +1287,9 @@ function mergeFamilyCriticalTerms(
     && !isShortVideoSleepAttentionTopic(input)
     && !isColaHealthTopic(input)
     && !isClimateChangeCauseTopic(input)
+    && !isFoodSafetySalmonellaTopic(input)
+    && !isSwineAgricultureEcologyTopic(input)
+    && !isBMWEvLuxuryTopic(input)
   ) return plan;
 
   return {
@@ -747,6 +1305,7 @@ function mergeFamilyCriticalTerms(
     negativeTerms: unique([...plan.negativeTerms, ...fallback.negativeTerms]).slice(0, 10),
     chineseQueries: unique([...plan.chineseQueries, ...fallback.chineseQueries]).slice(0, MAX_QUERY_COUNT),
     englishQueries: unique([...plan.englishQueries, ...fallback.englishQueries]).slice(0, MAX_QUERY_COUNT),
+    domainProfile: plan.domainProfile ?? fallback.domainProfile,
   };
 }
 
@@ -758,8 +1317,10 @@ function coerceSearchIntentPlan(value: unknown, input: SearchIntentPlannerInput)
   const data = value as Record<string, unknown>;
   const fallback = buildRuleBasedSearchIntent(input, "LLM planner returned incomplete planning data; deterministic fields were merged.");
   const normalizedTopic = cleanString(data.normalizedTopic) ?? cleanString(data.normalized_topic) ?? input.topic.trim();
+  const domainProfile = (cleanString(data.domainProfile ?? data.domain_profile) as SearchSourceDomainProfile | null | undefined) ?? businessDomainProfile(input);
   const plan: SearchIntentPlan = {
     normalizedTopic,
+    domainProfile,
     primaryConcepts: stringArray(data.primaryConcepts ?? data.primary_concepts, 14),
     contextConcepts: stringArray(data.contextConcepts ?? data.context_concepts, 12),
     outcomeConcepts: stringArray(data.outcomeConcepts ?? data.outcome_concepts, 12),
@@ -949,6 +1510,15 @@ function matchedTerms(text: string, terms: string[]): string[] {
   return unique(terms.filter((term) => textContains(text, term)));
 }
 
+function splitSentences(text: string): string[] {
+  return text
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(/(?<=[。！？.!?])(?:\s+|(?=\S))/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+}
+
 function isUrbanHeatPlan(plan: SearchIntentPlan): boolean {
   const concepts = normalizeText([...plan.primaryConcepts, ...plan.mustHaveTerms].join(" "));
   return concepts.includes("urban heat island")
@@ -967,6 +1537,89 @@ function sourceYearBonus(year: number | null): number {
 
 function sourceDebugId(source: SourceRecord): string {
   return source.id || source.doi || source.url || source.title;
+}
+
+function hasUsableAbstract(source: SourceRecord): boolean {
+  return (source.abstract ?? "").trim().length >= 80;
+}
+
+function evidenceSnippetScore(sentence: string, plan: SearchIntentPlan): number {
+  const matchedPrimary = matchedTerms(sentence, plan.primaryConcepts).length;
+  const matchedMust = matchedTerms(sentence, plan.mustHaveTerms).length;
+  const matchedContext = matchedTerms(sentence, plan.contextConcepts).length;
+  const matchedOutcome = matchedTerms(sentence, plan.outcomeConcepts).length;
+  return matchedPrimary * 7 + matchedMust * 12 + matchedContext * 3 + matchedOutcome * 5;
+}
+
+function sourceEvidenceScore(source: SourceRecord, plan: SearchIntentPlan): {
+  directSnippetCount: number;
+  snippetScore: number;
+  bestSnippetScore: number;
+} {
+  const abstract = source.abstract ?? "";
+  if (!hasUsableAbstract(source)) {
+    return { directSnippetCount: 0, snippetScore: 0, bestSnippetScore: 0 };
+  }
+
+  const snippets = splitSentences(abstract)
+    .map((sentence) => {
+      const matchedPrimary = matchedTerms(sentence, plan.primaryConcepts);
+      const matchedMust = matchedTerms(sentence, plan.mustHaveTerms);
+      const score = evidenceSnippetScore(sentence, plan);
+      return {
+        score,
+        direct: matchedPrimary.length > 0 && matchedMust.length > 0,
+      };
+    })
+    .filter((snippet) => snippet.score > 0);
+
+  if (snippets.length === 0) {
+    return { directSnippetCount: 0, snippetScore: 0, bestSnippetScore: 0 };
+  }
+
+  return {
+    directSnippetCount: snippets.filter((snippet) => snippet.direct).length,
+    snippetScore: snippets.reduce((sum, snippet) => sum + snippet.score, 0),
+    bestSnippetScore: Math.max(...snippets.map((snippet) => snippet.score)),
+  };
+}
+
+function genericReferencePenalty(source: SourceRecord): { penalty: number; reasons: string[] } {
+  const text = [
+    source.title,
+    source.abstract,
+    source.publisher,
+    source.containerTitle,
+    source.url,
+  ]
+    .map((value) => (typeof value === "string" ? value : ""))
+    .join(" ")
+    .toLowerCase();
+
+  let penalty = 0;
+  const reasons: string[] = [];
+
+  if (/\b(wikipedia|wiktionary|dictionary|definition|meaning|encyclopedia|britannica|cambridge dictionary|merriam-webster)\b/.test(text)) {
+    penalty += 40;
+    reasons.push("generic_reference_page");
+  }
+
+  if (/\b(dealer|dealership|inventory|service center|service department|showroom|motorcycles|used cars|new inventory|shop now|buy now|lease offer)\b/.test(text)) {
+    penalty += 35;
+    reasons.push("promotional_or_dealer_page");
+  }
+
+  if (/\b(facebook|instagram|youtube|tiktok)\b/.test(text)) {
+    penalty += 20;
+    reasons.push("social_media_page");
+  }
+
+  if (!hasUsableAbstract(source) && reasons.length > 0) {
+    penalty += 10;
+    reasons.push("metadata_only_reference_page");
+  }
+
+  return { penalty, reasons };
 }
 
 export function scoreSourceRelevance(source: SourceRecord, plan: SearchIntentPlan): SourceRelevanceDebug {
@@ -988,19 +1641,23 @@ export function scoreSourceRelevance(source: SourceRecord, plan: SearchIntentPla
   const matchedContextConcepts = unique([...matchedContextTitle, ...matchedContextAbstract]);
   const matchedOutcomeConcepts = unique([...matchedOutcomeTitle, ...matchedOutcomeAbstract]);
   const penalties: string[] = [];
+  const evidence = sourceEvidenceScore(source, plan);
 
   let score = 0;
   score += matchedPrimaryTitle.length * 8;
-  score += matchedPrimaryAbstract.length * 5;
   score += matchedMustTitle.length * 8;
-  score += matchedMustAbstract.length * 5;
   score += matchedContextTitle.length * 3;
-  score += matchedContextAbstract.length * 2;
   score += matchedOutcomeTitle.length * 2;
-  score += matchedOutcomeAbstract.length * 1.5;
+  score += evidence.snippetScore;
+  score += evidence.bestSnippetScore;
+  score += evidence.directSnippetCount * 18;
   score += source.doi ? 1 : 0;
-  score += source.abstract ? 1 : 0;
+  score += hasUsableAbstract(source) ? 18 : -18;
   score += sourceYearBonus(source.year);
+
+  const genericPenalty = genericReferencePenalty(source);
+  score -= genericPenalty.penalty;
+  penalties.push(...genericPenalty.reasons);
 
   if (matchedMustHaveTerms.length === 0) {
     score -= 12;
@@ -1015,6 +1672,15 @@ export function scoreSourceRelevance(source: SourceRecord, plan: SearchIntentPla
   if (matchedPenalties.length > 0 && matchedMustHaveTerms.length === 0) {
     score -= matchedPenalties.length * 4;
     penalties.push(`penalty_terms:${matchedPenalties.join(",")}`);
+  }
+
+  if (!hasUsableAbstract(source)) {
+    penalties.push("metadata_only");
+  }
+
+  if (evidence.directSnippetCount === 0) {
+    score -= 16;
+    penalties.push("no_direct_evidence_snippet");
   }
 
   if (isUrbanHeatPlan(plan)) {
@@ -1060,6 +1726,7 @@ export function rerankSourcesBySearchIntent(
 
 function searchIntentSummary(plan: SearchIntentPlan): SearchIntentSummary {
   return {
+    domainProfile: plan.domainProfile,
     primaryConcepts: plan.primaryConcepts,
     contextConcepts: plan.contextConcepts,
     outcomeConcepts: plan.outcomeConcepts,
@@ -1122,12 +1789,45 @@ export async function searchIntentSources(
   const queryLimit = options?.queryLimit
     ?? (Number(process.env.SEARCH_INTENT_QUERY_LIMIT) || DEFAULT_SEARCH_INTENT_QUERY_LIMIT);
   const queries = orderedQueries(querySet, queryLimit);
-  const groups = (await Promise.all(
-    queries.map((query) => searchSourceProviders(query, options?.sourceSearch ?? { fetchImpl: options?.fetchImpl })),
+  const searchOptions = options?.sourceSearch ?? { fetchImpl: options?.fetchImpl };
+  const academicGroups = (await Promise.all(
+    queries.map((query) => searchSourceProviders(query, {
+      ...searchOptions,
+      stage: "academic",
+    })),
   )).flat();
+  let groups = academicGroups;
+  let fallbackUsed = false;
+
+  const minSources = 10;
+  const targetSources = 20;
+  const academicCount = dedupeSourceRecords(academicGroups.flatMap((group) => group.results)).length;
+  if (academicCount < minSources) {
+    fallbackUsed = true;
+    const officialGroups = (await Promise.all(
+      queries.map((query) => searchSourceProviders(query, {
+        ...searchOptions,
+        stage: "official",
+      })),
+    )).flat();
+    groups = [...groups, ...officialGroups];
+  }
+
+  const afterOfficialCount = dedupeSourceRecords(groups.flatMap((group) => group.results)).length;
+  if (afterOfficialCount < targetSources) {
+    fallbackUsed = true;
+    const mediaGroups = (await Promise.all(
+      queries.map((query) => searchSourceProviders(query, {
+        ...searchOptions,
+        stage: "media",
+      })),
+    )).flat();
+    groups = [...groups, ...mediaGroups];
+  }
+
   const dedupedSources = dedupeSourceRecords(groups.flatMap((group) => group.results));
   const reranked = rerankSourcesBySearchIntent(dedupedSources, plan);
-  const sources = reranked.sources.slice(0, 24);
+  const sources = reranked.sources.slice(0, targetSources);
   const plannerLlmStatus = llmStatusFromPlannerStatus(plan.plannerStatus, plan.fallbackUsed);
 
   return {
@@ -1141,7 +1841,7 @@ export async function searchIntentSources(
     warnings: resultWarnings(groups, sources, plan),
     planner: plan,
     ...(options?.includeDebug ?? process.env.NODE_ENV === "development"
-      ? { relevance_debug: reranked.relevanceDebug.slice(0, 24) }
+      ? { relevance_debug: reranked.relevanceDebug.slice(0, 20) }
       : {}),
     llm_status: plannerLlmStatus,
     keyword_expansion: {
@@ -1157,5 +1857,32 @@ export async function searchIntentSources(
       llm_status: plannerLlmStatus,
     },
     groups,
+    diagnostics: {
+      resultCount: sources.length,
+      resultTarget: targetSources,
+      minSources,
+      targetSources,
+      queryCount: queries.length,
+      providerCount: groups.length ? new Set(groups.map((group) => group.provider)).size : 0,
+      fallbackUsed,
+      status: sources.length === 0 ? "empty" : sources.length < minSources ? "insufficient_sources" : sources.length < targetSources || fallbackUsed ? "partial_success" : "success",
+      providerFailures: groups
+        .filter((group) => !group.ok)
+        .map((group) => ({
+          provider: group.provider,
+          query: group.query,
+          stage: group.stage ?? "academic",
+          error_type: group.error_type ?? "api-failure",
+          error_message: group.error_message ?? `${group.provider} request failed`,
+        })),
+      providerResultCounts: groups.map((group) => ({
+        provider: group.provider,
+        query: group.query,
+        stage: group.stage ?? "academic",
+        resultCount: group.results.length,
+        ok: group.ok,
+      })),
+      warnings: resultWarnings(groups, sources, plan),
+    },
   };
 }

@@ -324,28 +324,16 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
               </div>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 <Button size="sm" className="min-h-[42px] justify-start" onClick={handleDownloadDocx} data-testid="button-preview-export-docx">
-                  <FileType className="mr-2 h-4 w-4" /> Word
+                  <FileType className="mr-2 h-4 w-4" /> DOCX
                 </Button>
                 <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={handlePrintPdf} data-testid="button-preview-export-pdf">
                   <Printer className="mr-2 h-4 w-4" /> PDF
                 </Button>
-                <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={handleMarkdown} data-testid="button-preview-export-md">
-                  <FileDown className="mr-2 h-4 w-4" /> Markdown
-                </Button>
-                <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={handleTxt} data-testid="button-preview-export-txt">
-                  <FileText className="mr-2 h-4 w-4" /> TXT
-                </Button>
                 <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={handleCopy} data-testid="button-preview-copy">
                   <Copy className="mr-2 h-4 w-4" /> 複製
                 </Button>
-                <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={handleJson} data-testid="button-preview-export-json">
-                  <FileJson className="mr-2 h-4 w-4" /> JSON
-                </Button>
-                <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={() => downloadBlueprint(exportReport, workspace.input)}>
-                  <Download className="mr-2 h-4 w-4" /> 研究藍圖
-                </Button>
-                <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={() => downloadPromptPackage(exportReport, workspace.input)}>
-                  <Download className="mr-2 h-4 w-4" /> AI 提示包
+                <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={handleMarkdown} data-testid="button-preview-export-md">
+                  <FileDown className="mr-2 h-4 w-4" /> Markdown
                 </Button>
               </div>
             </section>

@@ -77,11 +77,14 @@ import {
 } from "@/lib/sourceSummaries";
 import { applySourceRelevanceAssessments } from "@/lib/sourceRelevance";
 import { applySourceAuthorityAndLanguage } from "@/lib/sourceAuthority";
+import { supplementTrustedClimateSources } from "@/lib/trustedClimateSources";
 import {
   generationReadiness,
   generatorWorkflowVisibility,
   loadReportWorkspace,
+  reportTopicFingerprint,
   startReportWorkspaceNavigation,
+  workspaceMatchesTopic,
 } from "@/lib/reportWorkspace";
 import {
   Wand2,
@@ -350,9 +353,29 @@ function sourceErrorMessage(error: unknown): string {
         return message;
       }
     }
+    if (data && typeof data === "object" && "diagnostics" in data) {
+      const diagnostics = (data as { diagnostics?: { warnings?: string[]; resultCount?: number; resultTarget?: number } }).diagnostics;
+      const warnings = diagnostics?.warnings?.filter((warning) => warning.trim()) ?? [];
+      const countMessage =
+        typeof diagnostics?.resultCount === "number" && typeof diagnostics?.resultTarget === "number"
+          ? `目前取得 ${diagnostics.resultCount}/${diagnostics.resultTarget} 筆。`
+          : null;
+      return [...warnings, countMessage].filter((item): item is string => Boolean(item)).join(" ");
+    }
   }
 
   return "來源搜尋暫時無法使用，請稍後再試。";
+}
+
+function sourceSearchDiagnosticsMessage(result: SourceSearchResult): string {
+  const diagnostics = result.diagnostics;
+  if (!diagnostics) return "";
+  const messages: string[] = [];
+  if (diagnostics.warnings.length > 0) messages.push(...diagnostics.warnings);
+  if (diagnostics.resultCount < diagnostics.resultTarget) {
+    messages.push(`目前取得 ${diagnostics.resultCount}/${diagnostics.resultTarget} 筆。`);
+  }
+  return messages.filter((item, index, array) => array.indexOf(item) === index).join(" ");
 }
 
 function sourceTechnicalErrorMessage(error: unknown): string {
@@ -790,10 +813,12 @@ function sourceReviewBadgeVariant(
 
 function sourceRelevanceLabel(level: SourceRecord["relevanceLevel"]): string {
   switch (level) {
-    case "high":
-      return "高度相關";
-    case "medium":
-      return "需確認";
+    case "primary":
+      return "主要來源";
+    case "secondary":
+      return "延伸來源";
+    case "clue":
+      return "線索來源";
     case "low":
       return "低相關";
     case "off_topic":
@@ -807,10 +832,12 @@ function sourceRelevanceBadgeVariant(
   level: SourceRecord["relevanceLevel"],
 ): "default" | "secondary" | "outline" | "destructive" {
   switch (level) {
-    case "high":
+    case "primary":
       return "default";
-    case "medium":
+    case "secondary":
       return "secondary";
+    case "clue":
+      return "outline";
     case "low":
       return "outline";
     case "off_topic":
@@ -820,10 +847,30 @@ function sourceRelevanceBadgeVariant(
   }
 }
 
+function evidenceGroundingLabel(status: SourceRecord["evidenceGrounding"]): string {
+  switch (status) {
+    case "abstract_grounded":
+    case "snippet_grounded":
+      return "有摘要可用";
+    case "metadata_only":
+      return "只有 metadata";
+    case "insufficient":
+      return "摘要不足";
+    default:
+      return "片段待確認";
+  }
+}
+
 function sourceAuthorShortLabel(authors: string[]): string {
   if (authors.length === 0) return "作者待確認";
   if (authors.length === 1) return authors[0];
   return `${authors[0]} 等`;
+}
+
+function compactSourceLine(text: string, maxLength = 80): string {
+  const chars = Array.from(text.replace(/\s+/g, " ").trim());
+  if (chars.length <= maxLength) return chars.join("");
+  return `${chars.slice(0, maxLength - 1).join("").trim()}…`;
 }
 
 function parseAuthorsInput(value: string): string[] {
@@ -848,6 +895,14 @@ function sourcesForReviewTab(
     default:
       return sources;
   }
+}
+
+function splitSourceReviewBuckets(sources: SourceRecord[]) {
+  return {
+    allSources: sources,
+    mainListSources: sources.filter((source) => source.shouldShowInMainList === true),
+    lowRelevanceSources: sources.filter((source) => source.shouldShowInMainList !== true),
+  };
 }
 
 function SourceReviewCard({
@@ -880,6 +935,8 @@ function SourceReviewCard({
   const relevanceReasons = source.relevanceReasons ?? [];
   const authorityLabel = source.authorityLabel ?? "權威性待確認";
   const languageLabel = source.sourceLanguageLabel ?? "來源語言待確認";
+  const compactMode = reviewState !== "pending";
+  const shouldShowExpandedDetails = isExpanded;
   const StatusIcon =
     reviewState === "accepted"
       ? CheckCircle2
@@ -900,85 +957,141 @@ function SourceReviewCard({
         : "bg-amber-100 text-amber-700";
   const compactSummary =
     reviewState === "accepted"
-      ? `已接受：${summary.contentSummary}`
+      ? compactSourceLine(summary.contentSummary)
       : reviewState === "rejected"
-        ? `已拒絕：${summary.topicRelation}`
-        : summary.contentSummary;
+        ? compactSourceLine(
+          summary.recommendation === "not_recommended"
+            ? summary.recommendationReason
+            : summary.topicRelation,
+        )
+        : compactSourceLine(summary.contentSummary);
+  const compactFacet =
+    summary.mainEvidenceFacet ??
+    summary.suitableSectionLabels[0] ??
+    summary.usableSections[0] ??
+    "支撐面向待確認";
   const acceptButtonLabel =
     summary.recommendation === "not_recommended"
       ? "仍要接受"
+      : summary.recommendation === "supporting"
+        ? "作為輔助"
       : summary.recommendation === "check_first"
         ? "確認後接受"
         : "接受來源";
 
   return (
-    <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
+    <Collapsible open={shouldShowExpandedDetails} onOpenChange={onExpandedChange}>
       <article className={`rounded-lg border p-3 transition-colors sm:p-4 ${cardTone}`} data-testid={`source-card-${reviewState}`}>
         <div className="flex flex-col gap-3">
           <div className="flex min-w-0 gap-3">
-            <div
-              className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${statusTone}`}
-            >
-              <StatusIcon className="h-4 w-4" />
-            </div>
+            {!compactMode && (
+              <div
+                className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${statusTone}`}
+              >
+                <StatusIcon className="h-4 w-4" />
+              </div>
+            )}
             <div className="min-w-0 flex-1">
               <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0">
                   <h3 className="line-clamp-2 text-sm font-semibold leading-6 text-foreground" title={title}>
                     {title}
                   </h3>
-                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                    <span>{sourceAuthorShortLabel(source.authors)}</span>
-                    <span>{year}</span>
-                    <span>{category}</span>
-                    <span>{source.sourceType}</span>
+                  {reviewState !== "rejected" && (
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span>{sourceAuthorShortLabel(source.authors)}</span>
+                      <span>{year}</span>
+                      <span>{category}</span>
+                      <span>{source.sourceType}</span>
+                    </div>
+                  )}
+                </div>
+                {!compactMode && (
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    <Badge variant={sourceReviewBadgeVariant(reviewState)}>
+                      {reviewLabel}
+                    </Badge>
+                    <Badge variant="secondary">可信度 {confidence}</Badge>
+                    <Badge variant={hasAbstract ? "outline" : "secondary"}>
+                      {evidenceGroundingLabel(summary.groundingStatus)}
+                    </Badge>
+                    <Badge variant={sourceRelevanceBadgeVariant(relevanceLevel)}>
+                      {sourceRelevanceLabel(relevanceLevel)}
+                    </Badge>
+                    <Badge variant="outline">{authorityLabel}</Badge>
+                    <Badge variant="outline">{languageLabel}</Badge>
+                    {incomplete && <Badge variant="outline">引用資料不完整</Badge>}
                   </div>
-                </div>
-                <div className="flex shrink-0 flex-wrap items-center gap-2">
-                  <Badge variant={sourceReviewBadgeVariant(reviewState)}>
-                    {reviewLabel}
-                  </Badge>
-                  <Badge variant="secondary">可信度 {confidence}</Badge>
-                  <Badge variant={hasAbstract ? "outline" : "secondary"}>
-                    {hasAbstract ? "摘要可判斷" : "摘要不足"}
-                  </Badge>
-                  <Badge variant={sourceRelevanceBadgeVariant(relevanceLevel)}>
-                    {sourceRelevanceLabel(relevanceLevel)}
-                  </Badge>
-                  <Badge variant="outline">{authorityLabel}</Badge>
-                  <Badge variant="outline">{languageLabel}</Badge>
-                  {incomplete && <Badge variant="outline">引用資料不完整</Badge>}
-                </div>
+                )}
               </div>
             </div>
           </div>
 
           <div className="space-y-2 rounded-md border border-border/70 bg-background/70 px-3 py-3">
-            <p className="line-clamp-2 text-sm leading-6 text-foreground/90">
-              <span className="font-medium text-foreground">內容摘要：</span>
-              {compactSummary}
-            </p>
-            <p className="text-xs leading-5 text-muted-foreground">
-              與主題關聯：{summary.topicRelation}
-            </p>
-            <p className="text-xs leading-5 text-muted-foreground">
-              採用建議：{summary.recommendationReason}
-            </p>
-            {relevanceReasons.length > 0 && (
-              <p className="text-xs leading-5 text-muted-foreground">
-                主題相關性：{relevanceReasons.slice(0, 2).join("；")}
-              </p>
+            {compactMode ? (
+              <div className="space-y-2">
+                {reviewState === "accepted" && (
+                  <p className="text-xs font-medium text-muted-foreground">
+                    主要支撐面向：{compactFacet}
+                  </p>
+                )}
+                <p className="line-clamp-1 text-sm leading-6 text-foreground/90">
+                  {compactSummary}
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-foreground">可驗證片段</p>
+                  {summary.evidenceSnippets.length > 0 ? (
+                    <ul className="space-y-1.5">
+                      {summary.evidenceSnippets.slice(0, 2).map((snippet) => (
+                        <li key={`${snippet.matchedFacet}-${snippet.originalSnippet}`} className="rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-5 text-foreground/90">
+                          <div className="font-medium text-foreground">{snippet.matchedFacet} · {snippet.supportLevel}</div>
+                          <div className="mt-0.5">{snippet.snippetZhTw}</div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            原始片段：{snippet.originalSnippet}
+                          </div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            命中詞：{snippet.matchedTerms.join("、")}
+                          </div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            {snippet.reasoningZhTw}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      尚未取得可驗證摘要片段。
+                    </p>
+                  )}
+                </div>
+                <p className="line-clamp-2 text-sm leading-6 text-foreground/90">
+                  <span className="font-medium text-foreground">繁中摘要：</span>
+                  {compactSummary}
+                </p>
+                <div className="space-y-1 text-xs leading-5 text-muted-foreground">
+                  <p>主證據面向：{summary.mainEvidenceFacet ?? "待確認"}</p>
+                  <p>證據鏈：{summary.evidenceChain.length > 0 ? summary.evidenceChain.map((entry) => `${entry.facetLabelZhTw} → ${entry.matchedTerms.slice(0, 2).join("、")} → ${entry.supportLevel}`).join("；") : "待確認"}</p>
+                  <p>與主題關聯：{summary.topicRelation}</p>
+                  <p>採用建議：{summary.recommendationReason}</p>
+                  {relevanceReasons.length > 0 && (
+                    <p>主題相關性：{relevanceReasons.slice(0, 2).join("；")}</p>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    適合使用章節
+                  </span>
+                  {(summary.suitableSectionLabels.length ? summary.suitableSectionLabels : summary.usableSections).map((section) => (
+                    <Badge key={section} variant="outline">
+                      {section}
+                    </Badge>
+                  ))}
+                </div>
+              </>
             )}
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-medium text-muted-foreground">
-                適合使用章節
-              </span>
-              {summary.usableSections.map((section) => (
-                <Badge key={section} variant="outline">
-                  {section}
-                </Badge>
-              ))}
-            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -990,21 +1103,20 @@ function SourceReviewCard({
                 className="min-h-[36px]"
                 onClick={() => onReview(sourceId, "pending")}
               >
-                取消接受
+                取消採用
               </Button>
-            ) : (
+            ) : reviewState === "pending" ? (
               <Button
                 type="button"
                 size="sm"
-                variant="default"
+                variant={summary.recommendation === "recommended" ? "default" : "outline"}
                 className="min-h-[36px]"
-                disabled={reviewState === "rejected"}
                 onClick={() => onReview(sourceId, "accepted")}
               >
                 <CheckCircle2 className="mr-2 h-4 w-4" />
                 {acceptButtonLabel}
               </Button>
-            )}
+            ) : null}
             {reviewState === "rejected" ? (
               <Button
                 type="button"
@@ -1015,18 +1127,17 @@ function SourceReviewCard({
               >
                 還原為待審
               </Button>
-            ) : (
+            ) : reviewState === "pending" ? (
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
                 className="min-h-[36px]"
-                disabled={reviewState === "accepted"}
                 onClick={() => onReview(sourceId, "rejected")}
               >
                 <XCircle className="mr-2 h-4 w-4" /> 拒絕
               </Button>
-            )}
+            ) : null}
             <CollapsibleTrigger asChild>
               <Button
                 type="button"
@@ -1034,10 +1145,10 @@ function SourceReviewCard({
                 variant="ghost"
                 className="min-h-[36px]"
                 data-testid="button-source-expand"
-                aria-label={isExpanded ? "收合來源細節" : "展開來源細節"}
-                title={isExpanded ? "收合來源細節" : "展開來源細節"}
+                aria-label={shouldShowExpandedDetails ? "收合來源細節" : "展開來源細節"}
+                title={shouldShowExpandedDetails ? "收合來源細節" : "展開來源細節"}
               >
-                {isExpanded ? (
+                {shouldShowExpandedDetails ? (
                   <ChevronUp className="mr-2 h-4 w-4" />
                 ) : (
                   <ChevronDown className="mr-2 h-4 w-4" />
@@ -1045,17 +1156,17 @@ function SourceReviewCard({
                 展開詳情
               </Button>
             </CollapsibleTrigger>
-            {source.url ? (
+            {!compactMode && source.url ? (
               <Button asChild type="button" size="sm" variant="ghost" className="min-h-[36px]">
                 <a href={source.url} target="_blank" rel="noreferrer">
                   <ExternalLink className="mr-2 h-4 w-4" /> 查看原始來源
                 </a>
               </Button>
-            ) : (
+            ) : !compactMode ? (
               <Button type="button" size="sm" variant="ghost" className="min-h-[36px]" disabled>
                 查看原始來源
               </Button>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -1466,10 +1577,9 @@ function SourceManagePanel({
   const previousReviewStates = useRef<Map<string, SourceReviewState>>(
     new Map(),
   );
-  const mainListSources = sources.filter((source) => source.shouldShowInMainList !== false);
-  const lowRelevanceSources = sources.filter((source) => source.shouldShowInMainList === false);
+  const { allSources, mainListSources, lowRelevanceSources } = splitSourceReviewBuckets(sources);
   const counts = sourceReviewCounts(sources);
-  const visibleSources = sourcesForReviewTab(mainListSources, activeTab);
+  const visibleSources = sourcesForReviewTab(allSources, activeTab);
   const activeTabLabel =
     SOURCE_REVIEW_TABS.find((tab) => tab.value === activeTab)?.label ?? "來源";
 
@@ -1609,7 +1719,7 @@ function SourceManagePanel({
                   >
                     <span>
                       <span className="block text-sm font-medium text-foreground">
-                        低相關來源 ({lowRelevanceSources.length})
+                        線索／延伸／低相關來源 ({lowRelevanceSources.length})
                       </span>
                       <span className="block text-xs text-muted-foreground">
                         已預設收合，不會進入主要推薦列表。
@@ -1938,6 +2048,7 @@ function TopicStepPanel({
 function ManageStepPanel({
   sources,
   acceptedCount,
+  hasWorkspaceTopicMismatch,
   onBack,
   onNext,
   onReview,
@@ -1946,12 +2057,23 @@ function ManageStepPanel({
 }: {
   sources: SourceRecord[];
   acceptedCount: number;
+  hasWorkspaceTopicMismatch: boolean;
   onBack: () => void;
   onNext: () => void;
   onReview: (sourceId: string, reviewState: SourceReviewState) => void;
   onEdit: (sourceId: string, patch: Partial<SourceRecord>) => void;
   topic: string;
 }) {
+  const sourceQualityReadiness = generationReadiness(acceptedSourceRecords(sources));
+  const canProceedToGenerate = sourceQualityReadiness.canGenerate && !hasWorkspaceTopicMismatch;
+  const sourceGateWarning = hasWorkspaceTopicMismatch
+    ? "目前來源屬於另一個主題，請重新搜尋後再生成。"
+    : sourceQualityReadiness.relevantSourceCount < 3
+      ? "目前主要來源不足。請重新搜尋或調整主題，至少需要 3 筆可驗證主要來源。"
+      : sourceQualityReadiness.lowQualityAcceptedCount > 0
+        ? "系統找到多筆延伸或低相關來源，但它們不足以支撐本研究主題。"
+        : sourceQualityReadiness.warning;
+
   return (
     <section
       className="mx-auto max-w-5xl space-y-4"
@@ -2011,9 +2133,21 @@ function ManageStepPanel({
         >
           <ArrowLeft className="mr-2 h-4 w-4" /> 上一步：搜尋來源
         </Button>
-        <Button type="button" className="min-h-[42px]" onClick={onNext}>
+        <div className="flex flex-col items-stretch gap-2 sm:items-end">
+          {!canProceedToGenerate && (
+            <p className="max-w-md rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-5 text-amber-800">
+              {sourceGateWarning}
+            </p>
+          )}
+        <Button
+          type="button"
+          className="min-h-[42px]"
+          onClick={onNext}
+          disabled={!canProceedToGenerate}
+        >
           下一步：生成報告 <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
+        </div>
       </div>
     </section>
   );
@@ -2412,6 +2546,7 @@ export function Generator() {
   const [developerDebugOpen, setDeveloperDebugOpen] = useState(false);
   const [workspaceResume, setWorkspaceResume] =
     useState<WorkspaceResumeState | null>(null);
+  const [sourceWorkspaceFingerprint, setSourceWorkspaceFingerprint] = useState<string | null>(null);
   const [activeStep, setActiveStep] = useState<GeneratorWorkflowStep>("topic");
   const [isStepTransitioning, setIsStepTransitioning] = useState(false);
   const [transitionTargetStep, setTransitionTargetStep] = useState<
@@ -2423,6 +2558,8 @@ export function Generator() {
   });
   const transitionTimerRef = useRef<number | null>(null);
   const stepDelayTimerRef = useRef<number | null>(null);
+  const activeTopicFingerprintRef = useRef<string | null>(null);
+  const suppressTopicResetRef = useRef(false);
 
   const updateInput = (key: ReportInputStringKey, value: string) => {
     setInput((prev) => {
@@ -2489,6 +2626,12 @@ export function Generator() {
     : null;
   const acceptedSources = acceptedSourceRecords(sources);
   const readiness = generationReadiness(acceptedSources);
+  const currentTopicFingerprint = hasTopic ? reportTopicFingerprint(input.topic.trim()) : null;
+  const hasWorkspaceTopicMismatch =
+    Boolean(sources.length)
+    && Boolean(sourceWorkspaceFingerprint)
+    && Boolean(currentTopicFingerprint)
+    && sourceWorkspaceFingerprint !== currentTopicFingerprint;
   const workflowVisibility = generatorWorkflowVisibility(developerDebugOpen);
   const reviewCounts = safeSourceReviewCounts(sources);
   const sourceReviewAvailable =
@@ -2503,7 +2646,8 @@ export function Generator() {
     if (step === "topic") return true;
     if (!hasTopic) return false;
     if (step === "search") return true;
-    if (step === "manage") return sources.length > 0;
+    if (step === "manage") return sources.length > 0 && !hasWorkspaceTopicMismatch;
+    if (step === "generate") return readiness.canGenerate && !hasWorkspaceTopicMismatch;
     return true;
   };
   const handleStepSelect = (step: GeneratorWorkflowStep) => {
@@ -2544,16 +2688,61 @@ export function Generator() {
   }, []);
 
   useEffect(() => {
+    const topic = input.topic.trim();
+    const fingerprint = reportTopicFingerprint(topic);
+
+    if (suppressTopicResetRef.current) {
+      activeTopicFingerprintRef.current = topic ? fingerprint : null;
+      suppressTopicResetRef.current = false;
+      return;
+    }
+
+    const previousFingerprint = activeTopicFingerprintRef.current;
+    if (!topic) {
+      activeTopicFingerprintRef.current = null;
+      return;
+    }
+
+    if (previousFingerprint === null) {
+      activeTopicFingerprintRef.current = fingerprint;
+      return;
+    }
+
+    if (previousFingerprint === fingerprint) return;
+
+    activeTopicFingerprintRef.current = fingerprint;
+    if (sources.length === 0 && sourceSearchStatus === "idle" && !workspaceResume) return;
+
+    clearStepTransition();
+    setSources([]);
+    setSourceWorkspaceFingerprint(null);
+    setKeywordSearchDebug(null);
+    setSourceSearchStatus("idle");
+    setSourceSearchMessage("主題已變更，請重新搜尋來源。");
+    setGenerateStatus("idle");
+    setWorkspaceResume(null);
+    setActiveStep("search");
+    toast({
+      title: "主題已變更",
+      description: "已清空前一個主題的來源與接受紀錄，請重新搜尋。",
+    });
+  }, [input.topic, sourceSearchStatus, sources.length, toast, workspaceResume]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const reportId = params.get("reportId");
     if (!reportId || workspaceResume?.loaded) return;
 
     const workspace = loadReportWorkspace(reportId);
     if (!workspace) return;
+    if (!workspaceMatchesTopic(workspace, workspace.input.topic)) return;
 
+    suppressTopicResetRef.current = true;
+    activeTopicFingerprintRef.current = workspace.topicFingerprint;
     setWorkspaceResume({ reportId, loaded: true });
     setInput(workspace.input);
     setSources(workspace.acceptedSources);
+    setSourceWorkspaceFingerprint(workspace.topicFingerprint);
     setSourceSearchStatus("done");
     setSourceSearchMessage("已載入報告工作區來源，可調整後重新生成。");
     setActiveStep(
@@ -2587,6 +2776,7 @@ export function Generator() {
     setSourceSearchMessage("");
     setKeywordSearchDebug(null);
     setSources([]);
+    setSourceWorkspaceFingerprint(null);
     if (stepDelayTimerRef.current !== null) {
       window.clearTimeout(stepDelayTimerRef.current);
       stepDelayTimerRef.current = null;
@@ -2602,26 +2792,35 @@ export function Generator() {
       });
       const normalizedSources = applySourceAuthorityAndLanguage(
         applySourceRelevanceAssessments(
-          dedupeSourceRecords(result.sources.map(normalizeSourceForReview)),
+          dedupeSourceRecords(
+            supplementTrustedClimateSources(
+              result.sources.map(normalizeSourceForReview),
+              topic,
+            ),
+          ),
           topic,
         ),
       );
       setSources(normalizedSources);
+      setSourceWorkspaceFingerprint(reportTopicFingerprint(topic));
       setKeywordSearchDebug(keywordSearchDebugFromResult(result));
       if (normalizedSources.length) {
         setSourceSearchStatus("done");
         const partialProviderFailure = hasProviderFailures(result);
+        const diagnosticsMessage = sourceSearchDiagnosticsMessage(result);
         toast({
           title: partialProviderFailure ? "部分來源搜尋失敗" : "已找到來源",
-          description: partialProviderFailure
-            ? "已顯示可用來源，部分資料來源暫時無法使用。"
-            : `已套用關鍵詞搜尋策略，共找到 ${normalizedSources.length} 筆可選來源。`,
+          description: diagnosticsMessage || (
+            partialProviderFailure
+              ? "已顯示可用來源，部分資料來源暫時無法使用。"
+              : `已套用關鍵詞搜尋策略，共找到 ${normalizedSources.length} 筆可選來源。`
+          ),
         });
         scheduleManageStepAfterSearch(normalizedSources.length);
       } else {
         setSourceSearchStatus("empty");
         setSourceSearchMessage(
-          "已產生搜尋關鍵詞，但目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。",
+          sourceSearchDiagnosticsMessage(result) || "已產生搜尋關鍵詞，但目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。",
         );
       }
     } catch (error) {
@@ -2634,11 +2833,17 @@ export function Generator() {
         const result = await searchSources({ query: searchQuery });
         const normalizedSources = applySourceAuthorityAndLanguage(
           applySourceRelevanceAssessments(
-            dedupeSourceRecords(result.sources.map(normalizeSourceForReview)),
+            dedupeSourceRecords(
+              supplementTrustedClimateSources(
+                result.sources.map(normalizeSourceForReview),
+                topic,
+              ),
+            ),
             topic,
           ),
         );
         setSources(normalizedSources);
+        setSourceWorkspaceFingerprint(reportTopicFingerprint(topic));
         setKeywordSearchDebug({
           fallbackUsed: true,
           llmStatus: "skipped",
@@ -2661,7 +2866,8 @@ export function Generator() {
         } else {
           setSourceSearchStatus("empty");
           setSourceSearchMessage(
-            "目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。",
+            sourceErrorMessage(error) ||
+              "目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。",
           );
         }
       } catch (fallbackError) {
@@ -2714,6 +2920,15 @@ export function Generator() {
       return;
     }
     const currentReadiness = generationReadiness(acceptedSources);
+    if (hasWorkspaceTopicMismatch) {
+      setGenerateStatus("error");
+      toast({
+        title: "主題與來源不一致",
+        description: "目前來源屬於另一個主題，請重新搜尋後再生成。",
+        variant: "destructive",
+      });
+      return;
+    }
     if (!currentReadiness.canGenerate) {
       setGenerateStatus("error");
       toast({
@@ -2802,8 +3017,11 @@ export function Generator() {
   const handleClear = () => {
     clearStepTransition();
     setInput(DEFAULT_INPUT);
+    activeTopicFingerprintRef.current = null;
+    suppressTopicResetRef.current = false;
     setExpansions([]);
     setSources([]);
+    setSourceWorkspaceFingerprint(null);
     setSourceSearchStatus("idle");
     setSourceSearchMessage("");
     setKeywordSearchDebug(null);
@@ -2964,6 +3182,7 @@ export function Generator() {
             <ManageStepPanel
               sources={sources}
               acceptedCount={acceptedSources.length}
+              hasWorkspaceTopicMismatch={hasWorkspaceTopicMismatch}
               onBack={() => goToStep("search")}
               onNext={goToGenerateStep}
               onReview={updateSourceReview}

@@ -77,8 +77,8 @@ test("sourceSummaryForUser explains cola-health topic relation in Traditional Ch
 
   assert.equal(summary.recommendation, "recommended");
   assert.match(summary.topicRelation, /可樂中的成分與攝取習慣對健康的影響/);
-  assert.match(summary.topicRelation, /核心概念|相關面向/);
-  assert.match(summary.recommendationReason, /優先考慮接受/);
+  assert.match(summary.topicRelation, /主要證據|直接支撐|關聯/);
+  assert.match(summary.recommendationReason, /推薦採用/);
   assert.ok(summary.usableSections.length > 0);
 });
 
@@ -94,7 +94,7 @@ test("sourceSummaryForUser separates content summary from relation and recommend
   );
 
   assert.match(summary.contentSummary, /soft drink intake/);
-  assert.match(summary.topicRelation, /與主題關聯|核心概念|相關面向/);
+  assert.match(summary.topicRelation, /主題|直接支撐|延伸/);
   assert.match(summary.recommendationReason, /採用|接受|確認|不建議/);
 });
 
@@ -125,7 +125,30 @@ test("sourceSummaryForUser marks relevant metadata-only sources as check-first",
   );
 
   assert.equal(summary.recommendation, "check_first");
-  assert.match(summary.contentSummary, /摘要不足/);
-  assert.match(summary.topicRelation, /摘要不足/);
+  assert.match(summary.contentSummary, /只有書目資料|摘要不足/);
+  assert.match(summary.topicRelation, /開啟原文確認|摘要不足/);
   assert.match(summary.recommendationReason, /開啟原文確認/);
+});
+
+test("sourceSummaryForUser builds evidence snippets and zh-TW refined summary for climate sources", () => {
+  const summary = sourceSummaryForUser(
+    source({
+      title: "Observed global warming and current status of climate change indicators",
+      abstract:
+        "Observed warming is reflected in global temperature trends, CO2 concentration, and sea level change. Greenhouse gas emissions remain a major driver of climate change.",
+      sourceCategory: "journal_article",
+    }),
+    "「氣候變遷」的成因與現況分析",
+  );
+
+  assert.equal(summary.recommendation, "recommended");
+  assert.equal(summary.groundingStatus, "abstract_grounded");
+  assert.ok(summary.evidenceSnippets.length > 0);
+  assert.ok(summary.evidenceSnippets[0]?.matchedFacet);
+  assert.ok(summary.evidenceSnippets[0]?.supportLevel);
+  assert.ok(summary.evidenceSnippets[0]?.reasoningZhTw);
+  assert.ok(summary.evidenceChain.length > 0);
+  assert.ok(summary.mainEvidenceFacet);
+  assert.match(summary.contentSummary, /溫室氣體|二氧化碳|觀測升溫|海平面/);
+  assert.ok(summary.suitableSectionLabels.includes("現況分析"));
 });

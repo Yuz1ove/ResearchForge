@@ -1,4 +1,4 @@
-export const SOURCE_PROVIDERS = ["Crossref", "Semantic Scholar"] as const;
+export const SOURCE_PROVIDERS = ["Crossref", "OpenAlex", "Semantic Scholar", "Web"] as const;
 export type SourceProvider = (typeof SOURCE_PROVIDERS)[number];
 
 export const SOURCE_REVIEW_STATES = ["pending", "accepted", "rejected"] as const;
@@ -94,16 +94,61 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
   };
 }
 
+function preferLongerText(primary: string | null | undefined, secondary: string | null | undefined): string | null {
+  const first = cleanText(primary);
+  const second = cleanText(secondary);
+  if (!first) return second;
+  if (!second) return first;
+  return second.length > first.length ? second : first;
+}
+
+function preferAuthors(primary: string[], secondary: string[]): string[] {
+  if (primary.length === 0) return secondary;
+  if (secondary.length > primary.length) return secondary;
+  return primary;
+}
+
+function preferUrl(primary: string | null | undefined, secondary: string | null | undefined): string | null {
+  const first = cleanText(primary);
+  const second = cleanText(secondary);
+  if (!first) return second;
+  if (!second) return first;
+  return first;
+}
+
+function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): SourceRecord {
+  return normalizeSourceRecord({
+    ...existing,
+    title: cleanText(existing.title) || cleanText(incoming.title) || "",
+    authors: preferAuthors(existing.authors, incoming.authors),
+    year: existing.year ?? incoming.year,
+    abstract: preferLongerText(existing.abstract, incoming.abstract),
+    doi: existing.doi ?? incoming.doi,
+    url: preferUrl(existing.url, incoming.url),
+    sourceType: existing.sourceType,
+    reviewState: existing.reviewState,
+    publisher: cleanText(existing.publisher) ?? cleanText(incoming.publisher),
+    containerTitle: cleanText(existing.containerTitle) ?? cleanText(incoming.containerTitle),
+    accessedAt: cleanText(existing.accessedAt) ?? cleanText(incoming.accessedAt),
+    id: cleanText(existing.id) || cleanText(incoming.id) || "",
+  });
+}
+
 export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
-  const seen = new Set<string>();
   const deduped: SourceRecord[] = [];
+  const indexByKey = new Map<string, number>();
 
   for (const source of sources) {
     const normalized = normalizeSourceRecord(source);
     const key = sourceRecordKey(normalized);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push({ ...normalized, id: normalized.id || key });
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex === undefined) {
+      indexByKey.set(key, deduped.length);
+      deduped.push({ ...normalized, id: normalized.id || key });
+      continue;
+    }
+
+    deduped[existingIndex] = mergeSourceRecords(deduped[existingIndex], normalized);
   }
 
   return deduped;

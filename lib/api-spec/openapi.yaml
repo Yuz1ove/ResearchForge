@@ -164,7 +164,9 @@ components:
           type: string
           enum:
             - Crossref
+            - OpenAlex
             - Semantic Scholar
+            - Web
         reviewState:
           $ref: "#/components/schemas/SourceReviewState"
         publisher:
@@ -236,6 +238,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SearchRelevanceDebug"
+        diagnostics:
+          $ref: "#/components/schemas/SourceSearchDiagnostics"
       required:
         - sources
     KeywordExpansionResult:
@@ -328,6 +332,12 @@ components:
             - failed
         fallbackUsed:
           type: boolean
+        domainProfile:
+          type: string
+          enum:
+            - academic
+            - business-industry
+            - automotive-industry
       required:
         - primaryConcepts
         - contextConcepts
@@ -337,6 +347,7 @@ components:
         - mustHaveTerms
         - plannerStatus
         - fallbackUsed
+        - domainProfile
     SearchIntentQuerySet:
       type: object
       properties:
@@ -408,6 +419,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/KeywordSourceGroup"
+        diagnostics:
+          $ref: "#/components/schemas/SourceSearchDiagnostics"
       required:
         - ok
         - topic
@@ -426,6 +439,12 @@ components:
       properties:
         normalizedTopic:
           type: string
+        domainProfile:
+          type: string
+          enum:
+            - academic
+            - business-industry
+            - automotive-industry
         primaryConcepts:
           type: array
           items:
@@ -485,6 +504,7 @@ components:
           type: boolean
       required:
         - normalizedTopic
+        - domainProfile
         - primaryConcepts
         - contextConcepts
         - outcomeConcepts
@@ -546,9 +566,17 @@ components:
           type: string
           enum:
             - Crossref
+            - OpenAlex
             - Semantic Scholar
+            - Web
         query:
           type: string
+        stage:
+          type: string
+          enum:
+            - academic
+            - official
+            - media
         results:
           type: array
           items:
@@ -563,9 +591,111 @@ components:
         - ok
         - provider
         - query
+        - stage
         - results
         - error_type
         - error_message
+    SourceSearchDiagnostics:
+      type: object
+      properties:
+        resultCount:
+          type: integer
+        resultTarget:
+          type: integer
+        minSources:
+          type: integer
+        targetSources:
+          type: integer
+        queryCount:
+          type: integer
+        providerCount:
+          type: integer
+        fallbackUsed:
+          type: boolean
+        status:
+          type: string
+          enum:
+            - success
+            - partial_success
+            - insufficient_sources
+            - empty
+            - failed
+        providerFailures:
+          type: array
+          items:
+            type: object
+            properties:
+              provider:
+                type: string
+                enum:
+                  - Crossref
+                  - OpenAlex
+                  - Semantic Scholar
+                  - Web
+              query:
+                type: string
+              stage:
+                type: string
+                enum:
+                  - academic
+                  - official
+                  - media
+              error_type:
+                type: string
+              error_message:
+                type: string
+            required:
+              - provider
+              - query
+              - stage
+              - error_type
+              - error_message
+        providerResultCounts:
+          type: array
+          items:
+            type: object
+            properties:
+              provider:
+                type: string
+                enum:
+                  - Crossref
+                  - OpenAlex
+                  - Semantic Scholar
+                  - Web
+              query:
+                type: string
+              stage:
+                type: string
+                enum:
+                  - academic
+                  - official
+                  - media
+              resultCount:
+                type: integer
+              ok:
+                type: boolean
+            required:
+              - provider
+              - query
+              - stage
+              - resultCount
+              - ok
+        warnings:
+          type: array
+          items:
+            type: string
+      required:
+        - resultCount
+        - resultTarget
+        - minSources
+        - targetSources
+        - queryCount
+        - providerCount
+        - fallbackUsed
+        - status
+        - providerFailures
+        - providerResultCounts
+        - warnings
     KeywordSourceSearchResult:
       type: object
       properties:

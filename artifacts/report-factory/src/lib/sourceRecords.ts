@@ -4,9 +4,35 @@ export type { SourceReviewState };
 
 export const WORKFLOW_REPORT_SECTIONS = ["研究背景", "文獻探討", "研究方法", "數據分析", "結論"] as const;
 export type WorkflowReportSection = (typeof WORKFLOW_REPORT_SECTIONS)[number];
+export type SourceRelevanceLevel = "primary" | "secondary" | "clue" | "low" | "off_topic";
+export type EvidenceGroundingStatus =
+  | "abstract_grounded"
+  | "snippet_grounded"
+  | "metadata_only"
+  | "insufficient";
 
 export const SOURCE_CONFIDENCE_OPTIONS = ["高", "中", "低"] as const;
 export type SourceConfidence = (typeof SOURCE_CONFIDENCE_OPTIONS)[number];
+
+export const EVIDENCE_SUPPORT_LEVELS = ["direct", "indirect", "weak"] as const;
+export type EvidenceSupportLevel = (typeof EVIDENCE_SUPPORT_LEVELS)[number];
+
+export interface SourceEvidenceSnippet {
+  originalSnippet: string;
+  snippetZhTw: string;
+  matchedFacet: string;
+  matchedTerms: string[];
+  supportLevel: EvidenceSupportLevel;
+  reasoningZhTw: string;
+  score: number;
+}
+
+export interface SourceEvidenceChainEntry {
+  facetLabelZhTw: string;
+  matchedTerms: string[];
+  supportLevel: EvidenceSupportLevel;
+  reasoningZhTw: string;
+}
 
 export const SOURCE_CATEGORY_OPTIONS = [
   "academic_paper",
@@ -32,11 +58,15 @@ export interface SourceRecordMetadata {
   usableSections?: WorkflowReportSection[] | string[] | null;
   confidence?: SourceConfidence | string | null;
   reviewNotes?: string | null;
-  relevanceLevel?: "high" | "medium" | "low" | "off_topic" | null;
+  relevanceLevel?: SourceRelevanceLevel | null;
   relevanceScore?: number | null;
   relevanceReasons?: string[] | null;
   matchedCoreConcepts?: string[] | null;
   missingCoreConcepts?: string[] | null;
+  matchedFacets?: string[] | null;
+  missingRequiredFacets?: string[] | null;
+  evidenceGrounding?: EvidenceGroundingStatus | null;
+  sourceRelevanceReasonZhTw?: string | null;
   shouldShowInMainList?: boolean | null;
   shouldRecommendAccept?: boolean | null;
   authorityLevel?: "high" | "medium" | "check" | "insufficient_summary" | "low_relevance" | null;
@@ -44,6 +74,10 @@ export interface SourceRecordMetadata {
   authorityLabel?: string | null;
   sourceLanguage?: "zh-TW" | "zh-CN" | "en" | "other" | "unknown" | null;
   sourceLanguageLabel?: string | null;
+  mainEvidenceFacet?: string | null;
+  evidenceSummaryZhTw?: string | null;
+  evidenceSnippets?: SourceEvidenceSnippet[] | null;
+  evidenceChain?: SourceEvidenceChainEntry[] | null;
 }
 
 export type SourceRecord = ApiSourceRecord & SourceRecordMetadata;
@@ -93,6 +127,10 @@ function cleanText(value: string | null | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
+function cleanUnknownText(value: unknown): string | null {
+  return cleanText(typeof value === "string" ? value : null);
+}
+
 export function normalizeUsableSections(value: unknown): WorkflowReportSection[] {
   if (!Array.isArray(value)) return [];
   const allowed = new Set<string>(WORKFLOW_REPORT_SECTIONS);
@@ -126,8 +164,89 @@ function normalizeStringList(value: unknown): string[] | null {
   return normalized.length ? Array.from(new Set(normalized)) : null;
 }
 
+function normalizeEvidenceSupportLevel(value: unknown): EvidenceSupportLevel | null {
+  if (value === "direct" || value === "indirect" || value === "weak") return value;
+  return null;
+}
+
+function normalizeEvidenceSnippet(value: unknown): SourceEvidenceSnippet | null {
+  if (!value || typeof value !== "object") return null;
+  const data = value as Record<string, unknown>;
+  const originalSnippet = cleanUnknownText(data.originalSnippet ?? data.original_snippet);
+  const snippetZhTw = cleanUnknownText(data.snippetZhTw ?? data.snippet_zh_tw ?? data.snippet);
+  const matchedFacet = cleanUnknownText(data.matchedFacet ?? data.matched_facet);
+  const matchedTerms = normalizeStringList(data.matchedTerms ?? data.matched_terms);
+  const supportLevel = normalizeEvidenceSupportLevel(data.supportLevel ?? data.support_level);
+  const reasoningZhTw = cleanUnknownText(data.reasoningZhTw ?? data.reasoning_zh_tw ?? data.reasoning);
+  const score = typeof data.score === "number" && Number.isFinite(data.score)
+    ? data.score
+    : null;
+
+  if (!originalSnippet || !snippetZhTw || !matchedFacet || !matchedTerms || !supportLevel || !reasoningZhTw || score === null) {
+    return null;
+  }
+
+  return {
+    originalSnippet,
+    snippetZhTw,
+    matchedFacet,
+    matchedTerms,
+    supportLevel,
+    reasoningZhTw,
+    score,
+  };
+}
+
+function normalizeEvidenceChainEntry(value: unknown): SourceEvidenceChainEntry | null {
+  if (!value || typeof value !== "object") return null;
+  const data = value as Record<string, unknown>;
+  const facetLabelZhTw = cleanUnknownText(data.facetLabelZhTw ?? data.facetLabel ?? data.facet);
+  const matchedTerms = normalizeStringList(data.matchedTerms ?? data.matched_terms);
+  const supportLevel = normalizeEvidenceSupportLevel(data.supportLevel ?? data.support_level);
+  const reasoningZhTw = cleanUnknownText(data.reasoningZhTw ?? data.reasoning_zh_tw ?? data.reasoning);
+
+  if (!facetLabelZhTw || !matchedTerms || !supportLevel || !reasoningZhTw) {
+    return null;
+  }
+
+  return {
+    facetLabelZhTw,
+    matchedTerms,
+    supportLevel,
+    reasoningZhTw,
+  };
+}
+
+function normalizeEvidenceSnippetList(value: unknown): SourceEvidenceSnippet[] | null {
+  if (!Array.isArray(value)) return null;
+  const snippets = value
+    .map((item) => normalizeEvidenceSnippet(item))
+    .filter((item): item is SourceEvidenceSnippet => Boolean(item));
+  return snippets.length ? snippets : null;
+}
+
+function normalizeEvidenceChainList(value: unknown): SourceEvidenceChainEntry[] | null {
+  if (!Array.isArray(value)) return null;
+  const entries = value
+    .map((item) => normalizeEvidenceChainEntry(item))
+    .filter((item): item is SourceEvidenceChainEntry => Boolean(item));
+  return entries.length ? entries : null;
+}
+
 function normalizeRelevanceLevel(value: unknown): SourceRecordMetadata["relevanceLevel"] {
-  if (value === "high" || value === "medium" || value === "low" || value === "off_topic") return value;
+  if (value === "primary" || value === "secondary" || value === "clue" || value === "low" || value === "off_topic") return value;
+  if (value === "high") return "primary";
+  if (value === "medium") return "secondary";
+  return null;
+}
+
+function normalizeEvidenceGrounding(value: unknown): SourceRecordMetadata["evidenceGrounding"] {
+  if (
+    value === "abstract_grounded"
+    || value === "snippet_grounded"
+    || value === "metadata_only"
+    || value === "insufficient"
+  ) return value;
   return null;
 }
 
@@ -234,6 +353,17 @@ export function sourceRecordKey(source: Pick<SourceRecord, "title" | "doi" | "ur
   return `source:${source.sourceType}:${stableHash(JSON.stringify(source))}`;
 }
 
+function sourceDedupeKey(source: Pick<SourceRecord, "title" | "doi" | "url">): string {
+  const doi = normalizeDoi(source.doi);
+  if (doi) return `doi:${doi.toLowerCase()}`;
+
+  const url = cleanText(source.url);
+  if (url) return `url:${url.toLowerCase()}`;
+
+  const title = normalizeTitle(source.title).toLowerCase();
+  return title ? `title:${title}` : `source:${stableHash(JSON.stringify(source))}`;
+}
+
 function textForClassification(source: SourceRecord): string {
   return [
     source.title,
@@ -334,6 +464,10 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     relevanceReasons: normalizeStringList(source.relevanceReasons),
     matchedCoreConcepts: normalizeStringList(source.matchedCoreConcepts),
     missingCoreConcepts: normalizeStringList(source.missingCoreConcepts),
+    matchedFacets: normalizeStringList(source.matchedFacets),
+    missingRequiredFacets: normalizeStringList(source.missingRequiredFacets),
+    evidenceGrounding: normalizeEvidenceGrounding(source.evidenceGrounding),
+    sourceRelevanceReasonZhTw: cleanText(source.sourceRelevanceReasonZhTw),
     shouldShowInMainList: typeof source.shouldShowInMainList === "boolean" ? source.shouldShowInMainList : null,
     shouldRecommendAccept: typeof source.shouldRecommendAccept === "boolean" ? source.shouldRecommendAccept : null,
     authorityLevel: normalizeAuthorityLevel(source.authorityLevel),
@@ -343,6 +477,10 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     authorityLabel: cleanText(source.authorityLabel),
     sourceLanguage: normalizeSourceLanguage(source.sourceLanguage),
     sourceLanguageLabel: cleanText(source.sourceLanguageLabel),
+    mainEvidenceFacet: cleanText(source.mainEvidenceFacet),
+    evidenceSummaryZhTw: cleanText(source.evidenceSummaryZhTw),
+    evidenceSnippets: normalizeEvidenceSnippetList(source.evidenceSnippets),
+    evidenceChain: normalizeEvidenceChainList(source.evidenceChain),
   };
   return {
     ...normalized,
@@ -352,16 +490,84 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
   };
 }
 
+function preferLongerText(primary: string | null | undefined, secondary: string | null | undefined): string | null {
+  const first = cleanText(primary);
+  const second = cleanText(secondary);
+  if (!first) return second;
+  if (!second) return first;
+  return second.length > first.length ? second : first;
+}
+
+function preferAuthors(primary: string[], secondary: string[]): string[] {
+  if (primary.length === 0) return secondary;
+  if (secondary.length > primary.length) return secondary;
+  return primary;
+}
+
+function preferUrl(primary: string | null | undefined, secondary: string | null | undefined): string | null {
+  const first = cleanText(primary);
+  const second = cleanText(secondary);
+  if (!first) return second;
+  if (!second) return first;
+  return first;
+}
+
+function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): SourceRecord {
+  return normalizeSourceForReview({
+    ...existing,
+    title: cleanText(existing.title) || cleanText(incoming.title) || "",
+    authors: preferAuthors(existing.authors, incoming.authors),
+    year: existing.year ?? incoming.year,
+    abstract: preferLongerText(existing.abstract, incoming.abstract),
+    doi: existing.doi ?? incoming.doi,
+    url: preferUrl(existing.url, incoming.url),
+    sourceType: existing.sourceType,
+    reviewState: existing.reviewState,
+    publisher: cleanText(existing.publisher) ?? cleanText(incoming.publisher),
+    containerTitle: cleanText(existing.containerTitle) ?? cleanText(incoming.containerTitle),
+    accessedAt: cleanText(existing.accessedAt) ?? cleanText(incoming.accessedAt),
+    sourceCategory: existing.sourceCategory ?? incoming.sourceCategory,
+    usableSections: existing.usableSections ?? incoming.usableSections,
+    confidence: existing.confidence ?? incoming.confidence,
+    reviewNotes: cleanText(existing.reviewNotes) ?? cleanText(incoming.reviewNotes),
+    relevanceLevel: existing.relevanceLevel ?? incoming.relevanceLevel,
+    relevanceScore: existing.relevanceScore ?? incoming.relevanceScore,
+    relevanceReasons: existing.relevanceReasons ?? incoming.relevanceReasons,
+    matchedCoreConcepts: existing.matchedCoreConcepts ?? incoming.matchedCoreConcepts,
+    missingCoreConcepts: existing.missingCoreConcepts ?? incoming.missingCoreConcepts,
+    matchedFacets: existing.matchedFacets ?? incoming.matchedFacets,
+    missingRequiredFacets: existing.missingRequiredFacets ?? incoming.missingRequiredFacets,
+    evidenceGrounding: existing.evidenceGrounding ?? incoming.evidenceGrounding,
+    sourceRelevanceReasonZhTw: cleanText(existing.sourceRelevanceReasonZhTw) ?? cleanText(incoming.sourceRelevanceReasonZhTw),
+    shouldShowInMainList: typeof existing.shouldShowInMainList === "boolean" ? existing.shouldShowInMainList : incoming.shouldShowInMainList,
+    shouldRecommendAccept: typeof existing.shouldRecommendAccept === "boolean" ? existing.shouldRecommendAccept : incoming.shouldRecommendAccept,
+    authorityLevel: existing.authorityLevel ?? incoming.authorityLevel,
+    authorityScore: existing.authorityScore ?? incoming.authorityScore,
+    authorityLabel: cleanText(existing.authorityLabel) ?? cleanText(incoming.authorityLabel),
+    sourceLanguage: existing.sourceLanguage ?? incoming.sourceLanguage,
+    sourceLanguageLabel: cleanText(existing.sourceLanguageLabel) ?? cleanText(incoming.sourceLanguageLabel),
+    mainEvidenceFacet: cleanText(existing.mainEvidenceFacet) ?? cleanText(incoming.mainEvidenceFacet),
+    evidenceSummaryZhTw: cleanText(existing.evidenceSummaryZhTw) ?? cleanText(incoming.evidenceSummaryZhTw),
+    evidenceSnippets: existing.evidenceSnippets ?? incoming.evidenceSnippets,
+    evidenceChain: existing.evidenceChain ?? incoming.evidenceChain,
+  });
+}
+
 export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
-  const seen = new Set<string>();
   const deduped: SourceRecord[] = [];
+  const indexByKey = new Map<string, number>();
 
   for (const source of sources) {
     const normalized = normalizeSourceForReview(source);
-    const key = sourceRecordKey(normalized);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push({ ...normalized, id: normalized.id || key });
+    const key = sourceDedupeKey(normalized);
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex === undefined) {
+      indexByKey.set(key, deduped.length);
+      deduped.push({ ...normalized, id: normalized.id || key });
+      continue;
+    }
+
+    deduped[existingIndex] = mergeSourceRecords(deduped[existingIndex], normalized);
   }
 
   return deduped;
@@ -391,6 +597,25 @@ export function sourceReviewCounts(sources: SourceRecord[]): {
     pending: candidateSourceRecords(sources).length,
     rejected: rejectedSourceRecords(sources).length,
   };
+}
+
+export type SourceReviewTab = "all" | "accepted" | "pending" | "rejected";
+
+export function sourceReviewTabSources(
+  sources: SourceRecord[],
+  tab: SourceReviewTab,
+): SourceRecord[] {
+  switch (tab) {
+    case "accepted":
+      return acceptedSourceRecords(sources);
+    case "pending":
+      return candidateSourceRecords(sources);
+    case "rejected":
+      return rejectedSourceRecords(sources);
+    case "all":
+    default:
+      return sources;
+  }
 }
 
 export function updateSourceReviewState(
