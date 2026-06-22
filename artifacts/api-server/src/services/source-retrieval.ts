@@ -10,14 +10,15 @@ import {
   type SourceProviderName,
 } from "./source-provider-config";
 
-const MAX_RESULTS = 20;
-const ACADEMIC_FALLBACK_THRESHOLD = 10;
+const DEFAULT_MIN_SOURCES = 10;
+const DEFAULT_TARGET_SOURCES = 20;
 
 export type SourceProvider = SourceProviderName;
 export type SourceSearchErrorCode = "timeout" | "api-failure";
 export type SourceSearchDiagnosticsStatus =
   | "success"
-  | "partial"
+  | "partial_success"
+  | "insufficient_sources"
   | "empty"
   | "failed";
 
@@ -26,6 +27,7 @@ export type SourceSearchStage = "academic" | "official" | "media";
 export interface SourceSearchProviderFailure {
   provider: SourceProvider;
   query: string;
+  stage: SourceSearchStage;
   error_type: SourceSearchErrorCode;
   error_message: string;
 }
@@ -33,6 +35,8 @@ export interface SourceSearchProviderFailure {
 export interface SourceSearchDiagnostics {
   resultCount: number;
   resultTarget: number;
+  minSources: number;
+  targetSources: number;
   queryCount: number;
   providerCount: number;
   fallbackUsed: boolean;
@@ -41,6 +45,7 @@ export interface SourceSearchDiagnostics {
   providerResultCounts: Array<{
     provider: SourceProvider;
     query: string;
+    stage: SourceSearchStage;
     resultCount: number;
     ok: boolean;
   }>;
@@ -53,6 +58,8 @@ export interface SourceSearchOptions {
   fetchImpl?: SourceFetch;
   providerConfigs?: Partial<Record<SourceProvider, SourceProviderConfig>>;
   stage?: SourceSearchStage;
+  minSources?: number;
+  targetSources?: number;
 }
 
 export interface SourceSearchResultWithDiagnostics {
@@ -65,6 +72,7 @@ export interface SourceProviderSearchResult {
   ok: boolean;
   provider: SourceProvider;
   query: string;
+  stage: SourceSearchStage;
   results: SourceRecord[];
   error_type: SourceSearchErrorCode | null;
   error_message: string | null;
@@ -528,6 +536,7 @@ async function searchProviderOrThrow(
 function providerErrorResult(
   provider: SourceProvider,
   query: string,
+  stage: SourceSearchStage,
   error: unknown,
 ): SourceProviderSearchResult {
   if (error instanceof SourceSearchError) {
@@ -535,6 +544,7 @@ function providerErrorResult(
       ok: false,
       provider,
       query,
+      stage,
       results: [],
       error_type: error.code,
       error_message: error.message,
@@ -546,6 +556,7 @@ function providerErrorResult(
     ok: false,
     provider,
     query,
+    stage,
     results: [],
     error_type: "api-failure",
     error_message: message,
@@ -558,12 +569,14 @@ export async function searchSourceProvider(
   options?: SourceSearchOptions,
 ): Promise<SourceProviderSearchResult> {
   const trimmedQuery = query.trim();
+  const stage = options?.stage ?? "academic";
   const config = sourceProviderConfigs(options)[provider];
   if (!trimmedQuery) {
     return {
       ok: true,
       provider,
       query: trimmedQuery,
+      stage,
       results: [],
       error_type: null,
       error_message: null,
@@ -576,12 +589,13 @@ export async function searchSourceProvider(
       ok: true,
       provider,
       query: trimmedQuery,
+      stage,
       results,
       error_type: null,
       error_message: null,
     };
   } catch (error) {
-    return providerErrorResult(provider, trimmedQuery, error);
+    return providerErrorResult(provider, trimmedQuery, stage, error);
   }
 }
 
@@ -596,12 +610,18 @@ export async function searchSourceProviders(
       : stage === "official"
         ? ["Web", "Crossref"] as const
         : ["Web"] as const;
-  return Promise.all(providers.map((provider) => searchSourceProvider(provider, query, options)));
+  const settled = await Promise.allSettled(providers.map((provider) => searchSourceProvider(provider, query, options)));
+  return settled.map((item, index) => {
+    const provider = providers[index];
+    if (item.status === "fulfilled") return item.value;
+    return providerErrorResult(provider, query.trim(), stage, item.reason);
+  });
 }
 
 export function buildSourceSearchDiagnostics(
   providerResults: SourceProviderSearchResult[],
-  resultTarget: number,
+  minSources: number,
+  targetSources: number,
   fallbackUsed: boolean,
 ): SourceSearchDiagnostics {
   const providerFailures = providerResults
@@ -609,6 +629,7 @@ export function buildSourceSearchDiagnostics(
     .map((result) => ({
       provider: result.provider,
       query: result.query,
+      stage: result.stage ?? "academic",
       error_type: result.error_type ?? "api-failure",
       error_message: result.error_message ?? `${result.provider} request failed`,
     }));
@@ -620,6 +641,7 @@ export function buildSourceSearchDiagnostics(
   const providerResultCounts = providerResults.map((result) => ({
     provider: result.provider,
     query: result.query,
+    stage: result.stage ?? "academic",
     resultCount: result.results.length,
     ok: result.ok,
   }));
@@ -632,18 +654,28 @@ export function buildSourceSearchDiagnostics(
   if (providerFailures.length > 0) {
     warnings.push("部分資料來源暫時不可用，已保留可用結果。");
   }
-  if (resultCount < resultTarget) {
-    warnings.push(`目前取得 ${resultCount}/${resultTarget} 筆來源。`);
+  if (resultCount < minSources) {
+    warnings.push(`目前取得 ${resultCount}/${minSources} 筆，少於最低建議來源數。`);
+  } else if (resultCount < targetSources) {
+    warnings.push(`目前取得 ${resultCount}/${targetSources} 筆來源。`);
   }
 
   let status: SourceSearchDiagnosticsStatus = "success";
-  if (providerFailures.length > 0 && resultCount > 0) status = "partial";
-  else if (providerFailures.length > 0 && resultCount === 0) status = "failed";
-  else if (resultCount === 0) status = "empty";
+  if (resultCount === 0 && providerFailures.length === 0) {
+    status = "empty";
+  } else if (resultCount === 0 && providerFailures.length > 0) {
+    status = "failed";
+  } else if (resultCount < minSources) {
+    status = "insufficient_sources";
+  } else if (resultCount < targetSources || providerFailures.length > 0) {
+    status = "partial_success";
+  }
 
   return {
     resultCount,
-    resultTarget,
+    resultTarget: targetSources,
+    minSources,
+    targetSources,
     queryCount: providerResults.length > 0 ? new Set(providerResults.map((result) => result.query)).size : 0,
     providerCount: SOURCE_PROVIDER_NAMES.length,
     fallbackUsed,
@@ -656,12 +688,16 @@ export function buildSourceSearchDiagnostics(
 
 export async function searchSources(query: string, options?: SourceSearchOptions): Promise<SourceSearchResultWithDiagnostics> {
   const trimmedQuery = query.trim();
+  const minSources = options?.minSources ?? DEFAULT_MIN_SOURCES;
+  const targetSources = options?.targetSources ?? DEFAULT_TARGET_SOURCES;
   if (!trimmedQuery) {
     return {
       sources: [],
       diagnostics: {
         resultCount: 0,
-        resultTarget: MAX_RESULTS,
+        resultTarget: targetSources,
+        minSources,
+        targetSources,
         queryCount: 0,
         providerCount: SOURCE_PROVIDER_NAMES.length,
         fallbackUsed: false,
@@ -679,22 +715,22 @@ export async function searchSources(query: string, options?: SourceSearchOptions
   let fallbackUsed = false;
   let sources = dedupeSources(providerResults.flatMap((result) => result.results));
 
-  if (sources.length < ACADEMIC_FALLBACK_THRESHOLD) {
+  if (sources.length < minSources) {
     fallbackUsed = true;
     const officialResults = await searchSourceProviders(trimmedQuery, { ...options, stage: "official" });
     providerResults = [...providerResults, ...officialResults];
     sources = dedupeSources(providerResults.flatMap((result) => result.results));
   }
 
-  if (sources.length < MAX_RESULTS) {
+  if (sources.length < targetSources) {
     fallbackUsed = true;
     const mediaResults = await searchSourceProviders(trimmedQuery, { ...options, stage: "media" });
     providerResults = [...providerResults, ...mediaResults];
     sources = dedupeSources(providerResults.flatMap((result) => result.results));
   }
 
-  sources = sources.slice(0, MAX_RESULTS);
-  const diagnostics = buildSourceSearchDiagnostics(providerResults, MAX_RESULTS, fallbackUsed);
+  sources = sources.slice(0, targetSources);
+  const diagnostics = buildSourceSearchDiagnostics(providerResults, minSources, targetSources, fallbackUsed);
 
   return {
     sources,

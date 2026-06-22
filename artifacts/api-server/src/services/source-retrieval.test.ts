@@ -212,6 +212,60 @@ test("returns deduped partial results when one provider succeeds and another fai
   assert.ok(result.diagnostics.warnings.some((warning) => warning.includes("目前取得")));
 });
 
+test("keeps partial results when academic providers fail with 429 or malformed responses", async () => {
+  const configs = getSourceProviderConfigs();
+  const result = await searchSources("BMW electric vehicle strategy", {
+    providerConfigs: {
+      Crossref: {
+        ...configs.Crossref,
+        endpoint: "https://example.test/works",
+        timeoutMs: 50,
+        queryLimit: 1,
+      },
+      OpenAlex: {
+        ...configs.OpenAlex,
+        endpoint: "https://example.test/openalex",
+        timeoutMs: 50,
+        queryLimit: 1,
+      },
+      "Semantic Scholar": {
+        ...configs["Semantic Scholar"],
+        endpoint: "https://example.test/paper/search",
+        timeoutMs: 50,
+        queryLimit: 1,
+      },
+    },
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.includes("paper/search")) {
+        return new Response("{", { status: 200 });
+      }
+      if (url.includes("openalex")) {
+        return new Response(JSON.stringify({ error: "rate limited" }), { status: 429 });
+      }
+      return new Response(JSON.stringify({
+        message: {
+          items: [
+            {
+              title: ["BMW Group electric vehicle transition annual report"],
+              author: [{ given: "Ada", family: "Analyst" }],
+              issued: { "date-parts": [[2024]] },
+              DOI: "10.5000/bmw-annual",
+              URL: "https://doi.org/10.5000/bmw-annual",
+            },
+          ],
+        },
+      }));
+    },
+  });
+
+  assert.equal(result.sources.length, 1);
+  assert.equal(result.diagnostics.status, "insufficient_sources");
+  assert.ok(result.diagnostics.providerFailures.some((failure) => failure.provider !== "Crossref"));
+  assert.ok(result.diagnostics.providerFailures.some((failure) => failure.stage === "academic"));
+  assert.ok(result.diagnostics.warnings.some((warning) => warning.includes("外部學術 API")));
+});
+
 test("merges duplicate source metadata so longer abstracts survive dedupe", () => {
   const merged = dedupeSources([
     {

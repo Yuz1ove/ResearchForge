@@ -64,6 +64,7 @@ test("search source topic-style route response includes search intent fields", a
         ok: true,
         topic: input.topic,
         searchIntent: {
+          domainProfile: "academic",
           primaryConcepts: ["urban heat island", "thermal comfort"],
           contextConcepts: ["campus"],
           outcomeConcepts: ["student comfort"],
@@ -86,6 +87,7 @@ test("search source topic-style route response includes search intent fields", a
             ok: false,
             provider: "Semantic Scholar",
             query: "urban heat island campus thermal comfort students",
+            stage: "academic",
             results: [],
             error_type: "api-failure",
             error_message: "Semantic Scholar returned HTTP 503",
@@ -94,6 +96,7 @@ test("search source topic-style route response includes search intent fields", a
         warnings: ["外部學術 API 暫時不可用。", "目前取得 1/20 筆來源。"],
         planner: {
           normalizedTopic: input.topic,
+          domainProfile: "academic",
           primaryConcepts: ["urban heat island", "thermal comfort"],
           contextConcepts: ["campus"],
           outcomeConcepts: ["student comfort"],

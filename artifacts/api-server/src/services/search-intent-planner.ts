@@ -19,9 +19,11 @@ export interface SearchIntentPlannerInput {
 }
 
 export type SearchIntentPlannerStatus = "llm" | "rule_fallback" | "skipped" | "failed";
+export type SearchSourceDomainProfile = "academic" | "business-industry" | "automotive-industry";
 
 export interface SearchIntentPlan {
   normalizedTopic: string;
+  domainProfile: SearchSourceDomainProfile;
   primaryConcepts: string[];
   contextConcepts: string[];
   outcomeConcepts: string[];
@@ -75,6 +77,7 @@ export interface SearchIntentSourceSearchOptions extends SearchIntentPlannerOpti
 }
 
 export interface SearchIntentSummary {
+  domainProfile: SearchSourceDomainProfile;
   primaryConcepts: string[];
   contextConcepts: string[];
   outcomeConcepts: string[];
@@ -113,19 +116,23 @@ export interface SearchIntentSourceSearchResult {
   diagnostics?: {
     resultCount: number;
     resultTarget: number;
+    minSources: number;
+    targetSources: number;
     queryCount: number;
     providerCount: number;
     fallbackUsed: boolean;
-    status: "success" | "partial" | "empty" | "failed";
+    status: "success" | "partial_success" | "insufficient_sources" | "empty" | "failed";
     providerFailures: Array<{
       provider: string;
       query: string;
+      stage: string;
       error_type: string;
       error_message: string;
     }>;
     providerResultCounts: Array<{
       provider: string;
       query: string;
+      stage: string;
       resultCount: number;
       ok: boolean;
     }>;
@@ -527,6 +534,9 @@ const BMW_CONTEXT = [
   "supply chain",
   "sustainability",
   "consumer positioning",
+  "annual report",
+  "sustainability report",
+  "market analysis",
 ];
 
 const BMW_OUTCOMES = [
@@ -548,6 +558,8 @@ const BMW_MUST_HAVE = [
   "Tesla",
   "supply chain",
   "ESG",
+  "annual report",
+  "sustainability report",
 ];
 
 const BMW_LOW_WEIGHT = [
@@ -555,6 +567,83 @@ const BMW_LOW_WEIGHT = [
   "education",
   "learning",
   "school",
+];
+
+const BUSINESS_PRIMARY = [
+  "BMW",
+  "Mercedes-Benz",
+  "Audi",
+  "Tesla",
+  "electric vehicle strategy",
+  "luxury car market",
+  "brand positioning",
+];
+
+const BUSINESS_CONTEXT = [
+  "annual report",
+  "sustainability report",
+  "company report",
+  "market competition",
+  "supply chain",
+  "ESG",
+  "policy",
+  "industry analysis",
+  "automotive industry",
+  "electric vehicle",
+  "market outlook",
+  "strategy report",
+  "sector analysis",
+];
+
+const BUSINESS_OUTCOMES = [
+  "market share",
+  "competitive strategy",
+  "premium segment",
+  "consumer positioning",
+  "transition strategy",
+  "investment",
+];
+
+const BUSINESS_MUST_HAVE = [
+  "BMW",
+  "electric vehicle strategy",
+  "luxury car market competition",
+  "brand positioning",
+  "Mercedes-Benz",
+  "Audi",
+  "Tesla",
+  "annual report",
+  "sustainability report",
+];
+
+const BUSINESS_LOW_WEIGHT = [
+  "students",
+  "education",
+  "learning",
+  "school",
+];
+
+const BUSINESS_NEGATIVE = [
+  "dealer",
+  "dealership",
+  "used cars",
+  "used car",
+  "car listings",
+  "parts catalog",
+  "repair manual",
+  "generic dictionary",
+  "dictionary",
+  "wiki",
+  "wikipedia",
+  "encyclopedia",
+  "local dealership",
+  "classified",
+  "inventory",
+  "service center",
+  "test drive",
+  "buy now",
+  "lease offer",
+  "price list",
 ];
 
 function normalizeText(value: string): string {
@@ -641,9 +730,23 @@ function isSwineAgricultureEcologyTopic(input: SearchIntentPlannerInput): boolea
 function isBMWEvLuxuryTopic(input: SearchIntentPlannerInput): boolean {
   const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
   return hasAny(text, [
-    /BMW|電動車轉型|豪華車市場|豪華車|品牌定位|Mercedes-Benz|Mercedes|Audi|Tesla|供應鏈|ESG/,
-    /bmw|electric vehicle strategy|luxury car market|brand positioning|mercedes-benz|mercedes|audi|tesla|supply chain|esg/i,
+    /BMW|電動車轉型|豪華車市場|豪華車|品牌定位|Mercedes-Benz|Mercedes|Audi|Tesla|供應鏈|ESG|automotive|汽車/,
+    /bmw|electric vehicle strategy|luxury car market|brand positioning|mercedes-benz|mercedes|audi|tesla|supply chain|esg|automotive|vehicle/i,
   ]);
+}
+
+function isBusinessIndustryTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /BMW|Tesla|Mercedes|Mercedes-Benz|Audi|Toyota|EV|電動車|豪華車|汽車|automotive|vehicle|market competition|brand positioning|industry analysis|annual report|sustainability report|company report|ESG|轉型/,
+    /bmw|tesla|mercedes|mercedes-benz|audi|toyota|electric vehicle|ev|luxury car|automotive|vehicle|market competition|brand positioning|industry analysis|annual report|sustainability report|company report|esg|transition/i,
+  ]);
+}
+
+function businessDomainProfile(input: SearchIntentPlannerInput): SearchSourceDomainProfile {
+  if (isBMWEvLuxuryTopic(input)) return "automotive-industry";
+  if (isBusinessIndustryTopic(input)) return "business-industry";
+  return "academic";
 }
 
 function topicTerms(topic: string): string[] {
@@ -672,6 +775,7 @@ export function buildRuleBasedSearchIntent(
   if (isUrbanHeatIslandTopic(input)) {
     return {
       normalizedTopic,
+      domainProfile: "academic",
       primaryConcepts: URBAN_HEAT_PRIMARY,
       contextConcepts: URBAN_HEAT_CONTEXT,
       outcomeConcepts: URBAN_HEAT_OUTCOMES,
@@ -708,6 +812,7 @@ export function buildRuleBasedSearchIntent(
   if (isShortVideoSleepAttentionTopic(input)) {
     return {
       normalizedTopic,
+      domainProfile: "academic",
       primaryConcepts: SHORT_VIDEO_PRIMARY,
       contextConcepts: SHORT_VIDEO_CONTEXT,
       outcomeConcepts: SHORT_VIDEO_OUTCOMES,
@@ -738,6 +843,7 @@ export function buildRuleBasedSearchIntent(
   if (isColaHealthTopic(input)) {
     return {
       normalizedTopic,
+      domainProfile: "academic",
       primaryConcepts: COLA_HEALTH_PRIMARY,
       contextConcepts: COLA_HEALTH_CONTEXT,
       outcomeConcepts: COLA_HEALTH_OUTCOMES,
@@ -783,6 +889,7 @@ export function buildRuleBasedSearchIntent(
   if (isClimateChangeCauseTopic(input)) {
     return {
       normalizedTopic,
+      domainProfile: "academic",
       primaryConcepts: CLIMATE_CAUSES_PRIMARY,
       contextConcepts: CLIMATE_CAUSES_CONTEXT,
       outcomeConcepts: CLIMATE_CAUSES_OUTCOMES,
@@ -837,6 +944,7 @@ export function buildRuleBasedSearchIntent(
   if (isFoodSafetySalmonellaTopic(input)) {
     return {
       normalizedTopic,
+      domainProfile: "academic",
       primaryConcepts: FOOD_SAFETY_PRIMARY,
       contextConcepts: FOOD_SAFETY_CONTEXT,
       outcomeConcepts: FOOD_SAFETY_OUTCOMES,
@@ -881,6 +989,7 @@ export function buildRuleBasedSearchIntent(
   if (isSwineAgricultureEcologyTopic(input)) {
     return {
       normalizedTopic,
+      domainProfile: "academic",
       primaryConcepts: SWINE_PRIMARY,
       contextConcepts: SWINE_CONTEXT,
       outcomeConcepts: SWINE_OUTCOMES,
@@ -925,12 +1034,13 @@ export function buildRuleBasedSearchIntent(
   if (isBMWEvLuxuryTopic(input)) {
     return {
       normalizedTopic,
-      primaryConcepts: BMW_PRIMARY,
-      contextConcepts: BMW_CONTEXT,
-      outcomeConcepts: BMW_OUTCOMES,
+      domainProfile: businessDomainProfile(input),
+      primaryConcepts: unique([...BMW_PRIMARY, ...BUSINESS_PRIMARY]),
+      contextConcepts: unique([...BMW_CONTEXT, ...BUSINESS_CONTEXT]),
+      outcomeConcepts: unique([...BMW_OUTCOMES, ...BUSINESS_OUTCOMES]),
       populationConcepts: ["premium consumers", "luxury car buyers", "EV shoppers"],
-      lowWeightTerms: BMW_LOW_WEIGHT,
-      mustHaveTerms: BMW_MUST_HAVE,
+      lowWeightTerms: unique([...BMW_LOW_WEIGHT, ...BUSINESS_LOW_WEIGHT]),
+      mustHaveTerms: unique([...BMW_MUST_HAVE, ...BUSINESS_MUST_HAVE]),
       shouldHaveTerms: [
         "luxury car market competition",
         "brand positioning",
@@ -939,9 +1049,13 @@ export function buildRuleBasedSearchIntent(
         "supply chain",
         "ESG",
         "premium segment",
+        "annual report",
+        "sustainability report",
+        "industry analysis",
+        "market share",
       ],
-      penaltyTerms: ["generic education", "school performance"],
-      negativeTerms: ["unrelated urban traffic", "fleet logistics only"],
+      penaltyTerms: ["generic education", "school performance", ...BUSINESS_NEGATIVE],
+      negativeTerms: ["unrelated urban traffic", "fleet logistics only", ...BUSINESS_NEGATIVE],
       chineseQueries: [
         "BMW 電動車 轉型",
         "BMW 豪華車市場 競爭",
@@ -949,14 +1063,25 @@ export function buildRuleBasedSearchIntent(
         "BMW 品牌定位",
         "BMW 供應鏈 ESG",
         "BMW 電動車 策略",
+        "BMW 集團 年報 電動車",
+        "BMW 集團 永續報告 電動車",
+        "BMW 豪華車市場 競爭 分析",
+        "BMW 汽車產業 轉型 ESG",
       ],
       englishQueries: [
+        "BMW Group electric vehicle transition annual report",
+        "BMW Group sustainability report electric vehicles",
+        "BMW EV transition competition Mercedes Tesla Audi",
         "BMW electric vehicle strategy",
         "BMW luxury car market competition",
         "BMW Mercedes Audi Tesla comparison",
         "BMW brand positioning",
         "BMW supply chain ESG",
         "BMW consumer positioning premium segment",
+        "global electric vehicle market luxury segment BMW",
+        "automotive industry electric vehicle transition premium brands",
+        "IEA electric vehicle outlook BMW luxury market",
+        "BMW automotive industry transition ESG",
       ],
       reasoningNotes: planReason(
         reason,
@@ -967,10 +1092,89 @@ export function buildRuleBasedSearchIntent(
     };
   }
 
+  if (isBusinessIndustryTopic(input)) {
+    const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+    const hasAutomotiveCue = /BMW|Tesla|Mercedes|Mercedes-Benz|Audi|Toyota|EV|電動車|豪華車|automotive|car|vehicle/i.test(text);
+    const domainProfile = hasAutomotiveCue ? "automotive-industry" : "business-industry";
+    const businessQueries = hasAutomotiveCue
+      ? [
+          "BMW Group electric vehicle transition annual report",
+          "BMW Group sustainability report electric vehicles",
+          "BMW EV transition competition Mercedes Tesla Audi",
+          "BMW electric vehicle strategy",
+          "BMW luxury car market competition",
+          "global electric vehicle market luxury segment BMW",
+          "automotive industry electric vehicle transition premium brands",
+          "IEA electric vehicle outlook BMW luxury market",
+          "BMW Mercedes Audi Tesla comparison",
+          "BMW brand positioning",
+          "BMW supply chain ESG",
+        ]
+      : [
+          "company annual report industry analysis",
+          "sustainability report market competition",
+          "brand positioning competitive strategy",
+          "supply chain ESG transition",
+          "industry analysis annual report policy",
+          "market outlook strategy report",
+        ];
+    return {
+      normalizedTopic,
+      domainProfile,
+      primaryConcepts: hasAutomotiveCue ? unique([...BMW_PRIMARY, ...BUSINESS_PRIMARY]) : BUSINESS_PRIMARY,
+      contextConcepts: unique([
+        ...BUSINESS_CONTEXT,
+        ...(hasAutomotiveCue ? ["BMW Group", "Mercedes-Benz", "Audi", "Tesla", "automotive industry"] : []),
+      ]),
+      outcomeConcepts: BUSINESS_OUTCOMES,
+      populationConcepts: ["investors", "consumers", "industry analysts", "management"],
+      lowWeightTerms: BUSINESS_LOW_WEIGHT,
+      mustHaveTerms: hasAutomotiveCue ? BUSINESS_MUST_HAVE : ["company report", "annual report", "sustainability report", "industry analysis"],
+      shouldHaveTerms: [
+        "annual report",
+        "sustainability report",
+        "company report",
+        "industry analysis",
+        "market share",
+        "competitive strategy",
+        "supply chain",
+        "ESG",
+        "policy",
+      ],
+      penaltyTerms: BUSINESS_NEGATIVE,
+      negativeTerms: BUSINESS_NEGATIVE,
+      chineseQueries: hasAutomotiveCue
+        ? [
+          "BMW 電動車 轉型",
+          "BMW 豪華車市場 競爭",
+          "BMW 品牌定位",
+          "BMW 集團 年報 電動車",
+          "BMW 集團 永續報告 電動車",
+          "BMW 豪華車市場 競爭 分析",
+        ]
+        : [
+          "企業 年報 產業分析",
+          "公司 永續報告 市場競爭",
+          "品牌定位 市場競爭 產業分析",
+          "供應鏈 ESG 轉型",
+        ],
+      englishQueries: businessQueries,
+      reasoningNotes: planReason(
+        reason,
+        hasAutomotiveCue
+          ? "Automotive business topics should prioritize official company reports, policy and industry analysis, with academic sources as secondary support."
+          : "Business topics should prioritize company reports, annual reports, policy sources, and industry analysis before academic support.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
   const genericTerms = topicTerms(normalizedTopic);
   const audience = cleanString(input.audience);
   return {
     normalizedTopic,
+    domainProfile: "academic",
     primaryConcepts: genericTerms.length ? genericTerms : [normalizedTopic],
     contextConcepts: [audience, cleanString(input.reportType)].filter((term): term is string => Boolean(term)),
     outcomeConcepts: [],
@@ -1101,6 +1305,7 @@ function mergeFamilyCriticalTerms(
     negativeTerms: unique([...plan.negativeTerms, ...fallback.negativeTerms]).slice(0, 10),
     chineseQueries: unique([...plan.chineseQueries, ...fallback.chineseQueries]).slice(0, MAX_QUERY_COUNT),
     englishQueries: unique([...plan.englishQueries, ...fallback.englishQueries]).slice(0, MAX_QUERY_COUNT),
+    domainProfile: plan.domainProfile ?? fallback.domainProfile,
   };
 }
 
@@ -1112,8 +1317,10 @@ function coerceSearchIntentPlan(value: unknown, input: SearchIntentPlannerInput)
   const data = value as Record<string, unknown>;
   const fallback = buildRuleBasedSearchIntent(input, "LLM planner returned incomplete planning data; deterministic fields were merged.");
   const normalizedTopic = cleanString(data.normalizedTopic) ?? cleanString(data.normalized_topic) ?? input.topic.trim();
+  const domainProfile = (cleanString(data.domainProfile ?? data.domain_profile) as SearchSourceDomainProfile | null | undefined) ?? businessDomainProfile(input);
   const plan: SearchIntentPlan = {
     normalizedTopic,
+    domainProfile,
     primaryConcepts: stringArray(data.primaryConcepts ?? data.primary_concepts, 14),
     contextConcepts: stringArray(data.contextConcepts ?? data.context_concepts, 12),
     outcomeConcepts: stringArray(data.outcomeConcepts ?? data.outcome_concepts, 12),
@@ -1519,6 +1726,7 @@ export function rerankSourcesBySearchIntent(
 
 function searchIntentSummary(plan: SearchIntentPlan): SearchIntentSummary {
   return {
+    domainProfile: plan.domainProfile,
     primaryConcepts: plan.primaryConcepts,
     contextConcepts: plan.contextConcepts,
     outcomeConcepts: plan.outcomeConcepts,
@@ -1591,8 +1799,10 @@ export async function searchIntentSources(
   let groups = academicGroups;
   let fallbackUsed = false;
 
+  const minSources = 10;
+  const targetSources = 20;
   const academicCount = dedupeSourceRecords(academicGroups.flatMap((group) => group.results)).length;
-  if (academicCount < 10) {
+  if (academicCount < minSources) {
     fallbackUsed = true;
     const officialGroups = (await Promise.all(
       queries.map((query) => searchSourceProviders(query, {
@@ -1604,7 +1814,7 @@ export async function searchIntentSources(
   }
 
   const afterOfficialCount = dedupeSourceRecords(groups.flatMap((group) => group.results)).length;
-  if (afterOfficialCount < 20) {
+  if (afterOfficialCount < targetSources) {
     fallbackUsed = true;
     const mediaGroups = (await Promise.all(
       queries.map((query) => searchSourceProviders(query, {
@@ -1617,7 +1827,7 @@ export async function searchIntentSources(
 
   const dedupedSources = dedupeSourceRecords(groups.flatMap((group) => group.results));
   const reranked = rerankSourcesBySearchIntent(dedupedSources, plan);
-  const sources = reranked.sources.slice(0, 20);
+  const sources = reranked.sources.slice(0, targetSources);
   const plannerLlmStatus = llmStatusFromPlannerStatus(plan.plannerStatus, plan.fallbackUsed);
 
   return {
@@ -1649,22 +1859,26 @@ export async function searchIntentSources(
     groups,
     diagnostics: {
       resultCount: sources.length,
-      resultTarget: 20,
+      resultTarget: targetSources,
+      minSources,
+      targetSources,
       queryCount: queries.length,
       providerCount: groups.length ? new Set(groups.map((group) => group.provider)).size : 0,
       fallbackUsed,
-      status: sources.length === 0 ? "empty" : fallbackUsed ? "partial" : "success",
+      status: sources.length === 0 ? "empty" : sources.length < minSources ? "insufficient_sources" : sources.length < targetSources || fallbackUsed ? "partial_success" : "success",
       providerFailures: groups
         .filter((group) => !group.ok)
         .map((group) => ({
           provider: group.provider,
           query: group.query,
+          stage: group.stage ?? "academic",
           error_type: group.error_type ?? "api-failure",
           error_message: group.error_message ?? `${group.provider} request failed`,
         })),
       providerResultCounts: groups.map((group) => ({
         provider: group.provider,
         query: group.query,
+        stage: group.stage ?? "academic",
         resultCount: group.results.length,
         ok: group.ok,
       })),

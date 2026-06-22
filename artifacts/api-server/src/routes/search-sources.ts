@@ -2,11 +2,13 @@ import { Router, type IRouter } from "express";
 import {
   SearchSourcesBody,
   SearchSourcesResponse,
-  type SourceRecord,
-  type SourceSearchResult,
 } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
-import { searchSources, SourceSearchError } from "../services/source-retrieval";
+import {
+  searchSources,
+  SourceSearchError,
+  type SourceSearchResultWithDiagnostics,
+} from "../services/source-retrieval";
 import {
   searchIntentSources,
   type SearchIntentPlannerInput,
@@ -15,7 +17,7 @@ import {
 
 const INVALID_SEARCH_MESSAGE = "請輸入有效的查詢關鍵字。";
 
-export type SearchSourcesHandler = (query: string) => Promise<SourceSearchResult>;
+export type SearchSourcesHandler = (query: string) => Promise<SourceSearchResultWithDiagnostics>;
 export type TopicSearchSourcesHandler = (input: SearchIntentPlannerInput) => Promise<SearchIntentSourceSearchResult>;
 
 export type NormalizedSearchSourcesRequest =
@@ -88,6 +90,8 @@ export function createSearchSourcesRouter({
           diagnostics: {
             resultCount: 0,
             resultTarget: 20,
+            minSources: 10,
+            targetSources: 20,
             queryCount: 0,
             providerCount: 0,
             fallbackUsed: false,
@@ -96,6 +100,7 @@ export function createSearchSourcesRouter({
               {
                 provider: "Crossref",
                 query: "",
+                stage: "academic",
                 error_type: "timeout",
                 error_message: "來源搜尋逾時，請稍後再試。",
               },
@@ -108,24 +113,27 @@ export function createSearchSourcesRouter({
       }
 
       logger.warn({ err: error }, "Source search failed");
-      res.status(200).json({
-        sources: [],
-        warnings: ["外部來源服務暫時無法使用，請稍後再試。"],
-        diagnostics: {
-          resultCount: 0,
-          resultTarget: 20,
-          queryCount: 0,
-          providerCount: 0,
-          fallbackUsed: false,
-          status: "failed",
-          providerFailures: [
-            {
-              provider: "Crossref",
-              query: "",
-              error_type: "api-failure",
-              error_message: "外部來源服務暫時無法使用，請稍後再試。",
-            },
-          ],
+        res.status(200).json({
+          sources: [],
+          warnings: ["外部來源服務暫時無法使用，請稍後再試。"],
+          diagnostics: {
+            resultCount: 0,
+            resultTarget: 20,
+            minSources: 10,
+            targetSources: 20,
+            queryCount: 0,
+            providerCount: 0,
+            fallbackUsed: false,
+            status: "failed",
+            providerFailures: [
+              {
+                provider: "Crossref",
+                query: "",
+                stage: "academic",
+                error_type: "api-failure",
+                error_message: "外部來源服務暫時無法使用，請稍後再試。",
+              },
+            ],
           providerResultCounts: [],
           warnings: ["外部來源服務暫時無法使用，請稍後再試。"],
         },

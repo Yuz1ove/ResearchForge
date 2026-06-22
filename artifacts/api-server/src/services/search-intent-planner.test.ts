@@ -100,6 +100,28 @@ test("rule fallback keeps climate change cause concepts in every main query fami
   assert.ok(!/education students peer reviewed research/i.test(queryText));
 });
 
+test("rule fallback expands BMW business topics toward annual reports, sustainability, and competition", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: "BMW 電動車轉型與豪華車市場競爭",
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = [...queries.highPrecision, ...queries.english, ...queries.chinese].join(" ");
+
+  assert.equal(plan.domainProfile, "automotive-industry");
+  for (const term of ["BMW", "Mercedes-Benz", "Audi", "Tesla", "annual report", "sustainability report"]) {
+    assert.ok(plan.mustHaveTerms.some((value) => value.includes(term) || term.includes(value)), `expected must-have ${term}`);
+  }
+  assert.match(queryText, /BMW Group electric vehicle transition annual report/i);
+  assert.match(queryText, /BMW Group sustainability report electric vehicles/i);
+  assert.match(queryText, /BMW EV transition competition Mercedes Tesla Audi/i);
+  assert.match(queryText, /BMW 電動車 轉型/);
+  assert.match(queryText, /BMW 豪華車市場 競爭/);
+  assert.ok(!/dealer|used car|parts catalog/i.test(queryText));
+});
+
 test("rule fallback weights urban heat island, thermal comfort, and microclimate over generic learning terms", () => {
   const plan = buildRuleBasedSearchIntent({
     topic: urbanHeatTopic,

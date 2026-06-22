@@ -6,10 +6,12 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { SourceSearchDiagnosticsProviderResultCountsItemProvider } from './sourceSearchDiagnosticsProviderResultCountsItemProvider';
+import type { SourceSearchDiagnosticsProviderResultCountsItemStage } from './sourceSearchDiagnosticsProviderResultCountsItemStage';
 
 export type SourceSearchDiagnosticsProviderResultCountsItem = {
   provider: SourceSearchDiagnosticsProviderResultCountsItemProvider;
   query: string;
+  stage: SourceSearchDiagnosticsProviderResultCountsItemStage;
   resultCount: number;
   ok: boolean;
 };

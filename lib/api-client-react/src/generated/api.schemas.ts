@@ -87,6 +87,15 @@ export const SearchIntentSummaryPlannerStatus = {
   failed: 'failed',
 } as const;
 
+export type SearchIntentSummaryDomainProfile = typeof SearchIntentSummaryDomainProfile[keyof typeof SearchIntentSummaryDomainProfile];
+
+
+export const SearchIntentSummaryDomainProfile = {
+  academic: 'academic',
+  'business-industry': 'business-industry',
+  'automotive-industry': 'automotive-industry',
+} as const;
+
 export interface SearchIntentSummary {
   primaryConcepts: string[];
   contextConcepts: string[];
@@ -96,6 +105,7 @@ export interface SearchIntentSummary {
   mustHaveTerms: string[];
   plannerStatus: SearchIntentSummaryPlannerStatus;
   fallbackUsed: boolean;
+  domainProfile: SearchIntentSummaryDomainProfile;
 }
 
 export interface SearchIntentQuerySet {
@@ -115,10 +125,20 @@ export const KeywordSourceGroupProvider = {
   Web: 'Web',
 } as const;
 
+export type KeywordSourceGroupStage = typeof KeywordSourceGroupStage[keyof typeof KeywordSourceGroupStage];
+
+
+export const KeywordSourceGroupStage = {
+  academic: 'academic',
+  official: 'official',
+  media: 'media',
+} as const;
+
 export interface KeywordSourceGroup {
   ok: boolean;
   provider: KeywordSourceGroupProvider;
   query: string;
+  stage: KeywordSourceGroupStage;
   results: SourceRecord[];
   error_type: string | null;
   error_message: string | null;
@@ -148,6 +168,15 @@ export interface KeywordExpansionResult {
   llm_status: KeywordExpansionResultLlmStatus;
 }
 
+export type SearchIntentPlanDomainProfile = typeof SearchIntentPlanDomainProfile[keyof typeof SearchIntentPlanDomainProfile];
+
+
+export const SearchIntentPlanDomainProfile = {
+  academic: 'academic',
+  'business-industry': 'business-industry',
+  'automotive-industry': 'automotive-industry',
+} as const;
+
 export type SearchIntentPlanPlannerStatus = typeof SearchIntentPlanPlannerStatus[keyof typeof SearchIntentPlanPlannerStatus];
 
 
@@ -160,6 +189,7 @@ export const SearchIntentPlanPlannerStatus = {
 
 export interface SearchIntentPlan {
   normalizedTopic: string;
+  domainProfile: SearchIntentPlanDomainProfile;
   primaryConcepts: string[];
   contextConcepts: string[];
   outcomeConcepts: string[];
@@ -192,7 +222,8 @@ export type SourceSearchDiagnosticsStatus = typeof SourceSearchDiagnosticsStatus
 
 export const SourceSearchDiagnosticsStatus = {
   success: 'success',
-  partial: 'partial',
+  partial_success: 'partial_success',
+  insufficient_sources: 'insufficient_sources',
   empty: 'empty',
   failed: 'failed',
 } as const;
@@ -207,6 +238,15 @@ export const SourceSearchDiagnosticsProviderFailuresItemProvider = {
   Web: 'Web',
 } as const;
 
+export type SourceSearchDiagnosticsProviderFailuresItemStage = typeof SourceSearchDiagnosticsProviderFailuresItemStage[keyof typeof SourceSearchDiagnosticsProviderFailuresItemStage];
+
+
+export const SourceSearchDiagnosticsProviderFailuresItemStage = {
+  academic: 'academic',
+  official: 'official',
+  media: 'media',
+} as const;
+
 export type SourceSearchDiagnosticsProviderResultCountsItemProvider = typeof SourceSearchDiagnosticsProviderResultCountsItemProvider[keyof typeof SourceSearchDiagnosticsProviderResultCountsItemProvider];
 
 
@@ -217,9 +257,19 @@ export const SourceSearchDiagnosticsProviderResultCountsItemProvider = {
   Web: 'Web',
 } as const;
 
+export type SourceSearchDiagnosticsProviderResultCountsItemStage = typeof SourceSearchDiagnosticsProviderResultCountsItemStage[keyof typeof SourceSearchDiagnosticsProviderResultCountsItemStage];
+
+
+export const SourceSearchDiagnosticsProviderResultCountsItemStage = {
+  academic: 'academic',
+  official: 'official',
+  media: 'media',
+} as const;
+
 export type SourceSearchDiagnosticsProviderFailuresItem = {
   provider: SourceSearchDiagnosticsProviderFailuresItemProvider;
   query: string;
+  stage: SourceSearchDiagnosticsProviderFailuresItemStage;
   error_type: string;
   error_message: string;
 };
@@ -227,6 +277,7 @@ export type SourceSearchDiagnosticsProviderFailuresItem = {
 export type SourceSearchDiagnosticsProviderResultCountsItem = {
   provider: SourceSearchDiagnosticsProviderResultCountsItemProvider;
   query: string;
+  stage: SourceSearchDiagnosticsProviderResultCountsItemStage;
   resultCount: number;
   ok: boolean;
 };
@@ -234,6 +285,8 @@ export type SourceSearchDiagnosticsProviderResultCountsItem = {
 export interface SourceSearchDiagnostics {
   resultCount: number;
   resultTarget: number;
+  minSources: number;
+  targetSources: number;
   queryCount: number;
   providerCount: number;
   fallbackUsed: boolean;

@@ -11,7 +11,8 @@ export type SourceSearchDiagnosticsStatus = typeof SourceSearchDiagnosticsStatus
 
 export const SourceSearchDiagnosticsStatus = {
   success: 'success',
-  partial: 'partial',
+  partial_success: 'partial_success',
+  insufficient_sources: 'insufficient_sources',
   empty: 'empty',
   failed: 'failed',
 } as const;

@@ -6,10 +6,12 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { SourceSearchDiagnosticsProviderFailuresItemProvider } from './sourceSearchDiagnosticsProviderFailuresItemProvider';
+import type { SourceSearchDiagnosticsProviderFailuresItemStage } from './sourceSearchDiagnosticsProviderFailuresItemStage';
 
 export type SourceSearchDiagnosticsProviderFailuresItem = {
   provider: SourceSearchDiagnosticsProviderFailuresItemProvider;
   query: string;
+  stage: SourceSearchDiagnosticsProviderFailuresItemStage;
   error_type: string;
   error_message: string;
 };

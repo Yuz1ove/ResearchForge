@@ -332,6 +332,12 @@ components:
             - failed
         fallbackUsed:
           type: boolean
+        domainProfile:
+          type: string
+          enum:
+            - academic
+            - business-industry
+            - automotive-industry
       required:
         - primaryConcepts
         - contextConcepts
@@ -341,6 +347,7 @@ components:
         - mustHaveTerms
         - plannerStatus
         - fallbackUsed
+        - domainProfile
     SearchIntentQuerySet:
       type: object
       properties:
@@ -432,6 +439,12 @@ components:
       properties:
         normalizedTopic:
           type: string
+        domainProfile:
+          type: string
+          enum:
+            - academic
+            - business-industry
+            - automotive-industry
         primaryConcepts:
           type: array
           items:
@@ -491,6 +504,7 @@ components:
           type: boolean
       required:
         - normalizedTopic
+        - domainProfile
         - primaryConcepts
         - contextConcepts
         - outcomeConcepts
@@ -557,6 +571,12 @@ components:
             - Web
         query:
           type: string
+        stage:
+          type: string
+          enum:
+            - academic
+            - official
+            - media
         results:
           type: array
           items:
@@ -571,6 +591,7 @@ components:
         - ok
         - provider
         - query
+        - stage
         - results
         - error_type
         - error_message
@@ -580,6 +601,10 @@ components:
         resultCount:
           type: integer
         resultTarget:
+          type: integer
+        minSources:
+          type: integer
+        targetSources:
           type: integer
         queryCount:
           type: integer
@@ -591,7 +616,8 @@ components:
           type: string
           enum:
             - success
-            - partial
+            - partial_success
+            - insufficient_sources
             - empty
             - failed
         providerFailures:
@@ -608,6 +634,12 @@ components:
                   - Web
               query:
                 type: string
+              stage:
+                type: string
+                enum:
+                  - academic
+                  - official
+                  - media
               error_type:
                 type: string
               error_message:
@@ -615,6 +647,7 @@ components:
             required:
               - provider
               - query
+              - stage
               - error_type
               - error_message
         providerResultCounts:
@@ -631,6 +664,12 @@ components:
                   - Web
               query:
                 type: string
+              stage:
+                type: string
+                enum:
+                  - academic
+                  - official
+                  - media
               resultCount:
                 type: integer
               ok:
@@ -638,6 +677,7 @@ components:
             required:
               - provider
               - query
+              - stage
               - resultCount
               - ok
         warnings:
@@ -647,6 +687,8 @@ components:
       required:
         - resultCount
         - resultTarget
+        - minSources
+        - targetSources
         - queryCount
         - providerCount
         - fallbackUsed

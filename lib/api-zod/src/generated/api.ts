@@ -45,7 +45,8 @@ export const SearchSourcesResponse = zod.object({
   "lowWeightTerms": zod.array(zod.string()),
   "mustHaveTerms": zod.array(zod.string()),
   "plannerStatus": zod.enum(['llm', 'rule_fallback', 'skipped', 'failed']),
-  "fallbackUsed": zod.boolean()
+  "fallbackUsed": zod.boolean(),
+  "domainProfile": zod.enum(['academic', 'business-industry', 'automotive-industry'])
 }).optional(),
   "queries": zod.object({
   "chinese": zod.array(zod.string()),
@@ -71,6 +72,7 @@ export const SearchSourcesResponse = zod.object({
   "ok": zod.boolean(),
   "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "query": zod.string(),
+  "stage": zod.enum(['academic', 'official', 'media']),
   "results": zod.array(zod.object({
   "id": zod.string(),
   "title": zod.string(),
@@ -106,6 +108,7 @@ export const SearchSourcesResponse = zod.object({
   "ok": zod.boolean(),
   "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "query": zod.string(),
+  "stage": zod.enum(['academic', 'official', 'media']),
   "results": zod.array(zod.object({
   "id": zod.string(),
   "title": zod.string(),
@@ -139,6 +142,7 @@ export const SearchSourcesResponse = zod.object({
 })),
   "planner": zod.object({
   "normalizedTopic": zod.string(),
+  "domainProfile": zod.enum(['academic', 'business-industry', 'automotive-industry']),
   "primaryConcepts": zod.array(zod.string()),
   "contextConcepts": zod.array(zod.string()),
   "outcomeConcepts": zod.array(zod.string()),
@@ -167,19 +171,23 @@ export const SearchSourcesResponse = zod.object({
   "diagnostics": zod.object({
   "resultCount": zod.number(),
   "resultTarget": zod.number(),
+  "minSources": zod.number(),
+  "targetSources": zod.number(),
   "queryCount": zod.number(),
   "providerCount": zod.number(),
   "fallbackUsed": zod.boolean(),
-  "status": zod.enum(['success', 'partial', 'empty', 'failed']),
+  "status": zod.enum(['success', 'partial_success', 'insufficient_sources', 'empty', 'failed']),
   "providerFailures": zod.array(zod.object({
   "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "query": zod.string(),
+  "stage": zod.enum(['academic', 'official', 'media']),
   "error_type": zod.string(),
   "error_message": zod.string()
 })),
   "providerResultCounts": zod.array(zod.object({
   "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "query": zod.string(),
+  "stage": zod.enum(['academic', 'official', 'media']),
   "resultCount": zod.number(),
   "ok": zod.boolean()
 })),
@@ -222,6 +230,7 @@ export const SearchKeywordsResponse = zod.object({
   "ok": zod.boolean(),
   "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
   "query": zod.string(),
+  "stage": zod.enum(['academic', 'official', 'media']),
   "results": zod.array(zod.object({
   "id": zod.string(),
   "title": zod.string(),

@@ -12,6 +12,8 @@ import type { SourceSearchDiagnosticsStatus } from './sourceSearchDiagnosticsSta
 export interface SourceSearchDiagnostics {
   resultCount: number;
   resultTarget: number;
+  minSources: number;
+  targetSources: number;
   queryCount: number;
   providerCount: number;
   fallbackUsed: boolean;
