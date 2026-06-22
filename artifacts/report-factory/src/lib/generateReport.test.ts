@@ -20,7 +20,7 @@ test("expands flower topics into ecology, pollination, culture, or observation d
 test("expands cola topics into health, marketing, environment, or culture directions", () => {
   const text = joinedCards("可樂");
 
-  assert.match(text, /健康|行銷|環境|文化/);
+  assert.match(text, /糖分|血糖|肥胖|代謝|公共衛生|健康|文化/);
 });
 
 test("expands short-video topics into attention, algorithm, sleep, or teen directions", () => {
@@ -48,9 +48,21 @@ test("expands BMW electric vehicle transition topics into brand positioning and 
 });
 
 test("topic expansion cards do not fall back to generic template phrases", () => {
-  const text = ["花朵", "可樂", "短影音"].map(joinedCards).join("\n");
+  const text = ["花朵", "可樂", "短影音", "壽司", "BMW 電動車轉型與豪華車市場競爭"].map(joinedCards).join("\n");
 
   for (const phrase of TEMPLATE_PHRASES) {
     assert.equal(text.includes(phrase), false);
   }
+});
+
+test("expands sushi topics into food safety, nutrition, culture, and supply chain directions", () => {
+  const text = joinedCards("壽司");
+
+  assert.match(text, /食品安全|營養|文化|供應鏈|冷鏈|生食|風險/);
+});
+
+test("expands cola topics with deterministic fallback when LLM is unavailable", () => {
+  const text = joinedCards("碳酸飲料對健康影響");
+
+  assert.match(text, /糖分|肥胖|血糖|代謝|公共衛生|咖啡因/);
 });

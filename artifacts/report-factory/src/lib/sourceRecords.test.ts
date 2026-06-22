@@ -13,6 +13,7 @@ import {
   rejectedSourceRecords,
   sourceHasIncompleteMetadata,
   sourceReviewCounts,
+  sourceReviewTabSources,
   sourceReviewState,
   updateSourceReviewState,
   type SourceRecord,
@@ -175,6 +176,18 @@ test("counts source review tabs from filtered records", () => {
     pending: candidateSourceRecords(sources).length,
     rejected: rejectedSourceRecords(sources).length,
   });
+});
+
+test("all review tab returns every candidate source even when none are primary", () => {
+  const sources = [
+    source({ id: "accepted", reviewState: "accepted", doi: "10.1000/accepted" }),
+    source({ id: "pending-a", reviewState: "pending", doi: "10.1000/pending-a" }),
+    source({ id: "pending-b", reviewState: "pending", doi: "10.1000/pending-b" }),
+    source({ id: "rejected", reviewState: "rejected", doi: "10.1000/rejected" }),
+  ];
+
+  assert.equal(sourceReviewTabSources(sources, "all").length, sources.length);
+  assert.deepEqual(sourceReviewTabSources(sources, "pending"), candidateSourceRecords(sources));
 });
 
 test("reads accepted review aliases before rendering source lists", () => {

@@ -599,6 +599,25 @@ export function sourceReviewCounts(sources: SourceRecord[]): {
   };
 }
 
+export type SourceReviewTab = "all" | "accepted" | "pending" | "rejected";
+
+export function sourceReviewTabSources(
+  sources: SourceRecord[],
+  tab: SourceReviewTab,
+): SourceRecord[] {
+  switch (tab) {
+    case "accepted":
+      return acceptedSourceRecords(sources);
+    case "pending":
+      return candidateSourceRecords(sources);
+    case "rejected":
+      return rejectedSourceRecords(sources);
+    case "all":
+    default:
+      return sources;
+  }
+}
+
 export function updateSourceReviewState(
   sources: SourceRecord[],
   sourceId: string,

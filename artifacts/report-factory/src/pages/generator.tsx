@@ -897,6 +897,14 @@ function sourcesForReviewTab(
   }
 }
 
+function splitSourceReviewBuckets(sources: SourceRecord[]) {
+  return {
+    allSources: sources,
+    mainListSources: sources.filter((source) => source.shouldShowInMainList === true),
+    lowRelevanceSources: sources.filter((source) => source.shouldShowInMainList !== true),
+  };
+}
+
 function SourceReviewCard({
   source,
   isExpanded,
@@ -1569,10 +1577,9 @@ function SourceManagePanel({
   const previousReviewStates = useRef<Map<string, SourceReviewState>>(
     new Map(),
   );
-  const mainListSources = sources.filter((source) => source.shouldShowInMainList === true);
-  const lowRelevanceSources = sources.filter((source) => source.shouldShowInMainList !== true);
+  const { allSources, mainListSources, lowRelevanceSources } = splitSourceReviewBuckets(sources);
   const counts = sourceReviewCounts(sources);
-  const visibleSources = sourcesForReviewTab(mainListSources, activeTab);
+  const visibleSources = sourcesForReviewTab(allSources, activeTab);
   const activeTabLabel =
     SOURCE_REVIEW_TABS.find((tab) => tab.value === activeTab)?.label ?? "來源";
 

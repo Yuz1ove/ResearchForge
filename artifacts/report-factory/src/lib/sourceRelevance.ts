@@ -85,6 +85,239 @@ function sourceHasAbstract(source: SourceRecord): boolean {
   return cleanText(source.abstract).length >= 24;
 }
 
+function sourceHasCredibleProvider(source: SourceRecord): boolean {
+  const text = textForSource(source);
+  const host = source.url ? (() => {
+    try {
+      return new URL(source.url).hostname.replace(/^www\./, "").toLowerCase();
+    } catch {
+      return "";
+    }
+  })() : "";
+
+  return Boolean(
+    /crossref|semantic scholar|openalex|pubmed|doi|scopus|web of science/.test(text)
+    || /\.gov(\.|$)|\.edu(\.|$)|gov\.tw$|who\.int$|un\.org$|oecd\.org$|worldbank\.org$|europa\.eu$/.test(host)
+  );
+}
+
+function isFoodHealthTopic(text: string): boolean {
+  return /壽司|sushi|雞蛋|egg|eggs|可樂|cola|soda|soft drink|碳酸飲料|汽水|含糖飲料|食品安全|沙門氏桿菌|食源性疾病|交叉污染|保存溫度|營養|健康|飲食文化|food safety|foodborne illness|nutrition|diet|beverage|public health|raw fish|sashimi|seafood|rice/.test(text);
+}
+
+function isBusinessIndustryTopic(text: string): boolean {
+  return /bmw|tesla|mercedes|mercedes-benz|audi|toyota|ev|電動車|豪華車|市場競爭|品牌定位|供應鏈|esg|年報|永續報告|產業|公司|品牌|市場|轉型|automotive|vehicle|industry|annual report|sustainability report|company report|brand positioning|market competition|industry analysis/.test(text);
+}
+
+function foodHealthProfile(topic: string): SourceIntentProfile {
+  const normalized = cleanText(topic);
+  if (/壽司|sushi/.test(normalized)) {
+    return {
+      coreConcepts: [
+        "sushi",
+        "壽司",
+        "sashimi",
+        "生魚片",
+        "raw fish",
+        "seafood",
+        "food safety",
+        "食品安全",
+        "nutrition",
+        "營養",
+        "culture",
+        "文化",
+        "supply chain",
+        "供應鏈",
+        "cold chain",
+        "冷鏈",
+        "public health",
+      ],
+      researchVariables: [
+        "foodborne illness",
+        "food poisoning",
+        "cross-contamination",
+        "parasite",
+        "寄生蟲",
+        "mercury",
+        "heavy metals",
+        "storage temperature",
+        "保存溫度",
+        "blood glucose",
+        "consumer behavior",
+      ],
+      requiredConceptGroups: [
+        ["sushi", "壽司", "sashimi", "生魚片"],
+        ["food safety", "食品安全", "foodborne illness", "食源性疾病", "cross-contamination", "交叉污染", "salmonella", "沙門氏桿菌"],
+        ["nutrition", "營養", "carbohydrate", "protein", "fat", "calorie", "熱量"],
+        ["culture", "文化", "cuisine", "飲食文化", "餐飲"],
+        ["supply chain", "供應鏈", "cold chain", "冷鏈", "traceability", "溯源"],
+      ],
+      usefulContextTerms: ["review", "study", "survey", "official report", "government", "restaurant", "Japan", "台灣", "日本", "food service"],
+      excludeTerms: ["recipe", "menu", "coupon", "delivery", "shop", "商店"],
+    };
+  }
+
+  if (/雞蛋|egg|eggs|蛋類|蛋品/.test(normalized)) {
+    return {
+      coreConcepts: [
+        "egg",
+        "eggs",
+        "雞蛋",
+        "蛋類",
+        "蛋品",
+        "蛋白質",
+        "food safety",
+        "食品安全",
+        "nutrition",
+        "營養",
+        "salmonella",
+        "沙門氏桿菌",
+        "breakfast",
+        "早餐",
+        "baking",
+        "烘焙",
+      ],
+      researchVariables: [
+        "storage",
+        "保存",
+        "refrigeration",
+        "冷藏",
+        "cholesterol",
+        "膽固醇",
+        "protein",
+        "蛋白質",
+        "foodborne illness",
+        "consumer behavior",
+      ],
+      requiredConceptGroups: [
+        ["egg", "eggs", "雞蛋", "蛋類", "蛋品"],
+        ["nutrition", "營養", "protein", "蛋白質", "cholesterol", "膽固醇"],
+        ["food safety", "食品安全", "salmonella", "沙門氏桿菌", "storage", "保存", "refrigeration", "冷藏"],
+        ["culture", "文化", "breakfast", "早餐", "baking", "烘焙"],
+      ],
+      usefulContextTerms: ["review", "study", "survey", "official report", "government", "nutrition facts", "餐飲", "食品標示"],
+      excludeTerms: ["recipe", "dessert tutorial", "video", "comment"],
+    };
+  }
+
+  if (/可樂|cola|soda|soft drink|碳酸飲料|汽水|含糖飲料/.test(normalized)) {
+    return {
+      coreConcepts: [
+        "cola",
+        "soda",
+        "soft drink",
+        "sugar-sweetened beverage",
+        "含糖飲料",
+        "可樂",
+        "碳酸飲料",
+        "sugar",
+        "caffeine",
+        "health",
+        "public health",
+      ],
+      researchVariables: ["consumption", "intake", "drinking habits", "攝取習慣", "飲用習慣", "obesity", "metabolic health", "dental caries", "糖分", "咖啡因"],
+      requiredConceptGroups: [
+        ["cola", "soda", "soft drink", "sugar-sweetened beverage", "含糖飲料", "可樂", "碳酸飲料"],
+        ["sugar", "caffeine", "health", "obesity", "metabolic health", "dental caries", "糖分", "咖啡因", "健康"],
+      ],
+      usefulContextTerms: ["adolescents", "students", "systematic review", "review", "survey", "臨床", "研究", "public health policy"],
+      excludeTerms: ["招生", "高考", "工程管理", "圖書館推介", "職業教育", "成人高考", "北京話變調", "耶路撒冷"],
+    };
+  }
+
+  return {
+    coreConcepts: [
+      "food",
+      "nutrition",
+      "health",
+      "food safety",
+      "食品",
+      "食品安全",
+      "營養",
+      "飲食",
+      "文化",
+      "supply chain",
+      "供應鏈",
+      "public health",
+    ],
+    researchVariables: ["consumption", "intake", "dietary patterns", "餐飲", "保存", "processing", "加工", "quality", "risk", "safety"],
+    requiredConceptGroups: [
+      ["food", "food safety", "食品", "食品安全", "nutrition", "營養"],
+      ["culture", "文化", "cuisine", "飲食文化", "餐飲"],
+      ["supply chain", "供應鏈", "processing", "加工", "cold chain", "冷鏈"],
+      ["public health", "公共衛生", "risk", "safety", "health"],
+    ],
+    usefulContextTerms: ["review", "systematic review", "research", "official report", "government", "restaurant", "hospital", "industry"],
+    excludeTerms: ["招生", "高考", "工程管理", "圖書館推介", "職業教育", "成人高考"],
+  };
+}
+
+function businessIndustryProfile(topic: string): SourceIntentProfile {
+  const normalized = cleanText(topic);
+  const automotive = /bmw|tesla|mercedes|mercedes-benz|audi|toyota|ev|電動車|豪華車|automotive|vehicle/.test(normalized);
+
+  if (automotive) {
+    return {
+      coreConcepts: [
+        "BMW",
+        "Tesla",
+        "Mercedes-Benz",
+        "Mercedes",
+        "Audi",
+        "Toyota",
+        "electric vehicle",
+        "EV",
+        "電動車",
+        "豪華車",
+        "market competition",
+        "brand positioning",
+        "automotive industry",
+        "industry analysis",
+        "annual report",
+        "sustainability report",
+      ],
+      researchVariables: ["transition", "strategy", "supply chain", "ESG", "market share", "premium segment", "consumer positioning", "investment", "revenue", "profit"],
+      requiredConceptGroups: [
+        ["BMW", "Tesla", "Mercedes-Benz", "Mercedes", "Audi", "Toyota", "electric vehicle", "EV", "電動車"],
+        ["market competition", "brand positioning", "luxury car market", "premium segment", "consumer positioning", "豪華車市場"],
+        ["annual report", "sustainability report", "company report", "industry analysis", "official report"],
+        ["supply chain", "ESG", "transition", "strategy", "policy"],
+      ],
+      usefulContextTerms: ["official report", "annual report", "sustainability report", "company report", "industry analysis", "policy", "market outlook", "strategy"],
+      excludeTerms: ["dealer", "dealership", "used cars", "used car", "car listings", "parts catalog", "repair manual", "generic dictionary", "dictionary", "wiki", "wikipedia", "encyclopedia", "local dealership", "classified", "inventory", "service center", "test drive", "buy now", "lease offer", "price list"],
+    };
+  }
+
+  return {
+    coreConcepts: [
+      "company",
+      "brand",
+      "market",
+      "competition",
+      "annual report",
+      "sustainability report",
+      "industry analysis",
+      "supply chain",
+      "ESG",
+      "strategy",
+      "企業",
+      "品牌",
+      "市場",
+      "產業",
+      "年報",
+      "永續報告",
+    ],
+    researchVariables: ["revenue", "profit", "market share", "consumer positioning", "premium segment", "transition", "investment", "policy", "corporate strategy", "manufacturing"],
+    requiredConceptGroups: [
+      ["annual report", "sustainability report", "company report", "industry analysis"],
+      ["brand positioning", "market competition", "market share", "competitive strategy"],
+      ["supply chain", "ESG", "transition", "strategy"],
+    ],
+    usefulContextTerms: ["official report", "annual report", "sustainability report", "industry analysis", "market outlook", "policy", "strategy", "research"],
+    excludeTerms: ["dealer", "dealership", "used cars", "used car", "car listings", "parts catalog", "repair manual", "generic dictionary", "dictionary", "wiki", "wikipedia", "encyclopedia", "local dealership", "classified", "inventory", "service center", "test drive", "buy now", "lease offer", "price list"],
+  };
+}
+
 function authoritySignal(source: SourceRecord): number {
   const text = textForSource(source);
   const host = source.url ? (() => {
@@ -165,7 +398,7 @@ function inferFacetLevel(input: {
   if (input.titleSpecific && !input.hasAbstract) return "clue";
   if (input.hasCore && input.secondaryHits > 0 && input.requiredHits === 0) return "secondary";
   if (input.hasCore && input.secondaryHits > 0) return "secondary";
-  if (input.hasCore && input.requiredHits > 0 && !input.hasEvidence) return "clue";
+  if (input.hasCore && input.requiredHits > 0 && !input.hasEvidence) return input.hasAbstract ? "clue" : "secondary";
   if (input.hasCore) return "low";
   return "off_topic";
 }
@@ -218,6 +451,7 @@ export function buildSourceFacetAssessment(
     hasAbstract,
     titleSpecific,
   });
+  const credibleProvider = sourceHasCredibleProvider(source);
   const authority = sourceAuthorityScore(source);
   const relevanceScore =
     coreHits.length * 10
@@ -228,12 +462,13 @@ export function buildSourceFacetAssessment(
     + evidenceProfile.directSnippetCount * 14
     + (evidenceProfile.hasRequiredEvidence ? 12 : 0)
     + (hasAbstract ? 3 : 0)
+    + (credibleProvider ? 4 : 0)
     - downgradeHits.length * 10
     - (relevanceLevel === "off_topic" ? 20 : 0);
   const missingRequiredFacets = topicFacets.requiredFacets
     .map((facet) => facet.labelZhTw)
     .filter((label) => !requiredHits.includes(label));
-  const shouldShowInMainList = relevanceLevel === "primary";
+  const shouldShowInMainList = relevanceLevel === "primary" || relevanceLevel === "secondary";
   const shouldRecommendAccept = relevanceLevel === "primary"
     && evidenceProfile.evidenceSnippets.length > 0
     && (evidenceProfile.groundingStatus === "abstract_grounded" || evidenceProfile.groundingStatus === "snippet_grounded");
@@ -307,7 +542,7 @@ function legacyProfileAssessment(
     missingRequiredFacets: missingCoreConcepts,
     evidenceGrounding: hasAbstract ? "abstract_grounded" : "metadata_only",
     reasonZhTw: reasons[0] ?? "來源相關性待確認。",
-    shouldShowInMainList: relevanceLevel === "primary" || relevanceLevel === "secondary" || relevanceLevel === "clue",
+    shouldShowInMainList: relevanceLevel === "primary" || relevanceLevel === "secondary" || (relevanceLevel === "clue" && hasAbstract && matchedCoreConcepts.length >= 1),
     shouldRecommendAccept: relevanceLevel === "primary" && hasAbstract && matchedExclusions.length === 0,
   };
 }
@@ -333,7 +568,35 @@ export function buildSourceRelevanceAssessment(
     };
   }
 
-  return legacyProfileAssessment(source, profile);
+  const hasCredibleProvider = sourceHasCredibleProvider(source);
+  const hasAbstract = sourceHasAbstract(source);
+  const sourceText = textForSource(source);
+  const hasTopicSignal = profile.coreConcepts.some((term) => sourceText.includes(cleanText(term)))
+    || profile.researchVariables.some((term) => textForSource(source).includes(cleanText(term)))
+    || profile.requiredConceptGroups.some((group) => group.some((term) => sourceText.includes(cleanText(term))));
+  if (hasTopicSignal) {
+    // Keep legacy behavior for non-facet topics, but let credible sources with
+    // DOI/abstract/provider signals surface as supporting rather than low.
+  }
+
+  const legacyAssessment = legacyProfileAssessment(source, profile);
+  if (
+    legacyAssessment.relevanceLevel === "low"
+    && hasCredibleProvider
+    && (hasAbstract || Boolean(source.doi) || Boolean(source.url))
+    && (legacyAssessment.matchedCoreConcepts.length > 0 || legacyAssessment.reasons.length > 0)
+  ) {
+    return {
+      ...legacyAssessment,
+      relevanceLevel: "secondary",
+      shouldShowInMainList: true,
+      shouldRecommendAccept: false,
+      reasons: [...legacyAssessment.reasons, "來源具備 DOI / 可信 provider / 摘要等可驗證訊號，先作為輔助來源。"],
+      reasonZhTw: "來源具備 DOI 或可信 provider，且與主題有初步關聯，可先列為輔助來源。",
+    };
+  }
+
+  return legacyAssessment;
 }
 
 export function applySourceRelevanceAssessments(
@@ -397,17 +660,12 @@ export function applySourceRelevanceAssessments(
 export function buildSourceIntentProfile(topic: string): SourceIntentProfile {
   const normalized = cleanText(topic);
 
-  if (/可樂|cola|soda|soft drink|sugar-sweetened beverage|含糖飲料|碳酸飲料|汽水/.test(normalized)) {
-    return {
-      coreConcepts: ["cola", "soda", "soft drink", "sugar-sweetened beverage", "含糖飲料", "可樂", "碳酸飲料", "sugar", "caffeine", "health"],
-      researchVariables: ["consumption", "intake", "drinking habits", "攝取習慣", "飲用習慣", "sugar", "caffeine", "obesity", "metabolic health", "dental caries"],
-      requiredConceptGroups: [
-        ["cola", "soda", "soft drink", "sugar-sweetened beverage", "含糖飲料", "可樂", "碳酸飲料"],
-        ["sugar", "caffeine", "health", "obesity", "metabolic health", "dental caries", "糖分", "咖啡因", "健康"],
-      ],
-      usefulContextTerms: ["adolescents", "students", "systematic review", "review", "survey", "臨床", "研究"],
-      excludeTerms: ["招生", "高考", "工程管理", "圖書館推介", "職業教育", "成人高考", "北京話變調", "耶路撒冷"],
-    };
+  if (isFoodHealthTopic(normalized)) {
+    return foodHealthProfile(normalized);
+  }
+
+  if (isBusinessIndustryTopic(normalized)) {
+    return businessIndustryProfile(normalized);
   }
 
   if (/氣候變遷|全球暖化|溫室氣體|climate change|global warming|greenhouse gas/.test(normalized)) {

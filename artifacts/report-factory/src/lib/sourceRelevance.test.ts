@@ -38,6 +38,26 @@ test("cola health relevance keeps English high-quality research in the main list
   assert.ok(assessment.matchedCoreConcepts.includes("cola"));
 });
 
+test("food-health profiles keep sushi and soda topics domain aware", () => {
+  const sushiProfile = buildSourceIntentProfile("壽司");
+  const sodaProfile = buildSourceIntentProfile("碳酸飲料對健康影響");
+
+  assert.ok(sushiProfile.coreConcepts.includes("sushi"));
+  assert.ok(sushiProfile.coreConcepts.includes("food safety"));
+  assert.ok(sushiProfile.requiredConceptGroups.some((group) => group.includes("sashimi")));
+  assert.ok(sodaProfile.coreConcepts.includes("cola"));
+  assert.ok(sodaProfile.coreConcepts.includes("public health"));
+});
+
+test("business industry profiles keep BMW topics away from dealer and used car noise", () => {
+  const profile = buildSourceIntentProfile("BMW 電動車轉型與豪華車市場競爭");
+
+  assert.ok(profile.coreConcepts.includes("BMW"));
+  assert.ok(profile.coreConcepts.includes("annual report"));
+  assert.ok(profile.excludeTerms.includes("dealer"));
+  assert.ok(profile.excludeTerms.includes("used car"));
+});
+
 test("cola health relevance removes admissions and engineering-management noise from the main list", () => {
   const profile = buildSourceIntentProfile("可樂中的成分與攝取習慣對健康的影響");
   const noisySources = [
@@ -119,6 +139,24 @@ test("applySourceRelevanceAssessments persists gate metadata on source records",
   assert.equal(assessed[0]?.shouldShowInMainList, true);
   assert.equal(assessed[1]?.relevanceLevel, "off_topic");
   assert.equal(assessed[1]?.shouldShowInMainList, false);
+});
+
+test("credible low relevance sources can still surface as supporting sources", () => {
+  const profile = buildSourceIntentProfile("壽司");
+  const assessment = buildSourceRelevanceAssessment(
+    source({
+      title: "Sushi safety and nutrition in restaurant settings",
+      abstract: "This article reviews food safety, nutritional composition, and consumer behavior around sushi.",
+      sourceType: "Web",
+      url: "https://www.cdc.gov/example/sushi",
+      publisher: "CDC",
+      doi: null,
+    }),
+    profile,
+  );
+
+  assert.notEqual(assessment.relevanceLevel, "low");
+  assert.equal(assessment.shouldShowInMainList, true);
 });
 
 test("climate source relevance separates primary causes and current-status sources from secondary material", () => {
