@@ -10,6 +10,7 @@
   },
   "private": true,
   "devDependencies": {
+    "convex": "latest",
     "prettier": "^3.8.3",
     "typescript": "~5.9.3"
   },
