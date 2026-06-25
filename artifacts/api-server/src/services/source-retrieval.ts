@@ -11,16 +11,23 @@ import {
 } from "./source-provider-config";
 
 const MAX_RESULTS = 120;
+const FALLBACK_PROVIDER_NAMES = [
+  "Official Source",
+  "Institutional Source",
+  "Authoritative Media",
+] as const;
 
-export type SourceProvider = SourceProviderName;
+export type AcademicSourceProvider = SourceProviderName;
+export type FallbackSourceProvider = (typeof FALLBACK_PROVIDER_NAMES)[number];
+export type SourceProvider = AcademicSourceProvider | FallbackSourceProvider;
 export type SourceSearchErrorCode = "timeout" | "api-failure";
 
 export type SourceFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 export interface SourceSearchOptions {
   fetchImpl?: SourceFetch;
-  providerConfigs?: Partial<Record<SourceProvider, SourceProviderConfig>>;
-  providers?: SourceProvider[];
+  providerConfigs?: Partial<Record<AcademicSourceProvider, SourceProviderConfig>>;
+  providers?: AcademicSourceProvider[];
 }
 
 export interface SourceProviderSearchResult {
@@ -101,6 +108,7 @@ type SemanticScholarPaper = {
 
 type SemanticScholarResponse = {
   data?: SemanticScholarPaper[];
+  next?: number;
 };
 
 type OpenAlexAuthor = {
@@ -153,6 +161,10 @@ type OpenAlexWork = {
 type OpenAlexResponse = {
   results?: OpenAlexWork[];
 };
+
+function pageCount(config: SourceProviderConfig): number {
+  return Math.max(1, Math.min(5, Math.trunc(config.pageLimit || 1)));
+}
 
 function firstText(value: unknown): string | null {
   if (typeof value === "string") {
@@ -271,7 +283,7 @@ export function normalizeSemanticScholarPaper(paper: SemanticScholarPaper, query
   if (!title) return null;
 
   const doi = normalizeDoi(paper.externalIds?.DOI);
-  const abstract = stripMarkup(paper.abstract);
+  const abstract = stripMarkup(paper.abstract) ?? stripMarkup(paper.tldr?.text);
   return normalizeSourceRecord({
     title,
     authors: paper.authors?.map((author) => author.name?.trim()).filter((name): name is string => Boolean(name)) ?? [],
@@ -380,7 +392,7 @@ export function normalizeOpenAlexWork(work: OpenAlexWork, queryUsed?: string): S
   });
 }
 
-function sourceProviderConfigs(options?: SourceSearchOptions): Record<SourceProvider, SourceProviderConfig> {
+function sourceProviderConfigs(options?: SourceSearchOptions): Record<AcademicSourceProvider, SourceProviderConfig> {
   const defaults = getSourceProviderConfigs();
   return {
     OpenAlex: options?.providerConfigs?.OpenAlex ?? defaults.OpenAlex,
@@ -390,17 +402,27 @@ function sourceProviderConfigs(options?: SourceSearchOptions): Record<SourceProv
 }
 
 async function searchOpenAlex(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<SourceRecord[]> {
-  const url = new URL(config.endpoint);
-  url.searchParams.set("search", query);
-  url.searchParams.set("per-page", String(config.queryLimit));
-  url.searchParams.set("sort", "relevance_score:desc");
-  url.searchParams.set("select", "id,doi,title,display_name,publication_year,abstract_inverted_index,authorships,primary_location,locations,concepts,topics,cited_by_count,type,open_access");
-  if (config.mailto) url.searchParams.set("mailto", config.mailto);
+  const pages = Array.from({ length: pageCount(config) }, (_, index) => index + 1);
+  const results: SourceRecord[] = [];
 
-  const data = await fetchJson<OpenAlexResponse>("OpenAlex", url, config, options?.fetchImpl);
-  return (data.results ?? [])
-    .map((work) => normalizeOpenAlexWork(work, query))
-    .filter((source): source is SourceRecord => Boolean(source));
+  for (const page of pages) {
+    const url = new URL(config.endpoint);
+    url.searchParams.set("search", query);
+    url.searchParams.set("per-page", String(config.queryLimit));
+    url.searchParams.set("page", String(page));
+    url.searchParams.set("sort", "relevance_score:desc");
+    url.searchParams.set("select", "id,doi,title,display_name,publication_year,abstract_inverted_index,authorships,primary_location,locations,concepts,topics,cited_by_count,type,open_access");
+    if (config.mailto) url.searchParams.set("mailto", config.mailto);
+
+    const data = await fetchJson<OpenAlexResponse>("OpenAlex", url, config, options?.fetchImpl);
+    const pageResults = (data.results ?? [])
+      .map((work) => normalizeOpenAlexWork(work, query))
+      .filter((source): source is SourceRecord => Boolean(source));
+    results.push(...pageResults);
+    if (pageResults.length < config.queryLimit) break;
+  }
+
+  return results;
 }
 
 async function fetchJson<T>(
@@ -439,29 +461,51 @@ async function fetchJson<T>(
 }
 
 async function searchCrossref(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<SourceRecord[]> {
-  const url = new URL(config.endpoint);
-  url.searchParams.set("query", query);
-  url.searchParams.set("rows", String(config.queryLimit));
-  url.searchParams.set("select", "title,author,issued,published,published-print,published-online,abstract,DOI,URL,publisher,container-title,type,is-referenced-by-count");
-  if (config.mailto) url.searchParams.set("mailto", config.mailto);
+  const pages = Array.from({ length: pageCount(config) }, (_, index) => index);
+  const results: SourceRecord[] = [];
 
-  const data = await fetchJson<CrossrefResponse>("Crossref", url, config, options?.fetchImpl);
-  return (data.message?.items ?? [])
-    .map((work) => normalizeCrossrefWork(work, query))
-    .filter((source): source is SourceRecord => Boolean(source));
+  for (const page of pages) {
+    const url = new URL(config.endpoint);
+    url.searchParams.set("query", query);
+    url.searchParams.set("rows", String(config.queryLimit));
+    url.searchParams.set("offset", String(page * config.queryLimit));
+    url.searchParams.set("select", "title,author,issued,published,published-print,published-online,abstract,DOI,URL,publisher,container-title,type,is-referenced-by-count");
+    if (config.mailto) url.searchParams.set("mailto", config.mailto);
+
+    const data = await fetchJson<CrossrefResponse>("Crossref", url, config, options?.fetchImpl);
+    const pageResults = (data.message?.items ?? [])
+      .map((work) => normalizeCrossrefWork(work, query))
+      .filter((source): source is SourceRecord => Boolean(source));
+    results.push(...pageResults);
+    if (pageResults.length < config.queryLimit) break;
+  }
+
+  return results;
 }
 
 async function searchSemanticScholar(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<SourceRecord[]> {
-  const url = new URL(config.endpoint);
-  url.searchParams.set("query", query);
-  url.searchParams.set("limit", String(config.queryLimit));
-  url.searchParams.set("fields", "title,authors,year,abstract,tldr,externalIds,url,venue,fieldsOfStudy,citationCount,publicationTypes,isOpenAccess");
+  const results: SourceRecord[] = [];
+  let nextOffset: number | null = 0;
 
-  const data = await fetchJson<SemanticScholarResponse>("Semantic Scholar", url, config, options?.fetchImpl);
+  for (let page = 0; page < pageCount(config) && nextOffset !== null; page += 1) {
+    const url = new URL(config.endpoint);
+    url.searchParams.set("query", query);
+    url.searchParams.set("limit", String(config.queryLimit));
+    url.searchParams.set("offset", String(nextOffset));
+    url.searchParams.set("fields", "title,authors,year,abstract,tldr,externalIds,url,venue,fieldsOfStudy,citationCount,publicationTypes,isOpenAccess");
 
-  return (data.data ?? [])
-    .map((paper) => normalizeSemanticScholarPaper(paper, query))
-    .filter((source): source is SourceRecord => Boolean(source));
+    const data = await fetchJson<SemanticScholarResponse>("Semantic Scholar", url, config, options?.fetchImpl);
+    const pageResults = (data.data ?? [])
+      .map((paper) => normalizeSemanticScholarPaper(paper, query))
+      .filter((source): source is SourceRecord => Boolean(source));
+    results.push(...pageResults);
+    nextOffset =
+      typeof data.next === "number" && pageResults.length >= config.queryLimit
+        ? data.next
+        : null;
+  }
+
+  return results;
 }
 
 export function dedupeSources(sources: SourceRecord[]): SourceRecord[] {
@@ -469,7 +513,7 @@ export function dedupeSources(sources: SourceRecord[]): SourceRecord[] {
 }
 
 async function searchProviderOrThrow(
-  provider: SourceProvider,
+  provider: AcademicSourceProvider,
   query: string,
   config: SourceProviderConfig,
   options?: SourceSearchOptions,
@@ -507,7 +551,7 @@ function providerErrorResult(
 }
 
 export async function searchSourceProvider(
-  provider: SourceProvider,
+  provider: AcademicSourceProvider,
   query: string,
   options?: SourceSearchOptions,
 ): Promise<SourceProviderSearchResult> {

@@ -70,9 +70,9 @@ function source(
   };
 }
 
-test("generation readiness keeps legacy count gates for existing callers", () => {
-  const blocked = generationReadiness(2);
-  const quickDraft = generationReadiness(3);
+test("generation readiness allows evidence-first quick drafts from a single accepted source", () => {
+  const blocked = generationReadiness(0);
+  const quickDraft = generationReadiness(1);
   const fullReport = generationReadiness(10);
 
   assert.equal(blocked.canGenerate, false);
@@ -86,7 +86,7 @@ test("generation readiness keeps legacy count gates for existing callers", () =>
   assert.equal(fullReport.canGenerateFull, true);
 });
 
-test("generation readiness gates report creation by source quality", () => {
+test("generation readiness surfaces low-quality contamination while keeping evidence-first drafts available", () => {
   const lowQualityAccepted = [
     source(1),
     source(2),
@@ -125,9 +125,10 @@ test("generation readiness gates report creation by source quality", () => {
   const quickDraft = generationReadiness(quickDraftSources);
   const full = generationReadiness(fullSources);
 
-  assert.equal(blocked.canGenerate, false);
+  assert.equal(blocked.canGenerate, true);
+  assert.equal(blocked.lowQualityAcceptedCount, 1);
   assert.ok(
-    blocked.diagnostics.some((message) => message.includes("延伸或低相關來源")),
+    (blocked.warning ?? "").includes("延伸或低相關來源"),
   );
   assert.equal(quickDraft.canGenerate, true);
   assert.equal(quickDraft.canGenerateFull, false);
@@ -155,9 +156,9 @@ test("generation readiness allows preliminary report from three secondary source
   assert.equal(readiness.buttonLabel, "生成初步報告");
 });
 
-test("standard depth recommends ten sources while keeping minimum gate at three", () => {
-  const blocked = generationReadiness(2, "standard");
-  const quickDraft = generationReadiness(3, "standard");
+test("standard depth recommends ten sources while keeping evidence-first draft generation", () => {
+  const blocked = generationReadiness(0, "standard");
+  const quickDraft = generationReadiness(1, "standard");
   const full = generationReadiness(10, "standard");
 
   assert.equal(blocked.canGenerate, false);
@@ -227,6 +228,7 @@ test("workspace topic fingerprint isolates different topics", () => {
     input: input({ topic: topicA }),
     acceptedSources: [source(1)],
     acceptedSourceDigest: {
+      version: 2,
       summary: "",
       coverage: [],
       gaps: [],
@@ -288,7 +290,7 @@ test("start report workspace navigation saves workspace and calls navigation wit
   assert.equal(result.workspace.topicHash, reportTopicFingerprint(result.workspace.input.topic));
   assert.deepEqual(result.workspace.sourceIds, acceptedSources.map((source) => source.id));
   assert.equal(workspaceSnapshotIsConsistent(result.workspace), true);
-  assert.match(result.workspace.acceptedSourceDigest.summary, /目前已接受/);
+  assert.match(result.workspace.acceptedSourceDigest.summary, /目前已接受 3 筆來源/);
   assert.equal(result.workspace.project.depth, "standard");
   assert.equal(
     result.workspace.evidenceCards.length >= acceptedSources.length,
@@ -302,13 +304,36 @@ test("start report workspace navigation saves workspace and calls navigation wit
   assert.deepEqual(navigateCalls, [reportWorkspacePath(result.workspace.id)]);
 });
 
+test("single accepted source still seeds evidence cards and citations in the report workspace", () => {
+  const acceptedSources = [source(1)];
+
+  const result = startReportWorkspaceNavigation({
+    input: input(),
+    acceptedSources,
+    navigate: () => {},
+    saveWorkspace: () => {},
+  });
+
+  assert.ok(result);
+  assert.equal(result.workspace.acceptedSources.length, 1);
+  assert.equal(result.workspace.evidenceCards.length >= 1, true);
+  assert.equal(
+    result.workspace.draft.sections.some((section) => section.evidenceCardIds.length > 0),
+    true,
+  );
+  assert.equal(
+    result.workspace.draft.sections.some((section) => section.citationIds.length > 0),
+    true,
+  );
+});
+
 test("start report workspace navigation does not navigate when accepted sources are below threshold", () => {
   const navigateCalls: string[] = [];
   const savedWorkspaceIds: string[] = [];
 
   const result = startReportWorkspaceNavigation({
     input: input(),
-    acceptedSources: Array.from({ length: 2 }, (_, index) => source(index + 1)),
+    acceptedSources: [],
     navigate: (path) => navigateCalls.push(path),
     saveWorkspace: (workspace) => savedWorkspaceIds.push(workspace.id),
   });

@@ -13,6 +13,7 @@ import type { SearchIntentSourceSearchResultLlmStatus } from './searchIntentSour
 import type { SearchIntentSummary } from './searchIntentSummary';
 import type { SearchRelevanceDebug } from './searchRelevanceDebug';
 import type { SearchTrace } from './searchTrace';
+import type { SourceSearchPipelineDiagnostics } from './sourceSearchPipelineDiagnostics';
 import type { SourceRecord } from './sourceRecord';
 
 export interface SearchIntentSourceSearchResult {
@@ -30,6 +31,7 @@ export interface SearchIntentSourceSearchResult {
   planner: SearchIntentPlan;
   relevance_debug?: SearchRelevanceDebug[];
   searchTrace: SearchTrace;
+  diagnostics: SourceSearchPipelineDiagnostics;
   llm_status: SearchIntentSourceSearchResultLlmStatus;
   keyword_expansion: KeywordExpansionResult;
   groups: KeywordSourceGroup[];

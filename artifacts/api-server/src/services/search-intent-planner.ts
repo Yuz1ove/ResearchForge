@@ -1,20 +1,25 @@
 import {
   dedupeSourceRecords,
+  normalizeSourceRecord,
   type SourceRecord,
 } from "@workspace/api-zod";
 import {
   entitySearchTerms,
   understandTopic,
   type TopicClarificationCard,
+  type TopicDomain,
+  type TopicResearchAngle,
   type TopicUnderstandingResult,
 } from "@workspace/api-zod/topic-understanding";
 import { createHash, randomUUID } from "node:crypto";
+import { logger } from "../lib/logger";
 import {
   searchSourceProviders,
-  type SourceProvider,
+  type AcademicSourceProvider,
   type SourceFetch,
   type SourceProviderSearchResult,
   type SourceSearchOptions,
+  type FallbackSourceProvider,
 } from "./source-retrieval";
 import {
   LlmAdapterError,
@@ -23,9 +28,15 @@ import {
   type OpenAICompatibleLlmConfig,
 } from "./llm-adapter";
 import { summarizeSourcesWithLlm } from "./source-summarizer";
+import {
+  understandTopicWithFallback,
+  type TopicUnderstanding,
+} from "./topic-understanding";
 
 export interface SearchIntentPlannerInput {
   topic: string;
+  originalTopic?: string;
+  refinedTopic?: string;
   reportType?: string;
   audience?: string;
   language?: "zh-TW" | "en" | string;
@@ -58,14 +69,81 @@ export interface SearchIntentPlan {
   narrowedResearchQuestions?: ResearchReadyQuestion[];
   excludedDriftTerms?: string[];
   topicUnderstanding?: TopicUnderstandingResult;
+  originalTopic?: string;
+  activeResearchTopic?: string;
+  canonicalEnglishTopic?: string;
+  coreConcepts?: string[];
+}
+
+export interface SearchIntentQueryPhase {
+  stage:
+    | "core_english_academic"
+    | "academic_synonym"
+    | "education_explanation"
+    | "chinese_supplemental"
+    | "fallback_relaxed";
+  queries: string[];
 }
 
 export interface SearchIntentQuerySet {
+  coreConcepts: string[];
   chinese: string[];
   english: string[];
   highPrecision: string[];
   broad: string[];
+  coreEnglishAcademic: string[];
+  academicSynonyms: string[];
+  education: string[];
+  chineseSupplemental: string[];
+  fallbackRelaxed: string[];
+  phases: SearchIntentQueryPhase[];
 }
+
+const ROTATIONAL_MECHANICS_CORE_CONCEPTS = [
+  "spinning top",
+  "angular momentum",
+  "torque",
+  "rotational stability",
+  "gyroscopic precession",
+  "rigid body dynamics",
+  "Euler equations",
+  "Lagrange top",
+];
+
+const ROTATIONAL_MECHANICS_CORE_ENGLISH = [
+  "spinning top angular momentum torque rotational stability",
+  "spinning top precession angular momentum torque",
+  "physics of spinning top gyroscopic stability",
+  "rotational dynamics of spinning top",
+];
+
+const ROTATIONAL_MECHANICS_ACADEMIC_SYNONYMS = [
+  "gyroscopic precession torque angular momentum",
+  "rigid body dynamics spinning top stability",
+  "Euler equations Lagrange top precession",
+];
+
+const ROTATIONAL_MECHANICS_EDUCATION = [
+  "spinning top physics angular momentum explanation",
+  "gyroscope precession torque explanation",
+  "angular momentum spinning top physics classroom",
+  "rotational motion spinning top education",
+];
+
+const ROTATIONAL_MECHANICS_CHINESE = [
+  "陀螺 角動量 扭矩 進動",
+  "陀螺 旋轉穩定性 物理",
+  "陀螺 進動 角動量",
+  "剛體轉動 陀螺 角動量",
+];
+
+const ROTATIONAL_MECHANICS_RELAXED = [
+  "gyroscopic precession",
+  "torque angular momentum",
+  "rigid body rotational dynamics",
+  "spinning top physics",
+  "Lagrange top",
+];
 
 export interface SourceRelevanceDebug {
   sourceId: string;
@@ -107,6 +185,9 @@ export interface SourceDecisionTrace {
 export interface SearchTrace {
   workflowId: string;
   topic: string;
+  originalTopic: string;
+  activeResearchTopic: string;
+  canonicalEnglishTopic: string;
   normalizedTopic: string;
   topicHash: string;
   queryPlanHash: string;
@@ -116,6 +197,36 @@ export interface SearchTrace {
   acceptedCount: number;
   rejectedCount: number;
   sourceDecisions: SourceDecisionTrace[];
+}
+
+export interface SourceSearchProviderDiagnostic {
+  provider: string;
+  query: string;
+  ok: boolean;
+  result_count: number;
+  error_type: string | null;
+  error_message: string | null;
+}
+
+export interface SourceSearchPipelineDiagnostics {
+  original_topic: string;
+  active_research_topic: string;
+  canonical_english_topic: string;
+  core_concepts: string[];
+  english_queries: string[];
+  chinese_queries: string[];
+  fallback_relaxed_queries: string[];
+  provider_search_results_count: number;
+  filtered_results_count: number;
+  rejection_reasons: Record<string, number>;
+  retrieved_count: number;
+  deduped_count: number;
+  rejected_count: number;
+  candidate_count: number;
+  displayed_count: number;
+  primary_candidate_count: number;
+  provider_status: SourceSearchProviderDiagnostic[];
+  warnings: string[];
 }
 
 type SearchIntentRankedSource = SourceRecord & {
@@ -131,6 +242,13 @@ export interface SearchIntentSourceSearchOptions extends SearchIntentPlannerOpti
   queryLimit?: number;
   sourceSearch?: SourceSearchOptions;
   includeDebug?: boolean;
+  webFallback?: {
+    enabled?: boolean;
+    endpoint?: string;
+    timeoutMs?: number;
+    maxResultsPerQuery?: number;
+    fetchImpl?: SourceFetch;
+  };
 }
 
 export interface SearchIntentSummary {
@@ -161,6 +279,7 @@ export interface SearchIntentSourceSearchResult {
   planner: SearchIntentPlan;
   relevance_debug?: SourceRelevanceDebug[];
   searchTrace: SearchTrace;
+  diagnostics: SourceSearchPipelineDiagnostics;
   llm_status: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped";
   keyword_expansion: {
     normalized_topic: string;
@@ -168,6 +287,11 @@ export interface SearchIntentSourceSearchResult {
     search_queries: string[];
     english_queries: string[];
     chinese_queries: string[];
+    core_concepts?: string[];
+    core_english_queries?: string[];
+    academic_synonym_queries?: string[];
+    education_queries?: string[];
+    fallback_relaxed_queries?: string[];
     preferred_source_types: string[];
     avoid_source_types: string[];
     reasoning_notes: string[];
@@ -175,6 +299,8 @@ export interface SearchIntentSourceSearchResult {
     llm_status: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped";
   };
   groups: SourceProviderSearchResult[];
+  status?: "ok" | "empty";
+  queryCount?: number;
 }
 
 type SearchIntentPlannerErrorCode =
@@ -195,9 +321,16 @@ class SearchIntentPlannerError extends Error {
   }
 }
 
-const DEFAULT_SEARCH_INTENT_QUERY_LIMIT = 8;
-const MAX_CANDIDATE_RESULTS = 80;
-const MAX_QUERY_COUNT = 8;
+const DEFAULT_SEARCH_INTENT_QUERY_LIMIT = 18;
+const MAX_CANDIDATE_RESULTS = 180;
+const MAX_QUERY_COUNT = 16;
+const TARGET_SOURCE_COUNT = 20;
+const MINIMUM_TOTAL_SOURCES = 20;
+const MINIMUM_ACADEMIC_SOURCES = 10;
+const DEFAULT_ACADEMIC_QUERY_LIMIT = 5;
+const DEFAULT_WEB_FALLBACK_QUERY_LIMIT = 3;
+const DEFAULT_SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS = 3_500;
+const DEFAULT_SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS = 2_500;
 
 const URBAN_HEAT_PRIMARY = [
   "urban heat island",
@@ -363,6 +496,103 @@ const LLM_WRITING_PENALTIES = [
   "程式碼生成",
   "軟體工程",
   "模型跑分",
+];
+
+const AI_LEARNING_EFFECT_PRIMARY = [
+  "artificial intelligence",
+  "generative AI",
+  "AI tutoring",
+  "intelligent tutoring system",
+  "educational technology",
+  "AI in education",
+  "人工智慧",
+  "生成式 AI",
+  "AI 教學",
+  "教育科技",
+];
+
+const AI_LEARNING_EFFECT_CONTEXT = [
+  "high school students",
+  "secondary education",
+  "K-12 education",
+  "adolescents",
+  "classroom learning",
+  "高中生",
+  "中學生",
+  "高中教育",
+  "課堂學習",
+];
+
+const AI_LEARNING_EFFECT_OUTCOMES = [
+  "learning outcomes",
+  "academic achievement",
+  "learning performance",
+  "student engagement",
+  "self-regulated learning",
+  "motivation",
+  "學習成效",
+  "學業成就",
+  "學習表現",
+  "學習動機",
+  "學習投入",
+];
+
+const AI_LEARNING_EFFECT_MUST_HAVE = [
+  "artificial intelligence",
+  "generative AI",
+  "AI tutoring",
+  "intelligent tutoring system",
+  "AI in education",
+  "high school students",
+  "secondary education",
+  "secondary students",
+  "K-12 education",
+  "learning outcomes",
+  "academic achievement",
+  "人工智慧",
+  "生成式 AI",
+  "AI 教學",
+  "高中生",
+  "中學生",
+  "學習成效",
+  "學業成就",
+];
+
+const AI_LEARNING_EFFECT_LOW_WEIGHT = [
+  "student",
+  "students",
+  "learning",
+  "education",
+  "impact",
+  "effect",
+  "高中",
+  "學生",
+  "學習",
+  "教育",
+  "影響",
+];
+
+const AI_LEARNING_EFFECT_PENALTIES = [
+  "software engineering",
+  "code generation",
+  "computer vision",
+  "model benchmark",
+  "image generation",
+  "medical diagnosis",
+  "business analytics",
+  "prompt injection",
+  "higher education",
+  "university students",
+  "college students",
+  "undergraduate students",
+  "大學生",
+  "高等教育",
+  "程式碼生成",
+  "軟體工程",
+  "影像生成",
+  "醫療診斷",
+  "模型評測",
+  "商業分析",
 ];
 
 const DUMPLING_PRIMARY = [
@@ -602,6 +832,453 @@ const COLA_HEALTH_PENALTIES = [
   "成人高考",
 ];
 
+const EGG_NUTRITION_PRIMARY = [
+  "egg",
+  "eggs",
+  "chicken egg",
+  "hen egg",
+  "egg white",
+  "egg yolk",
+  "albumen",
+  "yolk",
+  "雞蛋",
+  "蛋白",
+  "蛋黃",
+  "全蛋",
+  "卵白",
+  "卵黃",
+];
+
+const EGG_NUTRITION_CONTEXT = [
+  "nutrition",
+  "nutritional composition",
+  "nutritive value",
+  "food composition",
+  "dietary protein",
+  "egg nutrition",
+  "雞蛋營養",
+  "營養成分",
+  "營養價值",
+  "食品成分",
+];
+
+const EGG_NUTRITION_OUTCOMES = [
+  "protein quality",
+  "amino acid profile",
+  "amino acid composition",
+  "protein digestibility",
+  "biological value",
+  "essential amino acids",
+  "蛋白質品質",
+  "胺基酸組成",
+  "氨基酸組成",
+  "消化率",
+  "生物價",
+  "必需胺基酸",
+];
+
+const EGG_NUTRITION_MUST_HAVE = [
+  "egg",
+  "eggs",
+  "chicken egg",
+  "egg white",
+  "egg yolk",
+  "albumen",
+  "yolk",
+  "protein",
+  "protein quality",
+  "amino acid",
+  "amino acids",
+  "amino acid profile",
+  "digestibility",
+  "biological value",
+  "雞蛋",
+  "蛋白",
+  "蛋黃",
+  "蛋白質",
+  "蛋白質品質",
+  "胺基酸",
+  "氨基酸",
+  "消化率",
+  "生物價",
+  "營養成分",
+];
+
+const EGG_NUTRITION_LOW_WEIGHT = [
+  "nutrition",
+  "food",
+  "diet",
+  "value",
+  "quality",
+  "research",
+  "study",
+  "營養",
+  "食品",
+  "飲食",
+  "研究",
+  "價值",
+  "品質",
+];
+
+const EGG_NUTRITION_DRIFT_TERMS = [
+  "basketball",
+  "baseball",
+  "volleyball",
+  "sports",
+  "athlete",
+  "climate",
+  "climate change",
+  "aviation",
+  "airplane",
+  "aircraft",
+  "flight",
+  "intravenous",
+  "parenteral nutrition",
+  "infusion",
+  "albumin infusion",
+  "籃球",
+  "棒球",
+  "排球",
+  "運動",
+  "運動員",
+  "氣候",
+  "氣候變遷",
+  "飛機",
+  "航空",
+  "輸液",
+  "靜脈營養",
+  "白蛋白輸注",
+];
+
+const COD_PRIMARY = [
+  "鱈魚",
+  "cod",
+  "cod fish",
+  "Atlantic cod",
+  "Gadus morhua",
+];
+
+const COD_CONTEXT = [
+  "fish",
+  "seafood",
+  "fisheries",
+  "aquaculture",
+  "omega-3",
+  "DHA",
+  "EPA",
+  "fish protein",
+  "mercury",
+  "heavy metals",
+  "sustainable fisheries",
+];
+
+const COD_MUST_HAVE = [
+  "鱈魚",
+  "cod",
+  "Atlantic cod",
+  "Gadus morhua",
+  "fish",
+  "seafood",
+];
+
+const COD_DRIFT_TERMS = [
+  "brand strategy",
+  "marketing",
+  "customer segmentation",
+  "business model",
+  "nutrition supplement generic",
+  "行銷",
+  "品牌策略",
+  "顧客分群",
+];
+
+const CHICKEN_THIGH_PRIMARY = [
+  "雞腿",
+  "雞腿肉",
+  "chicken thigh",
+  "chicken leg",
+  "poultry",
+  "雞肉",
+];
+
+const CHICKEN_THIGH_CONTEXT = [
+  "protein",
+  "fat content",
+  "calories",
+  "food safety",
+  "Salmonella",
+  "poultry nutrition",
+  "烹調方式",
+  "脂肪含量",
+  "熱量",
+  "食品安全",
+  "沙門氏菌",
+];
+
+const CHICKEN_THIGH_MUST_HAVE = [
+  "雞腿",
+  "雞腿肉",
+  "雞肉",
+  "chicken thigh",
+  "chicken leg",
+  "poultry",
+];
+
+const CHICKEN_THIGH_DRIFT_TERMS = [
+  "egg",
+  "eggs",
+  "egg white",
+  "egg yolk",
+  "albumen",
+  "yolk",
+  "雞蛋",
+  "蛋黃",
+  "全蛋",
+  "breakfast cereal",
+  "maize",
+  "digital media",
+  "eye strain",
+  "plant-based protein",
+  "amino acid injection",
+  "早餐穀片",
+  "玉米",
+  "數位媒體",
+  "眼睛疲勞",
+  "植物蛋白",
+  "胺基酸注射",
+];
+
+const CLAM_PRIMARY = [
+  "蛤蜊",
+  "文蛤",
+  "clam",
+  "hard clam",
+  "bivalve",
+  "Meretrix",
+  "Meretrix lusoria",
+];
+
+const CLAM_CONTEXT = [
+  "shellfish",
+  "aquaculture",
+  "intertidal",
+  "sediment",
+  "water quality",
+  "habitat",
+  "food safety",
+  "biotoxins",
+  "heavy metals",
+  "microbial",
+  "水質",
+  "棲地",
+  "潮間帶",
+  "養殖",
+  "食用安全",
+  "貝毒",
+  "重金屬",
+  "微生物",
+];
+
+const CLAM_MUST_HAVE = [
+  "蛤蜊",
+  "文蛤",
+  "clam",
+  "hard clam",
+  "bivalve",
+  "shellfish",
+  "Meretrix",
+];
+
+const CLAM_DRIFT_TERMS = [
+  "shell command",
+  "shell script",
+  "linux shell",
+  "clam shell craft",
+  "craft",
+  "軟體",
+  "命令列",
+  "貝殼工藝",
+];
+
+const KOALA_PRIMARY = [
+  "無尾熊",
+  "樹袋熊",
+  "考拉",
+  "koala",
+  "Phascolarctos cinereus",
+];
+
+const KOALA_CONTEXT = [
+  "habitat",
+  "eucalyptus",
+  "conservation",
+  "fragmentation",
+  "bushfire",
+  "chlamydia",
+  "population",
+  "road mortality",
+  "habitat connectivity",
+  "棲地",
+  "桉樹",
+  "尤加利",
+  "保育",
+  "棲地破碎化",
+  "野火",
+  "疾病",
+  "族群",
+];
+
+const KOALA_MUST_HAVE = [
+  "無尾熊",
+  "樹袋熊",
+  "考拉",
+  "koala",
+  "Phascolarctos cinereus",
+];
+
+const KOALA_DRIFT_TERMS = [
+  "mattress",
+  "toy",
+  "cartoon",
+  "plush",
+  "brand",
+  "床墊",
+  "玩具",
+  "卡通",
+  "品牌",
+];
+
+const TAIWAN_SEMICONDUCTOR_PRIMARY = [
+  "台灣半導體",
+  "台灣 半導體",
+  "Taiwan semiconductor",
+  "Taiwan chip",
+  "TSMC",
+  "台積電",
+  "晶圓代工",
+  "foundry",
+];
+
+const TAIWAN_SEMICONDUCTOR_CONTEXT = [
+  "supply chain",
+  "semiconductor supply chain",
+  "advanced packaging",
+  "packaging and testing",
+  "OSAT",
+  "wafer",
+  "foundry",
+  "EUV",
+  "CoWoS",
+  "geopolitics",
+  "export controls",
+  "resilience",
+  "供應鏈",
+  "晶圓",
+  "封裝",
+  "封測",
+  "先進製程",
+  "設備",
+  "材料",
+  "地緣政治",
+  "出口管制",
+  "韌性",
+];
+
+const TAIWAN_SEMICONDUCTOR_MUST_HAVE = [
+  "Taiwan",
+  "Taiwan semiconductor",
+  "semiconductor",
+  "supply chain",
+  "TSMC",
+  "台灣",
+  "半導體",
+  "供應鏈",
+  "台積電",
+];
+
+const TAIWAN_SEMICONDUCTOR_DRIFT_TERMS = [
+  "potato chips",
+  "food chips",
+  "poker chips",
+  "fish and chips",
+  "薯條",
+  "馬鈴薯片",
+  "食物",
+  "零食",
+];
+
+const DINOSAUR_PRIMARY = [
+  "恐龍",
+  "dinosaur",
+  "non-avian dinosaur",
+];
+
+const DINOSAUR_CONTEXT = [
+  "paleontology",
+  "fossil record",
+  "Mesozoic",
+  "Jurassic",
+  "Cretaceous",
+  "extinction",
+  "asteroid impact",
+  "bird evolution",
+  "古生物學",
+  "化石紀錄",
+  "中生代",
+  "侏羅紀",
+  "白堊紀",
+  "鳥類演化",
+];
+
+const DINOSAUR_MUST_HAVE = [
+  "恐龍",
+  "dinosaur",
+  "fossil",
+  "paleontology",
+  "化石",
+  "古生物",
+];
+
+const DON_QUIXOTE_PRIMARY = [
+  "唐吉訶德",
+  "唐吉柯德",
+  "Don Quixote",
+  "Cervantes",
+  "塞萬提斯",
+];
+
+const DON_QUIXOTE_CONTEXT = [
+  "textual analysis",
+  "novel analysis",
+  "chivalric romance satire",
+  "idealism and reality",
+  "Spanish Golden Age",
+  "literary history",
+  "文本分析",
+  "騎士小說諷刺",
+  "理想與現實衝突",
+  "西班牙黃金時代文學",
+  "文學史地位",
+];
+
+const DON_QUIXOTE_MUST_HAVE = [
+  "唐吉訶德",
+  "唐吉柯德",
+  "Don Quixote",
+  "Cervantes",
+  "塞萬提斯",
+];
+
+const DON_QUIXOTE_DRIFT_TERMS = [
+  "cod",
+  "fish",
+  "nutrition",
+  "DHA",
+  "EPA",
+  "fatty acid",
+  "seafood",
+];
+
 const CLIMATE_CAUSES_PRIMARY = [
   "climate change",
   "global warming",
@@ -691,19 +1368,27 @@ const CLIMATE_CAUSES_PENALTIES = [
 ];
 
 const MARINE_MICROPLASTICS_PRIMARY = [
-  "microplastic",
   "microplastics",
+  "microplastic",
+  "microplastic pollution",
+  "micro- and nanoplastics",
+  "nanoplastics",
   "plastic pollution",
   "marine ecosystem",
   "marine ecology",
   "ocean pollution",
   "微塑膠",
+  "微塑料",
+  "奈米塑膠",
   "塑膠微粒",
+  "塑料微粒",
   "塑膠污染",
   "海洋生態",
 ];
 
 const MARINE_MICROPLASTICS_CONTEXT = [
+  "drinking water",
+  "human health",
   "marine organisms",
   "marine environment",
   "ocean",
@@ -723,6 +1408,8 @@ const MARINE_MICROPLASTICS_CONTEXT = [
 const MARINE_MICROPLASTICS_OUTCOMES = [
   "ingestion",
   "toxicity",
+  "health effects",
+  "exposure",
   "bioaccumulation",
   "biodiversity",
   "ecological risk",
@@ -736,13 +1423,18 @@ const MARINE_MICROPLASTICS_OUTCOMES = [
 ];
 
 const MARINE_MICROPLASTICS_MUST_HAVE = [
-  "microplastic",
   "microplastics",
+  "microplastic",
+  "microplastic pollution",
+  "micro- and nanoplastics",
+  "nanoplastics",
   "plastic pollution",
   "marine",
   "ocean",
   "marine ecosystem",
   "微塑膠",
+  "微塑料",
+  "奈米塑膠",
   "塑膠微粒",
   "塑膠污染",
   "海洋",
@@ -776,6 +1468,124 @@ const MARINE_MICROPLASTICS_PENALTIES = [
   "棒球",
   "高齡者",
   "英文寫作",
+];
+
+const TELOMERASE_AGING_PRIMARY = [
+  "telomerase",
+  "telomere",
+  "telomeres",
+  "cellular senescence",
+  "aging",
+  "ageing",
+  "longevity",
+  "端粒酶",
+  "端粒",
+  "老化",
+  "衰老",
+  "細胞衰老",
+];
+
+const TELOMERASE_AGING_CONTEXT = [
+  "telomerase activity",
+  "telomere length",
+  "replicative senescence",
+  "stem cells",
+  "cancer risk",
+  "age-related disease",
+  "端粒長度",
+  "端粒酶活性",
+  "幹細胞",
+  "癌症風險",
+];
+
+const TELOMERASE_AGING_PENALTIES = [
+  "social media",
+  "food poisoning",
+  "microplastics",
+  "climate change",
+  "社群媒體",
+  "食物中毒",
+  "微塑膠",
+];
+
+const SALMONELLA_FOOD_POISONING_PRIMARY = [
+  "Salmonella",
+  "salmonellosis",
+  "food poisoning",
+  "foodborne illness",
+  "foodborne disease",
+  "food safety",
+  "沙門氏菌",
+  "沙門氏菌感染",
+  "食物中毒",
+  "食品安全",
+];
+
+const SALMONELLA_FOOD_POISONING_CONTEXT = [
+  "poultry",
+  "eggs",
+  "meat",
+  "outbreak",
+  "contamination",
+  "prevention",
+  "antimicrobial resistance",
+  "家禽",
+  "雞蛋",
+  "污染",
+  "爆發",
+  "預防",
+  "抗藥性",
+];
+
+const SALMONELLA_FOOD_POISONING_PENALTIES = [
+  "stock market",
+  "social media addiction",
+  "telomerase",
+  "climate change",
+  "股票",
+  "社群成癮",
+  "端粒酶",
+];
+
+const SOCIAL_MEDIA_ADDICTION_PRIMARY = [
+  "social media addiction",
+  "problematic social media use",
+  "problematic internet use",
+  "smartphone addiction",
+  "adolescents",
+  "mental health",
+  "社群媒體成癮",
+  "社交媒體成癮",
+  "問題性社群媒體使用",
+  "手機成癮",
+  "青少年",
+  "心理健康",
+];
+
+const SOCIAL_MEDIA_ADDICTION_CONTEXT = [
+  "depression",
+  "anxiety",
+  "sleep quality",
+  "attention",
+  "self-esteem",
+  "academic performance",
+  "憂鬱",
+  "焦慮",
+  "睡眠品質",
+  "注意力",
+  "自尊",
+  "學業表現",
+];
+
+const SOCIAL_MEDIA_ADDICTION_PENALTIES = [
+  "marketing strategy",
+  "brand advertising",
+  "fish",
+  "food safety",
+  "climate change",
+  "行銷策略",
+  "品牌廣告",
+  "食品安全",
 ];
 
 const SPIDER_ECOLOGY_PRIMARY = [
@@ -902,6 +1712,42 @@ const SPIDER_ECOLOGY_PENALTIES = [
   "民辦本科",
 ];
 
+const BMW_EV_STRATEGY_QUERIES = [
+  "BMW electric vehicle transition supply chain strategy",
+  "BMW EV strategy battery supply chain",
+  "BMW electric vehicle product strategy",
+  "BMW supply chain resilience electric vehicles",
+  "BMW battery sourcing strategy",
+  "BMW critical minerals supply chain",
+  "BMW sustainability report electric vehicles supply chain",
+  "BMW annual report electric vehicles supply chain",
+  "BMW EV transition China battery suppliers",
+  "BMW Neue Klasse supply chain strategy",
+];
+
+const GENERIC_LOW_SIGNAL_TERMS = new Set([
+  "strategy",
+  "strategies",
+  "product",
+  "products",
+  "business",
+  "market",
+  "management",
+  "research",
+  "study",
+  "analysis",
+  "effect",
+  "impact",
+  "策略",
+  "產品",
+  "商業",
+  "市場",
+  "管理",
+  "研究",
+  "分析",
+  "影響",
+]);
+
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -914,6 +1760,11 @@ function cleanString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function positiveEnvNumber(key: string, fallback: number): number {
+  const value = Number(process.env[key]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function stringArray(value: unknown, limit = 16): string[] {
@@ -975,6 +1826,21 @@ function isLlmEnglishWritingLearningTopic(
   return hasLlmCue && hasWritingCue;
 }
 
+function isAiLearningEffectTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(
+    `${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`,
+  );
+  const hasAiCue = hasAny(text, [
+    /人工智慧|生成式\s*ai|ai|chatgpt|大型語言模型|智慧教學|教育科技/i,
+    /artificial intelligence|generative ai|chatgpt|ai in education|intelligent tutoring/i,
+  ]);
+  const hasLearningCue = hasAny(text, [
+    /高中生|中學生|學生|學習成效|學業成就|學習表現|學習動機|課堂/,
+    /high school|secondary education|student|learning outcome|academic achievement|learning performance|student engagement/i,
+  ]);
+  return hasAiCue && hasLearningCue;
+}
+
 function isDumplingTopic(input: SearchIntentPlannerInput): boolean {
   const text = normalizeText(
     `${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`,
@@ -1019,6 +1885,84 @@ function isColaHealthTopic(input: SearchIntentPlannerInput): boolean {
   );
 }
 
+function isEggNutritionProteinTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(
+    `${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`,
+  );
+  const hasEggCue = hasAny(text, [
+    /雞蛋|蛋白(?!質)|蛋黃|全蛋|卵白|卵黃/,
+    /\beggs?\b|chicken egg|hen egg|egg white|egg yolk|albumen|\byolk\b/i,
+  ]);
+  const hasNutritionCue = hasAny(text, [
+    /營養成分|營養價值|蛋白質|蛋白質品質|胺基酸|氨基酸|消化率|生物價/,
+    /nutrition|nutritional composition|protein quality|amino acid|amino acids|amino acid profile|digestibility|biological value|dietary protein/i,
+  ]);
+  return hasEggCue && hasNutritionCue;
+}
+
+function isCodTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /鱈魚|大西洋鱈魚/,
+    /\bcod\b|cod fish|atlantic cod|gadus morhua/i,
+  ]);
+}
+
+function isChickenThighTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /雞腿|雞腿肉|雞腿排/,
+    /chicken thigh|chicken leg|poultry/i,
+  ]);
+}
+
+function isClamSafetyEcologyTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /蛤蜊|文蛤|雙殼貝|貝類/,
+    /hard clam|\bclam\b|bivalve|meretrix|shellfish/i,
+  ]);
+}
+
+function isKoalaConservationTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /無尾熊|樹袋熊|考拉/,
+    /koala|phascolarctos cinereus/i,
+  ]);
+}
+
+function isTaiwanSemiconductorSupplyChainTopic(
+  input: SearchIntentPlannerInput,
+): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  const hasTaiwanSemiconductorCue = hasAny(text, [
+    /台灣.*半導體|半導體.*台灣|台積電|晶圓代工|晶片.*台灣/,
+    /taiwan.*semiconductor|semiconductor.*taiwan|tsmc|taiwan.*chip|chip.*taiwan|foundry/i,
+  ]);
+  const hasSupplyChainCue = hasAny(text, [
+    /供應鏈|產業鏈|封測|設備|材料|韌性|地緣政治|出口管制/,
+    /supply chain|value chain|packaging|testing|equipment|materials|resilience|geopolitics|export controls/i,
+  ]);
+  return hasTaiwanSemiconductorCue && hasSupplyChainCue;
+}
+
+function isDinosaurTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /恐龍|中生代|侏羅紀|白堊紀|化石|古生物/,
+    /dinosaur|fossil record|paleontology|jurassic|cretaceous|non-avian dinosaur/i,
+  ]);
+}
+
+function isDonQuixoteTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  return hasAny(text, [
+    /唐吉訶德|唐吉柯德|塞萬提斯|騎士小說|西班牙黃金時代|文學史/,
+    /don quixote|cervantes|chivalric romance|spanish golden age|literary history/i,
+  ]);
+}
+
 function isClimateChangeCauseTopic(input: SearchIntentPlannerInput): boolean {
   const text = normalizeText(
     `${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`,
@@ -1034,15 +1978,33 @@ function isClimateChangeCauseTopic(input: SearchIntentPlannerInput): boolean {
   return hasClimateCue && hasCauseCue;
 }
 
+function isClimateMarineEcologyImpactTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""}`);
+  const hasClimateCue = hasAny(text, [
+    /氣候變遷|全球暖化|海洋暖化|氣候/,
+    /climate change|global warming|ocean warming/i,
+  ]);
+  const hasMarineCue = hasAny(text, [
+    /海洋|海水|海洋生態|海洋生物|珊瑚|酸化/,
+    /marine|ocean|coral|seawater|ocean acidification/i,
+  ]);
+  const hasImpactCue = hasAny(text, [
+    /影響|衝擊|生態|生物多樣性|棲地|食物網/,
+    /impact|effect|ecosystem|ecology|biodiversity|habitat|food web/i,
+  ]);
+  return hasClimateCue && hasMarineCue && hasImpactCue;
+}
+
 function isMarineMicroplasticsEcologyTopic(
   input: SearchIntentPlannerInput,
 ): boolean {
   const text = normalizeText(
     `${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`,
   );
+  const topicOnly = normalizeText(input.topic);
   const hasMicroplasticsCue = hasAny(text, [
-    /塑膠微粒|微塑膠|塑料微粒|塑膠污染/,
-    /microplastic|microplastics|plastic pollution/i,
+    /塑膠微粒|微塑膠|微塑料|塑料微粒|奈米塑膠|塑膠污染/,
+    /microplastic|microplastics|nanoplastic|nanoplastics|plastic pollution/i,
   ]);
   const hasMarineCue = hasAny(text, [
     /海洋|海水|海域|沿岸|海岸|海洋生態/,
@@ -1052,7 +2014,44 @@ function isMarineMicroplasticsEcologyTopic(
     /生態|生物|食物鏈|食物網|毒性|攝食|累積|生物多樣性/,
     /ecology|ecosystem|organism|food web|toxicity|ingestion|bioaccumulation|biodiversity/i,
   ]);
-  return hasMicroplasticsCue && (hasMarineCue || hasEcologyCue);
+  const isShortMicroplasticsTopic = /^(微塑膠|微塑料|塑膠微粒|塑料微粒|奈米塑膠|microplastics?|nanoplastics?)$/i.test(topicOnly);
+  return hasMicroplasticsCue && (hasMarineCue || hasEcologyCue || isShortMicroplasticsTopic);
+}
+
+function isTelomeraseAgingTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""}`);
+  const hasTelomeraseCue = hasAny(text, [
+    /端粒酶|端粒/,
+    /telomerase|telomere|telomeres/i,
+  ]);
+  const hasAgingCue = hasAny(text, [
+    /老化|衰老|長壽|細胞衰老/,
+    /aging|ageing|senescence|longevity/i,
+  ]);
+  return hasTelomeraseCue && hasAgingCue;
+}
+
+function isSalmonellaFoodPoisoningTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""}`);
+  const hasSalmonellaCue = hasAny(text, [/沙門氏菌/, /salmonella|salmonellosis/i]);
+  const hasFoodSafetyCue = hasAny(text, [
+    /食物中毒|食品安全|食源性|污染|感染/,
+    /food poisoning|foodborne|food safety|contamination|outbreak/i,
+  ]);
+  return hasSalmonellaCue && hasFoodSafetyCue;
+}
+
+function isSocialMediaAddictionTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(`${input.topic} ${input.reportType ?? ""}`);
+  const hasSocialMediaCue = hasAny(text, [
+    /社群媒體|社交媒體|社群平台|社交平台|手機|短影音/,
+    /social media|social networking|smartphone|instagram|tiktok|facebook/i,
+  ]);
+  const hasAddictionCue = hasAny(text, [
+    /成癮|上癮|沉迷|問題性使用|心理健康/,
+    /addiction|addictive|problematic use|compulsive|mental health/i,
+  ]);
+  return hasSocialMediaCue && hasAddictionCue;
 }
 
 function isSpiderEcologyTopic(input: SearchIntentPlannerInput): boolean {
@@ -1127,6 +2126,168 @@ function researchQuestionFromClarificationCard(
   };
 }
 
+function researchQuestionFromTopicResearchAngle(
+  angle: TopicResearchAngle,
+  excludedDriftTerms: string[],
+): ResearchReadyQuestion {
+  const zhKeywords = unique(
+    angle.zhQueries.flatMap((query) =>
+      query
+        .split(/[\s，,、：:；;。！？!?（）()]+/)
+        .map((term) => term.trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, 10);
+  const enKeywords = unique(
+    angle.enQueries.flatMap((query) =>
+      query
+        .split(/[\s,;:()/-]+/)
+        .map((term) => term.trim())
+        .filter((term) => term.length >= 2),
+    ),
+  ).slice(0, 12);
+
+  return {
+    title: angle.researchQuestion,
+    researchAngle: angle.label,
+    whyResearchable: angle.whyResearchable,
+    suggestedSourceTypes: angle.suggestedSourceTypes,
+    zhKeywords,
+    enKeywords,
+    primaryQueries: unique([...angle.enQueries, ...angle.zhQueries]).slice(0, 6),
+    secondaryQueries: unique([...angle.zhQueries, ...angle.enQueries]).slice(0, 6),
+    excludedDriftTerms,
+  };
+}
+
+function researchQuestionFromFallbackAngle(
+  angle: TopicUnderstanding["researchAngles"][number],
+  excludedDriftTerms: string[],
+): ResearchReadyQuestion {
+  const zhKeywords = unique(
+    angle.searchQueries
+      .filter((query) => /[\u3400-\u9fff]/u.test(query))
+      .flatMap((query) =>
+        query
+          .split(/[\s，,、：:；;。！？!?（）()]+/)
+          .map((term) => term.trim())
+          .filter(Boolean),
+      ),
+  ).slice(0, 10);
+  const enKeywords = unique(
+    angle.searchQueries
+      .filter((query) => /[A-Za-z]/.test(query))
+      .flatMap((query) =>
+        query
+          .split(/[\s,;:()/-]+/)
+          .map((term) => term.trim())
+          .filter((term) => term.length >= 2),
+      ),
+  ).slice(0, 12);
+
+  return {
+    title: angle.title,
+    researchAngle: angle.angle,
+    whyResearchable: angle.reason,
+    suggestedSourceTypes: [
+      "academic_paper",
+      "systematic_review",
+      "official_or_research_institution",
+    ],
+    zhKeywords,
+    enKeywords,
+    primaryQueries: unique(angle.searchQueries.filter((query) => /[A-Za-z]/.test(query))).slice(0, 6),
+    secondaryQueries: unique(angle.searchQueries.filter((query) => /[\u3400-\u9fff]/u.test(query))).slice(0, 6),
+    excludedDriftTerms,
+  };
+}
+
+function hasLatin(value: string): boolean {
+  return /[A-Za-z]/.test(value);
+}
+
+function stableEnglishTerms(values: string[]): string[] {
+  return unique(values.map((value) => value.trim()).filter((value) => value && hasLatin(value)));
+}
+
+function domainEnglishBoostQueries(
+  domain: TopicDomain | string,
+  canonicalEnglishTopic: string,
+): string[] {
+  const topic = canonicalEnglishTopic.trim();
+  if (!topic || !hasLatin(topic)) return [];
+
+  switch (domain) {
+    case "animal_science":
+      return [
+        topic,
+        `${topic} husbandry`,
+        `${topic} behavior`,
+        `${topic} disease management`,
+        `${topic} fiber`,
+      ];
+    case "health":
+      return [
+        topic,
+        `${topic} infection`,
+        `${topic} food safety`,
+        `${topic} gastroenteritis`,
+      ];
+    case "environment":
+      return [
+        topic,
+        `${topic} human exposure`,
+        `${topic} toxicology`,
+        `${topic} public health`,
+      ];
+    case "beverage_health":
+      return [
+        topic,
+        `${topic} sugar caffeine`,
+        `${topic} dental health`,
+        `${topic} obesity risk`,
+        `${topic} public health`,
+      ];
+    case "food_nutrition":
+      return [
+        topic,
+        `${topic} nutrition`,
+        `${topic} food safety`,
+        `${topic} protein quality`,
+      ];
+    default:
+      return [topic];
+  }
+}
+
+function stableCrossLanguageEnglishQueries(input: {
+  domain: TopicDomain | string;
+  canonicalEnglishTopic: string;
+  extraEnglishTerms: string[];
+  existingQueries: string[];
+  limit?: number;
+}): string[] {
+  const extraEnglishTerms = stableEnglishTerms(input.extraEnglishTerms);
+  const existingQueries = cleanQueryList(input.existingQueries, input.limit ?? MAX_QUERY_COUNT);
+  const bridgeQueries = cleanQueryList(
+    [
+      ...domainEnglishBoostQueries(input.domain, input.canonicalEnglishTopic),
+      ...extraEnglishTerms,
+    ],
+    input.limit ?? MAX_QUERY_COUNT,
+  );
+
+  const preferBridgeFirst =
+    input.domain === "animal_science" ||
+    input.domain === "health" ||
+    existingQueries.length < 4;
+  const prioritized = preferBridgeFirst
+    ? [...bridgeQueries, ...existingQueries]
+    : [...existingQueries, ...bridgeQueries];
+
+  return cleanQueryList(prioritized, input.limit ?? MAX_QUERY_COUNT);
+}
+
 function termsFromQueries(queries: string[]): string[] {
   return unique(
     queries.flatMap((query) =>
@@ -1140,6 +2301,167 @@ function termsFromQueries(queries: string[]): string[] {
         }),
     ),
   );
+}
+
+function isBmwElectricVehiclePlanText(value: string): boolean {
+  const normalized = normalizeText(value);
+  return (
+    /\bbmw\b|寶馬|bayerische motoren werke/i.test(value) &&
+    /electric vehicle|electrification|\bev\b|battery|supply chain|neue klasse|電動車|電動化|電池|供應鏈|轉型/i.test(
+      normalized,
+    )
+  );
+}
+
+function isRotationalMechanicsPlanText(value: string): boolean {
+  const normalized = normalizeText(value);
+  return (
+    /spinning top|gyroscope|陀螺|陀螺儀/.test(normalized) &&
+    /angular momentum|torque|precession|rotational stability|rigid body|euler equations|lagrange top|角動量|扭矩|進動|旋轉穩定性|剛體轉動/.test(
+      normalized,
+    )
+  );
+}
+
+function isFoodSafetyNutritionPlanText(value: string): boolean {
+  const normalized = normalizeText(value);
+  const hasEggSubject = /(?:\beggs?\b|chicken egg|hen egg|egg white|egg yolk|albumen|\byolk\b|shell eggs?|雞蛋|蛋品|蛋白(?!質)|蛋黃|全蛋|卵白|卵黃)/i.test(
+    normalized,
+  );
+  return (
+    hasEggSubject &&
+    /nutrition|protein|cholesterol|food safety|salmonella|storage|refrigeration|safe handling|營養|蛋白質|膽固醇|食品安全|沙門氏菌|保存|冷藏/i.test(
+      normalized,
+    )
+  );
+}
+
+function domainQueryExpansion(plan: SearchIntentPlan): string[] {
+  const planText = [
+    plan.normalizedTopic,
+    plan.topicType ?? "",
+    ...plan.primaryConcepts,
+    ...plan.contextConcepts,
+    ...plan.outcomeConcepts,
+    ...plan.mustHaveTerms,
+    ...plan.shouldHaveTerms,
+    ...plan.chineseQueries,
+    ...plan.englishQueries,
+  ].join(" ");
+
+  if (isBmwElectricVehiclePlanText(planText)) {
+    return BMW_EV_STRATEGY_QUERIES;
+  }
+
+  if (/taiwan_semiconductor_supply_chain|Taiwan semiconductor|台灣半導體|台灣 半導體|TSMC|台積電/i.test(planText)) {
+    return [
+      "Taiwan semiconductor supply chain TSMC foundry packaging testing",
+      "Taiwan semiconductor industry supply chain equipment materials",
+      "TSMC supply chain advanced packaging CoWoS EUV",
+      "Taiwan semiconductor supply chain resilience geopolitics export controls",
+      "台灣 半導體 供應鏈 晶圓代工 封測 設備 材料",
+      "台積電 供應鏈 先進封裝 CoWoS EUV",
+    ];
+  }
+
+  return [];
+}
+
+function deterministicAcademicQueryVariants(plan: SearchIntentPlan): {
+  chinese: string[];
+  english: string[];
+} {
+  const text = normalizeText(
+    [
+      plan.normalizedTopic,
+      ...plan.primaryConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.chineseQueries,
+      ...plan.englishQueries,
+    ].join(" "),
+  );
+
+  if (/微塑膠|微塑料|塑膠微粒|塑料微粒|microplastic|nanoplastic/.test(text)) {
+    return {
+      chinese: ["微塑膠", "微塑料", "奈米塑膠", "塑膠微粒"],
+      english: [
+        "microplastics",
+        "microplastic pollution",
+        "microplastics human health",
+        "microplastics drinking water",
+        "microplastics marine environment",
+        "micro- and nanoplastics",
+      ],
+    };
+  }
+
+  if (/碳酸飲料|含糖飲料|可樂|soft drink|soda|cola|sugar sweetened beverage/.test(text)) {
+    return {
+      chinese: ["碳酸飲料 健康影響", "含糖飲料 健康", "可樂 糖分 咖啡因"],
+      english: [
+        "soft drink consumption health effects",
+        "sugar-sweetened beverages health outcomes",
+        "carbonated beverages obesity metabolic health",
+        "soda caffeine sugar health",
+      ],
+    };
+  }
+
+  if (/telomerase|telomere|端粒酶|端粒/.test(text)) {
+    return {
+      chinese: ["端粒酶 老化", "端粒長度 細胞衰老"],
+      english: [
+        "telomerase aging",
+        "telomere length aging",
+        "telomerase cellular senescence",
+        "telomeres longevity review",
+      ],
+    };
+  }
+
+  if (/salmonella|salmonellosis|沙門氏菌/.test(text)) {
+    return {
+      chinese: ["沙門氏菌 食物中毒", "沙門氏菌 食品安全"],
+      english: [
+        "Salmonella food poisoning",
+        "Salmonella foodborne illness",
+        "salmonellosis outbreak food safety",
+      ],
+    };
+  }
+
+  if (/social media addiction|problematic social media|社群媒體成癮|社交媒體成癮/.test(text)) {
+    return {
+      chinese: ["社群媒體成癮", "問題性社群媒體使用", "社交媒體成癮 青少年"],
+      english: [
+        "social media addiction",
+        "problematic social media use",
+        "social media addiction mental health",
+        "problematic social media use adolescents",
+      ],
+    };
+  }
+
+  if (/氣候變遷.*海洋|海洋.*氣候變遷|climate change.*marine|climate change.*ocean|marine ecosystem/.test(text)) {
+    return {
+      chinese: ["氣候變遷 海洋生態影響", "氣候變遷 海洋生物多樣性", "海洋暖化 生態系"],
+      english: [
+        "climate change impacts on marine ecosystems",
+        "ocean warming marine biodiversity",
+        "climate change marine ecology",
+        "climate change ocean acidification marine ecosystems",
+      ],
+    };
+  }
+
+  return {
+    chinese: /[\u4e00-\u9fff]/.test(plan.normalizedTopic)
+      ? [plan.normalizedTopic]
+      : [],
+    english: /^[\x00-\x7F]+$/.test(plan.normalizedTopic)
+      ? [plan.normalizedTopic, `${plan.normalizedTopic} systematic review`]
+      : [],
+  };
 }
 
 function sourceTypesFromUnderstanding(
@@ -1171,25 +2493,61 @@ function buildUnderstandingSearchIntent(
   plannerStatus: SearchIntentPlannerStatus,
 ): SearchIntentPlan {
   const angleCards = understanding.clarificationCards;
-  const questions = angleCards.map((card) =>
-    researchQuestionFromClarificationCard(card, understanding.excludedDriftTerms),
-  );
+  const questions = (
+    angleCards.length
+      ? angleCards.map((card) =>
+          researchQuestionFromClarificationCard(card, understanding.excludedDriftTerms),
+        )
+      : understanding.researchAngles.map((angle) =>
+          researchQuestionFromTopicResearchAngle(angle, understanding.excludedDriftTerms),
+        )
+  ).slice(0, 6);
   const zhQueries = unique([
+    ...understanding.searchQueries.zh,
     ...angleCards.flatMap((card) => card.zhQueries),
     ...questions.flatMap((question) => question.primaryQueries),
   ]).slice(0, MAX_QUERY_COUNT);
-  const enQueries = unique([
-    ...angleCards.flatMap((card) => card.enQueries),
-    ...questions.flatMap((question) => question.secondaryQueries),
-  ]).slice(0, MAX_QUERY_COUNT);
+  const enQueries = stableCrossLanguageEnglishQueries({
+    domain: understanding.domain,
+    canonicalEnglishTopic: understanding.canonicalEnglishTopic,
+    extraEnglishTerms: [
+      ...understanding.englishTerms,
+      ...understanding.scientificNames,
+      ...(understanding.entity ? entitySearchTerms(understanding.entity) : []),
+    ],
+    existingQueries: unique([
+      ...understanding.searchQueries.en,
+      ...angleCards.flatMap((card) => card.enQueries),
+      ...questions.flatMap((question) => question.secondaryQueries),
+    ]),
+  }).slice(0, MAX_QUERY_COUNT);
+  const planText = [
+    input.topic,
+    understanding.normalizedTopic,
+    ...understanding.canonicalTerms,
+    ...understanding.englishTerms,
+    ...enQueries,
+    ...zhQueries,
+  ].join(" ");
+  const expandedEnglishQueries = isBmwElectricVehiclePlanText(planText)
+    ? unique([...BMW_EV_STRATEGY_QUERIES, ...enQueries]).slice(0, MAX_QUERY_COUNT)
+    : enQueries;
+  const queryTerms = termsFromQueries([...zhQueries, ...enQueries]);
+  const specificTopicConcepts =
+    understanding.topicKind === "specific_research_topic"
+      ? unique([
+          ...understanding.coreConcepts,
+          ...queryTerms,
+        ])
+      : [];
   const conceptTerms = unique([
+    ...specificTopicConcepts,
     ...understanding.canonicalTerms,
     ...understanding.aliases,
     ...understanding.englishTerms,
     ...understanding.scientificNames,
     ...(understanding.entity ? entitySearchTerms(understanding.entity) : []),
   ]);
-  const queryTerms = termsFromQueries([...zhQueries, ...enQueries]);
   const angleLabels = understanding.researchAngles.map((angle) => angle.label);
   const domainContext = sourceTypesFromUnderstanding(understanding);
   const fallbackTerms = topicTerms(input.topic);
@@ -1240,8 +2598,8 @@ function buildUnderstandingSearchIntent(
           ...primaryConcepts.map((term) => `${term} 安全 營養 市場 文化`.trim()),
           ...fallbackTerms,
         ]).slice(0, MAX_QUERY_COUNT),
-    englishQueries: enQueries.length
-      ? enQueries
+    englishQueries: expandedEnglishQueries.length
+      ? expandedEnglishQueries
       : unique([
           ...primaryConcepts.map((term) => `${term} safety nutrition market culture`.trim()),
         ]).slice(0, MAX_QUERY_COUNT),
@@ -1253,6 +2611,10 @@ function buildUnderstandingSearchIntent(
     ),
     plannerStatus,
     fallbackUsed: true,
+    originalTopic: input.originalTopic?.trim() || input.topic.trim(),
+    activeResearchTopic: input.topic.trim(),
+    canonicalEnglishTopic: understanding.canonicalEnglishTopic,
+    coreConcepts: understanding.coreConcepts,
   };
 }
 
@@ -1265,17 +2627,34 @@ function buildEntityAwareSearchIntent(
   if (!understanding.entity) return null;
 
   const entityTerms = entitySearchTerms(understanding.entity);
-  const clarificationQuestions = understanding.clarificationCards.map((card) =>
-    researchQuestionFromClarificationCard(card, understanding.excludedDriftTerms),
-  );
+  const clarificationQuestions = (
+    understanding.clarificationCards.length
+      ? understanding.clarificationCards.map((card) =>
+          researchQuestionFromClarificationCard(card, understanding.excludedDriftTerms),
+        )
+      : understanding.researchAngles.map((angle) =>
+          researchQuestionFromTopicResearchAngle(angle, understanding.excludedDriftTerms),
+        )
+  ).slice(0, 6);
   const zhQueries = unique([
+    ...understanding.searchQueries.zh,
     ...understanding.clarificationCards.flatMap((card) => card.zhQueries),
     ...clarificationQuestions.flatMap((question) => question.primaryQueries),
   ]).slice(0, MAX_QUERY_COUNT);
-  const enQueries = unique([
-    ...understanding.clarificationCards.flatMap((card) => card.enQueries),
-    ...clarificationQuestions.flatMap((question) => question.secondaryQueries),
-  ]).slice(0, MAX_QUERY_COUNT);
+  const enQueries = stableCrossLanguageEnglishQueries({
+    domain: understanding.domain,
+    canonicalEnglishTopic: understanding.canonicalEnglishTopic,
+    extraEnglishTerms: [
+      ...understanding.englishTerms,
+      ...understanding.scientificNames,
+      ...entityTerms,
+    ],
+    existingQueries: unique([
+      ...understanding.searchQueries.en,
+      ...understanding.clarificationCards.flatMap((card) => card.enQueries),
+      ...clarificationQuestions.flatMap((question) => question.secondaryQueries),
+    ]),
+  }).slice(0, MAX_QUERY_COUNT);
   const categoryConcepts: Record<string, string[]> = {
     animal: ["animal model", "husbandry", "animal welfare", "behavior"],
     food: ["nutrition", "food safety", "consumption", "food labeling"],
@@ -1493,6 +2872,96 @@ export function buildRuleBasedSearchIntent(
       reasoningNotes: planReason(
         reason,
         "LLM English-writing searches must keep large-language-model, English writing, language learning, education, and writing-feedback terms together; software-only model topics are drift.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isAiLearningEffectTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "ai_learning_effect_secondary_education",
+      primaryConcepts: AI_LEARNING_EFFECT_PRIMARY,
+      contextConcepts: AI_LEARNING_EFFECT_CONTEXT,
+      outcomeConcepts: AI_LEARNING_EFFECT_OUTCOMES,
+      populationConcepts: ["high school students", "secondary students", "adolescents", "高中生"],
+      lowWeightTerms: AI_LEARNING_EFFECT_LOW_WEIGHT,
+      mustHaveTerms: AI_LEARNING_EFFECT_MUST_HAVE,
+      shouldHaveTerms: [
+        "high school students",
+        "secondary education",
+        "learning outcomes",
+        "academic achievement",
+        "student engagement",
+        "self-regulated learning",
+        "高中生",
+        "學習成效",
+        "學業成就",
+      ],
+      penaltyTerms: AI_LEARNING_EFFECT_PENALTIES,
+      negativeTerms: [
+        "software engineering only",
+        "code generation only",
+        "model benchmark without education",
+        "medical AI without students or learning",
+      ],
+      chineseQueries: [
+        "人工智慧 高中生 學習成效",
+        "生成式 AI 高中生 學習成效",
+        "AI 教學 高中生 學業成就",
+        "教育科技 人工智慧 中學生 學習表現",
+        "ChatGPT 高中生 學習動機 學習成效",
+        "智慧教學系統 中學生 學習成效",
+      ],
+      englishQueries: [
+        "artificial intelligence high school students learning outcomes",
+        "generative AI secondary education learning outcomes",
+        "AI tutoring high school students academic achievement",
+        "intelligent tutoring system secondary students learning performance",
+        "ChatGPT students learning outcomes secondary education",
+        "AI in education student engagement academic achievement",
+        "educational technology artificial intelligence learning performance students",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "AI 工具對高中生學習成效與學業表現的影響",
+          researchAngle: "比較 AI 教學、生成式 AI 或智慧 tutoring 對學習成果的實證研究。",
+          whyResearchable: "可使用教育科技、AI in education、學習成效與學業成就研究交叉驗證。",
+          suggestedSourceTypes: ["academic_paper", "systematic_review", "education_study"],
+          zhKeywords: ["人工智慧", "高中生", "學習成效", "學業成就"],
+          enKeywords: ["artificial intelligence", "high school students", "learning outcomes", "academic achievement"],
+          primaryQueries: [
+            "artificial intelligence high school students learning outcomes",
+            "AI tutoring high school students academic achievement",
+          ],
+          secondaryQueries: [
+            "generative AI secondary education learning outcomes",
+            "AI in education student engagement academic achievement",
+          ],
+          excludedDriftTerms: AI_LEARNING_EFFECT_PENALTIES,
+        },
+        {
+          title: "生成式 AI 對學生投入、動機與自我調節學習的影響",
+          researchAngle: "分析 ChatGPT 或生成式 AI 在課堂學習中的使用與學習投入。",
+          whyResearchable: "可查學生動機、自我調節、教育科技與課堂介入研究。",
+          suggestedSourceTypes: ["academic_paper", "systematic_review", "education_policy"],
+          zhKeywords: ["生成式 AI", "學習動機", "學習投入", "自我調節學習"],
+          enKeywords: ["generative AI", "student engagement", "motivation", "self-regulated learning"],
+          primaryQueries: [
+            "generative AI student engagement motivation learning outcomes",
+            "ChatGPT students self-regulated learning academic achievement",
+          ],
+          secondaryQueries: [
+            "AI in education motivation student learning performance",
+          ],
+          excludedDriftTerms: AI_LEARNING_EFFECT_PENALTIES,
+        },
+      ],
+      reasoningNotes: planReason(
+        reason,
+        "AI learning-effect searches must keep artificial-intelligence terms tied to students, secondary education, learning outcomes, academic achievement, engagement, or motivation; software-only AI matches are drift.",
       ),
       plannerStatus,
       fallbackUsed: true,
@@ -1783,6 +3252,603 @@ export function buildRuleBasedSearchIntent(
     };
   }
 
+  if (isEggNutritionProteinTopic(input)) {
+    const narrowedResearchQuestions: ResearchReadyQuestion[] = [
+      {
+        title: "雞蛋營養成分與蛋白質品質",
+        researchAngle: "整理雞蛋整體營養成分、蛋白質品質與必需胺基酸組成。",
+        whyResearchable: "可由食品成分、營養學、蛋白質品質與胺基酸 profile 文獻交叉驗證。",
+        suggestedSourceTypes: ["peer_reviewed_journal", "nutrition_database", "food_composition_study"],
+        zhKeywords: ["雞蛋", "營養成分", "蛋白質品質", "胺基酸組成"],
+        enKeywords: ["egg nutrition", "protein quality", "amino acid profile", "biological value"],
+        primaryQueries: [
+          "egg nutrition protein quality",
+          "egg protein amino acid profile",
+          "chicken egg nutritional composition",
+        ],
+        secondaryQueries: [
+          "dietary protein quality egg",
+          "egg protein biological value",
+        ],
+        excludedDriftTerms: EGG_NUTRITION_DRIFT_TERMS,
+      },
+      {
+        title: "蛋白與蛋黃的營養及胺基酸差異",
+        researchAngle: "比較 egg white/albumen 與 egg yolk/yolk 在蛋白質、脂質與胺基酸組成上的差異。",
+        whyResearchable: "可查找蛋白、蛋黃、albumen、yolk 的營養分析與食品科學研究。",
+        suggestedSourceTypes: ["food_science_study", "nutrition_database", "academic_paper"],
+        zhKeywords: ["蛋白", "蛋黃", "營養價值", "胺基酸"],
+        enKeywords: ["egg white", "albumen", "egg yolk", "yolk", "amino acid composition"],
+        primaryQueries: [
+          "egg white protein digestibility",
+          "egg yolk nutrition amino acids",
+          "albumen amino acid composition",
+        ],
+        secondaryQueries: [
+          "egg white yolk amino acid composition",
+          "egg yolk protein amino acids nutrition",
+        ],
+        excludedDriftTerms: EGG_NUTRITION_DRIFT_TERMS,
+      },
+    ];
+
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "egg_nutrition_protein_quality",
+      primaryConcepts: EGG_NUTRITION_PRIMARY,
+      contextConcepts: EGG_NUTRITION_CONTEXT,
+      outcomeConcepts: EGG_NUTRITION_OUTCOMES,
+      populationConcepts: [],
+      lowWeightTerms: EGG_NUTRITION_LOW_WEIGHT,
+      mustHaveTerms: EGG_NUTRITION_MUST_HAVE,
+      shouldHaveTerms: [
+        "egg nutrition",
+        "egg protein quality",
+        "amino acid profile",
+        "egg white protein",
+        "egg yolk nutrition",
+        "albumen",
+        "protein digestibility",
+        "biological value",
+        "雞蛋營養成分",
+        "蛋白質品質",
+        "胺基酸組成",
+        "蛋白 蛋黃",
+      ],
+      penaltyTerms: EGG_NUTRITION_DRIFT_TERMS,
+      negativeTerms: EGG_NUTRITION_DRIFT_TERMS,
+      chineseQueries: [
+        "雞蛋 營養成分 蛋白質品質",
+        "雞蛋 胺基酸組成",
+        "蛋白 蛋黃 營養價值",
+        "雞蛋蛋白質 消化率",
+        "雞蛋 生物價 胺基酸",
+        "雞蛋 蛋白質 必需胺基酸",
+      ],
+      englishQueries: [
+        "egg nutrition protein quality",
+        "egg protein amino acid profile",
+        "chicken egg nutritional composition",
+        "egg white protein digestibility",
+        "egg yolk nutrition amino acids",
+        "albumen amino acid composition",
+        "dietary protein quality egg",
+        "egg protein biological value",
+        "egg white yolk amino acid composition",
+      ],
+      narrowedResearchQuestions,
+      excludedDriftTerms: EGG_NUTRITION_DRIFT_TERMS,
+      reasoningNotes: planReason(
+        reason,
+        "Egg nutrition searches must keep egg/chicken egg/albumen/yolk terms tied to nutrition, protein quality, amino-acid composition, digestibility, or biological value; sports, climate, aviation, and unrelated infusion topics are hard drift.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isCodTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "cod_food_nutrition",
+      primaryConcepts: COD_PRIMARY,
+      contextConcepts: COD_CONTEXT,
+      outcomeConcepts: ["營養成分", "食品安全", "永續漁業", "omega-3", "重金屬"],
+      populationConcepts: [],
+      lowWeightTerms: ["fish", "seafood", "nutrition", "營養"],
+      mustHaveTerms: COD_MUST_HAVE,
+      shouldHaveTerms: unique([...COD_CONTEXT, "omega-3", "DHA", "EPA", "mercury", "heavy metals"]),
+      penaltyTerms: COD_DRIFT_TERMS,
+      negativeTerms: COD_DRIFT_TERMS,
+      chineseQueries: [
+        "鱈魚 營養成分 omega-3 DHA EPA",
+        "鱈魚 重金屬 mercury 食品安全",
+        "鱈魚 永續漁業 漁業管理",
+        "大西洋鱈魚 fish protein seafood safety",
+      ],
+      englishQueries: [
+        "Atlantic cod nutrition omega-3 DHA EPA",
+        "cod fish heavy metals mercury seafood safety",
+        "Gadus morhua nutritional composition",
+        "Atlantic cod sustainable fisheries management",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "鱈魚營養成分與 omega-3 價值",
+          researchAngle: "整理鱈魚蛋白質、omega-3、DHA 與 EPA 的營養價值。",
+          whyResearchable: "可由魚類營養研究與食品成分資料庫交叉驗證。",
+          suggestedSourceTypes: ["food_composition_study", "nutrition_database", "academic_paper"],
+          zhKeywords: ["鱈魚", "omega-3", "DHA", "EPA", "營養成分"],
+          enKeywords: ["Atlantic cod", "cod fish", "omega-3", "DHA", "EPA"],
+          primaryQueries: ["鱈魚 營養成分 omega-3 DHA EPA", "Atlantic cod nutrition omega-3 DHA EPA"],
+          secondaryQueries: ["Gadus morhua nutritional composition", "cod fish protein fatty acid composition"],
+          excludedDriftTerms: COD_DRIFT_TERMS,
+        },
+      ],
+      excludedDriftTerms: COD_DRIFT_TERMS,
+      reasoningNotes: planReason(reason, "Cod searches must keep cod/fish/seafood terms tied to nutrition, food safety, or fisheries context."),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isChickenThighTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "chicken_thigh_food_nutrition",
+      primaryConcepts: CHICKEN_THIGH_PRIMARY,
+      contextConcepts: CHICKEN_THIGH_CONTEXT,
+      outcomeConcepts: ["蛋白質", "脂肪含量", "熱量", "Salmonella", "食品安全"],
+      populationConcepts: [],
+      lowWeightTerms: ["food", "meat", "nutrition", "飲食"],
+      mustHaveTerms: CHICKEN_THIGH_MUST_HAVE,
+      shouldHaveTerms: unique([...CHICKEN_THIGH_CONTEXT, "chicken protein", "fat content"]),
+      penaltyTerms: CHICKEN_THIGH_DRIFT_TERMS,
+      negativeTerms: CHICKEN_THIGH_DRIFT_TERMS,
+      chineseQueries: [
+        "雞腿肉 營養 蛋白質 脂肪 熱量",
+        "雞腿 食品安全 沙門氏菌 烹調",
+        "雞肉 poultry Salmonella food safety",
+        "雞腿 烹調方式 脂肪含量",
+      ],
+      englishQueries: [
+        "chicken thigh nutrition protein fat content",
+        "chicken thigh Salmonella food safety",
+        "chicken leg calories protein composition",
+        "poultry meat cooking storage safety",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "雞腿肉營養與脂肪含量",
+          researchAngle: "整理 chicken thigh 的蛋白質、脂肪與熱量組成。",
+          whyResearchable: "可由食品成分與肉品營養研究交叉驗證。",
+          suggestedSourceTypes: ["food_composition_study", "nutrition_database", "academic_paper"],
+          zhKeywords: ["雞腿肉", "蛋白質", "脂肪", "熱量"],
+          enKeywords: ["chicken thigh", "protein", "fat content", "calories"],
+          primaryQueries: ["雞腿肉 營養 蛋白質 脂肪 熱量", "chicken thigh nutrition protein fat content"],
+          secondaryQueries: ["chicken leg calories protein composition"],
+          excludedDriftTerms: CHICKEN_THIGH_DRIFT_TERMS,
+        },
+      ],
+      excludedDriftTerms: CHICKEN_THIGH_DRIFT_TERMS,
+      reasoningNotes: planReason(reason, "Chicken-thigh searches must keep chicken/poultry terms tied to nutrition, cooking, or Salmonella food-safety evidence."),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isClamSafetyEcologyTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "clam_ecology_food_safety",
+      primaryConcepts: CLAM_PRIMARY,
+      contextConcepts: CLAM_CONTEXT,
+      outcomeConcepts: ["生態棲地", "食用安全", "貝毒", "重金屬", "水質", "養殖管理"],
+      populationConcepts: [],
+      lowWeightTerms: ["seafood", "shellfish", "food", "ecology", "海鮮", "貝類", "生態"],
+      mustHaveTerms: CLAM_MUST_HAVE,
+      shouldHaveTerms: unique([...CLAM_CONTEXT, "shellfish safety", "water quality", "aquaculture"]),
+      penaltyTerms: CLAM_DRIFT_TERMS,
+      negativeTerms: CLAM_DRIFT_TERMS,
+      chineseQueries: [
+        "蛤蜊 生態 棲地 水質",
+        "文蛤 潮間帶 底質 生長",
+        "蛤蜊 食用安全 貝毒 重金屬",
+        "文蛤 微生物 食品安全",
+        "蛤蜊 養殖 水質 病害",
+      ],
+      englishQueries: [
+        "hard clam habitat ecology water quality",
+        "clam shellfish safety biotoxins heavy metals",
+        "bivalve microbial food safety clam",
+        "hard clam aquaculture management water quality",
+        "Meretrix lusoria aquaculture food safety",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "蛤蜊的生態棲地與水質條件",
+          researchAngle: "整理蛤蜊／文蛤在潮間帶、底質、水質與養殖環境中的生長條件。",
+          whyResearchable: "可用海洋生態、水產養殖與政府監測資料交叉驗證。",
+          suggestedSourceTypes: ["aquaculture_study", "marine_ecology_paper", "government_monitoring_data"],
+          zhKeywords: ["蛤蜊", "文蛤", "棲地", "水質", "潮間帶"],
+          enKeywords: ["clam", "hard clam", "bivalve", "water quality", "habitat"],
+          primaryQueries: ["蛤蜊 生態 棲地 水質", "hard clam habitat ecology water quality"],
+          secondaryQueries: ["文蛤 潮間帶 底質 生長", "Meretrix lusoria aquaculture food safety"],
+          excludedDriftTerms: CLAM_DRIFT_TERMS,
+        },
+        {
+          title: "蛤蜊食用安全與污染風險",
+          researchAngle: "分析蛤蜊的貝毒、重金屬、微生物與 shellfish safety 管理。",
+          whyResearchable: "可查食品安全、環境污染與官方貝類衛生資料。",
+          suggestedSourceTypes: ["food_safety_guideline", "environmental_monitoring", "academic_paper"],
+          zhKeywords: ["蛤蜊", "食用安全", "貝毒", "重金屬", "微生物"],
+          enKeywords: ["clam", "shellfish safety", "biotoxins", "heavy metals", "microbial"],
+          primaryQueries: ["蛤蜊 食用安全 貝毒 重金屬", "clam shellfish safety biotoxins heavy metals"],
+          secondaryQueries: ["bivalve microbial food safety clam", "shellfish safety monitoring clam"],
+          excludedDriftTerms: CLAM_DRIFT_TERMS,
+        },
+      ],
+      excludedDriftTerms: CLAM_DRIFT_TERMS,
+      reasoningNotes: planReason(reason, "Clam searches must keep clam/hard-clam/bivalve/shellfish terms tied to ecology, aquaculture, water quality, or food-safety evidence."),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isKoalaConservationTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "koala_habitat_conservation",
+      primaryConcepts: KOALA_PRIMARY,
+      contextConcepts: KOALA_CONTEXT,
+      outcomeConcepts: ["棲地保育", "族群威脅", "疾病", "野火", "道路死亡", "保育政策"],
+      populationConcepts: [],
+      lowWeightTerms: ["animal", "wildlife", "conservation", "動物", "野生動物", "保育"],
+      mustHaveTerms: KOALA_MUST_HAVE,
+      shouldHaveTerms: unique([...KOALA_CONTEXT, "habitat conservation", "population threats"]),
+      penaltyTerms: KOALA_DRIFT_TERMS,
+      negativeTerms: KOALA_DRIFT_TERMS,
+      chineseQueries: [
+        "無尾熊 保育",
+        "無尾熊 棲地",
+        "無尾熊 棲地 保育 桉樹",
+        "樹袋熊 棲地破碎化 族群",
+        "無尾熊 疾病 野火 道路 族群",
+        "無尾熊 保育政策 棲地連通性",
+      ],
+      englishQueries: [
+        "koala conservation",
+        "koala habitat",
+        "Phascolarctos cinereus",
+        "koala habitat conservation eucalyptus fragmentation",
+        "Phascolarctos cinereus habitat loss conservation",
+        "koala chlamydia bushfire road mortality population",
+        "koala conservation policy habitat connectivity",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "無尾熊棲地流失與保育策略",
+          researchAngle: "整理桉樹棲地、棲地破碎化、土地利用與保護區管理。",
+          whyResearchable: "可使用保育研究、澳洲政府資料與族群監測報告。",
+          suggestedSourceTypes: ["conservation_report", "ecology_paper", "government_wildlife_data"],
+          zhKeywords: ["無尾熊", "棲地", "保育", "桉樹", "棲地破碎化"],
+          enKeywords: ["koala", "habitat conservation", "eucalyptus", "fragmentation"],
+          primaryQueries: ["無尾熊 棲地 保育 桉樹", "koala habitat conservation eucalyptus fragmentation"],
+          secondaryQueries: ["Phascolarctos cinereus habitat loss conservation"],
+          excludedDriftTerms: KOALA_DRIFT_TERMS,
+        },
+        {
+          title: "疾病、野火與道路對無尾熊族群的威脅",
+          researchAngle: "分析 chlamydia、bushfire、road mortality 對族群趨勢的影響。",
+          whyResearchable: "可查獸醫研究、保育報告、野火後監測與道路死亡資料。",
+          suggestedSourceTypes: ["veterinary_study", "conservation_monitoring", "government_report"],
+          zhKeywords: ["無尾熊", "疾病", "野火", "道路死亡", "族群"],
+          enKeywords: ["koala", "chlamydia", "bushfire", "road mortality", "population"],
+          primaryQueries: ["無尾熊 疾病 野火 道路 族群", "koala chlamydia bushfire road mortality population"],
+          secondaryQueries: ["koala population threats conservation"],
+          excludedDriftTerms: KOALA_DRIFT_TERMS,
+        },
+      ],
+      excludedDriftTerms: KOALA_DRIFT_TERMS,
+      reasoningNotes: planReason(reason, "Koala searches must stay anchored to koala/Phascolarctos and habitat, eucalyptus, conservation, disease, bushfire, or road-mortality evidence."),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isTaiwanSemiconductorSupplyChainTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "taiwan_semiconductor_supply_chain",
+      primaryConcepts: TAIWAN_SEMICONDUCTOR_PRIMARY,
+      contextConcepts: TAIWAN_SEMICONDUCTOR_CONTEXT,
+      outcomeConcepts: ["產業分工", "供應鏈韌性", "地緣政治風險", "出口管制", "先進製程", "封裝產能"],
+      populationConcepts: [],
+      lowWeightTerms: ["industry", "technology", "market", "產業", "科技", "市場"],
+      mustHaveTerms: TAIWAN_SEMICONDUCTOR_MUST_HAVE,
+      shouldHaveTerms: unique([...TAIWAN_SEMICONDUCTOR_CONTEXT, "TSMC", "advanced packaging"]),
+      penaltyTerms: TAIWAN_SEMICONDUCTOR_DRIFT_TERMS,
+      negativeTerms: TAIWAN_SEMICONDUCTOR_DRIFT_TERMS,
+      chineseQueries: [
+        "台灣 半導體 供應鏈 晶圓代工 封測",
+        "台積電 供應鏈 設備 材料",
+        "台灣 半導體 供應鏈 韌性 地緣政治",
+        "半導體 出口管制 台灣 供應鏈 風險",
+        "台灣 半導體 先進製程 封裝 EUV",
+      ],
+      englishQueries: [
+        "Taiwan semiconductor supply chain foundry packaging testing materials",
+        "TSMC supply chain equipment materials",
+        "Taiwan semiconductor supply chain resilience geopolitics",
+        "semiconductor export controls Taiwan supply chain risk",
+        "Taiwan semiconductor advanced packaging EUV CoWoS supply chain",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "台灣半導體供應鏈的產業分工",
+          researchAngle: "整理晶圓代工、封裝測試、設備、材料與關鍵企業角色。",
+          whyResearchable: "可用企業年報、政府統計、產業報告與政策資料交叉驗證。",
+          suggestedSourceTypes: ["industry_report", "company_report", "government_statistics"],
+          zhKeywords: ["台灣半導體", "供應鏈", "晶圓代工", "封測", "設備材料"],
+          enKeywords: ["Taiwan semiconductor", "supply chain", "foundry", "packaging", "materials"],
+          primaryQueries: ["台灣 半導體 供應鏈 晶圓代工 封測", "Taiwan semiconductor supply chain foundry packaging testing materials"],
+          secondaryQueries: ["TSMC supply chain equipment materials"],
+          excludedDriftTerms: TAIWAN_SEMICONDUCTOR_DRIFT_TERMS,
+        },
+        {
+          title: "地緣政治下的台灣半導體供應鏈韌性",
+          researchAngle: "分析出口管制、美中科技競爭、產能集中與供應鏈重組風險。",
+          whyResearchable: "可查政策報告、智庫、國際機構與產業分析。",
+          suggestedSourceTypes: ["policy_report", "think_tank_report", "industry_analysis"],
+          zhKeywords: ["台灣半導體", "地緣政治", "出口管制", "供應鏈韌性"],
+          enKeywords: ["Taiwan semiconductor", "geopolitics", "export controls", "supply chain resilience"],
+          primaryQueries: ["台灣 半導體 供應鏈 韌性 地緣政治", "Taiwan semiconductor supply chain resilience geopolitics"],
+          secondaryQueries: ["semiconductor export controls Taiwan supply chain risk"],
+          excludedDriftTerms: TAIWAN_SEMICONDUCTOR_DRIFT_TERMS,
+        },
+      ],
+      excludedDriftTerms: TAIWAN_SEMICONDUCTOR_DRIFT_TERMS,
+      reasoningNotes: planReason(reason, "Taiwan semiconductor searches must combine Taiwan/TSMC/semiconductor with supply-chain, foundry, packaging, equipment/materials, resilience, or export-control context."),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isDinosaurTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "dinosaur_paleontology",
+      primaryConcepts: DINOSAUR_PRIMARY,
+      contextConcepts: DINOSAUR_CONTEXT,
+      outcomeConcepts: ["化石紀錄", "滅絕機制", "鳥類演化"],
+      populationConcepts: [],
+      lowWeightTerms: ["history", "culture", "study", "研究"],
+      mustHaveTerms: DINOSAUR_MUST_HAVE,
+      shouldHaveTerms: unique([...DINOSAUR_CONTEXT, "asteroid impact", "bird evolution"]),
+      penaltyTerms: [],
+      negativeTerms: [],
+      chineseQueries: [
+        "恐龍 化石紀錄 中生代 侏羅紀 白堊紀",
+        "恐龍 滅絕 小行星撞擊 白堊紀末",
+        "恐龍 鳥類演化 羽毛 化石",
+      ],
+      englishQueries: [
+        "dinosaur fossil record Mesozoic",
+        "dinosaur extinction asteroid impact Cretaceous",
+        "dinosaur bird evolution feather fossils",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "恐龍化石紀錄與中生代演化",
+          researchAngle: "整理恐龍的化石紀錄、Jurassic、Cretaceous 與演化脈絡。",
+          whyResearchable: "可由古生物學與自然史資料支撐。",
+          suggestedSourceTypes: ["paleontology_paper", "review", "natural_history_reference"],
+          zhKeywords: ["恐龍", "化石紀錄", "中生代", "侏羅紀", "白堊紀"],
+          enKeywords: ["dinosaur", "fossil record", "Mesozoic", "Jurassic", "Cretaceous"],
+          primaryQueries: ["恐龍 化石紀錄 中生代 侏羅紀 白堊紀", "dinosaur fossil record Mesozoic"],
+          secondaryQueries: ["Jurassic Cretaceous dinosaur paleontology"],
+          excludedDriftTerms: [],
+        },
+      ],
+      excludedDriftTerms: [],
+      reasoningNotes: planReason(reason, "Dinosaur searches should stay anchored to paleontology, fossil evidence, extinction hypotheses, and avian evolution."),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isDonQuixoteTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "don_quixote_literature",
+      primaryConcepts: DON_QUIXOTE_PRIMARY,
+      contextConcepts: DON_QUIXOTE_CONTEXT,
+      outcomeConcepts: ["文本分析", "騎士小說諷刺", "理想與現實衝突", "文學史地位"],
+      populationConcepts: [],
+      lowWeightTerms: ["research", "study", "analysis", "文學"],
+      mustHaveTerms: DON_QUIXOTE_MUST_HAVE,
+      shouldHaveTerms: unique([...DON_QUIXOTE_CONTEXT, "novel", "literature"]),
+      penaltyTerms: DON_QUIXOTE_DRIFT_TERMS,
+      negativeTerms: DON_QUIXOTE_DRIFT_TERMS,
+      chineseQueries: [
+        "唐吉訶德 文本分析 塞萬提斯",
+        "唐吉柯德 騎士小說 諷刺 理想 現實",
+        "唐吉訶德 文學史 西班牙黃金時代",
+      ],
+      englishQueries: [
+        "Don Quixote textual analysis Cervantes",
+        "Don Quixote chivalric romance satire idealism reality",
+        "Don Quixote Spanish Golden Age literary history",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "《唐吉訶德》的文本分析與敘事特色",
+          researchAngle: "從敘事結構、人物塑造與理想／現實張力分析《唐吉訶德》。",
+          whyResearchable: "可由文學研究、專書與期刊論文支撐。",
+          suggestedSourceTypes: ["literature_paper", "book", "comparative_literature"],
+          zhKeywords: ["唐吉訶德", "文本分析", "塞萬提斯", "理想與現實"],
+          enKeywords: ["Don Quixote", "textual analysis", "Cervantes", "idealism and reality"],
+          primaryQueries: ["唐吉訶德 文本分析 塞萬提斯", "Don Quixote textual analysis Cervantes"],
+          secondaryQueries: ["Don Quixote Spanish Golden Age literary history"],
+          excludedDriftTerms: DON_QUIXOTE_DRIFT_TERMS,
+        },
+      ],
+      excludedDriftTerms: DON_QUIXOTE_DRIFT_TERMS,
+      reasoningNotes: planReason(reason, "Don Quixote searches must stay in literature, Cervantes, chivalric-romance satire, and Spanish Golden Age context; cod/fish/nutrition drift is invalid."),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isTelomeraseAgingTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "telomerase_aging_biology",
+      primaryConcepts: TELOMERASE_AGING_PRIMARY,
+      contextConcepts: TELOMERASE_AGING_CONTEXT,
+      outcomeConcepts: ["cellular aging", "replicative senescence", "longevity", "age-related disease", "細胞老化", "長壽"],
+      populationConcepts: [],
+      lowWeightTerms: ["research", "study", "effect", "impact", "研究", "影響"],
+      mustHaveTerms: ["telomerase", "telomere", "aging", "senescence", "端粒酶", "端粒", "老化"],
+      shouldHaveTerms: unique([...TELOMERASE_AGING_CONTEXT, "cellular aging", "review"]),
+      penaltyTerms: TELOMERASE_AGING_PENALTIES,
+      negativeTerms: TELOMERASE_AGING_PENALTIES,
+      chineseQueries: [
+        "端粒酶 老化 端粒長度",
+        "端粒 細胞衰老 端粒酶活性",
+        "端粒酶 老化 長壽 癌症風險",
+        "端粒酶 幹細胞 老化",
+      ],
+      englishQueries: [
+        "telomerase aging telomere length",
+        "telomerase activity cellular senescence aging",
+        "telomere length aging longevity review",
+        "telomerase stem cells aging cancer risk",
+        "telomeres replicative senescence age-related disease",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "端粒酶活性、端粒長度與細胞老化",
+          researchAngle: "整理 telomerase activity 與 telomere length 如何影響 replicative senescence。",
+          whyResearchable: "可使用細胞生物學、老化研究與綜述文獻。",
+          suggestedSourceTypes: ["academic_paper", "review", "cell_biology_study"],
+          zhKeywords: ["端粒酶", "端粒長度", "細胞老化", "端粒酶活性"],
+          enKeywords: ["telomerase", "telomere length", "cellular senescence", "aging"],
+          primaryQueries: ["telomerase aging telomere length", "telomerase activity cellular senescence aging"],
+          secondaryQueries: ["端粒酶 老化 端粒長度", "telomere length aging longevity review"],
+          excludedDriftTerms: TELOMERASE_AGING_PENALTIES,
+        },
+      ],
+      excludedDriftTerms: TELOMERASE_AGING_PENALTIES,
+      reasoningNotes: planReason(reason, "Telomerase-aging searches must keep telomerase/telomere terms tied to aging, senescence, longevity, stem cells, or age-related disease."),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isSalmonellaFoodPoisoningTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "salmonella_food_poisoning",
+      primaryConcepts: SALMONELLA_FOOD_POISONING_PRIMARY,
+      contextConcepts: SALMONELLA_FOOD_POISONING_CONTEXT,
+      outcomeConcepts: ["outbreaks", "infection risk", "prevention", "antimicrobial resistance", "爆發", "感染風險", "預防"],
+      populationConcepts: [],
+      lowWeightTerms: ["food", "health", "study", "飲食", "健康", "研究"],
+      mustHaveTerms: ["Salmonella", "salmonellosis", "food poisoning", "foodborne", "沙門氏菌", "食物中毒"],
+      shouldHaveTerms: unique([...SALMONELLA_FOOD_POISONING_CONTEXT, "CDC", "WHO", "review"]),
+      penaltyTerms: SALMONELLA_FOOD_POISONING_PENALTIES,
+      negativeTerms: SALMONELLA_FOOD_POISONING_PENALTIES,
+      chineseQueries: [
+        "沙門氏菌 食物中毒 食品安全",
+        "沙門氏菌 污染 家禽 雞蛋 爆發",
+        "沙門氏菌 食源性疾病 預防",
+        "沙門氏菌 抗藥性 食品安全",
+      ],
+      englishQueries: [
+        "Salmonella food poisoning food safety",
+        "Salmonella foodborne illness outbreak poultry eggs",
+        "salmonellosis prevention food contamination",
+        "Salmonella antimicrobial resistance food safety",
+        "Salmonella outbreaks foodborne disease review",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "沙門氏菌食物中毒的污染來源與預防",
+          researchAngle: "整理 Salmonella 在家禽、雞蛋與肉品中的污染、爆發與預防措施。",
+          whyResearchable: "可使用食品安全、流行病學、CDC/WHO 或學術文獻。",
+          suggestedSourceTypes: ["food_safety_study", "epidemiology_report", "official_guideline"],
+          zhKeywords: ["沙門氏菌", "食物中毒", "家禽", "雞蛋", "食品安全"],
+          enKeywords: ["Salmonella", "food poisoning", "foodborne illness", "poultry", "eggs"],
+          primaryQueries: ["Salmonella food poisoning food safety", "Salmonella foodborne illness outbreak poultry eggs"],
+          secondaryQueries: ["沙門氏菌 食物中毒 食品安全", "salmonellosis prevention food contamination"],
+          excludedDriftTerms: SALMONELLA_FOOD_POISONING_PENALTIES,
+        },
+      ],
+      excludedDriftTerms: SALMONELLA_FOOD_POISONING_PENALTIES,
+      reasoningNotes: planReason(reason, "Salmonella searches must keep Salmonella/salmonellosis tied to food poisoning, foodborne illness, contamination, outbreaks, prevention, or food safety."),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isSocialMediaAddictionTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "social_media_addiction_psychology",
+      primaryConcepts: SOCIAL_MEDIA_ADDICTION_PRIMARY,
+      contextConcepts: SOCIAL_MEDIA_ADDICTION_CONTEXT,
+      outcomeConcepts: ["mental health", "depression", "anxiety", "sleep quality", "attention", "心理健康", "睡眠品質"],
+      populationConcepts: ["adolescents", "young adults", "students", "青少年", "學生"],
+      lowWeightTerms: ["media", "internet", "students", "effect", "影響", "學生"],
+      mustHaveTerms: ["social media", "problematic social media use", "addiction", "mental health", "社群媒體", "成癮", "心理健康"],
+      shouldHaveTerms: unique([...SOCIAL_MEDIA_ADDICTION_CONTEXT, "systematic review", "adolescents"]),
+      penaltyTerms: SOCIAL_MEDIA_ADDICTION_PENALTIES,
+      negativeTerms: SOCIAL_MEDIA_ADDICTION_PENALTIES,
+      chineseQueries: [
+        "社群媒體成癮 青少年 心理健康",
+        "問題性社群媒體使用 睡眠品質 憂鬱 焦慮",
+        "社交媒體成癮 學生 注意力 學業表現",
+        "手機成癮 社群媒體 青少年 心理健康",
+      ],
+      englishQueries: [
+        "social media addiction adolescents mental health",
+        "problematic social media use depression anxiety sleep quality",
+        "social networking addiction students attention academic performance",
+        "smartphone addiction social media adolescents systematic review",
+        "problematic social media use young adults mental health review",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "社群媒體成癮與青少年心理健康",
+          researchAngle: "整理 problematic social media use 與憂鬱、焦慮、睡眠品質的關聯。",
+          whyResearchable: "可使用心理學、公共衛生與系統性回顧文獻。",
+          suggestedSourceTypes: ["psychology_study", "systematic_review", "public_health_study"],
+          zhKeywords: ["社群媒體成癮", "青少年", "心理健康", "憂鬱", "焦慮"],
+          enKeywords: ["social media addiction", "adolescents", "mental health", "depression", "anxiety"],
+          primaryQueries: ["social media addiction adolescents mental health", "problematic social media use depression anxiety sleep quality"],
+          secondaryQueries: ["社群媒體成癮 青少年 心理健康", "smartphone addiction social media adolescents systematic review"],
+          excludedDriftTerms: SOCIAL_MEDIA_ADDICTION_PENALTIES,
+        },
+      ],
+      excludedDriftTerms: SOCIAL_MEDIA_ADDICTION_PENALTIES,
+      reasoningNotes: planReason(reason, "Social-media-addiction searches must keep social media/problematic-use/addiction terms tied to mental health, sleep, attention, adolescents, or students."),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
   if (isMarineMicroplasticsEcologyTopic(input)) {
     return {
       normalizedTopic,
@@ -1813,12 +3879,21 @@ export function buildRuleBasedSearchIntent(
         "language writing education",
       ],
       chineseQueries: [
+        "微塑膠",
+        "微塑料",
+        "奈米塑膠",
         "微塑膠 海洋生態 影響",
+        "微塑膠 飲用水 人體健康",
         "塑膠微粒 海洋生物 攝食 毒性",
         "塑膠污染 海洋 食物網 生物累積",
         "微塑膠 海洋生態風險 文獻回顧",
       ],
       englishQueries: [
+        "microplastics",
+        "microplastic pollution",
+        "microplastics human health",
+        "microplastics drinking water",
+        "micro- and nanoplastics",
         "microplastics marine ecosystem ecological effects",
         "microplastics marine organisms ingestion toxicity",
         "plastic pollution marine food web bioaccumulation",
@@ -1866,6 +3941,100 @@ export function buildRuleBasedSearchIntent(
         reason,
         "Marine microplastics searches must keep microplastic/plastic-pollution terms tied to marine, ocean, ecosystem, food-web, toxicity, or ecological-risk evidence; heat, sports, and writing-learning matches are drift.",
       ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isClimateMarineEcologyImpactTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "climate_change_marine_ecology_impacts",
+      primaryConcepts: [
+        "climate change",
+        "global warming",
+        "ocean warming",
+        "marine ecosystem",
+        "marine ecology",
+        "ocean acidification",
+        "氣候變遷",
+        "全球暖化",
+        "海洋暖化",
+        "海洋生態",
+      ],
+      contextConcepts: [
+        "marine biodiversity",
+        "coral reefs",
+        "fish distribution",
+        "food web",
+        "marine organisms",
+        "海洋生物多樣性",
+        "珊瑚礁",
+        "食物網",
+      ],
+      outcomeConcepts: [
+        "biodiversity loss",
+        "habitat shift",
+        "species distribution",
+        "ecosystem services",
+        "生物多樣性",
+        "棲地變化",
+        "物種分布",
+      ],
+      populationConcepts: [],
+      lowWeightTerms: ["impact", "effect", "research", "影響", "研究"],
+      mustHaveTerms: [
+        "climate change",
+        "marine",
+        "ocean",
+        "ecosystem",
+        "氣候變遷",
+        "海洋",
+        "海洋生態",
+      ],
+      shouldHaveTerms: [
+        "ocean warming",
+        "ocean acidification",
+        "marine biodiversity",
+        "coral reefs",
+        "food web",
+        "海洋暖化",
+        "海洋酸化",
+        "生物多樣性",
+      ],
+      penaltyTerms: ["urban heat island", "business strategy", "education enrollment", "都市熱島", "招生"],
+      negativeTerms: ["urban heat island", "business strategy", "education enrollment"],
+      chineseQueries: [
+        "氣候變遷 海洋生態影響",
+        "氣候變遷 海洋生物多樣性",
+        "海洋暖化 海洋生態系",
+        "海洋酸化 珊瑚礁 生態影響",
+        "氣候變遷 海洋食物網 物種分布",
+      ],
+      englishQueries: [
+        "climate change impacts on marine ecosystems",
+        "ocean warming marine biodiversity",
+        "climate change marine ecology",
+        "ocean acidification coral reefs ecosystem impacts",
+        "climate change marine food web species distribution",
+        "global warming impacts marine organisms systematic review",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "氣候變遷如何改變海洋生態系與生物多樣性",
+          researchAngle: "整理 ocean warming、ocean acidification 對珊瑚礁、魚類分布與食物網的影響。",
+          whyResearchable: "可使用海洋生態、IPCC、NOAA 與系統性回顧文獻。",
+          suggestedSourceTypes: ["academic_paper", "systematic_review", "official_report"],
+          zhKeywords: ["氣候變遷", "海洋生態", "海洋暖化", "海洋酸化", "生物多樣性"],
+          enKeywords: ["climate change", "marine ecosystems", "ocean warming", "ocean acidification", "biodiversity"],
+          primaryQueries: ["climate change impacts on marine ecosystems", "ocean warming marine biodiversity"],
+          secondaryQueries: ["氣候變遷 海洋生態影響", "ocean acidification coral reefs ecosystem impacts"],
+          excludedDriftTerms: ["urban heat island", "business strategy", "education enrollment"],
+        },
+      ],
+      excludedDriftTerms: ["urban heat island", "business strategy", "education enrollment"],
+      reasoningNotes: planReason(reason, "Climate-marine searches must combine climate-change/ocean-warming terms with marine ecosystem, biodiversity, acidification, coral, food-web, or species-distribution evidence."),
       plannerStatus,
       fallbackUsed: true,
     };
@@ -2096,10 +4265,20 @@ function mergeFamilyCriticalTerms(
     !isUrbanHeatIslandTopic(input) &&
     !isShortVideoSleepAttentionTopic(input) &&
     !isLlmEnglishWritingLearningTopic(input) &&
+    !isAiLearningEffectTopic(input) &&
     !isDumplingTopic(input) &&
     !isFrenchFriesTopic(input) &&
     !isColaHealthTopic(input) &&
+    !isEggNutritionProteinTopic(input) &&
+    !isChickenThighTopic(input) &&
+    !isClamSafetyEcologyTopic(input) &&
+    !isKoalaConservationTopic(input) &&
+    !isTaiwanSemiconductorSupplyChainTopic(input) &&
+    !isTelomeraseAgingTopic(input) &&
+    !isSalmonellaFoodPoisoningTopic(input) &&
+    !isSocialMediaAddictionTopic(input) &&
     !isMarineMicroplasticsEcologyTopic(input) &&
+    !isClimateMarineEcologyImpactTopic(input) &&
     !isClimateChangeCauseTopic(input) &&
     !isSpiderEcologyTopic(input)
   )
@@ -2108,58 +4287,136 @@ function mergeFamilyCriticalTerms(
   return {
     ...plan,
     primaryConcepts: unique([
-      ...plan.primaryConcepts,
       ...fallback.primaryConcepts,
+      ...plan.primaryConcepts,
     ]).slice(0, 14),
     contextConcepts: unique([
-      ...plan.contextConcepts,
       ...fallback.contextConcepts,
+      ...plan.contextConcepts,
     ]).slice(0, 12),
     outcomeConcepts: unique([
-      ...plan.outcomeConcepts,
       ...fallback.outcomeConcepts,
+      ...plan.outcomeConcepts,
     ]).slice(0, 12),
     populationConcepts: unique([
-      ...plan.populationConcepts,
       ...fallback.populationConcepts,
+      ...plan.populationConcepts,
     ]).slice(0, 8),
     lowWeightTerms: unique([
-      ...plan.lowWeightTerms,
       ...fallback.lowWeightTerms,
+      ...plan.lowWeightTerms,
     ]).slice(0, 12),
     mustHaveTerms: unique([
-      ...plan.mustHaveTerms,
       ...fallback.mustHaveTerms,
+      ...plan.mustHaveTerms,
     ]).slice(0, 18),
     shouldHaveTerms: unique([
-      ...plan.shouldHaveTerms,
       ...fallback.shouldHaveTerms,
+      ...plan.shouldHaveTerms,
     ]).slice(0, 18),
     penaltyTerms: unique([
-      ...plan.penaltyTerms,
       ...fallback.penaltyTerms,
+      ...plan.penaltyTerms,
     ]).slice(0, 14),
     negativeTerms: unique([
-      ...plan.negativeTerms,
       ...fallback.negativeTerms,
+      ...plan.negativeTerms,
     ]).slice(0, 10),
     chineseQueries: unique([
-      ...plan.chineseQueries,
       ...fallback.chineseQueries,
+      ...plan.chineseQueries,
     ]).slice(0, MAX_QUERY_COUNT),
     englishQueries: unique([
-      ...plan.englishQueries,
       ...fallback.englishQueries,
+      ...plan.englishQueries,
     ]).slice(0, MAX_QUERY_COUNT),
-    topicType: plan.topicType ?? fallback.topicType,
+    topicType: fallback.topicType ?? plan.topicType,
     narrowedResearchQuestions:
-      plan.narrowedResearchQuestions?.length
-        ? plan.narrowedResearchQuestions
-        : fallback.narrowedResearchQuestions,
+      fallback.narrowedResearchQuestions?.length
+        ? fallback.narrowedResearchQuestions
+        : plan.narrowedResearchQuestions,
     excludedDriftTerms: unique([
-      ...(plan.excludedDriftTerms ?? []),
       ...(fallback.excludedDriftTerms ?? []),
+      ...(plan.excludedDriftTerms ?? []),
     ]),
+    canonicalEnglishTopic:
+      fallback.canonicalEnglishTopic || plan.canonicalEnglishTopic,
+    coreConcepts: cleanConceptList([
+      ...(fallback.coreConcepts ?? []),
+      ...(plan.coreConcepts ?? []),
+    ], 12),
+  };
+}
+
+function mergeFallbackPlans(
+  primary: SearchIntentPlan,
+  supplemental: SearchIntentPlan,
+): SearchIntentPlan {
+  return {
+    ...supplemental,
+    ...primary,
+    primaryConcepts: unique([
+      ...primary.primaryConcepts,
+      ...supplemental.primaryConcepts,
+    ]).slice(0, 14),
+    contextConcepts: unique([
+      ...primary.contextConcepts,
+      ...supplemental.contextConcepts,
+    ]).slice(0, 12),
+    outcomeConcepts: unique([
+      ...primary.outcomeConcepts,
+      ...supplemental.outcomeConcepts,
+    ]).slice(0, 12),
+    populationConcepts: unique([
+      ...primary.populationConcepts,
+      ...supplemental.populationConcepts,
+    ]).slice(0, 8),
+    lowWeightTerms: unique([
+      ...primary.lowWeightTerms,
+      ...supplemental.lowWeightTerms,
+    ]).slice(0, 12),
+    mustHaveTerms: unique([
+      ...primary.mustHaveTerms,
+      ...supplemental.mustHaveTerms,
+    ]).slice(0, 18),
+    shouldHaveTerms: unique([
+      ...primary.shouldHaveTerms,
+      ...supplemental.shouldHaveTerms,
+    ]).slice(0, 18),
+    penaltyTerms: unique([
+      ...primary.penaltyTerms,
+      ...supplemental.penaltyTerms,
+    ]).slice(0, 14),
+    negativeTerms: unique([
+      ...primary.negativeTerms,
+      ...supplemental.negativeTerms,
+    ]).slice(0, 10),
+    chineseQueries: unique([
+      ...primary.chineseQueries,
+      ...supplemental.chineseQueries,
+    ]).slice(0, MAX_QUERY_COUNT),
+    englishQueries: unique([
+      ...primary.englishQueries,
+      ...supplemental.englishQueries,
+    ]).slice(0, MAX_QUERY_COUNT),
+    narrowedResearchQuestions:
+      primary.narrowedResearchQuestions?.length
+        ? primary.narrowedResearchQuestions
+        : supplemental.narrowedResearchQuestions,
+    excludedDriftTerms: unique([
+      ...(primary.excludedDriftTerms ?? []),
+      ...(supplemental.excludedDriftTerms ?? []),
+    ]),
+    reasoningNotes: unique([
+      ...primary.reasoningNotes,
+      ...supplemental.reasoningNotes,
+    ]).slice(0, 10),
+    canonicalEnglishTopic:
+      primary.canonicalEnglishTopic || supplemental.canonicalEnglishTopic,
+    coreConcepts: cleanConceptList([
+      ...(primary.coreConcepts ?? []),
+      ...(supplemental.coreConcepts ?? []),
+    ], 12),
   };
 }
 
@@ -2276,7 +4533,13 @@ async function requestLlmSearchIntentPlan(
   input: SearchIntentPlannerInput,
   options?: SearchIntentPlannerOptions,
 ): Promise<SearchIntentPlan> {
-  const topicUnderstanding = understandTopic(input.topic);
+  const topicUnderstanding = await understandTopicWithFallback({
+    topic: input.topic,
+    reportType: input.reportType,
+    audience: input.audience,
+    sourceMode: input.sourceMode,
+    language: input.language,
+  });
   try {
     const content = await requestOpenAICompatibleChatCompletion({
       purpose: "planner",
@@ -2312,7 +4575,14 @@ async function requestLlmSearchIntentPlan(
         },
       ],
     });
-    return coerceSearchIntentPlan(extractJsonObject(content), input);
+    return {
+      ...coerceSearchIntentPlan(extractJsonObject(content), input),
+      originalTopic: input.originalTopic?.trim() || input.topic.trim(),
+      activeResearchTopic: input.topic.trim(),
+      canonicalEnglishTopic:
+        topicUnderstanding.canonicalEnglishTopic || undefined,
+      coreConcepts: topicUnderstanding.coreConcepts,
+    };
   } catch (error) {
     if (error instanceof SearchIntentPlannerError) throw error;
     if (error instanceof LlmAdapterError) {
@@ -2330,6 +4600,78 @@ async function requestLlmSearchIntentPlan(
   }
 }
 
+function buildUnderstandingFallbackSearchIntent(
+  input: SearchIntentPlannerInput,
+  understanding: TopicUnderstanding,
+  reason: string,
+  plannerStatus: SearchIntentPlannerStatus,
+): SearchIntentPlan {
+  const normalizedTopic = understanding.normalizedTopic.trim() || input.topic.trim();
+  const angleQueries = understanding.researchAngles.flatMap((angle) => angle.searchQueries);
+  const questions = understanding.researchAngles.map((angle) =>
+    researchQuestionFromFallbackAngle(angle, understanding.excludedDriftTerms),
+  );
+  const chineseQueries = unique(
+    angleQueries.filter((query) => /[\u3400-\u9fff]/u.test(query)),
+  ).slice(0, MAX_QUERY_COUNT);
+  const englishQueries = stableCrossLanguageEnglishQueries({
+    domain: understanding.domain,
+    canonicalEnglishTopic: understanding.canonicalEnglishTopic,
+    extraEnglishTerms: understanding.entities,
+    existingQueries: angleQueries.filter((query) => /[A-Za-z]/.test(query)),
+  }).slice(0, MAX_QUERY_COUNT);
+  const primaryConcepts = unique([
+    ...understanding.entities,
+    ...understanding.likelyMeanings,
+    ...understanding.researchAngles.map((angle) => angle.title),
+  ]).slice(0, 12);
+  const contextConcepts = unique(
+    understanding.researchAngles.flatMap((angle) => [
+      angle.title,
+      angle.angle,
+      angle.reason,
+    ]),
+  ).slice(0, 12);
+  const canonicalEnglishTopic =
+    englishQueries.find((query) => /^[A-Za-z][A-Za-z\s-]{2,}$/u.test(query)) ??
+    understanding.entities.find((entity) => /[A-Za-z]/.test(entity)) ??
+    "";
+
+  return {
+    normalizedTopic,
+    primaryConcepts,
+    contextConcepts,
+    outcomeConcepts: unique(understanding.likelyMeanings).slice(0, 8),
+    populationConcepts: [],
+    lowWeightTerms: ["research", "study", "evidence", "source", "研究", "資料"],
+    mustHaveTerms: unique(understanding.entities).slice(0, 12),
+    shouldHaveTerms: unique([
+      ...understanding.researchAngles.map((angle) => angle.title),
+      ...understanding.likelyMeanings,
+    ]).slice(0, 14),
+    penaltyTerms: [],
+    negativeTerms: [],
+    chineseQueries,
+    englishQueries,
+    narrowedResearchQuestions: questions,
+    reasoningNotes: planReason(
+      reason,
+      `Fallback queries were generated from topicUnderstanding researchAngles for topic "${input.topic}".`,
+    ),
+    plannerStatus,
+    fallbackUsed: true,
+    topicType: `${understanding.domain}_${understanding.subdomain}`,
+    originalTopic: input.originalTopic?.trim() || input.topic.trim(),
+    activeResearchTopic: input.topic.trim(),
+    canonicalEnglishTopic,
+    coreConcepts: unique([
+      ...understanding.entities,
+      ...understanding.coreConcepts,
+      ...understanding.researchAngles.map((angle) => angle.title),
+    ]).slice(0, 12),
+  };
+}
+
 export async function planSearchIntent(
   input: SearchIntentPlannerInput,
   options?: SearchIntentPlannerOptions,
@@ -2342,11 +4684,38 @@ export async function planSearchIntent(
   try {
     return await requestLlmSearchIntentPlan(normalizedInput, options);
   } catch (error) {
-    return buildRuleBasedSearchIntent(
-      normalizedInput,
-      fallbackReason(error),
-      statusFromError(error),
-    );
+    try {
+      const understanding = await understandTopicWithFallback({
+        topic: normalizedInput.topic,
+        reportType: normalizedInput.reportType,
+        audience: normalizedInput.audience,
+        sourceMode: normalizedInput.sourceMode,
+        language: normalizedInput.language,
+      });
+      const ruleFallback = buildRuleBasedSearchIntent(
+        normalizedInput,
+        fallbackReason(error),
+        statusFromError(error),
+      );
+      return mergeFamilyCriticalTerms(
+        normalizedInput,
+        mergeFallbackPlans(
+          ruleFallback,
+          buildUnderstandingFallbackSearchIntent(
+            normalizedInput,
+            understanding,
+            fallbackReason(error),
+            statusFromError(error),
+          ),
+        ),
+      );
+    } catch {
+      return buildRuleBasedSearchIntent(
+        normalizedInput,
+        fallbackReason(error),
+        statusFromError(error),
+      );
+    }
   }
 }
 
@@ -2375,6 +4744,7 @@ export function queryPlanHashForSearch(
 ): string {
   return stableSearchHash({
     normalizedTopic: plan.normalizedTopic,
+    coreConcepts: querySet.coreConcepts,
     primaryConcepts: plan.primaryConcepts,
     mustHaveTerms: plan.mustHaveTerms,
     penaltyTerms: plan.penaltyTerms,
@@ -2382,13 +4752,260 @@ export function queryPlanHashForSearch(
     englishQueries: querySet.english,
     highPrecision: querySet.highPrecision,
     broad: querySet.broad,
+    coreEnglishAcademic: querySet.coreEnglishAcademic,
+    academicSynonyms: querySet.academicSynonyms,
+    education: querySet.education,
+    chineseSupplemental: querySet.chineseSupplemental,
+    fallbackRelaxed: querySet.fallbackRelaxed,
   });
+}
+
+function isSentenceLikeQuery(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized) return false;
+  if (/[\u4e00-\u9fff]/.test(normalized)) {
+    return (
+      Array.from(normalized).length >= 24 &&
+      !/\s/.test(normalized) &&
+      /的|與|及|影響|研究|分析|比較/.test(normalized)
+    );
+  }
+  const tokens = normalized.split(/\s+/);
+  return (
+    tokens.length >= 10 &&
+    /^(the|a|an|this|that|these|those|what|which|how|why|when|where)$/i.test(tokens[0] ?? "")
+  );
+}
+
+function isTooGenericRelaxedConcept(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return true;
+  if (/[\u4e00-\u9fff]/.test(normalized)) {
+    return Array.from(normalized).length <= 2;
+  }
+
+  const genericEnglishConcepts = new Set([
+    "egg",
+    "eggs",
+    "protein",
+    "value",
+    "nutrition",
+    "health",
+    "education",
+    "students",
+    "research",
+    "study",
+    "data",
+    "evidence",
+  ]);
+
+  return normalized.split(/\s+/).length <= 1 && genericEnglishConcepts.has(normalized);
+}
+
+function stripTopicLiteralQueries(
+  queries: string[],
+  plan: SearchIntentPlan,
+  limit = MAX_QUERY_COUNT,
+): string[] {
+  const blocked = new Set(
+    [
+      plan.normalizedTopic,
+      plan.originalTopic,
+      plan.activeResearchTopic,
+      plan.topicUnderstanding?.normalizedTopic,
+    ]
+      .map((value) => value?.trim())
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.toLowerCase()),
+  );
+
+  return cleanQueryList(
+    queries.filter((query) => !blocked.has(query.trim().toLowerCase())),
+    limit,
+  );
+}
+
+function cleanQueryList(queries: string[], limit = MAX_QUERY_COUNT): string[] {
+  return unique(
+    queries
+      .map((query) => query.trim())
+      .filter((query) => query && !isSentenceLikeQuery(query)),
+  ).slice(0, limit);
+}
+
+function cleanConceptList(concepts: string[], limit = 12): string[] {
+  const lowSignalConcepts = new Set([
+    "research",
+    "study",
+    "evidence",
+    "overview",
+    "education",
+    "students",
+    "data",
+    "statistics",
+    "文獻",
+    "研究",
+    "資料",
+    "證據",
+  ]);
+
+  return unique(
+    concepts
+      .map((concept) => concept.trim())
+      .filter((concept) => {
+        if (!concept) return false;
+        if (isSentenceLikeQuery(concept)) return false;
+        return !lowSignalConcepts.has(concept.toLowerCase());
+      }),
+  ).slice(0, limit);
+}
+
+function fallbackRelaxedQueriesFromConcepts(concepts: string[]): string[] {
+  const cleaned = cleanConceptList(concepts, 10).filter(
+    (concept) => !isTooGenericRelaxedConcept(concept),
+  );
+  if (cleaned.length === 0) return [];
+  const fallbackQueries: string[] = [];
+
+  for (let index = 0; index < cleaned.length && fallbackQueries.length < 6; index += 1) {
+    const current = cleaned[index]!;
+    if (index === 0) {
+      fallbackQueries.push(current);
+      continue;
+    }
+    fallbackQueries.push(`${cleaned[0]} ${current}`.trim());
+  }
+
+  return cleanQueryList(fallbackQueries, 6);
+}
+
+function queryBucketsForPlan(plan: SearchIntentPlan): {
+  coreConcepts: string[];
+  coreEnglishAcademic: string[];
+  academicSynonyms: string[];
+  education: string[];
+  chineseSupplemental: string[];
+  fallbackRelaxed: string[];
+} {
+  const understanding = plan.topicUnderstanding;
+  const planText = [
+    plan.normalizedTopic,
+    plan.topicType ?? "",
+    ...plan.primaryConcepts,
+    ...plan.coreConcepts ?? [],
+    ...plan.chineseQueries,
+    ...plan.englishQueries,
+  ].join(" ");
+
+  if (isRotationalMechanicsPlanText(planText)) {
+    return {
+      coreConcepts: ROTATIONAL_MECHANICS_CORE_CONCEPTS,
+      coreEnglishAcademic: ROTATIONAL_MECHANICS_CORE_ENGLISH,
+      academicSynonyms: ROTATIONAL_MECHANICS_ACADEMIC_SYNONYMS,
+      education: ROTATIONAL_MECHANICS_EDUCATION,
+      chineseSupplemental: ROTATIONAL_MECHANICS_CHINESE,
+      fallbackRelaxed: ROTATIONAL_MECHANICS_RELAXED,
+    };
+  }
+  const canonicalEnglishTopic =
+    understanding?.canonicalEnglishTopic ??
+    plan.canonicalEnglishTopic ??
+    "";
+  const baseCoreConcepts = cleanConceptList([
+    ...plan.primaryConcepts,
+    ...(plan.coreConcepts ?? []),
+    canonicalEnglishTopic,
+    ...(understanding?.coreConcepts ?? []),
+  ]);
+  const cleanedEnglishQueries = stripTopicLiteralQueries(
+    plan.englishQueries,
+    plan,
+    MAX_QUERY_COUNT,
+  );
+  const cleanedChineseQueries = stripTopicLiteralQueries(
+    plan.chineseQueries,
+    plan,
+    MAX_QUERY_COUNT,
+  );
+  const secondaryConcept = baseCoreConcepts.find(
+    (concept) => concept.toLowerCase() !== canonicalEnglishTopic.toLowerCase(),
+  );
+
+  const education = cleanQueryList(
+    canonicalEnglishTopic
+      ? [
+          `${canonicalEnglishTopic} ${secondaryConcept ?? "concept"} explanation`.trim(),
+          `${canonicalEnglishTopic} educational explanation`.trim(),
+          `${canonicalEnglishTopic} classroom resource`.trim(),
+        ]
+      : [],
+    4,
+  );
+
+  const academicSynonyms = cleanQueryList(
+    cleanedEnglishQueries.slice(4).length
+      ? cleanedEnglishQueries.slice(4)
+      : canonicalEnglishTopic && secondaryConcept
+        ? [
+            `${canonicalEnglishTopic} ${secondaryConcept}`.trim(),
+            `${secondaryConcept} review`.trim(),
+          ]
+        : [],
+    6,
+  );
+
+  return {
+    coreConcepts: baseCoreConcepts,
+    coreEnglishAcademic: cleanedEnglishQueries.slice(0, 4),
+    academicSynonyms,
+    education,
+    chineseSupplemental: cleanedChineseQueries.slice(0, 6),
+    fallbackRelaxed: fallbackRelaxedQueriesFromConcepts([
+      ...baseCoreConcepts,
+      ...cleanedEnglishQueries,
+    ]),
+  };
+}
+
+function buildQueryPhases(
+  buckets: ReturnType<typeof queryBucketsForPlan>,
+): SearchIntentQueryPhase[] {
+  const phases: SearchIntentQueryPhase[] = [
+    {
+      stage: "core_english_academic",
+      queries: cleanQueryList(buckets.coreEnglishAcademic, 6),
+    },
+    {
+      stage: "academic_synonym",
+      queries: cleanQueryList(buckets.academicSynonyms, 6),
+    },
+    {
+      stage: "education_explanation",
+      queries: cleanQueryList(buckets.education, 4),
+    },
+    {
+      stage: "chinese_supplemental",
+      queries: cleanQueryList(buckets.chineseSupplemental, 6),
+    },
+    {
+      stage: "fallback_relaxed",
+      queries: cleanQueryList(buckets.fallbackRelaxed, 6),
+    },
+  ];
+  return phases.filter((phase) => phase.queries.length > 0);
 }
 
 export function buildSearchIntentQueries(
   plan: SearchIntentPlan,
 ): SearchIntentQuerySet {
+  const expandedQueries = domainQueryExpansion(plan);
+  const deterministicVariants = deterministicAcademicQueryVariants(plan);
+  const queryBuckets = queryBucketsForPlan(plan);
+  const phases = buildQueryPhases(queryBuckets);
   const highPrecision = unique([
+    ...queryBuckets.coreEnglishAcademic,
+    ...deterministicVariants.english.slice(0, 2),
+    ...expandedQueries.slice(0, 2),
     ...plan.englishQueries.filter((query) => {
       const normalized = normalizeText(query);
       return (
@@ -2400,25 +5017,43 @@ export function buildSearchIntentQueries(
         )
       );
     }),
-    ...plan.englishQueries.slice(0, 4),
+    ...queryBuckets.academicSynonyms.slice(0, 2),
   ]).slice(0, MAX_QUERY_COUNT);
 
   const broad = unique([
+    ...queryBuckets.fallbackRelaxed,
+    ...queryBuckets.education.slice(0, 2),
     ...plan.shouldHaveTerms
-      .slice(0, 4)
+      .slice(0, 2)
       .map((term) =>
         `${plan.primaryConcepts[0] ?? plan.normalizedTopic} ${term}`.trim(),
       ),
-    `${plan.primaryConcepts[0] ?? plan.normalizedTopic} ${plan.outcomeConcepts[0] ?? "data statistics"}`.trim(),
   ])
     .filter(Boolean)
-    .slice(0, 4);
+    .slice(0, 6);
 
   return {
-    chinese: plan.chineseQueries.slice(0, MAX_QUERY_COUNT),
-    english: plan.englishQueries.slice(0, MAX_QUERY_COUNT),
-    highPrecision,
-    broad,
+    coreConcepts: queryBuckets.coreConcepts,
+    chinese: stripTopicLiteralQueries([
+      ...deterministicVariants.chinese,
+      ...queryBuckets.chineseSupplemental,
+    ], plan, MAX_QUERY_COUNT),
+    english: stripTopicLiteralQueries([
+      ...queryBuckets.coreEnglishAcademic,
+      ...queryBuckets.academicSynonyms,
+      ...deterministicVariants.english,
+      ...expandedQueries,
+      ...queryBuckets.education,
+      ...queryBuckets.fallbackRelaxed,
+    ], plan, MAX_QUERY_COUNT),
+    highPrecision: stripTopicLiteralQueries(highPrecision, plan, MAX_QUERY_COUNT),
+    broad: stripTopicLiteralQueries(broad, plan, 6),
+    coreEnglishAcademic: queryBuckets.coreEnglishAcademic,
+    academicSynonyms: queryBuckets.academicSynonyms,
+    education: queryBuckets.education,
+    chineseSupplemental: queryBuckets.chineseSupplemental,
+    fallbackRelaxed: queryBuckets.fallbackRelaxed,
+    phases,
   };
 }
 
@@ -2428,14 +5063,1284 @@ function orderedQueries(
 ): string[] {
   return unique(
     [
+      ...querySet.coreEnglishAcademic,
+      ...querySet.academicSynonyms,
+      ...querySet.education,
+      ...querySet.chineseSupplemental,
+      ...querySet.fallbackRelaxed,
       ...querySet.highPrecision,
       ...querySet.english,
       ...querySet.chinese,
       ...querySet.broad,
     ]
       .map((query) => query.trim())
-      .filter(Boolean),
+    .filter(Boolean),
   ).slice(0, queryLimit);
+}
+
+function queryExecutionPhases(
+  querySet: SearchIntentQuerySet,
+  queryLimit: number,
+): SearchIntentQueryPhase[] {
+  const phaseBudgets: Array<{
+    stage: SearchIntentQueryPhase["stage"];
+    max: number;
+  }> = [
+    { stage: "core_english_academic", max: 3 },
+    { stage: "academic_synonym", max: 2 },
+    { stage: "education_explanation", max: 1 },
+    { stage: "chinese_supplemental", max: 1 },
+    { stage: "fallback_relaxed", max: 1 },
+  ];
+  const phaseMap = new Map(
+    querySet.phases.map((phase) => [phase.stage, phase.queries] as const),
+  );
+  let remaining = Math.max(0, queryLimit);
+
+  return phaseBudgets
+    .map(({ stage, max }) => {
+      if (remaining <= 0) return null;
+      const queries = (phaseMap.get(stage) ?? []).slice(0, Math.min(max, remaining));
+      remaining -= queries.length;
+      if (queries.length === 0) return null;
+      return { stage, queries };
+    })
+    .filter((phase): phase is SearchIntentQueryPhase => Boolean(phase));
+}
+
+function isAcademicSource(source: SourceRecord): boolean {
+  return (
+    source.sourceType === "OpenAlex" ||
+    source.sourceType === "Crossref" ||
+    source.sourceType === "Semantic Scholar"
+  );
+}
+
+function shouldAlwaysUseTrustedWebFallback(plan: SearchIntentPlan): boolean {
+  return isBmwElectricVehiclePlanText(
+    [
+      plan.normalizedTopic,
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.outcomeConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.shouldHaveTerms,
+      ...plan.englishQueries,
+      ...plan.chineseQueries,
+    ].join(" "),
+  );
+}
+
+function providerZeroWarning(group: SourceProviderSearchResult): string | null {
+  if (!group.ok) {
+    const reason = group.error_message ?? group.error_type ?? "failed";
+    return `${group.provider} ${reason}`;
+  }
+  if (group.results.length === 0) return `${group.provider} returned 0 for "${group.query}"`;
+  return null;
+}
+
+function noSourceWarnings(groups: SourceProviderSearchResult[]): string[] {
+  const statusLines = groups
+    .map(providerZeroWarning)
+    .filter((line): line is string => Boolean(line));
+  return statusLines.length
+    ? statusLines.slice(0, 8)
+    : ["所有來源 provider 都沒有回傳可用 metadata。"];
+}
+
+function publicSearchConfig(options?: SearchIntentSourceSearchOptions): {
+  enabled: boolean;
+  endpoint: string;
+  timeoutMs: number;
+  maxResultsPerQuery: number;
+  maxQueriesPerProvider: number;
+} {
+  const envEnabled = process.env.SOURCE_WEB_FALLBACK_ENABLED?.trim().toLowerCase();
+  return {
+    enabled:
+      options?.webFallback?.enabled ??
+      !(envEnabled === "0" || envEnabled === "false" || envEnabled === "off"),
+    endpoint:
+      options?.webFallback?.endpoint ??
+      process.env.SOURCE_WEB_SEARCH_URL?.trim() ??
+      "https://html.duckduckgo.com/html/",
+    timeoutMs:
+      options?.webFallback?.timeoutMs ??
+      (Number(process.env.SOURCE_WEB_SEARCH_TIMEOUT_MS) || 8000),
+    maxResultsPerQuery:
+      options?.webFallback?.maxResultsPerQuery ??
+      (Number(process.env.SOURCE_WEB_SEARCH_RESULTS_PER_QUERY) || 5),
+    maxQueriesPerProvider: positiveEnvNumber(
+      "SOURCE_WEB_SEARCH_QUERIES_PER_PROVIDER",
+      DEFAULT_WEB_FALLBACK_QUERY_LIMIT,
+    ),
+  };
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) =>
+      String.fromCodePoint(Number.parseInt(hex, 16)),
+    )
+    .replace(/&#(\d+);/g, (_, code: string) =>
+      String.fromCodePoint(Number.parseInt(code, 10)),
+    );
+}
+
+function stripHtml(value: string): string {
+  return decodeHtmlEntities(value.replace(/<[^>]*>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function resolvePublicSearchUrl(rawUrl: string): string | null {
+  const decoded = decodeHtmlEntities(rawUrl);
+  try {
+    const url = new URL(decoded, "https://duckduckgo.com");
+    const redirected = url.searchParams.get("uddg");
+    if (redirected) return decodeURIComponent(redirected);
+    return url.toString();
+  } catch {
+    return decoded.startsWith("http") ? decoded : null;
+  }
+}
+
+function sourceHostFromUrl(url: string | null): string {
+  if (!url) return "";
+  try {
+    return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+type PublicWebResult = {
+  title: string;
+  url: string;
+  snippet: string | null;
+};
+
+function parsePublicSearchResults(html: string): PublicWebResult[] {
+  const results: PublicWebResult[] = [];
+  const anchorPattern =
+    /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  const matches = Array.from(html.matchAll(anchorPattern));
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index];
+    const rawUrl = match?.[1];
+    const rawTitle = match?.[2];
+    if (!rawUrl || !rawTitle) continue;
+    const url = resolvePublicSearchUrl(rawUrl);
+    const title = stripHtml(rawTitle);
+    if (!url || !title) continue;
+    const nextIndex = matches[index + 1]?.index ?? html.length;
+    const segment = html.slice(match.index ?? 0, nextIndex);
+    const snippetMatch =
+      segment.match(/class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:a|div)>/i) ??
+      segment.match(/class="[^"]*result__body[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    const snippet = snippetMatch?.[1] ? stripHtml(snippetMatch[1]) : null;
+    results.push({ title, url, snippet });
+  }
+  return results;
+}
+
+function sourcePublisherFromHost(host: string): string {
+  const known: Record<string, string> = {
+    "bmwgroup.com": "BMW Group",
+    "bmw.com": "BMW",
+    "tsmc.com": "TSMC",
+    "itri.org.tw": "ITRI",
+    "moea.gov.tw": "Ministry of Economic Affairs, Taiwan",
+    "nist.gov": "NIST",
+    "semi.org": "SEMI",
+    "semiconductors.org": "Semiconductor Industry Association",
+    "iucnredlist.org": "IUCN Red List",
+    "dcceew.gov.au": "Australian Department of Climate Change, Energy, the Environment and Water",
+    "environment.gov.au": "Australian Government Department of the Environment",
+    "des.qld.gov.au": "Queensland Government",
+    "iea.org": "IEA",
+    "oecd.org": "OECD",
+    "europa.eu": "European Union",
+    "worldbank.org": "World Bank",
+    "imf.org": "IMF",
+    "nhtsa.gov": "NHTSA",
+    "epa.gov": "EPA",
+    "fda.gov": "FDA",
+    "usda.gov": "USDA",
+    "cdc.gov": "CDC",
+    "foodsafety.gov": "FoodSafety.gov",
+    "foodstandards.gov.au": "Food Standards Australia New Zealand",
+    "food.gov.uk": "Food Standards Agency",
+    "efsa.europa.eu": "European Food Safety Authority",
+    "un.org": "United Nations",
+    "who.int": "World Health Organization",
+    "reuters.com": "Reuters",
+    "apnews.com": "Associated Press",
+    "bbc.com": "BBC",
+    "bbc.co.uk": "BBC",
+    "cnn.com": "CNN",
+    "ft.com": "Financial Times",
+    "theguardian.com": "The Guardian",
+    "nytimes.com": "The New York Times",
+    "cnbc.com": "CNBC",
+    "bloomberg.com": "Bloomberg",
+  };
+  const match = Object.entries(known).find(([domain]) => host.endsWith(domain));
+  return match?.[1] ?? host;
+}
+
+function sourceYearFromText(text: string): number | null {
+  const matches = Array.from(text.matchAll(/\b(20[0-2]\d|19[7-9]\d)\b/g))
+    .map((match) => Number(match[1]))
+    .filter((year) => Number.isFinite(year));
+  return matches.length ? Math.max(...matches) : null;
+}
+
+function officialSourceHost(host: string): boolean {
+  return (
+    host === "bmwgroup.com" ||
+    host.endsWith(".bmwgroup.com") ||
+    host === "bmw.com" ||
+    host.endsWith(".bmw.com") ||
+    host === "tsmc.com" ||
+    host.endsWith(".tsmc.com") ||
+    /\.gov$|\.gov\.[a-z]+$|gov\.tw$/.test(host)
+  );
+}
+
+function institutionalSourceHost(host: string): boolean {
+  return /iea\.org$|oecd\.org$|worldbank\.org$|imf\.org$|europa\.eu$|nhtsa\.gov$|epa\.gov$|energy\.gov$|fda\.gov$|usda\.gov$|cdc\.gov$|foodsafety\.gov$|foodstandards\.gov\.au$|food\.gov\.uk$|efsa\.europa\.eu$|un\.org$|unctad\.org$|wto\.org$|ilo\.org$|who\.int$|itri\.org\.tw$|semi\.org$|semiconductors\.org$|nist\.gov$|iucnredlist\.org$/.test(
+    host,
+  );
+}
+
+function authoritativeMediaHost(host: string): boolean {
+  return /reuters\.com$|apnews\.com$|bbc\.(com|co\.uk)$|cnn\.com$|ft\.com$|theguardian\.com$|nytimes\.com$|cnbc\.com$|bloomberg\.com$/.test(
+    host,
+  );
+}
+
+function resultAllowedForProvider(
+  provider: FallbackSourceProvider,
+  result: PublicWebResult,
+): boolean {
+  const host = sourceHostFromUrl(result.url);
+  if (!host) return false;
+  if (provider === "Official Source") return officialSourceHost(host);
+  if (provider === "Institutional Source") return institutionalSourceHost(host);
+  return authoritativeMediaHost(host);
+}
+
+function sourceTypeQuality(provider: FallbackSourceProvider): number {
+  if (provider === "Official Source") return 82;
+  if (provider === "Institutional Source") return 78;
+  return 64;
+}
+
+function normalizePublicWebSource(
+  result: PublicWebResult,
+  provider: FallbackSourceProvider,
+  queryUsed: string,
+): SourceRecord | null {
+  const host = sourceHostFromUrl(result.url);
+  if (!host || !result.title.trim()) return null;
+  const publisher = sourcePublisherFromHost(host);
+  const snippet = result.snippet?.trim() || `${result.title} (${publisher})`;
+  return normalizeSourceRecord({
+    title: result.title,
+    authors: [],
+    year: sourceYearFromText(`${result.title} ${snippet}`),
+    abstract: snippet,
+    snippet,
+    abstractMissing: true,
+    doi: null,
+    url: result.url,
+    sourceType: provider,
+    reviewState: "pending",
+    publisher,
+    containerTitle: provider,
+    accessedAt: null,
+    provider: publisher,
+    queryUsed,
+    retrievedAt: new Date().toISOString(),
+    sourceKind: "web",
+    isPeerReviewed: false,
+    sourceQualityScore: sourceTypeQuality(provider),
+    scoreReasons: [
+      provider === "Authoritative Media"
+        ? "authoritative media metadata"
+        : "official or institutional web metadata",
+      "abstract missing; provider snippet used",
+    ],
+  });
+}
+
+function trustedSeedSourcesForPlan(plan: SearchIntentPlan): SourceRecord[] {
+  const seedSources: SourceRecord[] = [];
+  if (isKoalaPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:iucn-koala-red-list",
+        title: "Phascolarctos cinereus: The IUCN Red List of Threatened Species",
+        authors: ["IUCN"],
+        year: null,
+        abstract:
+          "The IUCN Red List profile for the koala summarizes population status, habitat dependence, threats including habitat loss, disease, fire and road mortality, and conservation actions for Phascolarctos cinereus.",
+        doi: null,
+        url: "https://www.iucnredlist.org/species/16892/166496779",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "IUCN Red List",
+        containerTitle: "IUCN Red List",
+        accessedAt: null,
+        provider: "IUCN",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted conservation seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:dcceew-koala-conservation",
+        title: "National Recovery Plan for the Koala",
+        authors: ["Australian Government"],
+        year: 2022,
+        abstract:
+          "The Australian Government koala recovery plan describes habitat protection, threat management, disease, bushfire impacts, monitoring and conservation actions for koala populations and habitat.",
+        doi: null,
+        url: "https://www.dcceew.gov.au/environment/biodiversity/threatened/publications/recovery/koala-2022",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "Australian Government",
+        containerTitle: "Department of Climate Change, Energy, the Environment and Water",
+        accessedAt: null,
+        provider: "DCCEEW",
+        sourceKind: "web",
+        sourceQualityScore: 86,
+        scoreReasons: ["trusted official seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:qld-koala-conservation-strategy",
+        title: "South East Queensland Koala Conservation Strategy",
+        authors: ["Queensland Government"],
+        year: 2020,
+        abstract:
+          "Queensland's koala conservation strategy addresses habitat protection, habitat connectivity, population monitoring, disease, vehicle strike and policy actions for koala conservation.",
+        doi: null,
+        url: "https://environment.des.qld.gov.au/wildlife/animals/living-with/koalas/conservation/strategy",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "Queensland Government",
+        containerTitle: "Koala conservation strategy",
+        accessedAt: null,
+        provider: "Queensland Government",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted official seed source"],
+      }),
+    );
+  }
+  if (isTaiwanSemiconductorPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:tsmc-annual-reports",
+        title: "TSMC Annual Reports",
+        authors: ["Taiwan Semiconductor Manufacturing Company"],
+        year: null,
+        abstract:
+          "TSMC annual reports describe the company's foundry business, advanced process roadmap, capacity planning, customer demand, capital expenditure, risk factors and supplier sustainability disclosures within Taiwan's semiconductor supply chain.",
+        doi: null,
+        url: "https://investor.tsmc.com/english/annual-reports",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "Taiwan Semiconductor Manufacturing Company",
+        containerTitle: "TSMC Investor Relations",
+        accessedAt: null,
+        provider: "TSMC",
+        sourceKind: "web",
+        sourceQualityScore: 88,
+        scoreReasons: ["trusted official Taiwan semiconductor seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:tsmc-responsible-supply-chain-report",
+        title: "TSMC Responsible Supply Chain Report",
+        authors: ["Taiwan Semiconductor Manufacturing Company"],
+        year: 2024,
+        abstract:
+          "TSMC's responsible supply chain report covers supplier governance, resilience, sustainability requirements, risk management and local supplier collaboration across semiconductor manufacturing inputs and services.",
+        doi: null,
+        url: "https://esg.tsmc.com/file/public/2024-TSMC-Responsible-Supply-Chain-Report-e.pdf",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "Taiwan Semiconductor Manufacturing Company",
+        containerTitle: "TSMC ESG",
+        accessedAt: null,
+        provider: "TSMC ESG",
+        sourceKind: "web",
+        sourceQualityScore: 88,
+        scoreReasons: ["trusted official supply-chain seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:moea-taiwan-semiconductor-supply-chain",
+        title:
+          "MOEA: Taiwan's semiconductor industry and domestic supply chain strategy",
+        authors: ["Ministry of Economic Affairs, R.O.C."],
+        year: null,
+        abstract:
+          "MOEA materials discuss Taiwan's semiconductor industry advantages, domestic supply-chain strategy, equipment sector development and policy efforts to strengthen Taiwan's position in global semiconductor supply chains.",
+        doi: null,
+        url: "https://www.moea.gov.tw/Mns/english/content/Content.aspx?menu_id=42766",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "Ministry of Economic Affairs, R.O.C.",
+        containerTitle: "MOEA English",
+        accessedAt: null,
+        provider: "MOEA",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted official Taiwan policy seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:nist-tsmc-chips",
+        title: "NIST CHIPS for America: TSMC Arizona",
+        authors: ["National Institute of Standards and Technology"],
+        year: 2024,
+        abstract:
+          "NIST CHIPS materials on TSMC Arizona connect Taiwan-origin advanced foundry technology with semiconductor manufacturing capacity, supply-chain resilience and advanced-node chip production.",
+        doi: null,
+        url: "https://www.nist.gov/chips/tsmc-arizona-phoenix",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "National Institute of Standards and Technology",
+        containerTitle: "CHIPS for America",
+        accessedAt: null,
+        provider: "NIST",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted official semiconductor supply-chain seed source"],
+      }),
+    );
+  }
+  if (isSalmonellaFoodPoisoningPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:cdc-salmonella",
+        title: "CDC: Salmonella",
+        authors: ["Centers for Disease Control and Prevention"],
+        year: null,
+        abstract:
+          "CDC describes Salmonella infection, common food sources, outbreak investigation, symptoms, risk groups and prevention practices for salmonellosis and foodborne illness.",
+        doi: null,
+        url: "https://www.cdc.gov/salmonella/",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "Centers for Disease Control and Prevention",
+        containerTitle: "CDC Salmonella",
+        accessedAt: null,
+        provider: "CDC",
+        sourceKind: "web",
+        sourceQualityScore: 86,
+        scoreReasons: ["trusted official Salmonella seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:who-salmonella-non-typhoidal",
+        title: "WHO: Salmonella (non-typhoidal)",
+        authors: ["World Health Organization"],
+        year: null,
+        abstract:
+          "WHO summarizes non-typhoidal Salmonella as a foodborne disease, covering transmission through contaminated food, disease burden, prevention, control and food-safety measures.",
+        doi: null,
+        url: "https://www.who.int/news-room/fact-sheets/detail/salmonella-(non-typhoidal)",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "World Health Organization",
+        containerTitle: "WHO Fact Sheet",
+        accessedAt: null,
+        provider: "WHO",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted institutional foodborne-disease seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:fsis-salmonella",
+        title: "USDA FSIS: Salmonella",
+        authors: ["USDA Food Safety and Inspection Service"],
+        year: null,
+        abstract:
+          "USDA FSIS guidance explains Salmonella as a foodborne pathogen, including contamination risks in meat and poultry, safe handling, cooking and prevention measures.",
+        doi: null,
+        url: "https://www.fsis.usda.gov/food-safety/foodborne-illness-and-disease/pathogens/salmonella",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "USDA Food Safety and Inspection Service",
+        containerTitle: "FSIS Food Safety",
+        accessedAt: null,
+        provider: "USDA FSIS",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted official food-safety seed source"],
+      }),
+    );
+  }
+  if (isColaHealthPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:cdc-sugar-sweetened-beverages",
+        title: "Sugar-Sweetened Beverage Consumption",
+        authors: ["Centers for Disease Control and Prevention"],
+        year: null,
+        abstract:
+          "CDC summarizes evidence and surveillance context for sugar-sweetened beverage consumption, including added sugar intake, obesity, type 2 diabetes, heart disease, kidney disease, dental caries and public-health reduction strategies.",
+        doi: null,
+        url: "https://www.cdc.gov/nutrition/php/data-research/sugar-sweetened-beverages.html",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "Centers for Disease Control and Prevention",
+        containerTitle: "CDC Nutrition",
+        accessedAt: null,
+        provider: "CDC",
+        sourceKind: "web",
+        sourceQualityScore: 86,
+        scoreReasons: ["trusted official sugary-drink health seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:who-sugars-guideline",
+        title: "Guideline: Sugars intake for adults and children",
+        authors: ["World Health Organization"],
+        year: 2015,
+        abstract:
+          "WHO guidelines synthesize evidence on free sugars and health outcomes such as body weight and dental caries, providing intake recommendations relevant to sugar-sweetened and carbonated beverages.",
+        doi: null,
+        url: "https://www.who.int/publications/i/item/9789241549028",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "World Health Organization",
+        containerTitle: "WHO Guidelines",
+        accessedAt: null,
+        provider: "WHO",
+        sourceKind: "web",
+        sourceQualityScore: 86,
+        scoreReasons: ["trusted institutional nutrition guideline seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:harvard-sugary-drinks-health",
+        title: "Sugary Drinks",
+        authors: ["Harvard T.H. Chan School of Public Health"],
+        year: null,
+        abstract:
+          "Harvard Nutrition Source reviews health concerns around sugary drinks, including weight gain, diabetes, cardiovascular risk, dental health, serving size and population-level consumption patterns.",
+        doi: null,
+        url: "https://nutritionsource.hsph.harvard.edu/healthy-drinks/sugary-drinks/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "Harvard T.H. Chan School of Public Health",
+        containerTitle: "The Nutrition Source",
+        accessedAt: null,
+        provider: "Harvard T.H. Chan School of Public Health",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted academic public-health seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:aha-reducing-sugary-drinks",
+        title: "Our commitment to reducing consumption of sugary drinks",
+        authors: ["American Heart Association"],
+        year: null,
+        abstract:
+          "The American Heart Association explains policy and health rationales for reducing sugary drink consumption, connecting sugar-sweetened beverages to cardiometabolic risk and prevention strategies.",
+        doi: null,
+        url: "https://www.heart.org/en/get-involved/advocate/policy-research/our-policy-positions/our-commitment-to-reducing-consumption-of-sugary-drinks",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "American Heart Association",
+        containerTitle: "AHA Policy Research",
+        accessedAt: null,
+        provider: "AHA",
+        sourceKind: "web",
+        sourceQualityScore: 80,
+        scoreReasons: ["trusted health-organization seed source"],
+      }),
+    );
+  }
+  if (isTelomeraseAgingPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:pmc-telomeres-senescence-aging",
+        title: "Telomeres, cellular senescence and aging",
+        authors: ["NCBI PubMed Central"],
+        year: 2024,
+        abstract:
+          "This open-access review discusses telomere shortening, telomerase, cellular senescence and their roles in organismal aging, age-related disease mechanisms and therapeutic questions.",
+        doi: null,
+        url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC11287966/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "NCBI PubMed Central",
+        containerTitle: "PubMed Central",
+        accessedAt: null,
+        provider: "NCBI PMC",
+        sourceKind: "web",
+        sourceQualityScore: 86,
+        scoreReasons: ["trusted open-access biomedical review seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:pmc-telomeres-cell-senescence",
+        title: "Telomeres and Cell Senescence: Size Matters Not",
+        authors: ["NCBI PubMed Central"],
+        year: 2017,
+        abstract:
+          "This review examines how telomere structure and dysfunction can trigger cellular senescence, clarifying the relationship between telomere length, telomerase activity and aging biology.",
+        doi: null,
+        url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC5514392/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "NCBI PubMed Central",
+        containerTitle: "PubMed Central",
+        accessedAt: null,
+        provider: "NCBI PMC",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted open-access biomedical review seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:pmc-telomeres-lifestyle-cancer-aging",
+        title: "Telomeres, lifestyle, cancer, and aging",
+        authors: ["NCBI PubMed Central"],
+        year: 2012,
+        abstract:
+          "The review connects telomere biology and telomerase to aging, cancer risk and modifiable lifestyle factors, useful for distinguishing evidence-based aging mechanisms from overgeneralized claims.",
+        doi: null,
+        url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC3370421/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "NCBI PubMed Central",
+        containerTitle: "PubMed Central",
+        accessedAt: null,
+        provider: "NCBI PMC",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted open-access biomedical review seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:europepmc-telomerase-cancer-aging",
+        title: "Telomerase at the intersection of cancer and aging",
+        authors: ["Europe PMC"],
+        year: 2013,
+        abstract:
+          "This biomedical review discusses telomerase regulation at the intersection of cancer and aging, including why telomerase activation has therapeutic promise but also oncogenic risk.",
+        doi: null,
+        url: "https://europepmc.org/article/pmc/3896987",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "Europe PMC",
+        containerTitle: "Europe PMC",
+        accessedAt: null,
+        provider: "Europe PMC",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted biomedical literature seed source"],
+      }),
+    );
+  }
+  if (isSocialMediaAddictionPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:pmc-social-media-youth-mental-health",
+        title: "Effects of Social Media Use on Youth and Adolescent Mental Health",
+        authors: ["NCBI PubMed Central"],
+        year: 2025,
+        abstract:
+          "This open-access review examines associations between social media use and adolescent mental health outcomes, including problematic use, anxiety, depression, sleep and risk-protective factors.",
+        doi: null,
+        url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC12108867/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "NCBI PubMed Central",
+        containerTitle: "PubMed Central",
+        accessedAt: null,
+        provider: "NCBI PMC",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted open-access mental-health review seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:pmc-problematic-social-media-use",
+        title: "Problematic Social Media Use in Adolescents and Young Adults",
+        authors: ["NCBI PubMed Central"],
+        year: 2022,
+        abstract:
+          "This review addresses problematic social media use in adolescents and young adults, comparing measurement approaches, addictive-use constructs, comorbid mental-health outcomes and intervention needs.",
+        doi: null,
+        url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC9052033/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "NCBI PubMed Central",
+        containerTitle: "PubMed Central",
+        accessedAt: null,
+        provider: "NCBI PMC",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted open-access mental-health review seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:jmir-problematic-social-media-use",
+        title: "Problematic Social Media Use in Adolescents and Young Adults",
+        authors: ["JMIR Mental Health"],
+        year: 2022,
+        abstract:
+          "JMIR Mental Health publishes a peer-reviewed overview of problematic social media use, emphasizing assessment, prevalence patterns, psychological correlates and research gaps.",
+        doi: null,
+        url: "https://mental.jmir.org/2022/4/e33450/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "JMIR Publications",
+        containerTitle: "JMIR Mental Health",
+        accessedAt: null,
+        provider: "JMIR",
+        sourceKind: "web",
+        sourceQualityScore: 86,
+        scoreReasons: ["trusted peer-reviewed mental-health seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:hhs-social-media-youth-mental-health-advisory",
+        title: "Social Media and Youth Mental Health: The U.S. Surgeon General's Advisory",
+        authors: ["U.S. Surgeon General"],
+        year: 2023,
+        abstract:
+          "The U.S. Surgeon General's advisory synthesizes evidence and uncertainty on social media and youth mental health, including problematic use, sleep, body image, cyberbullying and safety recommendations.",
+        doi: null,
+        url: "https://www.hhs.gov/sites/default/files/sg-youth-mental-health-social-media-advisory.pdf",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "U.S. Department of Health and Human Services",
+        containerTitle: "Surgeon General Advisory",
+        accessedAt: null,
+        provider: "HHS",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted official public-health seed source"],
+      }),
+    );
+  }
+  if (isClimateMarineEcologyPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:ipcc-srocc",
+        title: "Special Report on the Ocean and Cryosphere in a Changing Climate",
+        authors: ["Intergovernmental Panel on Climate Change"],
+        year: 2019,
+        abstract:
+          "IPCC SROCC assesses how climate change affects the ocean, marine ecosystems, coastal systems, biodiversity, fisheries, sea-level rise, ocean warming, deoxygenation and acidification.",
+        doi: null,
+        url: "https://www.ipcc.ch/srocc/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "Intergovernmental Panel on Climate Change",
+        containerTitle: "IPCC Special Report",
+        accessedAt: null,
+        provider: "IPCC",
+        sourceKind: "web",
+        sourceQualityScore: 88,
+        scoreReasons: ["trusted climate-science assessment seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:ipcc-ar6-wg2-oceans-coastal-ecosystems",
+        title: "IPCC AR6 WGII Chapter 3: Ocean and Coastal Ecosystems and Their Services",
+        authors: ["Intergovernmental Panel on Climate Change"],
+        year: 2022,
+        abstract:
+          "IPCC AR6 WGII Chapter 3 evaluates observed and projected climate impacts on ocean and coastal ecosystems, biodiversity, food webs, fisheries, ecosystem services and adaptation options.",
+        doi: null,
+        url: "https://www.ipcc.ch/report/ar6/wg2/chapter/chapter-3/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "Intergovernmental Panel on Climate Change",
+        containerTitle: "IPCC AR6 WGII",
+        accessedAt: null,
+        provider: "IPCC",
+        sourceKind: "web",
+        sourceQualityScore: 88,
+        scoreReasons: ["trusted climate-science assessment seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:ipcc-srocc-changing-ocean",
+        title: "SROCC Chapter 5: Changing Ocean, Marine Ecosystems, and Dependent Communities",
+        authors: ["Intergovernmental Panel on Climate Change"],
+        year: 2019,
+        abstract:
+          "IPCC SROCC Chapter 5 focuses on climate-driven ocean change, marine ecosystem responses, biodiversity shifts, dependent communities and risks under warming and acidification.",
+        doi: null,
+        url: "https://www.ipcc.ch/srocc/chapter/chapter-5/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "Intergovernmental Panel on Climate Change",
+        containerTitle: "IPCC SROCC",
+        accessedAt: null,
+        provider: "IPCC",
+        sourceKind: "web",
+        sourceQualityScore: 88,
+        scoreReasons: ["trusted climate-science assessment seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:eea-climate-change-marine-life",
+        title: "How climate change impacts marine life",
+        authors: ["European Environment Agency"],
+        year: 2024,
+        abstract:
+          "The European Environment Agency summarizes climate impacts on marine life, including ocean warming, acidification, oxygen loss, species distribution shifts and ecosystem vulnerability.",
+        doi: null,
+        url: "https://www.eea.europa.eu/en/analysis/publications/how-climate-change-impacts-marine-life",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "European Environment Agency",
+        containerTitle: "EEA Publications",
+        accessedAt: null,
+        provider: "EEA",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted environmental assessment seed source"],
+      }),
+    );
+  }
+  if (!isMarineMicroplasticsPlan(plan)) return seedSources;
+  seedSources.push(
+    normalizeSourceRecord({
+      id: "trusted:unep-marine-litter-plastic-pollution",
+      title:
+        "From Pollution to Solution: A global assessment of marine litter and plastic pollution",
+      authors: ["United Nations Environment Programme"],
+      year: 2021,
+      abstract:
+        "UNEP assesses marine litter and plastic pollution, including microplastics, their sources, pathways, ecological impacts on marine organisms and ecosystems, and policy responses for monitoring and reduction.",
+      doi: null,
+      url: "https://www.unep.org/resources/pollution-solution-global-assessment-marine-litter-and-plastic-pollution",
+      sourceType: "Institutional Source",
+      reviewState: "pending",
+      publisher: "United Nations Environment Programme",
+      containerTitle: "UNEP report",
+      accessedAt: null,
+      provider: "UNEP",
+      sourceKind: "web",
+      sourceQualityScore: 82,
+      scoreReasons: ["trusted institutional seed source"],
+    }),
+    normalizeSourceRecord({
+      id: "trusted:gesamp-microplastics-marine-environment",
+      title:
+        "Sources, fate and effects of microplastics in the marine environment: a global assessment",
+      authors: ["GESAMP"],
+      year: 2015,
+      abstract:
+        "GESAMP reviews sources, transport, fate and ecological effects of microplastics in the marine environment, including ingestion by marine organisms, food-web transfer and risk assessment needs.",
+      doi: null,
+      url: "https://www.gesamp.org/publications/reports-and-studies-no-90",
+      sourceType: "Institutional Source",
+      reviewState: "pending",
+      publisher: "GESAMP",
+      containerTitle: "Reports and Studies No. 90",
+      accessedAt: null,
+      provider: "GESAMP",
+      sourceKind: "web",
+      sourceQualityScore: 80,
+      scoreReasons: ["trusted scientific advisory report"],
+    }),
+    normalizeSourceRecord({
+      id: "trusted:noaa-microplastics",
+      title: "Microplastics",
+      authors: ["NOAA Marine Debris Program"],
+      year: null,
+      abstract:
+        "NOAA Marine Debris Program explains microplastics as small plastic debris in marine and aquatic environments, describing sources, persistence, monitoring concerns and potential effects on wildlife.",
+      doi: null,
+      url: "https://marinedebris.noaa.gov/what-marine-debris/microplastics",
+      sourceType: "Official Source",
+      reviewState: "pending",
+      publisher: "NOAA Marine Debris Program",
+      containerTitle: "NOAA Marine Debris Program",
+      accessedAt: null,
+      provider: "NOAA",
+      sourceKind: "web",
+      sourceQualityScore: 84,
+      scoreReasons: ["trusted official seed source"],
+    }),
+    normalizeSourceRecord({
+      id: "trusted:noaa-ncei-marine-microplastics",
+      title: "Marine Microplastics",
+      authors: ["NOAA National Centers for Environmental Information"],
+      year: null,
+      abstract:
+        "NOAA NCEI provides a global marine microplastics data product aggregating field observations into discoverable datasets for monitoring microplastic distribution in ocean and coastal environments.",
+      doi: null,
+      url: "https://www.ncei.noaa.gov/products/microplastics",
+      sourceType: "Official Source",
+      reviewState: "pending",
+      publisher: "NOAA National Centers for Environmental Information",
+      containerTitle: "NOAA NCEI Products",
+      accessedAt: null,
+      provider: "NOAA NCEI",
+      sourceKind: "web",
+      sourceQualityScore: 84,
+      scoreReasons: ["trusted official marine-microplastics data seed source"],
+    }),
+    normalizeSourceRecord({
+      id: "trusted:ec-microplastics",
+      title: "Microplastics",
+      authors: ["European Commission"],
+      year: null,
+      abstract:
+        "The European Commission explains microplastic persistence, mobility and accumulation in the environment, including the sea, and summarizes policy responses to microplastic pollution.",
+      doi: null,
+      url: "https://environment.ec.europa.eu/topics/plastics/microplastics_en",
+      sourceType: "Official Source",
+      reviewState: "pending",
+      publisher: "European Commission",
+      containerTitle: "Environment",
+      accessedAt: null,
+      provider: "European Commission",
+      sourceKind: "web",
+      sourceQualityScore: 82,
+      scoreReasons: ["trusted official policy seed source"],
+    }),
+    normalizeSourceRecord({
+      id: "trusted:oecd-plastic-pollution-ocean",
+      title: "Stemming plastic pollution to protect the ocean",
+      authors: ["Organisation for Economic Co-operation and Development"],
+      year: 2025,
+      abstract:
+        "OECD summarizes plastic leakage to aquatic environments and ocean pollution pathways, supporting policy framing for macroplastic and microplastic pollution reduction.",
+      doi: null,
+      url: "https://www.oecd.org/en/data/insights/data-explainers/2025/05/stemming-plastic-pollution-to-protect-the-ocean.html",
+      sourceType: "Institutional Source",
+      reviewState: "pending",
+      publisher: "Organisation for Economic Co-operation and Development",
+      containerTitle: "OECD Data Explainers",
+      accessedAt: null,
+      provider: "OECD",
+      sourceKind: "web",
+      sourceQualityScore: 80,
+      scoreReasons: ["trusted institutional plastic-pollution seed source"],
+    }),
+  );
+  return seedSources;
+}
+
+async function fetchPublicSearchHtml(
+  query: string,
+  config: ReturnType<typeof publicSearchConfig>,
+  fetchImpl: SourceFetch = fetch,
+): Promise<string> {
+  const url = new URL(config.endpoint);
+  url.searchParams.set("q", query);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const response = await fetchImpl(url, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        "User-Agent": "ReportFactoryAI/1.0",
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`public search returned HTTP ${response.status}`);
+    }
+    return await response.text();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function fallbackQueriesForProvider(
+  provider: FallbackSourceProvider,
+  baseQueries: string[],
+  plan: SearchIntentPlan,
+  maxQueries = DEFAULT_WEB_FALLBACK_QUERY_LIMIT,
+): string[] {
+  const seedQueries = unique([
+    ...domainQueryExpansion(plan),
+    ...baseQueries,
+    ...plan.englishQueries,
+  ]).slice(0, Math.max(2, maxQueries + 2));
+
+  if (provider === "Official Source") {
+    const official = seedQueries.map(
+      (query) => `${query} official annual report sustainability report investor relations`,
+    );
+    if (isBmwElectricVehiclePlanText(seedQueries.join(" "))) {
+      official.unshift(
+        "BMW annual report electric vehicles supply chain site:bmwgroup.com",
+        "BMW sustainability report electric vehicles supply chain site:bmwgroup.com",
+        "BMW Neue Klasse supply chain strategy site:bmwgroup.com",
+        "BMW electric vehicle strategy press release site:press.bmwgroup.com",
+        "BMW battery supply chain sustainability site:bmwgroup.com",
+        "BMW Group electric mobility supply chain report",
+      );
+    }
+    if (isTaiwanSemiconductorPlan(plan)) {
+      official.unshift(
+        "Taiwan semiconductor supply chain report site:moea.gov.tw",
+        "Taiwan semiconductor supply chain TSMC annual report site:tsmc.com",
+        "TSMC supply chain sustainability report site:tsmc.com",
+        "Taiwan semiconductor supply chain resilience site:nist.gov",
+        "Taiwan semiconductor industry supply chain site:itri.org.tw",
+      );
+    }
+    if (isClamPlan(plan)) {
+      official.unshift(
+        "clam shellfish safety biotoxins official site:fda.gov",
+        "shellfish safety heavy metals clam site:fda.gov",
+        "bivalve shellfish safety food standards site:foodstandards.gov.au",
+        "clam aquaculture water quality government report",
+      );
+    }
+    if (isKoalaPlan(plan)) {
+      official.unshift(
+        "koala conservation strategy site:dcceew.gov.au",
+        "koala habitat conservation site:environment.gov.au",
+        "koala habitat fragmentation conservation site:des.qld.gov.au",
+        "koala chlamydia bushfire road mortality site:dcceew.gov.au",
+        "Phascolarctos cinereus habitat conservation government report",
+      );
+    }
+    if (isSalmonellaFoodPoisoningPlan(plan)) {
+      official.unshift(
+        "Salmonella food poisoning CDC food safety",
+        "Salmonella foodborne illness outbreak CDC",
+        "Salmonella food safety FDA",
+        "Salmonella poultry food safety USDA FSIS",
+        "salmonellosis foodborne disease WHO",
+      );
+    }
+    if (
+      !isSalmonellaFoodPoisoningPlan(plan) &&
+      isFoodSafetyNutritionPlanText(seedQueries.join(" "))
+    ) {
+      official.unshift(
+        "egg nutrition food safety storage USDA site:usda.gov",
+        "eggs safe handling storage Salmonella FDA site:fda.gov",
+        "egg safety refrigeration Salmonella CDC site:cdc.gov",
+        "egg nutrition food safety official site:foodsafety.gov",
+        "egg storage Salmonella food safety government",
+        "eggs nutrition safe storage site:usda.gov",
+        "shell eggs food safety site:fda.gov",
+      );
+    }
+    return unique(official).slice(0, maxQueries);
+  }
+
+  if (provider === "Institutional Source") {
+    const institutional = seedQueries.map(
+      (query) => `${query} IEA OECD EU government report`,
+    );
+    if (isBmwElectricVehiclePlanText(seedQueries.join(" "))) {
+      institutional.unshift(
+        "electric vehicle battery supply chain critical minerals IEA report",
+        "electric vehicle supply chains OECD report",
+        "EU electric vehicle battery supply chain critical raw materials",
+        "electric vehicle supply chain battery market IEA",
+        "critical minerals electric vehicle batteries OECD",
+        "electric vehicles battery supply chain European Union report",
+      );
+    }
+    if (isTaiwanSemiconductorPlan(plan)) {
+      institutional.unshift(
+        "Taiwan semiconductor supply chain SEMI report",
+        "Taiwan semiconductor industry supply chain SIA report",
+        "TSMC supply chain advanced packaging CoWoS industry analysis",
+        "semiconductor supply chain Taiwan geopolitics export controls think tank report",
+        "Taiwan semiconductor supply chain resilience report",
+      );
+    }
+    if (isClamPlan(plan)) {
+      institutional.unshift(
+        "clam shellfish safety biotoxins EFSA scientific opinion",
+        "bivalve shellfish food safety WHO FAO report",
+        "hard clam aquaculture water quality research institute",
+        "shellfish heavy metals microbial food safety review",
+      );
+    }
+    if (isKoalaPlan(plan)) {
+      institutional.unshift(
+        "koala IUCN Red List Phascolarctos cinereus",
+        "Phascolarctos cinereus IUCN habitat population threats",
+        "koala habitat conservation IUCN report",
+        "koala population threats chlamydia bushfire conservation report",
+        "Phascolarctos cinereus habitat loss conservation review",
+        "koala habitat connectivity conservation policy report",
+      );
+    }
+    if (isSalmonellaFoodPoisoningPlan(plan)) {
+      institutional.unshift(
+        "Salmonella foodborne disease systematic review",
+        "Salmonella outbreak food safety surveillance report",
+        "salmonellosis food contamination epidemiology review",
+        "Salmonella antimicrobial resistance food safety review",
+      );
+    }
+    if (
+      !isSalmonellaFoodPoisoningPlan(plan) &&
+      isFoodSafetyNutritionPlanText(seedQueries.join(" "))
+    ) {
+      institutional.unshift(
+        "egg nutrition dietary guidelines USDA report",
+        "egg food safety Salmonella EFSA scientific opinion",
+        "eggs storage safe handling WHO food safety",
+        "egg nutrition food safety public health report",
+        "egg food safety risk assessment EFSA",
+        "Salmonella eggs public health guidance WHO",
+      );
+    }
+    return unique(institutional).slice(0, maxQueries);
+  }
+
+  const media = seedQueries.map(
+    (query) => `${query} Reuters BBC Financial Times Guardian NYTimes CNBC`,
+  );
+  if (isBmwElectricVehiclePlanText(seedQueries.join(" "))) {
+    media.unshift(
+      "BMW electric vehicle supply chain strategy Reuters",
+      "BMW EV battery supply chain Financial Times",
+      "BMW Neue Klasse electric vehicle strategy Reuters",
+      "BMW battery supply chain Reuters",
+      "BMW electric vehicle product strategy CNBC",
+      "BMW EV transition supply chain AP News",
+    );
+  }
+  if (isTaiwanSemiconductorPlan(plan)) {
+    media.unshift(
+      "Taiwan semiconductor supply chain TSMC Reuters",
+      "TSMC advanced packaging supply chain Reuters",
+      "Taiwan semiconductor geopolitics supply chain Financial Times",
+      "semiconductor export controls Taiwan supply chain Bloomberg",
+    );
+  }
+  if (isClamPlan(plan)) {
+    media.unshift(
+      "clam shellfish safety biotoxins AP News",
+      "shellfish heavy metals food safety Reuters",
+      "hard clam aquaculture water quality news",
+    );
+  }
+  if (isKoalaPlan(plan)) {
+    media.unshift(
+      "koala habitat conservation Reuters",
+      "koala chlamydia bushfire road mortality AP News",
+      "koala population habitat loss BBC",
+    );
+  }
+  if (isSalmonellaFoodPoisoningPlan(plan)) {
+    media.unshift(
+      "Salmonella food poisoning outbreak Reuters",
+      "Salmonella food safety Associated Press",
+      "Salmonella outbreak foodborne illness BBC",
+    );
+  }
+  if (
+    !isSalmonellaFoodPoisoningPlan(plan) &&
+    isFoodSafetyNutritionPlanText(seedQueries.join(" "))
+  ) {
+    media.unshift(
+      "egg nutrition food safety Salmonella Reuters",
+      "egg storage refrigeration Salmonella BBC",
+      "egg prices nutrition food safety AP News",
+      "egg safety Salmonella Associated Press",
+      "egg nutrition cholesterol food safety Reuters",
+    );
+  }
+  return unique(media).slice(0, maxQueries);
+}
+
+function fallbackDisabledResult(
+  provider: FallbackSourceProvider,
+  query: string,
+): SourceProviderSearchResult {
+  return {
+    ok: false,
+    provider,
+    query,
+    results: [],
+    error_type: "api-failure",
+    error_message: `${provider} public web fallback disabled`,
+  };
+}
+
+async function searchFallbackProviderQuery(
+  provider: FallbackSourceProvider,
+  query: string,
+  options: SearchIntentSourceSearchOptions | undefined,
+): Promise<SourceProviderSearchResult> {
+  const config = publicSearchConfig(options);
+  if (!config.enabled) return fallbackDisabledResult(provider, query);
+
+  try {
+    const html = await fetchPublicSearchHtml(
+      query,
+      config,
+      options?.webFallback?.fetchImpl ?? options?.sourceSearch?.fetchImpl ?? options?.fetchImpl,
+    );
+    const results = parsePublicSearchResults(html)
+      .filter((result) => resultAllowedForProvider(provider, result))
+      .slice(0, config.maxResultsPerQuery)
+      .map((result) => normalizePublicWebSource(result, provider, query))
+      .filter((source): source is SourceRecord => Boolean(source));
+    return {
+      ok: true,
+      provider,
+      query,
+      results,
+      error_type: null,
+      error_message: null,
+    };
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === "AbortError";
+    return {
+      ok: false,
+      provider,
+      query,
+      results: [],
+      error_type: timedOut ? "timeout" : "api-failure",
+      error_message:
+        error instanceof Error
+          ? error.message
+          : `${provider} public web fallback failed`,
+    };
+  }
+}
+
+async function searchFallbackProvider(
+  provider: FallbackSourceProvider,
+  baseQueries: string[],
+  plan: SearchIntentPlan,
+  options?: SearchIntentSourceSearchOptions,
+  queryLimitOverride?: number,
+): Promise<SourceProviderSearchResult[]> {
+  const config = publicSearchConfig(options);
+  const queries = fallbackQueriesForProvider(
+    provider,
+    baseQueries,
+    plan,
+    queryLimitOverride ?? config.maxQueriesPerProvider,
+  );
+  if (queries.length === 0) {
+    return [
+      {
+        ok: true,
+        provider,
+        query: "",
+        results: [],
+        error_type: null,
+        error_message: null,
+      },
+    ];
+  }
+  return Promise.all(
+    queries.map((query) => searchFallbackProviderQuery(provider, query, options)),
+  );
 }
 
 function escapeRegExp(value: string): string {
@@ -2484,6 +6389,26 @@ function isUrbanHeatPlan(plan: SearchIntentPlan): boolean {
   );
 }
 
+function isAiSecondaryEducationPlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      plan.topicType ?? "",
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.outcomeConcepts,
+    ].join(" "),
+  );
+  return (
+    /artificial intelligence|generative ai|ai tutoring|ai in education|intelligent tutoring|人工智慧|生成式 ai|ai 教學/.test(
+      concepts,
+    ) &&
+    /high school|secondary education|secondary students|k-12|k12|adolescents|高中|高中生|中學生/.test(
+      concepts,
+    )
+  );
+}
+
 function isFrenchFriesPlan(plan: SearchIntentPlan): boolean {
   const concepts = normalizeText(
     [
@@ -2495,6 +6420,103 @@ function isFrenchFriesPlan(plan: SearchIntentPlan): boolean {
   );
   return /french fries|fried potato|薯條|炸薯條|丙烯醯胺|acrylamide/.test(
     concepts,
+  );
+}
+
+function isEggNutritionPlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      plan.topicType ?? "",
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.outcomeConcepts,
+      ...plan.mustHaveTerms,
+    ].join(" "),
+  );
+  const hasEggSubject = /(?:\beggs?\b|chicken egg|hen egg|egg white|egg yolk|albumen|\byolk\b|雞蛋|蛋品|蛋白(?!質)|蛋黃|全蛋|卵白|卵黃)/i.test(
+    concepts,
+  );
+  return (
+    hasEggSubject &&
+    /nutrition|protein quality|amino acid|biological value|營養|蛋白質品質|胺基酸|氨基酸|生物價/.test(
+      concepts,
+    )
+  );
+}
+
+function isSalmonellaFoodPoisoningPlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      plan.topicType ?? "",
+      plan.normalizedTopic,
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.outcomeConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.englishQueries,
+      ...plan.chineseQueries,
+    ].join(" "),
+  );
+  return (
+    /salmonella|salmonellosis|沙門氏菌/.test(concepts) &&
+    /food poisoning|foodborne|food safety|contamination|outbreak|食物中毒|食源性|食品安全|污染|爆發/.test(
+      concepts,
+    )
+  );
+}
+
+function isChickenThighPlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      plan.topicType ?? "",
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.outcomeConcepts,
+    ].join(" "),
+  );
+  return /chicken thigh|chicken leg|poultry|雞腿|雞腿肉|雞肉/.test(concepts);
+}
+
+function isClamPlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      plan.topicType ?? "",
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.outcomeConcepts,
+    ].join(" "),
+  );
+  return /clam|hard clam|bivalve|shellfish|meretrix|蛤蜊|文蛤|雙殼貝|貝類/.test(concepts);
+}
+
+function isKoalaPlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      plan.topicType ?? "",
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.outcomeConcepts,
+    ].join(" "),
+  );
+  return /koala|phascolarctos|無尾熊|樹袋熊|考拉/.test(concepts);
+}
+
+function isTaiwanSemiconductorPlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      plan.topicType ?? "",
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.outcomeConcepts,
+    ].join(" "),
+  );
+  return (
+    /taiwan|tsmc|台灣|台積電/.test(concepts) &&
+    /semiconductor|chip supply chain|foundry|半導體|晶圓|供應鏈|封測/.test(concepts)
   );
 }
 
@@ -2517,6 +6539,67 @@ function isMarineMicroplasticsPlan(plan: SearchIntentPlan): boolean {
   );
 }
 
+function trustedSeedPlanText(plan: SearchIntentPlan): string {
+  return normalizeText(
+    [
+      plan.topicType ?? "",
+      plan.normalizedTopic,
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.outcomeConcepts,
+      ...plan.englishQueries,
+      ...plan.chineseQueries,
+    ].join(" "),
+  );
+}
+
+function isColaHealthPlan(plan: SearchIntentPlan): boolean {
+  const concepts = trustedSeedPlanText(plan);
+  return (
+    /cola|soda|soft drink|sugar[- ]sweetened beverage|carbonated beverage|可樂|碳酸飲料|含糖飲料|汽水/.test(
+      concepts,
+    ) &&
+    /health|sugar|caffeine|obesity|metabolic|dental|健康|糖|咖啡因|肥胖|代謝|蛀牙/.test(
+      concepts,
+    )
+  );
+}
+
+function isTelomeraseAgingPlan(plan: SearchIntentPlan): boolean {
+  const concepts = trustedSeedPlanText(plan);
+  return (
+    /telomerase|telomere|telomeres|端粒酶|端粒/.test(concepts) &&
+    /aging|ageing|senescence|longevity|老化|衰老|長壽|細胞衰老/.test(
+      concepts,
+    )
+  );
+}
+
+function isSocialMediaAddictionPlan(plan: SearchIntentPlan): boolean {
+  const concepts = trustedSeedPlanText(plan);
+  return (
+    /social media|problematic social media|social networking|社群媒體|社交媒體/.test(
+      concepts,
+    ) &&
+    /addiction|problematic use|mental health|depression|anxiety|sleep|成癮|問題性使用|心理健康|憂鬱|焦慮|睡眠/.test(
+      concepts,
+    )
+  );
+}
+
+function isClimateMarineEcologyPlan(plan: SearchIntentPlan): boolean {
+  const concepts = trustedSeedPlanText(plan);
+  return (
+    /climate change|ocean warming|ocean acidification|氣候變遷|全球暖化|海洋暖化/.test(
+      concepts,
+    ) &&
+    /marine|ocean|coastal|ecosystem|biodiversity|coral|food web|海洋|海洋生態|海洋生物|生物多樣性|珊瑚|食物網/.test(
+      concepts,
+    )
+  );
+}
+
 function sourceYearBonus(year: number | null): number {
   if (!year) return 0;
   if (year >= 2020) return 1.5;
@@ -2530,6 +6613,19 @@ function sourceDebugId(source: SourceRecord): string {
 
 function hasUsableAbstract(source: SourceRecord): boolean {
   return (source.abstract ?? "").trim().length >= 80;
+}
+
+function isTrustedFallbackSource(source: SourceRecord): boolean {
+  return (
+    source.sourceType === "Official Source" ||
+    source.sourceType === "Institutional Source" ||
+    source.sourceType === "Authoritative Media"
+  );
+}
+
+function matchedOnlyLowSignalTerms(terms: string[]): boolean {
+  if (terms.length === 0) return false;
+  return terms.every((term) => GENERIC_LOW_SIGNAL_TERMS.has(normalizeText(term)));
 }
 
 function isSpiderEcologyPlan(plan: SearchIntentPlan): boolean {
@@ -2644,9 +6740,25 @@ export function scoreSourceRelevance(
   score += hasUsableAbstract(source) ? 18 : -18;
   score += sourceYearBonus(source.year);
 
+  if (isTrustedFallbackSource(source)) {
+    score += source.sourceType === "Authoritative Media" ? 8 : 14;
+  }
+
   if (matchedMustHaveTerms.length === 0) {
     score -= 12;
     penalties.push("missing_must_have_terms");
+  }
+
+  if (
+    matchedOnlyLowSignalTerms([
+      ...matchedPrimaryConcepts,
+      ...matchedMustHaveTerms,
+      ...matchedContextConcepts,
+      ...matchedOutcomeConcepts,
+    ])
+  ) {
+    score = Math.min(score, 32);
+    penalties.push("generic_terms_only");
   }
 
   if (
@@ -2727,7 +6839,7 @@ export function scoreSourceRelevance(
   }
 
   if (evidence.directSnippetCount === 0) {
-    score -= 16;
+    score -= isTrustedFallbackSource(source) ? 6 : 16;
     penalties.push("no_direct_evidence_snippet");
   }
 
@@ -2747,6 +6859,47 @@ export function scoreSourceRelevance(
     if (matchedTerms(combined, heatTerms).length === 0) {
       score -= 20;
       penalties.push("urban_heat_without_heat_or_thermal_terms");
+    }
+  }
+
+  if (isAiSecondaryEducationPlan(plan)) {
+    const secondaryTerms = [
+      "high school",
+      "high school students",
+      "secondary education",
+      "secondary students",
+      "secondary school",
+      "k-12",
+      "k12",
+      "adolescent",
+      "adolescents",
+      "高中",
+      "高中生",
+      "中學生",
+      "中等教育",
+    ];
+    const higherEducationTerms = [
+      "higher education",
+      "university",
+      "university students",
+      "college students",
+      "undergraduate",
+      "undergraduates",
+      "tertiary education",
+      "大學",
+      "大學生",
+      "高等教育",
+    ];
+    const secondaryHits = matchedTerms(combined, secondaryTerms);
+    const higherEducationHits = matchedTerms(combined, higherEducationTerms);
+    if (secondaryHits.length > 0) {
+      score += 18 + secondaryHits.length * 4;
+    }
+    if (higherEducationHits.length > 0 && secondaryHits.length === 0) {
+      score = Math.min(score - 72, 58);
+      penalties.push(
+        `higher_education_without_secondary_context:${higherEducationHits.join(",")}`,
+      );
     }
   }
 
@@ -2838,6 +6991,268 @@ export function scoreSourceRelevance(
     }
   }
 
+  if (isEggNutritionPlan(plan)) {
+    const eggSubjectTerms = [
+      "egg",
+      "eggs",
+      "chicken egg",
+      "hen egg",
+      "egg white",
+      "egg yolk",
+      "albumen",
+      "yolk",
+      "雞蛋",
+      "蛋白",
+      "蛋黃",
+      "全蛋",
+      "卵白",
+      "卵黃",
+    ];
+    const nutritionAxisTerms = [
+      "nutrition",
+      "nutritional composition",
+      "protein",
+      "protein quality",
+      "amino acid",
+      "amino acids",
+      "amino acid profile",
+      "amino acid composition",
+      "digestibility",
+      "biological value",
+      "營養",
+      "營養成分",
+      "營養價值",
+      "蛋白質",
+      "蛋白質品質",
+      "胺基酸",
+      "氨基酸",
+      "消化率",
+      "生物價",
+    ];
+    const driftHits = matchedTerms(combined, EGG_NUTRITION_DRIFT_TERMS);
+    const subjectHits = matchedTerms(combined, eggSubjectTerms);
+    const axisHits = matchedTerms(combined, nutritionAxisTerms);
+    if (subjectHits.length === 0) {
+      score -= 65;
+      penalties.push("egg_plan_missing_egg_subject");
+    }
+    if (axisHits.length === 0) {
+      score -= 50;
+      penalties.push("egg_plan_missing_nutrition_or_protein_axis");
+    }
+    if (driftHits.length > 0 && (subjectHits.length === 0 || axisHits.length === 0)) {
+      score -= 120;
+      penalties.push(`egg_drift_terms:${driftHits.join(",")}`);
+    }
+  }
+
+  if (isChickenThighPlan(plan)) {
+    const chickenTerms = [
+      "chicken thigh",
+      "chicken leg",
+      "poultry",
+      "chicken meat",
+      "雞腿",
+      "雞腿肉",
+      "雞腿排",
+      "雞肉",
+      "家禽",
+    ];
+    const nutritionSafetyTerms = [
+      "nutrition",
+      "protein",
+      "fat",
+      "fat content",
+      "calories",
+      "food safety",
+      "Salmonella",
+      "cooking",
+      "營養",
+      "蛋白質",
+      "脂肪",
+      "熱量",
+      "食品安全",
+      "沙門氏菌",
+      "烹調",
+    ];
+    const eggTerms = [
+      "egg",
+      "eggs",
+      "egg white",
+      "egg yolk",
+      "albumen",
+      "yolk",
+      "雞蛋",
+      "蛋黃",
+      "全蛋",
+      "卵白",
+      "卵黃",
+    ];
+    const chickenHits = matchedTerms(combined, chickenTerms);
+    const axisHits = matchedTerms(combined, nutritionSafetyTerms);
+    const eggHits = matchedTerms(combined, eggTerms);
+    if (chickenHits.length === 0) {
+      score -= 70;
+      penalties.push("chicken_thigh_missing_chicken_subject");
+    }
+    if (axisHits.length === 0) {
+      score -= 30;
+      penalties.push("chicken_thigh_missing_nutrition_or_safety_axis");
+    }
+    if (eggHits.length > 0 && chickenHits.length === 0) {
+      score -= 160;
+      penalties.push(`chicken_thigh_egg_drift:${eggHits.join(",")}`);
+    }
+  }
+
+  if (isClamPlan(plan)) {
+    const clamTerms = [
+      "clam",
+      "hard clam",
+      "bivalve",
+      "shellfish",
+      "Meretrix",
+      "蛤蜊",
+      "文蛤",
+      "雙殼貝",
+      "貝類",
+    ];
+    const clamContextTerms = [
+      "habitat",
+      "ecology",
+      "water quality",
+      "aquaculture",
+      "food safety",
+      "biotoxins",
+      "heavy metals",
+      "microbial",
+      "棲地",
+      "生態",
+      "水質",
+      "養殖",
+      "食用安全",
+      "食品安全",
+      "貝毒",
+      "重金屬",
+      "微生物",
+    ];
+    const driftHits = matchedTerms(combined, CLAM_DRIFT_TERMS);
+    const subjectHits = matchedTerms(combined, clamTerms);
+    const contextHits = matchedTerms(combined, clamContextTerms);
+    if (subjectHits.length === 0) {
+      score -= 65;
+      penalties.push("clam_missing_clam_subject");
+    }
+    if (contextHits.length === 0) {
+      score -= 30;
+      penalties.push("clam_missing_ecology_or_food_safety_context");
+    }
+    if (driftHits.length > 0 && subjectHits.length === 0) {
+      score -= 120;
+      penalties.push(`clam_drift_terms:${driftHits.join(",")}`);
+    }
+  }
+
+  if (isKoalaPlan(plan)) {
+    const koalaTerms = [
+      "koala",
+      "Phascolarctos",
+      "無尾熊",
+      "樹袋熊",
+      "考拉",
+    ];
+    const conservationTerms = [
+      "habitat",
+      "eucalyptus",
+      "conservation",
+      "fragmentation",
+      "population",
+      "chlamydia",
+      "bushfire",
+      "road mortality",
+      "棲地",
+      "桉樹",
+      "尤加利",
+      "保育",
+      "族群",
+      "疾病",
+      "野火",
+      "道路",
+    ];
+    const driftHits = matchedTerms(combined, KOALA_DRIFT_TERMS);
+    const subjectHits = matchedTerms(combined, koalaTerms);
+    const contextHits = matchedTerms(combined, conservationTerms);
+    if (subjectHits.length === 0) {
+      score -= 70;
+      penalties.push("koala_missing_koala_subject");
+    }
+    if (contextHits.length === 0) {
+      score -= 32;
+      penalties.push("koala_missing_conservation_context");
+    }
+    if (driftHits.length > 0 && subjectHits.length === 0) {
+      score -= 130;
+      penalties.push(`koala_drift_terms:${driftHits.join(",")}`);
+    }
+  }
+
+  if (isTaiwanSemiconductorPlan(plan)) {
+    const taiwanTerms = ["Taiwan", "Taiwanese", "TSMC", "台灣", "台積電"];
+    const semiconductorTerms = [
+      "semiconductor",
+      "chip",
+      "foundry",
+      "wafer",
+      "EUV",
+      "CoWoS",
+      "packaging",
+      "testing",
+      "半導體",
+      "晶片",
+      "晶圓",
+      "晶圓代工",
+      "封裝",
+      "封測",
+      "先進製程",
+    ];
+    const supplyChainTerms = [
+      "supply chain",
+      "value chain",
+      "equipment",
+      "materials",
+      "resilience",
+      "export controls",
+      "geopolitics",
+      "供應鏈",
+      "產業鏈",
+      "設備",
+      "材料",
+      "韌性",
+      "出口管制",
+      "地緣政治",
+    ];
+    const driftHits = matchedTerms(combined, TAIWAN_SEMICONDUCTOR_DRIFT_TERMS);
+    const taiwanHits = matchedTerms(combined, taiwanTerms);
+    const semiconductorHits = matchedTerms(combined, semiconductorTerms);
+    const supplyChainHits = matchedTerms(combined, supplyChainTerms);
+    if (taiwanHits.length === 0) {
+      score -= 45;
+      penalties.push("taiwan_semiconductor_missing_taiwan_context");
+    }
+    if (semiconductorHits.length === 0) {
+      score -= 65;
+      penalties.push("taiwan_semiconductor_missing_semiconductor_subject");
+    }
+    if (supplyChainHits.length === 0) {
+      score -= 25;
+      penalties.push("taiwan_semiconductor_missing_supply_chain_context");
+    }
+    if (driftHits.length > 0 && semiconductorHits.length === 0) {
+      score -= 130;
+      penalties.push(`taiwan_semiconductor_drift_terms:${driftHits.join(",")}`);
+    }
+  }
+
   return {
     sourceId: sourceDebugId(source),
     title: source.title,
@@ -2857,12 +7272,21 @@ function hasPenalty(debug: SourceRelevanceDebug, exactOrPrefix: string): boolean
   );
 }
 
-function relevanceLevelFromDebug(debug: SourceRelevanceDebug): NonNullable<SourceRecord["relevanceLevel"]> {
+function relevanceLevelFromDebug(
+  debug: SourceRelevanceDebug,
+  source?: SourceRecord,
+): NonNullable<SourceRecord["relevanceLevel"]> {
   const metadataOnly = hasPenalty(debug, "metadata_only");
   const noDirectEvidence = hasPenalty(debug, "no_direct_evidence_snippet");
+  const trustedFallback = source ? isTrustedFallbackSource(source) : false;
   const hardOffTopic =
     hasPenalty(debug, "spider_drift_terms") ||
     hasPenalty(debug, "french_fries_drift_terms") ||
+    hasPenalty(debug, "egg_drift_terms") ||
+    hasPenalty(debug, "chicken_thigh_egg_drift") ||
+    hasPenalty(debug, "clam_drift_terms") ||
+    hasPenalty(debug, "koala_drift_terms") ||
+    hasPenalty(debug, "taiwan_semiconductor_drift_terms") ||
     hasPenalty(debug, "negated_food_topic") ||
     hasPenalty(debug, "strategy_only_without_spider_ecology") ||
     hasPenalty(debug, "missing_spider_subject") ||
@@ -2871,12 +7295,33 @@ function relevanceLevelFromDebug(debug: SourceRelevanceDebug): NonNullable<Sourc
   if (hardOffTopic) return "off_topic";
   if (
     hasPenalty(debug, "missing_spider_habitat_or_ecology_concept") ||
+    hasPenalty(debug, "egg_plan_missing_egg_subject") ||
+    hasPenalty(debug, "egg_plan_missing_nutrition_or_protein_axis") ||
+    hasPenalty(debug, "chicken_thigh_missing_chicken_subject") ||
+    hasPenalty(debug, "clam_missing_clam_subject") ||
+    hasPenalty(debug, "koala_missing_koala_subject") ||
+    hasPenalty(debug, "missing_microplastic_subject") ||
+    hasPenalty(debug, "missing_marine_context") ||
+    hasPenalty(debug, "taiwan_semiconductor_missing_semiconductor_subject") ||
+    hasPenalty(debug, "taiwan_semiconductor_missing_taiwan_context") ||
     hasPenalty(debug, "missing_must_have_terms")
   ) {
+    if (
+      trustedFallback &&
+      debug.score >= 70 &&
+      debug.matchedPrimaryConcepts.length > 0 &&
+      (debug.matchedMustHaveTerms.length > 0 ||
+        debug.matchedContextConcepts.length > 0)
+    ) {
+      return "secondary";
+    }
     return debug.score >= 30 ? "low" : "off_topic";
   }
-  if (metadataOnly) return debug.score >= 25 ? "clue" : "low";
-  if (noDirectEvidence) return debug.score >= 60 ? "secondary" : "clue";
+  if (metadataOnly) {
+    if (trustedFallback && debug.score >= 24) return "secondary";
+    return debug.score >= 25 ? "clue" : "low";
+  }
+  if (noDirectEvidence) return debug.score >= 50 ? "secondary" : "clue";
   if (
     debug.score >= 70 &&
     debug.matchedPrimaryConcepts.length > 0 &&
@@ -2937,10 +7382,19 @@ function sourceAuthorityScore(source: SourceRecord): number {
   let score = 45;
   if (source.sourceType === "Crossref" || source.sourceType === "OpenAlex") score += 25;
   if (source.sourceType === "Semantic Scholar") score += 20;
+  if (source.sourceType === "Official Source") score += 35;
+  if (source.sourceType === "Institutional Source") score += 30;
+  if (source.sourceType === "Authoritative Media") score += 18;
   if (source.doi) score += 15;
   const text = `${source.publisher ?? ""} ${source.containerTitle ?? ""} ${source.url ?? ""}`.toLowerCase();
   if (/\.gov|gov\.tw|who\.int|un\.org|oecd\.org|worldbank\.org|ipcc|nasa|noaa|epa/.test(text)) {
     score += 15;
+  }
+  if (/bmwgroup\.com|annual report|sustainability report|investor relations/.test(text)) {
+    score += 10;
+  }
+  if (/reuters|associated press|bbc|cnn|financial times|the guardian|new york times|cnbc|bloomberg/.test(text)) {
+    score += 6;
   }
   if (/journal|期刊|university|大學|研究院/.test(text)) score += 5;
   return clampScore(score);
@@ -3055,13 +7509,31 @@ function sourceClassification(input: {
   return { classification: "review", rejectReason: null };
 }
 
+function sourceRecommendation(
+  classification: NonNullable<SourceRecord["classification"]>,
+  relevanceLevel: NonNullable<SourceRecord["relevanceLevel"]>,
+  evidenceGrounding: SourceRecord["evidenceGrounding"],
+): string {
+  if (classification === "off_topic" || classification === "trusted_but_off_topic") {
+    return "rejected";
+  }
+  if (evidenceGrounding === "metadata_only") return "metadata_only_review";
+  if (classification === "primary" && relevanceLevel === "primary") {
+    return "primary_candidate";
+  }
+  if (classification === "review" || relevanceLevel === "secondary" || relevanceLevel === "clue") {
+    return "supporting_candidate";
+  }
+  return "review_before_accepting";
+}
+
 function sourceWithRelevanceMetadata(
   source: SourceRecord,
   plan: SearchIntentPlan,
   debug: SourceRelevanceDebug,
   workflow?: SourceWorkflowContext,
 ): SearchIntentRankedSource {
-  const relevanceLevel = relevanceLevelFromDebug(debug);
+  const relevanceLevel = relevanceLevelFromDebug(debug, source);
   const evidenceGrounding = evidenceGroundingFromDebug(debug);
   const missingRequired = plan.mustHaveTerms.filter(
     (term) => !debug.matchedMustHaveTerms.includes(term),
@@ -3073,9 +7545,15 @@ function sourceWithRelevanceMetadata(
   const metadataCompletenessScore = sourceMetadataCompletenessScore(source);
   const recencyScore = sourceRecencyScore(source.year);
   const languageFitScore = sourceLanguageFitScore(source, plan);
-  const sourceQualityScore = clampScore(
+  let sourceQualityScore = clampScore(
     source.sourceQualityScore ?? metadataCompletenessScore,
   );
+  if (source.sourceType === "Official Source" || source.sourceType === "Institutional Source") {
+    sourceQualityScore = clampScore(Math.max(sourceQualityScore, 70));
+  }
+  if (source.sourceType === "Authoritative Media") {
+    sourceQualityScore = clampScore(Math.max(55, Math.min(sourceQualityScore, 75)));
+  }
   const finalScore = sourceFinalScore({
     relevanceScore,
     sourceQualityScore,
@@ -3121,13 +7599,34 @@ function sourceWithRelevanceMetadata(
     languageFitScore,
     finalScore,
     sourceQualityScore,
+    topicRelevance: relevanceScore,
+    evidenceQuality: summaryUsabilityScore,
+    metadataCompleteness: metadataCompletenessScore,
+    abstractQuality: summaryUsabilityScore,
+    sourceTrust: authorityScore,
+    isMetadataOnly: evidenceGrounding === "metadata_only",
+    isPrimaryEvidence:
+      classification.classification === "primary" &&
+      relevanceLevel === "primary" &&
+      evidenceGrounding !== "metadata_only",
     scoreReasons: source.scoreReasons,
     classification: classification.classification,
     rejectReason: classification.rejectReason,
+    rejectionReason: classification.rejectReason,
+    recommendation: sourceRecommendation(
+      classification.classification,
+      relevanceLevel,
+      evidenceGrounding,
+    ),
     matchedTerms: matchedTermsForSource,
     driftTerms,
     reviewState: forcedRejected ? "rejected" : source.reviewState,
-    shouldShowInMainList: classification.classification === "primary",
+    shouldShowInMainList:
+      classification.classification === "primary" ||
+      (classification.classification === "review" &&
+        relevanceLevel !== "low" &&
+        relevanceLevel !== "off_topic" &&
+        finalScore >= 70),
     shouldRecommendAccept:
       (classification.classification === "primary" ||
         classification.classification === "review") &&
@@ -3208,9 +7707,16 @@ function resultWarnings(
     warnings.push("LLM 搜尋意圖規劃不可用，已使用 deterministic fallback。");
   }
   if (sources.length === 0) {
-    warnings.push("目前沒有找到符合搜尋意圖的來源。");
+    warnings.push(
+      "OpenAlex、Crossref、Semantic Scholar 與 fallback 來源本次未找到足夠資料，請嘗試加入產業、地區、時間或公司名稱。",
+    );
+    warnings.push(...noSourceWarnings(groups));
   } else if (!sources.some((source) => source.relevanceLevel === "primary")) {
-    warnings.push("目前沒有找到足夠相關來源，請改寫題目或選擇更具體研究方向");
+    warnings.push("目前主要來源不足，已保留可審查的延伸、官方、機構或權威媒體候選。");
+  } else if (sources.length < TARGET_SOURCE_COUNT) {
+    warnings.push(
+      `目前僅找到 ${sources.length} 筆通過品質與關聯度篩選的可審查來源；可補充 DOI、URL 或 BibTeX 手動來源。`,
+    );
   }
   return unique(warnings);
 }
@@ -3291,16 +7797,53 @@ function preferredSourceTypes(plan: SearchIntentPlan): string[] {
   return unique(types);
 }
 
-function providerPolicyForPlan(plan: SearchIntentPlan): SourceProvider[] {
-  const topicKind = plan.topicUnderstanding?.topicKind;
-  const shortOrEntity =
-    topicKind === "known_entity" ||
-    topicKind === "brand_or_product" ||
-    topicKind === "cultural_artifact" ||
-    topicKind === "broad_common_noun" ||
-    topicKind === "ambiguous";
-  if (shortOrEntity) return ["OpenAlex", "Semantic Scholar"];
+function providerPolicyForPlan(plan: SearchIntentPlan): AcademicSourceProvider[] {
   return ["OpenAlex", "Semantic Scholar", "Crossref"];
+}
+
+function isAcademicProviderName(value: string): value is AcademicSourceProvider {
+  return value === "OpenAlex" || value === "Semantic Scholar" || value === "Crossref";
+}
+
+function providerRateLimited(group: SourceProviderSearchResult): boolean {
+  if (group.ok) return false;
+  const message = `${group.error_type ?? ""} ${group.error_message ?? ""}`;
+  return /429|rate limit|too many requests/i.test(message);
+}
+
+async function searchAcademicProviderGroups(
+  queries: string[],
+  plan: SearchIntentPlan,
+  options?: SearchIntentSourceSearchOptions,
+  activeProviders?: Set<AcademicSourceProvider>,
+): Promise<SourceProviderSearchResult[]> {
+  const providerPolicy =
+    options?.sourceSearch?.providers ?? providerPolicyForPlan(plan);
+  const availableProviders =
+    activeProviders ?? new Set<AcademicSourceProvider>(providerPolicy);
+  const groups: SourceProviderSearchResult[] = [];
+
+  for (const query of queries) {
+    const providers = providerPolicy.filter((provider) =>
+      availableProviders.has(provider),
+    );
+    if (!providers.length) break;
+
+    const queryGroups = await searchSourceProviders(query, {
+      ...(options?.sourceSearch ?? {}),
+      fetchImpl: options?.sourceSearch?.fetchImpl ?? options?.fetchImpl,
+      providers,
+    });
+    groups.push(...queryGroups);
+
+    for (const group of queryGroups) {
+      if (isAcademicProviderName(group.provider) && providerRateLimited(group)) {
+        availableProviders.delete(group.provider);
+      }
+    }
+  }
+
+  return groups;
 }
 
 function sourceDecisionTrace(source: SourceRecord): SourceDecisionTrace {
@@ -3319,14 +7862,303 @@ function sourceDecisionTrace(source: SourceRecord): SourceDecisionTrace {
   };
 }
 
+function isReviewableRankedSource(source: SourceRecord): boolean {
+  if (
+    source.reviewState === "rejected" ||
+    source.classification === "off_topic" ||
+    source.classification === "trusted_but_off_topic" ||
+    source.classification === "stale_topic" ||
+    source.classification === "stale_workflow" ||
+    source.relevanceLevel === "low" ||
+    source.relevanceLevel === "off_topic"
+  ) {
+    return false;
+  }
+  return (
+    source.classification === "primary" ||
+    source.classification === "review" ||
+    source.relevanceLevel === "primary" ||
+    source.relevanceLevel === "secondary" ||
+    source.relevanceLevel === "clue"
+  );
+}
+
+function topReviewableSources(
+  sources: SourceRecord[],
+  targetCount = TARGET_SOURCE_COUNT,
+): SourceRecord[] {
+  const reviewable = sources.filter(isReviewableRankedSource);
+  if (reviewable.length >= targetCount) return reviewable.slice(0, targetCount);
+
+  const seen = new Set(reviewable.map((source) => source.id));
+  const supplemental = sources.filter((source) => {
+    if (seen.has(source.id)) return false;
+    if (source.reviewState === "rejected") return false;
+    if (source.relevanceLevel === "off_topic") return false;
+    if (source.relevanceLevel === "low") return false;
+    if (
+      source.classification === "off_topic" ||
+      source.classification === "trusted_but_off_topic"
+    ) {
+      return false;
+    }
+    return (source.finalScore ?? 0) >= 45 && (source.sourceQualityScore ?? 0) >= 55;
+  });
+
+  return [...reviewable, ...supplemental].slice(0, targetCount);
+}
+
+function sourceRejectedForDiagnostics(source: SourceRecord): boolean {
+  return (
+    source.reviewState === "rejected" ||
+    source.classification === "off_topic" ||
+    source.classification === "trusted_but_off_topic" ||
+    source.relevanceLevel === "off_topic" ||
+    source.relevanceLevel === "low"
+  );
+}
+
+function providerDiagnostic(
+  group: SourceProviderSearchResult,
+): SourceSearchProviderDiagnostic {
+  return {
+    provider: group.provider,
+    query: group.query,
+    ok: group.ok,
+    result_count: group.results.length,
+    error_type: group.error_type,
+    error_message: group.error_message,
+  };
+}
+
+function providerRawCountSummary(groups: SourceProviderSearchResult[]): Record<string, number> {
+  return groups.reduce<Record<string, number>>((summary, group) => {
+    summary[group.provider] = (summary[group.provider] ?? 0) + group.results.length;
+    return summary;
+  }, {});
+}
+
+function rejectionReasonSummary(sources: SourceRecord[]): Record<string, number> {
+  return sources.reduce<Record<string, number>>((summary, source) => {
+    const reason = source.rejectReason ?? source.rejectionReason;
+    if (!reason) return summary;
+    summary[reason] = (summary[reason] ?? 0) + 1;
+    return summary;
+  }, {});
+}
+
+function logSearchTelemetry(input: {
+  originalTopic: string;
+  activeResearchTopic: string;
+  canonicalEnglishTopic: string;
+  coreConcepts: string[];
+  topic: string;
+  workflowId: string;
+  queryPlanHash: string;
+  querySet: SearchIntentQuerySet;
+  groups: SourceProviderSearchResult[];
+  candidateCount: number;
+  dedupedCount: number;
+  reviewableCount: number;
+  rejectedCount: number;
+  filteredCount: number;
+  displayedCount: number;
+  rejectionReasons: Record<string, number>;
+  warnings: string[];
+}): void {
+  logger.info(
+    {
+      event: "researchforge.search.telemetry",
+      original_topic: input.originalTopic,
+      active_research_topic: input.activeResearchTopic,
+      canonical_english_topic: input.canonicalEnglishTopic,
+      core_concepts: input.coreConcepts,
+      topic: input.topic,
+      workflowId: input.workflowId,
+      queryPlanHash: input.queryPlanHash,
+      query_plan: input.querySet,
+      provider_raw_counts: providerRawCountSummary(input.groups),
+      provider_queries: input.groups.map((group) => ({
+        provider: group.provider,
+        query: group.query,
+        ok: group.ok,
+        raw_results: group.results.length,
+        error_type: group.error_type,
+        error_message: group.error_message,
+      })),
+      before_dedup: input.candidateCount,
+      after_dedup: input.dedupedCount,
+      after_quality_filter: input.reviewableCount,
+      filtered_results_count: input.filteredCount,
+      rejected: input.rejectedCount,
+      rejection_reasons: input.rejectionReasons,
+      shown_to_user: input.displayedCount,
+      warnings: input.warnings,
+    },
+    "ResearchForge source search telemetry",
+  );
+}
+
 export async function searchIntentSources(
   input: SearchIntentPlannerInput,
   options?: SearchIntentSourceSearchOptions,
 ): Promise<SearchIntentSourceSearchResult> {
-  let plan = await planSearchIntent(input, options);
+  const plannerLlm = {
+    ...(options?.llm ?? {}),
+    timeoutMs:
+      options?.llm?.timeoutMs ??
+      positiveEnvNumber(
+        "SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS",
+        DEFAULT_SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS,
+      ),
+  };
+  const summaryLlm = {
+    ...(options?.llm ?? {}),
+    timeoutMs:
+      options?.llm?.timeoutMs ??
+      positiveEnvNumber(
+        "SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS",
+        DEFAULT_SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS,
+      ),
+  };
+  let plan = await planSearchIntent(input, { ...options, llm: plannerLlm });
+  const genericUnderstanding = await understandTopicWithFallback({
+    topic: input.topic,
+    reportType: input.reportType,
+    audience: input.audience,
+    sourceMode: input.sourceMode,
+    language: input.language,
+  });
   const topicUnderstanding = plan.topicUnderstanding ?? understandTopic(input.topic);
-  if (!plan.topicUnderstanding) {
-    plan = { ...plan, topicUnderstanding };
+  plan = {
+    ...plan,
+    topicUnderstanding,
+    originalTopic: input.originalTopic?.trim() || input.topic.trim(),
+    activeResearchTopic: input.topic.trim(),
+    canonicalEnglishTopic:
+      plan.canonicalEnglishTopic ||
+      genericUnderstanding.canonicalEnglishTopic ||
+      topicUnderstanding.canonicalEnglishTopic,
+    coreConcepts: plan.coreConcepts?.length
+      ? plan.coreConcepts
+      : genericUnderstanding.coreConcepts.length
+        ? genericUnderstanding.coreConcepts
+        : topicUnderstanding.coreConcepts,
+  };
+  if (genericUnderstanding.topicKind === "unknown_or_noise") {
+    const topic = input.topic.trim();
+    const warnings = ["查無結果：輸入內容不像有效研究主題，請改用具體關鍵詞。"];
+    return {
+      ok: true,
+      topic,
+      workflowId: "",
+      topicHash: "",
+      queryPlanHash: "",
+      searchIntent: {
+        primaryConcepts: [],
+        contextConcepts: [],
+        outcomeConcepts: [],
+        populationConcepts: [],
+        lowWeightTerms: [],
+        mustHaveTerms: [],
+        plannerStatus: "skipped",
+        fallbackUsed: false,
+        topicKind: "unknown_or_noise",
+        needsClarification: true,
+      },
+      queries: {
+        coreConcepts: [],
+        chinese: [],
+        english: [],
+        highPrecision: [],
+        broad: [],
+        coreEnglishAcademic: [],
+        academicSynonyms: [],
+        education: [],
+        chineseSupplemental: [],
+        fallbackRelaxed: [],
+        phases: [],
+      },
+      results: [],
+      sources: [],
+      provider_status: [],
+      warnings,
+      planner: {
+        ...plan,
+        normalizedTopic: topic,
+        primaryConcepts: [],
+        contextConcepts: [],
+        outcomeConcepts: [],
+        populationConcepts: [],
+        lowWeightTerms: [],
+        mustHaveTerms: [],
+        shouldHaveTerms: [],
+        penaltyTerms: [],
+        negativeTerms: [],
+        chineseQueries: [],
+        englishQueries: [],
+        reasoningNotes: warnings,
+        plannerStatus: "skipped",
+        fallbackUsed: false,
+      },
+      searchTrace: {
+        workflowId: "",
+        topic,
+        originalTopic: plan.originalTopic ?? topic,
+        activeResearchTopic: plan.activeResearchTopic ?? topic,
+        canonicalEnglishTopic: plan.canonicalEnglishTopic ?? "",
+        normalizedTopic: topic,
+        topicHash: "",
+        queryPlanHash: "",
+        providerQueries: [],
+        candidateCount: 0,
+        dedupedCount: 0,
+        acceptedCount: 0,
+        rejectedCount: 0,
+        sourceDecisions: [],
+      },
+      diagnostics: {
+        original_topic: plan.originalTopic ?? topic,
+        active_research_topic: plan.activeResearchTopic ?? topic,
+        canonical_english_topic: plan.canonicalEnglishTopic ?? "",
+        core_concepts: plan.coreConcepts ?? [],
+        english_queries: [],
+        chinese_queries: [],
+        fallback_relaxed_queries: [],
+        provider_search_results_count: 0,
+        filtered_results_count: 0,
+        rejection_reasons: {},
+        retrieved_count: 0,
+        deduped_count: 0,
+        rejected_count: 0,
+        candidate_count: 0,
+        displayed_count: 0,
+        primary_candidate_count: 0,
+        provider_status: [],
+        warnings,
+      },
+      llm_status: "skipped",
+      keyword_expansion: {
+        normalized_topic: topic,
+        domains: [],
+        search_queries: [],
+        english_queries: [],
+        chinese_queries: [],
+        core_concepts: [],
+        core_english_queries: [],
+        academic_synonym_queries: [],
+        education_queries: [],
+        fallback_relaxed_queries: [],
+        preferred_source_types: [],
+        avoid_source_types: [],
+        reasoning_notes: warnings,
+        fallback_used: false,
+        llm_status: "skipped",
+      },
+      groups: [],
+      status: "empty",
+      queryCount: 0,
+    };
   }
   const querySet = buildSearchIntentQueries(plan);
   const workflowId = randomUUID();
@@ -3344,91 +8176,143 @@ export async function searchIntentSources(
     (Number(process.env.SEARCH_INTENT_QUERY_LIMIT) ||
       DEFAULT_SEARCH_INTENT_QUERY_LIMIT);
   const queries = orderedQueries(querySet, queryLimit);
+  const academicQueryBudget = Math.max(
+    positiveEnvNumber(
+      "SEARCH_INTENT_ACADEMIC_QUERY_LIMIT",
+      DEFAULT_ACADEMIC_QUERY_LIMIT,
+    ),
+    querySet.phases.length > 0 ? 8 : DEFAULT_ACADEMIC_QUERY_LIMIT,
+  );
+  const academicQueryPhases = queryExecutionPhases(querySet, academicQueryBudget);
   const plannerLlmStatus = llmStatusFromPlannerStatus(plan);
+  const groups: SourceProviderSearchResult[] = [];
+  const seedSources = trustedSeedSourcesForPlan(plan);
+  let dedupedSources = dedupeSourceRecords(
+    [...groups.flatMap((group) => group.results), ...seedSources],
+  );
+  const useTrustedWebFallback = shouldAlwaysUseTrustedWebFallback(plan);
+  const refreshRankedSources = (): SearchIntentRankedSource[] => {
+    dedupedSources = dedupeSourceRecords(
+      [...groups.flatMap((group) => group.results), ...seedSources],
+    );
+    return rerankSourcesBySearchIntent(
+      dedupedSources,
+      plan,
+      workflowContext,
+    ).sources;
+  };
+  let preliminaryRanked = rerankSourcesBySearchIntent(
+    dedupedSources,
+    plan,
+    workflowContext,
+  ).sources;
+  let academicSourceCount = preliminaryRanked
+    .filter(isAcademicSource)
+    .filter(isReviewableRankedSource).length;
+  let reviewableCount = preliminaryRanked.filter(isReviewableRankedSource).length;
+  const activeAcademicProviders = new Set<AcademicSourceProvider>(
+    options?.sourceSearch?.providers ?? providerPolicyForPlan(plan),
+  );
 
-  if (topicUnderstanding.needsClarification) {
-    const searchTrace: SearchTrace = {
-      workflowId,
-      topic: input.topic.trim(),
-      normalizedTopic: plan.normalizedTopic,
-      topicHash,
-      queryPlanHash,
-      providerQueries: [],
-      candidateCount: 0,
-      dedupedCount: 0,
-      acceptedCount: 0,
-      rejectedCount: 0,
-      sourceDecisions: [],
-    };
-    const warnings = unique([
-      "此主題需要先選擇具體研究方向，暫不直接搜尋來源。",
-      ...(plan.fallbackUsed
-        ? ["LLM 搜尋意圖規劃不可用，已使用 deterministic fallback。"]
-        : []),
-    ]);
+  for (const phase of academicQueryPhases) {
+    const phaseGroups = await searchAcademicProviderGroups(
+      phase.queries,
+      plan,
+      options,
+      activeAcademicProviders,
+    );
+    groups.push(...phaseGroups);
+    preliminaryRanked = refreshRankedSources();
+    academicSourceCount = preliminaryRanked
+      .filter(isAcademicSource)
+      .filter(isReviewableRankedSource).length;
+    reviewableCount = preliminaryRanked.filter(isReviewableRankedSource).length;
 
-    return {
-      ok: true,
-      topic: plan.normalizedTopic,
-      workflowId,
-      topicHash,
-      queryPlanHash,
-      searchIntent: searchIntentSummary(plan),
-      queries: querySet,
-      results: [],
-      sources: [],
-      provider_status: [],
-      warnings,
-      planner: plan,
-      relevance_debug: [],
-      searchTrace,
-      llm_status: plannerLlmStatus,
-      keyword_expansion: {
-        normalized_topic: plan.normalizedTopic,
-        domains: domainsFromPlan(plan),
-        search_queries: queries,
-        english_queries: plan.englishQueries,
-        chinese_queries: plan.chineseQueries,
-        preferred_source_types: preferredSourceTypes(plan),
-        avoid_source_types: [
-          "uncited_blog",
-          "marketing_article",
-          "content_farm",
-          "ai_generated_article_without_sources",
-        ],
-        reasoning_notes: plan.reasoningNotes,
-        fallback_used: plan.fallbackUsed,
-        llm_status: plannerLlmStatus,
-      },
-      groups: [],
-    };
+    if (
+      academicSourceCount >= MINIMUM_ACADEMIC_SOURCES &&
+      reviewableCount >= TARGET_SOURCE_COUNT
+    ) {
+      break;
+    }
   }
 
-  const groups = (
-    await Promise.all(
-      queries.map((query) =>
-        searchSourceProviders(
-          query,
-          {
-            ...(options?.sourceSearch ?? {}),
-            fetchImpl: options?.sourceSearch?.fetchImpl ?? options?.fetchImpl,
-            providers:
-              options?.sourceSearch?.providers ?? providerPolicyForPlan(plan),
-          },
-        ),
-      ),
-    )
-  ).flat();
-  const candidateCount = groups.reduce((sum, group) => sum + group.results.length, 0);
-  const dedupedSources = dedupeSourceRecords(
-    groups.flatMap((group) => group.results),
-  );
+  if (
+    useTrustedWebFallback ||
+    academicSourceCount < MINIMUM_ACADEMIC_SOURCES ||
+    reviewableCount < TARGET_SOURCE_COUNT
+  ) {
+    groups.push(
+      ...(
+        await Promise.all([
+          searchFallbackProvider("Official Source", queries, plan, options),
+          searchFallbackProvider("Institutional Source", queries, plan, options),
+        ])
+      ).flat(),
+    );
+    preliminaryRanked = refreshRankedSources();
+    academicSourceCount = preliminaryRanked
+      .filter(isAcademicSource)
+      .filter(isReviewableRankedSource).length;
+    reviewableCount = preliminaryRanked.filter(isReviewableRankedSource).length;
+  }
+
+  if (useTrustedWebFallback || reviewableCount < MINIMUM_TOTAL_SOURCES) {
+    groups.push(
+      ...(await searchFallbackProvider("Authoritative Media", queries, plan, options)),
+    );
+    preliminaryRanked = refreshRankedSources();
+    reviewableCount = preliminaryRanked.filter(isReviewableRankedSource).length;
+  }
+
+  if (useTrustedWebFallback || reviewableCount < TARGET_SOURCE_COUNT) {
+    const expandedFallbackQueryLimit = Math.max(
+      DEFAULT_WEB_FALLBACK_QUERY_LIMIT * 2,
+      publicSearchConfig(options).maxQueriesPerProvider,
+    );
+    groups.push(
+      ...(
+        await Promise.all([
+          searchFallbackProvider(
+            "Official Source",
+            queries,
+            plan,
+            options,
+            expandedFallbackQueryLimit,
+          ),
+          searchFallbackProvider(
+            "Institutional Source",
+            queries,
+            plan,
+            options,
+            expandedFallbackQueryLimit,
+          ),
+          searchFallbackProvider(
+            "Authoritative Media",
+            queries,
+            plan,
+            options,
+            expandedFallbackQueryLimit,
+          ),
+        ])
+      ).flat(),
+    );
+    preliminaryRanked = refreshRankedSources();
+  }
+
+  const candidateCount =
+    groups.reduce((sum, group) => sum + group.results.length, 0) +
+    seedSources.length;
   const reranked = rerankSourcesBySearchIntent(dedupedSources, plan, workflowContext);
+  const reviewableRankedCount = reranked.sources.filter(isReviewableRankedSource).length;
+  const rejectedRankedCount = reranked.sources.filter(sourceRejectedForDiagnostics).length;
+  const filteredResultsCount = Math.max(0, dedupedSources.length - reviewableRankedCount);
+  const rejectionReasons = rejectionReasonSummary(reranked.sources);
+  const rankedSources = topReviewableSources(reranked.sources, TARGET_SOURCE_COUNT);
   const sources = await summarizeSourcesWithLlm(
     plan.normalizedTopic,
-    reranked.sources.slice(0, MAX_CANDIDATE_RESULTS),
+    rankedSources,
     {
-      llm: options?.llm,
+      llm: summaryLlm,
       fetchImpl: options?.fetchImpl,
     },
   );
@@ -3449,9 +8333,28 @@ export async function searchIntentSources(
       source.classification === "off_topic" ||
       source.classification === "trusted_but_off_topic",
   ).length;
+  const warnings = unique([
+    ...resultWarnings(groups, sources, plan),
+    ...(candidateCount < 80
+      ? [
+          `本次 provider 實際回傳 ${candidateCount} 筆候選，低於 80 筆；已避免用低相關來源湊數。`,
+        ]
+      : []),
+    ...(reviewableRankedCount < TARGET_SOURCE_COUNT
+      ? ["目前高相關來源不足，建議調整題目或關鍵詞。"]
+      : []),
+    ...(sources.length > 0 && primaryCount < 3
+      ? [
+          `主要來源不足，已找到 ${primaryCount} 筆主要來源與 ${secondaryCount} 筆延伸候選；可接受至少 3 筆主要／延伸來源生成初步報告。另有 ${lowCount} 筆低相關來源已折疊。`,
+        ]
+      : []),
+  ]);
   const searchTrace: SearchTrace = {
     workflowId,
     topic: input.topic.trim(),
+    originalTopic: plan.originalTopic ?? input.topic.trim(),
+    activeResearchTopic: plan.activeResearchTopic ?? input.topic.trim(),
+    canonicalEnglishTopic: plan.canonicalEnglishTopic ?? "",
     normalizedTopic: plan.normalizedTopic,
     topicHash,
     queryPlanHash,
@@ -3459,9 +8362,59 @@ export async function searchIntentSources(
     candidateCount,
     dedupedCount: dedupedSources.length,
     acceptedCount: sources.filter((source) => source.reviewState === "accepted").length,
-    rejectedCount,
-    sourceDecisions: sources.map(sourceDecisionTrace),
+    rejectedCount: Math.max(rejectedCount, rejectedRankedCount),
+    sourceDecisions: reranked.sources
+      .slice(0, MAX_CANDIDATE_RESULTS)
+      .map(sourceDecisionTrace),
   };
+  const diagnostics: SourceSearchPipelineDiagnostics = {
+    original_topic: plan.originalTopic ?? input.topic.trim(),
+    active_research_topic: plan.activeResearchTopic ?? input.topic.trim(),
+    canonical_english_topic: plan.canonicalEnglishTopic ?? "",
+    core_concepts: querySet.coreConcepts.length
+      ? querySet.coreConcepts
+      : (plan.coreConcepts ?? []),
+    english_queries: unique([
+      ...querySet.coreEnglishAcademic,
+      ...querySet.academicSynonyms,
+      ...querySet.education,
+    ]),
+    chinese_queries: querySet.chineseSupplemental,
+    fallback_relaxed_queries: querySet.fallbackRelaxed,
+    provider_search_results_count: groups.reduce(
+      (sum, group) => sum + group.results.length,
+      0,
+    ),
+    filtered_results_count: filteredResultsCount,
+    rejection_reasons: rejectionReasons,
+    retrieved_count: candidateCount,
+    deduped_count: dedupedSources.length,
+    rejected_count: Math.max(rejectedCount, rejectedRankedCount),
+    candidate_count: reviewableRankedCount,
+    displayed_count: sources.length,
+    primary_candidate_count: primaryCount,
+    provider_status: groups.map(providerDiagnostic),
+    warnings,
+  };
+  logSearchTelemetry({
+    originalTopic: plan.originalTopic ?? input.topic.trim(),
+    activeResearchTopic: plan.activeResearchTopic ?? input.topic.trim(),
+    canonicalEnglishTopic: plan.canonicalEnglishTopic ?? "",
+    coreConcepts: diagnostics.core_concepts,
+    topic: input.topic.trim(),
+    workflowId,
+    queryPlanHash,
+    querySet,
+    groups,
+    candidateCount,
+    dedupedCount: dedupedSources.length,
+    reviewableCount: reviewableRankedCount,
+    rejectedCount: Math.max(rejectedCount, rejectedRankedCount),
+    filteredCount: filteredResultsCount,
+    displayedCount: sources.length,
+    rejectionReasons,
+    warnings,
+  });
 
   return {
     ok: true,
@@ -3474,26 +8427,29 @@ export async function searchIntentSources(
     results: sources,
     sources,
     provider_status: groups,
-    warnings: unique([
-      ...resultWarnings(groups, sources, plan),
-      ...(sources.length > 0 && primaryCount < 3
-        ? [
-            `主要來源不足，已找到 ${primaryCount} 筆主要來源與 ${secondaryCount} 筆延伸候選；可接受至少 3 筆主要／延伸來源生成初步報告。另有 ${lowCount} 筆低相關來源已折疊。`,
-          ]
-        : []),
-    ]),
+    warnings,
     planner: plan,
     ...((options?.includeDebug ?? process.env.NODE_ENV === "development")
       ? { relevance_debug: reranked.relevanceDebug.slice(0, MAX_CANDIDATE_RESULTS) }
       : {}),
     searchTrace,
+    diagnostics,
     llm_status: plannerLlmStatus,
     keyword_expansion: {
       normalized_topic: plan.normalizedTopic,
       domains: domainsFromPlan(plan),
       search_queries: queries,
-      english_queries: plan.englishQueries,
-      chinese_queries: plan.chineseQueries,
+      english_queries: unique([
+        ...querySet.coreEnglishAcademic,
+        ...querySet.academicSynonyms,
+        ...querySet.education,
+      ]),
+      chinese_queries: querySet.chineseSupplemental,
+      core_concepts: diagnostics.core_concepts,
+      core_english_queries: querySet.coreEnglishAcademic,
+      academic_synonym_queries: querySet.academicSynonyms,
+      education_queries: querySet.education,
+      fallback_relaxed_queries: querySet.fallbackRelaxed,
       preferred_source_types: preferredSourceTypes(plan),
       avoid_source_types: [
         "uncited_blog",
@@ -3506,5 +8462,7 @@ export async function searchIntentSources(
       llm_status: plannerLlmStatus,
     },
     groups,
+    status: sources.length > 0 ? "ok" : "empty",
+    queryCount: queries.length,
   };
 }

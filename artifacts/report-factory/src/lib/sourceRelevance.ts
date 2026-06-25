@@ -100,6 +100,10 @@ function sourceHasAbstract(source: SourceRecord): boolean {
   return cleanText(source.abstract).length >= 24;
 }
 
+function sourceHasLocator(source: SourceRecord): boolean {
+  return Boolean(cleanText(source.doi) || cleanText(source.url));
+}
+
 function sourceHasSpiderSubjectSignal(text: string): boolean {
   return /spider|spiders|arachnid|araneae|蜘蛛|蛛形綱/.test(text);
 }
@@ -230,6 +234,8 @@ function inferFacetLevel(input: {
   hasDowngradingSecondary: boolean;
   hasEvidence: boolean;
   hasAbstract: boolean;
+  hasLocator: boolean;
+  authority: number;
   titleSpecific: boolean;
 }): SourceFacetRelevanceLevel {
   if (!input.hasCore && input.requiredHits === 0) return "off_topic";
@@ -244,6 +250,8 @@ function inferFacetLevel(input: {
   if (input.hasCore && input.secondaryHits > 0) return "secondary";
   if (input.hasCore && input.requiredHits > 0 && !input.hasEvidence)
     return "clue";
+  if (input.hasCore && (input.hasAbstract || input.hasLocator || input.authority >= 2))
+    return "secondary";
   if (input.hasCore) return "low";
   return "off_topic";
 }
@@ -288,6 +296,8 @@ export function buildSourceFacetAssessment(
   );
   const evidenceProfile = buildSourceEvidenceProfile(source, topicFacets);
   const hasAbstract = sourceHasAbstract(source);
+  const hasLocator = sourceHasLocator(source);
+  const authority = sourceAuthorityScore(source);
   const titleSpecific = sourceLooksExtremelySpecificFromTitle(
     source,
     topicFacets,
@@ -300,9 +310,10 @@ export function buildSourceFacetAssessment(
     hasDowngradingSecondary: downgradingSecondary,
     hasEvidence: evidenceProfile.hasRequiredEvidence,
     hasAbstract,
+    hasLocator,
+    authority,
     titleSpecific,
   });
-  const authority = sourceAuthorityScore(source);
   const relevanceScore =
     coreHits.length * 10 +
     requiredHits.length * 18 +
@@ -317,7 +328,9 @@ export function buildSourceFacetAssessment(
   const missingRequiredFacets = topicFacets.requiredFacets
     .map((facet) => facet.labelZhTw)
     .filter((label) => !requiredHits.includes(label));
-  const shouldShowInMainList = relevanceLevel === "primary";
+  const shouldShowInMainList =
+    relevanceLevel === "primary" ||
+    (relevanceLevel === "secondary" && hasAbstract);
   const shouldRecommendAccept =
     relevanceLevel === "primary" &&
     evidenceProfile.evidenceSnippets.length > 0 &&

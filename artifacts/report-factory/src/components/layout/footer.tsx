@@ -1,5 +1,5 @@
 import { Link } from "wouter";
-import { BarChart } from "lucide-react";
+import { BrandWordmark } from "@/components/brand-wordmark";
 
 export function Footer() {
   return (
@@ -8,10 +8,12 @@ export function Footer() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
           <div className="col-span-1 md:col-span-2">
             <Link href="/" className="flex items-center gap-2 mb-4" data-testid="link-footer-logo">
-              <div className="bg-primary text-primary-foreground p-1.5 rounded-md">
-                <BarChart className="h-5 w-5" />
-              </div>
-              <span className="font-bold text-lg tracking-tight">ResearchForge</span>
+              <img
+                src="/assets/researchforge_icon_transparent.png"
+                alt="ResearchForge"
+                className="h-8 w-8 shrink-0 object-contain"
+              />
+              <BrandWordmark className="text-lg" />
             </Link>
             <p className="text-sidebar-foreground/70 text-sm max-w-xs">
               AI 商業報告生成的專業標準。精準、以數據為核心，專為顧問與分析師打造。

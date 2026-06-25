@@ -17,6 +17,9 @@ export interface SourceRecord {
   authors: string[];
   year: number | null;
   abstract: string | null;
+  snippet?: string | null;
+  language?: string | null;
+  abstractMissing?: boolean | null;
   doi: string | null;
   url: string | null;
   sourceType: SourceRecordSourceType;
@@ -45,4 +48,13 @@ export interface SourceRecord {
   sourceRelevanceReasonZhTw?: string | null;
   shouldShowInMainList?: boolean | null;
   shouldRecommendAccept?: boolean | null;
+  topicRelevance?: number | null;
+  evidenceQuality?: number | null;
+  metadataCompleteness?: number | null;
+  abstractQuality?: number | null;
+  sourceTrust?: number | null;
+  isMetadataOnly?: boolean | null;
+  isPrimaryEvidence?: boolean | null;
+  rejectionReason?: string | null;
+  recommendation?: string | null;
 }

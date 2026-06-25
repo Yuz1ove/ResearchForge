@@ -53,7 +53,9 @@ test("accepted source digest summarizes multiple sources without listing source 
     { topic: "短影音與注意力", currentYear: 2026 },
   );
 
-  assert.match(digest.summary, /目前已接受 2 筆來源/);
+  assert.match(digest.summary, /短影音與注意力/u);
+  assert.match(digest.summary, /目前已接受 2 筆來源/u);
+  assert.doesNotMatch(digest.summary, /目前可先從/u);
   assert.doesNotMatch(digest.summary, /來源 1|來源 2|Source 1|Source 2/);
   assert.ok(digest.coverage.length > 0);
 });

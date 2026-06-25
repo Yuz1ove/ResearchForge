@@ -30,10 +30,34 @@ test("search source request normalization accepts generator topic-style calls", 
       kind: "topic",
       input: {
         topic: "短影音使用對高中生注意力與睡眠品質之影響",
+        originalTopic: "短影音使用對高中生注意力與睡眠品質之影響",
         reportType: "研究報告",
         audience: "高中",
         language: "zh-TW",
         sourceMode: "academic",
+      },
+    },
+  );
+});
+
+test("search source request normalization promotes refined topic to active search topic", () => {
+  assert.deepEqual(
+    normalizeSearchSourcesRequest({
+      originalTopic: "陀螺",
+      refinedTopic: "陀螺的角動量、扭矩與旋轉穩定性原理",
+      reportType: "研究報告",
+      audience: "高中",
+    }),
+    {
+      kind: "topic",
+      input: {
+        topic: "陀螺的角動量、扭矩與旋轉穩定性原理",
+        originalTopic: "陀螺",
+        refinedTopic: "陀螺的角動量、扭矩與旋轉穩定性原理",
+        reportType: "研究報告",
+        audience: "高中",
+        language: undefined,
+        sourceMode: undefined,
       },
     },
   );
@@ -80,10 +104,22 @@ test("search source topic-style route response includes search intent fields", a
           fallbackUsed: true,
         },
         queries: {
+          coreConcepts: ["urban heat island", "thermal comfort", "campus"],
           chinese: ["都市熱島效應 校園 熱舒適度"],
           english: ["urban heat island campus thermal comfort students"],
           highPrecision: ["urban heat island campus thermal comfort students"],
           broad: ["urban heat island campus"],
+          coreEnglishAcademic: ["urban heat island campus thermal comfort students"],
+          academicSynonyms: [],
+          education: [],
+          chineseSupplemental: ["都市熱島效應 校園 熱舒適度"],
+          fallbackRelaxed: ["urban heat island"],
+          phases: [
+            {
+              stage: "core_english_academic",
+              queries: ["urban heat island campus thermal comfort students"],
+            },
+          ],
         },
         results: [source],
         sources: [source],
@@ -118,6 +154,9 @@ test("search source topic-style route response includes search intent fields", a
         searchTrace: {
           workflowId,
           topic: input.topic,
+          originalTopic: input.originalTopic ?? input.topic,
+          activeResearchTopic: input.topic,
+          canonicalEnglishTopic: "",
           normalizedTopic: input.topic,
           topicHash,
           queryPlanHash,
@@ -142,6 +181,35 @@ test("search source topic-style route response includes search intent fields", a
             },
           ],
         },
+        diagnostics: {
+          original_topic: input.originalTopic ?? input.topic,
+          active_research_topic: input.topic,
+          canonical_english_topic: "",
+          core_concepts: ["urban heat island", "thermal comfort", "campus"],
+          english_queries: ["urban heat island campus thermal comfort students"],
+          chinese_queries: ["都市熱島效應 校園 熱舒適度"],
+          fallback_relaxed_queries: ["urban heat island"],
+          provider_search_results_count: 1,
+          filtered_results_count: 0,
+          rejection_reasons: {},
+          retrieved_count: 1,
+          deduped_count: 1,
+          rejected_count: 0,
+          candidate_count: 1,
+          displayed_count: 1,
+          primary_candidate_count: 1,
+          provider_status: [
+            {
+              ok: false,
+              provider: "Semantic Scholar",
+              query: "urban heat island campus thermal comfort students",
+              result_count: 0,
+              error_type: "api-failure",
+              error_message: "Semantic Scholar returned HTTP 503",
+            },
+          ],
+          warnings: ["部分來源提供者暫時無法使用，已顯示可用結果。"],
+        },
         llm_status: "failed",
         keyword_expansion: {
           normalized_topic: input.topic,
@@ -149,6 +217,11 @@ test("search source topic-style route response includes search intent fields", a
           search_queries: ["urban heat island campus thermal comfort students"],
           english_queries: ["urban heat island campus thermal comfort students"],
           chinese_queries: ["都市熱島效應 校園 熱舒適度"],
+          core_concepts: ["urban heat island", "thermal comfort", "campus"],
+          core_english_queries: ["urban heat island campus thermal comfort students"],
+          academic_synonym_queries: [],
+          education_queries: [],
+          fallback_relaxed_queries: ["urban heat island"],
           preferred_source_types: ["peer_reviewed_journal"],
           avoid_source_types: ["content_farm"],
           reasoning_notes: ["fallback used"],
@@ -202,4 +275,155 @@ test("search source topic-style route response includes search intent fields", a
   assert.ok(result.provider_status?.some((group) => !group.ok));
   assert.ok(result.warnings?.some((warning) => warning.includes("部分來源提供者")));
   assert.equal(result.sources?.length, 1);
+});
+
+test("search source topic-style route sends active research topic to planner when refined topic exists", async () => {
+  let capturedTopicInput: { topic: string; originalTopic?: string; refinedTopic?: string } | null =
+    null;
+  const router = createSearchSourcesRouter({
+    topicSearchHandler: async (input) => {
+      capturedTopicInput = input;
+      return {
+        ok: true,
+        topic: input.topic,
+        workflowId: "wf-test",
+        topicHash: "topic-hash",
+        queryPlanHash: "query-plan-hash",
+        searchIntent: {
+          primaryConcepts: [],
+          contextConcepts: [],
+          outcomeConcepts: [],
+          populationConcepts: [],
+          lowWeightTerms: [],
+          mustHaveTerms: [],
+          plannerStatus: "rule_fallback",
+          fallbackUsed: true,
+        },
+        queries: {
+          coreConcepts: [],
+          chinese: [],
+          english: [],
+          highPrecision: [],
+          broad: [],
+          coreEnglishAcademic: [],
+          academicSynonyms: [],
+          education: [],
+          chineseSupplemental: [],
+          fallbackRelaxed: [],
+          phases: [],
+        },
+        results: [],
+        sources: [],
+        provider_status: [],
+        warnings: [],
+        planner: {
+          normalizedTopic: input.topic,
+          primaryConcepts: [],
+          contextConcepts: [],
+          outcomeConcepts: [],
+          populationConcepts: [],
+          lowWeightTerms: [],
+          mustHaveTerms: [],
+          shouldHaveTerms: [],
+          penaltyTerms: [],
+          negativeTerms: [],
+          chineseQueries: [],
+          englishQueries: [],
+          reasoningNotes: [],
+          plannerStatus: "rule_fallback",
+          fallbackUsed: true,
+        },
+        searchTrace: {
+          workflowId: "wf-test",
+          topic: input.topic,
+          originalTopic: input.originalTopic ?? input.topic,
+          activeResearchTopic: input.topic,
+          canonicalEnglishTopic: "",
+          normalizedTopic: input.topic,
+          topicHash: "topic-hash",
+          queryPlanHash: "query-plan-hash",
+          providerQueries: [],
+          candidateCount: 0,
+          dedupedCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          sourceDecisions: [],
+        },
+        diagnostics: {
+          original_topic: input.originalTopic ?? input.topic,
+          active_research_topic: input.topic,
+          canonical_english_topic: "",
+          core_concepts: [],
+          english_queries: [],
+          chinese_queries: [],
+          fallback_relaxed_queries: [],
+          provider_search_results_count: 0,
+          filtered_results_count: 0,
+          rejection_reasons: {},
+          retrieved_count: 0,
+          deduped_count: 0,
+          rejected_count: 0,
+          candidate_count: 0,
+          displayed_count: 0,
+          primary_candidate_count: 0,
+          provider_status: [],
+          warnings: [],
+        },
+        llm_status: "skipped",
+        keyword_expansion: {
+          normalized_topic: input.topic,
+          domains: [],
+          search_queries: [],
+          english_queries: [],
+          chinese_queries: [],
+          core_concepts: [],
+          core_english_queries: [],
+          academic_synonym_queries: [],
+          education_queries: [],
+          fallback_relaxed_queries: [],
+          preferred_source_types: [],
+          avoid_source_types: [],
+          reasoning_notes: [],
+          fallback_used: true,
+          llm_status: "skipped",
+        },
+        groups: [],
+      };
+    },
+  });
+
+  const route = router.stack.find((layer) => layer.route?.path === "/search-sources");
+  assert.ok(route?.route);
+
+  let statusCode = 200;
+  const req = {
+    body: {
+      originalTopic: "陀螺",
+      refinedTopic: "陀螺的角動量、扭矩與旋轉穩定性原理",
+      reportType: "研究報告",
+      audience: "高中",
+    },
+  };
+  const res = {
+    status(code: number) {
+      statusCode = code;
+      return this;
+    },
+    json(value: unknown) {
+      return value;
+    },
+  };
+
+  await route.route.stack[0].handle(req as Request, res as unknown as Response, () => undefined);
+
+  assert.equal(statusCode, 200);
+  assert.deepEqual(capturedTopicInput, {
+    topic: "陀螺的角動量、扭矩與旋轉穩定性原理",
+    originalTopic: "陀螺",
+    refinedTopic: "陀螺的角動量、扭矩與旋轉穩定性原理",
+    reportType: "研究報告",
+    audience: "高中",
+    language: undefined,
+    sourceMode: undefined,
+  });
 });

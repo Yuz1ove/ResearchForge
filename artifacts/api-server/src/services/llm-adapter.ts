@@ -130,7 +130,7 @@ export function resolveLlmConfig(
     DEFAULT_MODEL;
   const timeoutMs =
     overrides.timeoutMs ??
-    envNumber(env, [...PURPOSE_TIMEOUT_ENV_KEYS[purpose], "LLM_TIMEOUT_MS"]) ??
+    envNumber(env, [...PURPOSE_TIMEOUT_ENV_KEYS[purpose], "LLM_TIMEOUT_MS", "OLLAMA_TIMEOUT_MS"]) ??
     PURPOSE_TIMEOUT_MS[purpose];
   const apiKey =
     explicitlyDisabled
@@ -201,15 +201,56 @@ function stripJsonFence(text: string): string {
   return fenced?.[1]?.trim() ?? trimmed;
 }
 
+export function extractFirstJsonObject(text: string): string | null {
+  const stripped = stripJsonFence(text);
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < stripped.length; index += 1) {
+    const char = stripped[index];
+
+    if (start === -1) {
+      if (char === "{") {
+        start = index;
+        depth = 1;
+      }
+      continue;
+    }
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return stripped.slice(start, index + 1);
+    }
+  }
+
+  return null;
+}
+
 export function safeJsonParse(text: string): unknown {
   const stripped = stripJsonFence(text);
   try {
     return JSON.parse(stripped);
   } catch {
-    const start = stripped.indexOf("{");
-    const end = stripped.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      return JSON.parse(stripped.slice(start, end + 1));
+    const jsonObject = extractFirstJsonObject(stripped);
+    if (jsonObject) {
+      return JSON.parse(jsonObject);
     }
     throw new LlmAdapterError(
       "invalid-json",
@@ -242,6 +283,16 @@ function firstNonEmptyText(...values: unknown[]): string {
   return "";
 }
 
+function firstJsonObjectFromReasoning(...values: unknown[]): string {
+  for (const value of values) {
+    const text = textFromContentValue(value);
+    if (!text) continue;
+    const jsonObject = extractFirstJsonObject(text);
+    if (jsonObject) return jsonObject;
+  }
+  return "";
+}
+
 export function extractModelText(raw: unknown): string {
   if (typeof raw === "string") return raw.trim();
   if (!raw || typeof raw !== "object") return "";
@@ -266,6 +317,12 @@ export function extractModelText(raw: unknown): string {
       choiceData.content,
     );
     if (text) return text;
+    const jsonFromReasoning = firstJsonObjectFromReasoning(
+      message.reasoning,
+      delta.reasoning,
+      choiceData.reasoning,
+    );
+    if (jsonFromReasoning) return jsonFromReasoning;
   }
 
   const message =
@@ -290,7 +347,7 @@ export function extractModelText(raw: unknown): string {
     data.text,
     data.output_text,
     outputText,
-  );
+  ) || firstJsonObjectFromReasoning(message.reasoning, data.reasoning);
 }
 
 function errorCode(error: unknown): string {
@@ -320,6 +377,7 @@ export async function requestOpenAICompatibleChatCompletion({
   const startedAt = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  const endpoint = chatCompletionsUrl(config.baseUrl).toString();
 
   try {
     const headers: Record<string, string> = {
@@ -329,7 +387,7 @@ export async function requestOpenAICompatibleChatCompletion({
       headers.Authorization = `Bearer ${config.apiKey}`;
     }
 
-    const response = await fetchImpl(chatCompletionsUrl(config.baseUrl), {
+    const response = await fetchImpl(endpoint, {
       method: "POST",
       signal: controller.signal,
       headers,
@@ -369,6 +427,7 @@ export async function requestOpenAICompatibleChatCompletion({
         purpose,
         model: config.model,
         baseUrl: config.baseUrl,
+        endpoint,
         durationMs: Date.now() - startedAt,
         timeoutMs: config.timeoutMs,
       },
@@ -387,6 +446,7 @@ export async function requestOpenAICompatibleChatCompletion({
         purpose,
         model: config.model,
         baseUrl: config.baseUrl,
+        endpoint,
         durationMs: Date.now() - startedAt,
         timeoutMs: config.timeoutMs,
         fallbackReason: errorCode(adapterError),

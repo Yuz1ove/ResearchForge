@@ -1,5 +1,7 @@
 export * from "./source-record";
 export * from "./research-workflow";
+export * from "./llm-status";
+export * from "./topic-expansion";
 export * from "./topic-understanding";
 export * from "./generated/api";
 export * from "./generated/types/errorResponse";

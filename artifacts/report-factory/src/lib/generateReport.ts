@@ -293,17 +293,17 @@ function cardFromClarification(
     ),
   ]).slice(0, 8);
 
+  const shortText = (text: string, max = 44) => {
+    const chars = Array.from(text.trim());
+    return chars.length > max ? `${chars.slice(0, max - 1).join("").trim()}…` : text;
+  };
+
   return {
     title: card.suggestedTopic,
     angle: card.label,
-    reason: card.description,
-    researchValue: card.description,
-    dataDirections: [
-      "學術論文",
-      "可信機構資料",
-      "摘要可驗證來源",
-      "中英文關鍵詞交叉搜尋",
-    ],
+    reason: shortText(card.description, 44),
+    researchValue: shortText(card.description, 44),
+    dataDirections: ["學術論文", "可信機構資料", "中英文關鍵詞交叉搜尋"],
     chineseKeywords: zhKeywords,
     englishKeywords: enKeywords,
     suggestedQuery: normalizeTerms([
@@ -313,7 +313,7 @@ function cardFromClarification(
     ])
       .slice(0, 6)
       .join(" "),
-    searchBoundary: "先沿著這個具體研究方向搜尋，不要只用原始短詞直接找來源。",
+    searchBoundary: "先沿著這個方向搜尋。",
   };
 }
 
@@ -1034,12 +1034,25 @@ function cultureExpansionCards(topic: string): TopicExpansionCard[] {
 export function expandTopicCards(topic: string, category?: TopicCategory): TopicExpansionCard[] {
   const t = topic.trim() || "主題";
   const understanding = understandTopic(t);
+  const expansionKind = topicExpansionKind(
+    t,
+    category ?? detectTopicCategory(t, "", ""),
+  );
 
   const shouldUseUnderstandingCards =
     understanding.clarificationCards.length > 0 &&
+    expansionKind === "general" &&
     (understanding.entity ||
+      understanding.needsClarification ||
+      understanding.topicKind === "broad_common_noun" ||
+      understanding.topicKind === "ambiguous" ||
       understanding.topicKind === "brand_or_product" ||
       understanding.topicKind === "cultural_artifact" ||
+      understanding.domain === "food_nutrition" ||
+      understanding.domain === "beverage_health" ||
+      understanding.domain === "animal_science" ||
+      understanding.domain === "consumer_product" ||
+      understanding.domain === "materials_design" ||
       understanding.domain === "household_safety" ||
       understanding.domain === "automotive_business" ||
       understanding.domain === "music_culture");
@@ -1050,7 +1063,7 @@ export function expandTopicCards(topic: string, category?: TopicCategory): Topic
     );
   }
 
-  switch (topicExpansionKind(t, category ?? detectTopicCategory(t, "", ""))) {
+  switch (expansionKind) {
     case "nature":
       return natureExpansionCards(t);
     case "food":
@@ -2144,71 +2157,85 @@ function buildHealthcare(topic: string): CategoryContent {
 }
 
 function buildGeneral(topic: string): CategoryContent {
+  const t = topic || "研究主題";
+  const understanding = understandTopic(t);
+  const firstAngles = understanding.researchAngles.slice(0, 3);
+  const angleTitles = firstAngles.map((angle) => angle.researchQuestion);
+  const angleLabels = firstAngles.map((angle) => angle.label);
+  const angleSources = firstAngles.flatMap((angle) => angle.suggestedSourceTypes);
+  const focusA = angleTitles[0] ?? `${t}的可查證定義與使用情境`;
+  const focusB = angleTitles[1] ?? `${t}的影響、風險或應用差異`;
+  const focusC = angleTitles[2] ?? `${t}的案例、資料與後續改善方向`;
+  const sourceHints = normalizeTerms(angleSources).slice(0, 4);
+  const sourceText = sourceHints.length
+    ? sourceHints.join("、")
+    : "政府或機構資料、期刊研究、案例資料";
+
   return {
-    summaryDirection: `本報告以「${topic}」為題，整理其背景、重要面向、現況與相關討論，並提出結論與個人觀點。`,
-    summary: `本報告探討「${topic}」，從背景與動機出發，整理主要面向與現況，分析相關討論，最後提出結論與個人看法。`,
-    background: `「${topic}」是值得整理與了解的主題。本報告蒐集相關資料，系統性地呈現其重要面向。〔建議補充背景資料〕`,
-    motivation: `希望透過資料整理與分析，更完整地認識「${topic}」，並培養蒐集與組織資訊的能力。`,
+    summaryDirection: `本報告以「${t}」為題，先界定研究對象，再聚焦「${focusA}」、「${focusB}」與「${focusC}」三個可查證方向。`,
+    summary: `本報告探討「${t}」，透過${sourceText}檢視研究對象、實際情境與可驗證資料，並整理適合後續深化的研究問題。`,
+    background: `「${t}」需要先從研究對象、使用情境與資料來源界定範圍。本報告以${sourceText}作為資料方向，避免只停留在生活聯想。`,
+    motivation: `希望把「${t}」從寬泛題目收斂成可搜尋、可比較、可佐證的研究問題，並判斷哪些資料能支撐報告結論。`,
     purpose: [
-      `整理「${topic}」的背景與重要性。`,
-      `分析「${topic}」的主要面向與現況。`,
-      `提出結論與個人觀點。`,
+      `界定「${t}」的研究對象與資料範圍。`,
+      `比較「${focusA}」與「${focusB}」的證據線索。`,
+      `整理「${focusC}」可延伸的研究結論。`,
     ],
     questions: [
-      `「${topic}」的重要性與背景為何？`,
-      `「${topic}」有哪些主要面向？`,
-      `從「${topic}」可以得到什麼結論或啟發？`,
+      `「${t}」應如何界定研究範圍才不會過度發散？`,
+      `哪些資料能支撐「${focusA}」？`,
+      `「${focusB}」與「${focusC}」之間有哪些可比較線索？`,
     ],
     hypothesis: [
-      `「${topic}」可從多個面向加以理解。`,
-      `深入整理「${topic}」有助於做出更完整的判斷。`,
+      `若先收斂研究範圍，「${t}」能找到較穩定的資料來源。`,
+      `不同資料類型會影響「${t}」的解讀與結論強度。`,
     ],
     literature: [
-      `「${topic}」的定義與基本資料`,
-      `相關研究、報導或案例（來源待確認）`,
-      `不同觀點的整理`,
+      `「${t}」的定義、分類或使用情境`,
+      `${focusA}的研究或機構資料`,
+      `${focusB}與${focusC}的案例或統計資料`,
     ],
-    method: `採用文獻整理與歸納分析法：蒐集「${topic}」的相關資料，分類整理後加以分析並提出結論。`,
-    analysis: `整理資料後可看出「${topic}」涵蓋多個面向〔建議補充具體資料與案例〕，彼此相互關聯。`,
-    discussion: `比較不同資料與觀點，討論「${topic}」的重點與爭議，並提出個人判斷。`,
+    method: `採用文獻整理與來源比對法：先用「${t}」及相關關鍵詞搜尋${sourceText}，再依研究方向分類資料。`,
+    analysis: `資料整理時應優先檢查來源是否直接回答「${focusA}」或「${focusB}」，再把「${focusC}」作為延伸討論。`,
+    discussion: `比較不同資料類型的證據力，判斷「${t}」哪些面向已有可靠資料，哪些仍需補查。`,
     limitations: [
-      `本報告以二手資料整理為主，深度與廣度受限。`,
-      `部分內容需更多資料佐證。`,
+      `若只使用短題目搜尋，結果可能混入不相關資料。`,
+      `部分角度需要補充摘要、統計或原文片段後才能作為主要證據。`,
     ],
-    conclusion: `綜合以上，「${topic}」具有多面向的內涵。本報告整理其重點與討論，作為後續深入研究的基礎。`,
+    conclusion: `綜合以上，「${t}」應以具體研究方向與可信來源交叉檢查，才能形成可引用的報告結論。`,
     futureWork: [
-      `補充第一手資料或實例。`,
-      `針對特定面向做更深入的探討。`,
+      `補充更精準的中英文關鍵詞搜尋。`,
+      `針對最有資料支撐的角度進一步查找摘要與原文片段。`,
     ],
     customSections: [
-      { heading: "一、主題背景", body: `介紹「${topic}」的基本背景與重要性。` },
-      { heading: "二、主要面向", body: `整理「${topic}」的重要面向或分類。` },
-      { heading: "三、現況分析", body: `說明「${topic}」目前的狀況或發展。` },
-      { heading: "四、相關討論", body: `整理與「${topic}」相關的案例或不同觀點。` },
-      { heading: "五、個人觀點", body: `提出對「${topic}」的看法。` },
+      { heading: "一、研究範圍界定", body: `說明「${t}」要聚焦的對象、情境與排除範圍。` },
+      { heading: "二、資料來源與關鍵詞", body: `整理${sourceText}與可用搜尋詞。` },
+      { heading: "三、核心證據整理", body: `比較「${focusA}」與「${focusB}」的資料支持程度。` },
+      { heading: "四、延伸討論", body: `分析「${focusC}」能否作為背景、案例或後續研究。` },
+      { heading: "五、結論與資料缺口", body: `指出目前最穩定的結論與仍需補查的資料。` },
     ],
     charts: [
       {
-        title: `${topic}重點整理表`,
-        position: "主要面向後",
-        purpose: `整理「${topic}」的主要面向與重點。`,
-        content: "以表格分類呈現各面向與說明。",
+        title: `${t}研究方向與來源對照表`,
+        position: "資料來源與關鍵詞後",
+        purpose: `比較「${t}」不同研究角度的來源品質。`,
+        content: `欄位可包含研究方向、關鍵詞、可用來源、摘要完整度與採用建議。`,
       },
     ],
     images: [
       {
-        title: `${topic}概念圖`,
-        position: "主題背景後",
-        purpose: `以圖像呈現「${topic}」的核心概念與關聯。`,
-        content: "可用心智圖整理重點。",
+        title: `${t}研究範圍圖`,
+        position: "研究範圍界定後",
+        purpose: `呈現「${t}」的對象、情境與排除範圍。`,
+        content: `可用心智圖連結${angleLabels.join("、") || "研究角度"}。`,
       },
     ],
     flowcharts: [
       {
-        title: "主題架構圖",
-        position: "主要面向後",
-        purpose: `呈現「${topic}」各面向之間的關係。`,
-        content: "以樹狀或關係圖呈現。",
+        title: "搜尋與採證流程圖",
+        position: "資料來源與關鍵詞後",
+        purpose: `呈現「${t}」從關鍵詞到可採用來源的判斷流程。`,
+        content: "題目收斂 → 關鍵詞搜尋 → 摘要檢查 → 來源分級 → 報告採用。",
       },
     ],
   };

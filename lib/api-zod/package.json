@@ -5,6 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./llm-status": "./src/llm-status.ts",
+    "./topic-expansion": "./src/topic-expansion.ts",
     "./topic-understanding": "./src/topic-understanding.ts"
   },
   "dependencies": {

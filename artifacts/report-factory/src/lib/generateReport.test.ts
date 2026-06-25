@@ -133,3 +133,13 @@ test("expands bubble broad noun into concrete physics, learning, and material di
   assert.match(text, /surface tension|soap bubble|microbubble/i);
   assert.ok(!/生活連結|資料策略|研究限制/.test(text));
 });
+
+test("expands airplane topics into mechanics, aviation, and construction directions", () => {
+  const cards = expandTopicCards("飛機");
+  const text = joinedCards("飛機");
+
+  assert.equal(cards.length >= 3, true);
+  assert.match(text, /機翼|機身|升力|民航|飛航安全|材料|製造|組裝/);
+  assert.match(text, /aircraft|aviation|manufacturing/i);
+  assert.ok(!/背景與重要性|現況分析|主要面向|生活連結|資料策略|研究限制/.test(text));
+});

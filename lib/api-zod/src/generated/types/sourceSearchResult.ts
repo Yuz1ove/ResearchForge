@@ -12,6 +12,7 @@ import type { SearchIntentQuerySet } from './searchIntentQuerySet';
 import type { SearchIntentSummary } from './searchIntentSummary';
 import type { SearchRelevanceDebug } from './searchRelevanceDebug';
 import type { SearchTrace } from './searchTrace';
+import type { SourceSearchPipelineDiagnostics } from './sourceSearchPipelineDiagnostics';
 import type { SourceRecord } from './sourceRecord';
 import type { SourceSearchResultLlmStatus } from './sourceSearchResultLlmStatus';
 
@@ -33,4 +34,5 @@ export interface SourceSearchResult {
   planner?: SearchIntentPlan;
   relevance_debug?: SearchRelevanceDebug[];
   searchTrace?: SearchTrace;
+  diagnostics?: SourceSearchPipelineDiagnostics;
 }

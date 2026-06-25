@@ -1,4 +1,11 @@
-export const SOURCE_PROVIDERS = ["OpenAlex", "Semantic Scholar", "Crossref"] as const;
+export const SOURCE_PROVIDERS = [
+  "OpenAlex",
+  "Semantic Scholar",
+  "Crossref",
+  "Official Source",
+  "Institutional Source",
+  "Authoritative Media",
+] as const;
 export type SourceProvider = (typeof SOURCE_PROVIDERS)[number];
 
 export const SOURCE_REVIEW_STATES = ["pending", "accepted", "rejected"] as const;
@@ -35,6 +42,9 @@ export interface SourceRecord {
   authors: string[];
   year: number | null;
   abstract: string | null;
+  snippet?: string | null;
+  language?: string | null;
+  abstractMissing?: boolean | null;
   doi: string | null;
   url: string | null;
   sourceType: SourceProvider;
@@ -61,6 +71,15 @@ export interface SourceRecord {
   missingRequiredFacets?: string[] | null;
   evidenceGrounding?: SourceEvidenceGroundingStatus | null;
   sourceRelevanceReasonZhTw?: string | null;
+  llmSummaryZhTw?: string | null;
+  llmSummaryStatus?: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped" | "metadata-only" | "fetch-failed" | "llm-failed" | "fallback" | null;
+  summaryStructuredStatus?: "success" | "unavailable" | "invalid_input" | "insufficient_sources" | "error" | null;
+  summaryProvider?: string | null;
+  summaryModel?: string | null;
+  summaryStatus?: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped" | "metadata-only" | "fetch-failed" | "llm-failed" | "fallback" | null;
+  summaryFallbackUsed?: boolean | null;
+  summaryReason?: string | null;
+  summaryMessage?: string | null;
   shouldShowInMainList?: boolean | null;
   shouldRecommendAccept?: boolean | null;
   workflowId?: string | null;
@@ -78,6 +97,15 @@ export interface SourceRecord {
   rejectReason?: string | null;
   matchedTerms?: string[] | null;
   driftTerms?: string[] | null;
+  topicRelevance?: number | null;
+  evidenceQuality?: number | null;
+  metadataCompleteness?: number | null;
+  abstractQuality?: number | null;
+  sourceTrust?: number | null;
+  isMetadataOnly?: boolean | null;
+  isPrimaryEvidence?: boolean | null;
+  rejectionReason?: string | null;
+  recommendation?: string | null;
 }
 
 export type SourceRecordInput = Partial<SourceRecord> & {
@@ -121,6 +149,29 @@ function normalizedTitleKey(title: string): string {
     .replace(/^[\s:.]+|[\s:.]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function titleTokens(title: string): Set<string> {
+  return new Set(
+    normalizedTitleKey(title)
+      .split(" ")
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 3),
+  );
+}
+
+function titleSimilarity(a: string, b: string): number {
+  const aTokens = titleTokens(a);
+  const bTokens = titleTokens(b);
+  if (aTokens.size === 0 || bTokens.size === 0) return 0;
+
+  let intersection = 0;
+  for (const token of aTokens) {
+    if (bTokens.has(token)) intersection += 1;
+  }
+
+  const union = new Set([...aTokens, ...bTokens]).size;
+  return union ? intersection / union : 0;
 }
 
 function normalizedAuthorKey(author: string | null | undefined): string {
@@ -183,6 +234,34 @@ function normalizeEvidenceGrounding(
   return null;
 }
 
+function normalizeSummaryStatus(
+  value: SourceRecordInput["summaryStatus"] | SourceRecordInput["llmSummaryStatus"],
+): SourceRecord["summaryStatus"] {
+  return value === "success" ||
+      value === "timeout" ||
+      value === "quota_exceeded" ||
+      value === "failed" ||
+      value === "skipped" ||
+      value === "metadata-only" ||
+      value === "fetch-failed" ||
+      value === "llm-failed" ||
+      value === "fallback"
+    ? value
+    : null;
+}
+
+function normalizeStructuredStatus(
+  value: SourceRecordInput["summaryStructuredStatus"],
+): SourceRecord["summaryStructuredStatus"] {
+  return value === "success" ||
+      value === "unavailable" ||
+      value === "invalid_input" ||
+      value === "insufficient_sources" ||
+      value === "error"
+    ? value
+    : null;
+}
+
 function normalizeClassification(
   value: SourceRecordInput["classification"],
 ): SourceRecord["classification"] {
@@ -224,17 +303,20 @@ function sourceKindFromRecord(
 export function sourceQualityAssessment(
   source: Pick<
     SourceRecord,
-    | "title"
-    | "authors"
-    | "year"
-    | "abstract"
-    | "doi"
+  | "title"
+  | "authors"
+  | "year"
+  | "abstract"
+  | "snippet"
+  | "language"
+  | "abstractMissing"
+  | "doi"
     | "containerTitle"
     | "publisher"
     | "citationCount"
-    | "isOpenAccess"
-    | "sourceKind"
-    | "sourceType"
+  | "isOpenAccess"
+  | "sourceKind"
+  | "sourceType"
     | "url"
   >,
 ): { sourceQualityScore: number; scoreReasons: string[]; sourceKind: SourceKind } {
@@ -277,6 +359,17 @@ export function sourceQualityAssessment(
   if (sourceKind === "journal" || sourceKind === "conference") {
     score += 5;
     reasons.push("journal/conference source");
+  }
+  if (
+    source.sourceType === "Official Source" ||
+    source.sourceType === "Institutional Source"
+  ) {
+    score = Math.max(score, 70);
+    reasons.push("official/institutional source");
+  }
+  if (source.sourceType === "Authoritative Media") {
+    score = Math.max(score, 55);
+    reasons.push("authoritative media source");
   }
 
   return {
@@ -325,6 +418,15 @@ function metadataFields(source: Pick<
   | "missingRequiredFacets"
   | "evidenceGrounding"
   | "sourceRelevanceReasonZhTw"
+  | "llmSummaryZhTw"
+  | "llmSummaryStatus"
+  | "summaryStructuredStatus"
+  | "summaryProvider"
+  | "summaryModel"
+  | "summaryStatus"
+  | "summaryFallbackUsed"
+  | "summaryReason"
+  | "summaryMessage"
   | "shouldShowInMainList"
   | "shouldRecommendAccept"
   | "workflowId"
@@ -342,6 +444,15 @@ function metadataFields(source: Pick<
   | "rejectReason"
   | "matchedTerms"
   | "driftTerms"
+  | "topicRelevance"
+  | "evidenceQuality"
+  | "metadataCompleteness"
+  | "abstractQuality"
+  | "sourceTrust"
+  | "isMetadataOnly"
+  | "isPrimaryEvidence"
+  | "rejectionReason"
+  | "recommendation"
 >): Partial<SourceRecord> {
   return {
     ...(source.provider != null ? { provider: source.provider } : {}),
@@ -369,6 +480,19 @@ function metadataFields(source: Pick<
     ...(source.sourceRelevanceReasonZhTw != null
       ? { sourceRelevanceReasonZhTw: source.sourceRelevanceReasonZhTw }
       : {}),
+    ...(source.llmSummaryZhTw != null ? { llmSummaryZhTw: source.llmSummaryZhTw } : {}),
+    ...(source.llmSummaryStatus != null ? { llmSummaryStatus: source.llmSummaryStatus } : {}),
+    ...(source.summaryStructuredStatus != null
+      ? { summaryStructuredStatus: source.summaryStructuredStatus }
+      : {}),
+    ...(source.summaryProvider != null ? { summaryProvider: source.summaryProvider } : {}),
+    ...(source.summaryModel != null ? { summaryModel: source.summaryModel } : {}),
+    ...(source.summaryStatus != null ? { summaryStatus: source.summaryStatus } : {}),
+    ...(source.summaryFallbackUsed != null
+      ? { summaryFallbackUsed: source.summaryFallbackUsed }
+      : {}),
+    ...(source.summaryReason != null ? { summaryReason: source.summaryReason } : {}),
+    ...(source.summaryMessage != null ? { summaryMessage: source.summaryMessage } : {}),
     ...(source.shouldShowInMainList != null
       ? { shouldShowInMainList: source.shouldShowInMainList }
       : {}),
@@ -394,6 +518,19 @@ function metadataFields(source: Pick<
     ...(source.rejectReason != null ? { rejectReason: source.rejectReason } : {}),
     ...(source.matchedTerms != null ? { matchedTerms: source.matchedTerms } : {}),
     ...(source.driftTerms != null ? { driftTerms: source.driftTerms } : {}),
+    ...(source.topicRelevance != null ? { topicRelevance: source.topicRelevance } : {}),
+    ...(source.evidenceQuality != null ? { evidenceQuality: source.evidenceQuality } : {}),
+    ...(source.metadataCompleteness != null
+      ? { metadataCompleteness: source.metadataCompleteness }
+      : {}),
+    ...(source.abstractQuality != null ? { abstractQuality: source.abstractQuality } : {}),
+    ...(source.sourceTrust != null ? { sourceTrust: source.sourceTrust } : {}),
+    ...(source.isMetadataOnly != null ? { isMetadataOnly: source.isMetadataOnly } : {}),
+    ...(source.isPrimaryEvidence != null
+      ? { isPrimaryEvidence: source.isPrimaryEvidence }
+      : {}),
+    ...(source.rejectionReason != null ? { rejectionReason: source.rejectionReason } : {}),
+    ...(source.recommendation != null ? { recommendation: source.recommendation } : {}),
   };
 }
 
@@ -429,6 +566,19 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
     evidenceGrounding: existing.evidenceGrounding ?? incoming.evidenceGrounding ?? null,
     sourceRelevanceReasonZhTw:
       existing.sourceRelevanceReasonZhTw ?? incoming.sourceRelevanceReasonZhTw ?? null,
+    llmSummaryZhTw: existing.llmSummaryZhTw ?? incoming.llmSummaryZhTw ?? null,
+    llmSummaryStatus: existing.llmSummaryStatus ?? incoming.llmSummaryStatus ?? null,
+    summaryStructuredStatus:
+      existing.summaryStructuredStatus ?? incoming.summaryStructuredStatus ?? null,
+    summaryProvider: existing.summaryProvider ?? incoming.summaryProvider ?? null,
+    summaryModel: existing.summaryModel ?? incoming.summaryModel ?? null,
+    summaryStatus: existing.summaryStatus ?? incoming.summaryStatus ?? null,
+    summaryFallbackUsed:
+      typeof existing.summaryFallbackUsed === "boolean" || typeof incoming.summaryFallbackUsed === "boolean"
+        ? Boolean(existing.summaryFallbackUsed ?? incoming.summaryFallbackUsed)
+        : null,
+    summaryReason: existing.summaryReason ?? incoming.summaryReason ?? null,
+    summaryMessage: existing.summaryMessage ?? incoming.summaryMessage ?? null,
     shouldShowInMainList:
       existing.shouldShowInMainList ?? incoming.shouldShowInMainList ?? null,
     shouldRecommendAccept:
@@ -454,7 +604,28 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
     rejectReason: existing.rejectReason ?? incoming.rejectReason ?? null,
     matchedTerms: mergeOptionalStringLists(existing.matchedTerms, incoming.matchedTerms),
     driftTerms: mergeOptionalStringLists(existing.driftTerms, incoming.driftTerms),
-    provider: existing.provider ?? incoming.provider ?? existing.sourceType,
+    topicRelevance: mergeOptionalScore(existing.topicRelevance, incoming.topicRelevance),
+    evidenceQuality: mergeOptionalScore(existing.evidenceQuality, incoming.evidenceQuality),
+    metadataCompleteness: mergeOptionalScore(
+      existing.metadataCompleteness,
+      incoming.metadataCompleteness,
+    ),
+    abstractQuality: mergeOptionalScore(existing.abstractQuality, incoming.abstractQuality),
+    sourceTrust: mergeOptionalScore(existing.sourceTrust, incoming.sourceTrust),
+    isMetadataOnly:
+      typeof existing.isMetadataOnly === "boolean" || typeof incoming.isMetadataOnly === "boolean"
+        ? Boolean(existing.isMetadataOnly || incoming.isMetadataOnly)
+        : null,
+    isPrimaryEvidence:
+      typeof existing.isPrimaryEvidence === "boolean" || typeof incoming.isPrimaryEvidence === "boolean"
+        ? Boolean(existing.isPrimaryEvidence || incoming.isPrimaryEvidence)
+        : null,
+    rejectionReason: existing.rejectionReason ?? incoming.rejectionReason ?? null,
+    recommendation: existing.recommendation ?? incoming.recommendation ?? null,
+    provider: uniqueStrings([
+      existing.provider ?? existing.sourceType,
+      incoming.provider ?? incoming.sourceType,
+    ]).join(", "),
     queryUsed: existing.queryUsed ?? incoming.queryUsed ?? null,
     retrievedAt: existing.retrievedAt ?? incoming.retrievedAt ?? null,
     dedupeKey: existing.dedupeKey ?? incoming.dedupeKey ?? null,
@@ -529,6 +700,12 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     authors,
     year: normalizeYearValue(source.year),
     abstract: cleanText(source.abstract),
+    snippet: cleanText(source.snippet),
+    language: cleanText(source.language),
+    abstractMissing:
+      typeof source.abstractMissing === "boolean"
+        ? source.abstractMissing
+        : !cleanText(source.abstract),
     doi,
     url,
     sourceType: source.sourceType,
@@ -576,6 +753,16 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     missingRequiredFacets: cleanStringList(source.missingRequiredFacets),
     evidenceGrounding: normalizeEvidenceGrounding(source.evidenceGrounding),
     sourceRelevanceReasonZhTw: cleanText(source.sourceRelevanceReasonZhTw),
+    llmSummaryZhTw: cleanText(source.llmSummaryZhTw),
+    llmSummaryStatus: normalizeSummaryStatus(source.llmSummaryStatus),
+    summaryStructuredStatus: normalizeStructuredStatus(source.summaryStructuredStatus),
+    summaryProvider: cleanText(source.summaryProvider),
+    summaryModel: cleanText(source.summaryModel),
+    summaryStatus: normalizeSummaryStatus(source.summaryStatus),
+    summaryFallbackUsed:
+      typeof source.summaryFallbackUsed === "boolean" ? source.summaryFallbackUsed : null,
+    summaryReason: cleanText(source.summaryReason),
+    summaryMessage: cleanText(source.summaryMessage),
     shouldShowInMainList:
       typeof source.shouldShowInMainList === "boolean"
         ? source.shouldShowInMainList
@@ -599,6 +786,17 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     rejectReason: cleanText(source.rejectReason),
     matchedTerms: cleanStringList(source.matchedTerms),
     driftTerms: cleanStringList(source.driftTerms),
+    topicRelevance: finiteScore(source.topicRelevance),
+    evidenceQuality: finiteScore(source.evidenceQuality),
+    metadataCompleteness: finiteScore(source.metadataCompleteness),
+    abstractQuality: finiteScore(source.abstractQuality),
+    sourceTrust: finiteScore(source.sourceTrust),
+    isMetadataOnly:
+      typeof source.isMetadataOnly === "boolean" ? source.isMetadataOnly : null,
+    isPrimaryEvidence:
+      typeof source.isPrimaryEvidence === "boolean" ? source.isPrimaryEvidence : null,
+    rejectionReason: cleanText(source.rejectionReason),
+    recommendation: cleanText(source.recommendation),
   });
 
   return {
@@ -615,9 +813,26 @@ export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
   for (const source of sources) {
     const normalized = normalizeSourceRecord(source);
     const key = sourceRecordKey(normalized);
-    const existing = seen.get(key);
+    const existing =
+      seen.get(key) ??
+      deduped.find((candidate) => {
+        if (normalized.doi || candidate.doi) return false;
+        if (!normalized.title || !candidate.title) return false;
+        const sameYear =
+          normalized.year != null &&
+          candidate.year != null &&
+          normalized.year === candidate.year;
+        const sameFirstAuthor =
+          normalizedAuthorKey(normalized.authors[0]) !== "" &&
+          normalizedAuthorKey(normalized.authors[0]) ===
+            normalizedAuthorKey(candidate.authors[0]);
+        const similarity = titleSimilarity(normalized.title, candidate.title);
+        return similarity >= 0.94 || (similarity >= 0.86 && (sameYear || sameFirstAuthor));
+      });
     if (existing) {
       const merged = { ...mergeSourceRecords(existing, normalized), id: existing.id || key };
+      seen.set(sourceRecordKey(merged), merged);
+      seen.set(sourceRecordKey(existing), merged);
       seen.set(key, merged);
       const index = deduped.findIndex((item) => item.id === existing.id);
       if (index >= 0) deduped[index] = merged;

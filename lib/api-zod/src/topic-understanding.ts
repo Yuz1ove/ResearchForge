@@ -69,16 +69,24 @@ export interface TopicEntityInfo {
   category: TopicEntityCategory;
 }
 
+export interface TopicQueryPlan {
+  zh: string[];
+  en: string[];
+}
+
 export interface TopicUnderstandingResult {
   originalTopic: string;
   normalizedTopic: string;
   language: TopicLanguage;
   topicKind: TopicKind;
   domain: TopicDomain;
+  canonicalEnglishTopic: string;
   canonicalTerms: string[];
   aliases: string[];
   englishTerms: string[];
   scientificNames: string[];
+  coreConcepts: string[];
+  searchQueries: TopicQueryPlan;
   excludedMeanings: string[];
   shouldSearchNow: boolean;
   shouldSearchImmediately: boolean;
@@ -104,7 +112,7 @@ interface TopicLexiconEntry {
 
 const COMMON_RESEARCH_CUES = [
   /影響|關係|比較|分析|研究|探討|成因|原因|風險|管理|應用|角色|作用|現況|趨勢|機制|差異|攝取|福利|飼養|行為|健康|安全|實驗|模型|醫學|營養|消費|包裝|供應鏈|設計|材料|品牌|市場|文化|歷史|演變|永續|回收/,
-  /effect|impact|relationship|comparison|analysis|study|research|review|risk|management|application|role|mechanism|trend|welfare|husbandry|behavior|behaviour|health|safety|experiment|animal model|biomedical|nutrition|consumer|packaging|supply chain|design|material|brand|market|culture|history|sustainability/i,
+  /effect|impact|relationship|comparison|analysis|study|research|review|risk|management|application|role|mechanism|trend|welfare|husbandry|behavior|behaviour|health|safety|experiment|animal model|biomedical|nutrition|consumer|packaging|supply chain|design|material|brand|market|culture|history|sustainability|poisoning|illness|infection|outbreak|foodborne|pathogen/i,
 ];
 
 const SPECIFIC_PATTERN_CUES = [
@@ -152,7 +160,43 @@ function angle(
 }
 
 const FOOD_SOURCE_TYPES = ["營養標示資料", "食品安全研究", "公共衛生資料"];
+const FOODBORNE_SOURCE_TYPES = ["食品安全研究", "公共衛生監測", "官方疾病防治資料"];
 const PRODUCT_SOURCE_TYPES = ["安全標準", "材料研究", "消費者或產業資料"];
+
+const ENGLISH_TOPIC_HINTS: Array<{
+  pattern: RegExp;
+  englishTerms: string[];
+}> = [
+  {
+    pattern: /羊駝|alpaca|vicugna pacos/i,
+    englishTerms: ["alpaca", "Vicugna pacos"],
+  },
+  {
+    pattern: /沙門氏(?:桿)?菌|salmonella|salmonellosis/i,
+    englishTerms: [
+      "Salmonella",
+      "salmonellosis",
+      "Salmonella enterica",
+      "foodborne illness",
+    ],
+  },
+  {
+    pattern: /觸變性|thixotropy/i,
+    englishTerms: ["thixotropy", "rheology", "non-Newtonian fluid behavior"],
+  },
+  {
+    pattern: /飛地|exclave|enclave/i,
+    englishTerms: ["exclave", "enclave", "territorial discontinuity"],
+  },
+  {
+    pattern: /端粒酶|telomerase/i,
+    englishTerms: ["telomerase", "telomere biology", "cellular senescence"],
+  },
+  {
+    pattern: /榫卯|mortise and tenon/i,
+    englishTerms: ["mortise and tenon joint", "traditional joinery"],
+  },
+];
 
 const TOPIC_LEXICON: TopicLexiconEntry[] = [
   {
@@ -529,6 +573,660 @@ const TOPIC_LEXICON: TopicLexiconEntry[] = [
     ],
   },
   {
+    canonicalName: "鱈魚",
+    aliases: ["cod fish", "cod", "大西洋鱈魚"],
+    englishNames: ["cod", "Atlantic cod"],
+    scientificNames: ["Gadus morhua"],
+    category: "food",
+    domain: "food_nutrition",
+    topicKind: "known_entity",
+    matchTerms: ["鱈魚", "大西洋鱈魚", "atlantic cod", "cod fish", "gadus morhua"],
+    excludedMeanings: ["code", "coding", "codon"],
+    researchAngles: [
+      angle(
+        "營養成分",
+        "鱈魚的蛋白質、omega-3、DHA 與 EPA 營養價值",
+        "可比較魚類蛋白質、脂肪酸組成與營養攝取價值。",
+        ["鱈魚 營養成分 omega-3 DHA EPA", "鱈魚 蛋白質 魚油"],
+        [
+          "Atlantic cod nutrition omega-3 DHA EPA",
+          "cod fish protein fatty acid composition",
+          "Gadus morhua nutritional composition",
+        ],
+        FOOD_SOURCE_TYPES,
+      ),
+      angle(
+        "食品安全",
+        "鱈魚的重金屬、污染物與 seafood safety 風險",
+        "可查 mercury、heavy metals、保存與加工安全。",
+        ["鱈魚 重金屬 污染 食品安全", "鱈魚 mercury seafood safety"],
+        [
+          "cod fish heavy metals mercury seafood safety",
+          "Atlantic cod contamination food safety",
+        ],
+        FOOD_SOURCE_TYPES,
+      ),
+      angle(
+        "漁業與永續",
+        "鱈魚漁業管理、aquaculture 與 sustainable fisheries",
+        "可討論鱈魚資源、漁業管理與永續捕撈。",
+        ["鱈魚 永續漁業 漁業管理", "鱈魚 aquaculture fisheries"],
+        [
+          "Atlantic cod sustainable fisheries management",
+          "cod aquaculture fisheries policy",
+        ],
+        ["漁業研究", "海洋政策資料", "產業與永續報告"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "雞腿",
+    aliases: ["雞腿肉", "雞腿排"],
+    englishNames: ["chicken thigh", "chicken leg"],
+    category: "food",
+    domain: "food_nutrition",
+    topicKind: "known_entity",
+    matchTerms: ["雞腿", "雞腿肉", "雞腿排", "chicken thigh", "chicken leg"],
+    excludedMeanings: [
+      "breakfast cereal",
+      "maize",
+      "digital media",
+      "eye strain",
+      "plant-based protein",
+      "amino acid injection",
+    ],
+    researchAngles: [
+      angle(
+        "營養成分",
+        "雞腿肉的蛋白質、脂肪含量與熱量分析",
+        "可比較 chicken thigh 的蛋白質、脂肪與熱量差異。",
+        ["雞腿肉 營養 蛋白質 脂肪 熱量", "雞腿 chicken thigh protein fat content"],
+        [
+          "chicken thigh nutrition protein fat content",
+          "chicken leg calories protein composition",
+        ],
+        FOOD_SOURCE_TYPES,
+      ),
+      angle(
+        "食品安全",
+        "雞腿保存、烹調與 Salmonella 食品安全風險",
+        "可查 poultry、Salmonella、保存條件與熟成安全。",
+        ["雞腿 食品安全 沙門氏菌 烹調", "雞肉 poultry Salmonella food safety"],
+        [
+          "chicken thigh Salmonella food safety",
+          "poultry meat cooking storage safety",
+        ],
+        FOOD_SOURCE_TYPES,
+      ),
+      angle(
+        "烹調與攝取",
+        "雞腿烹調方式如何影響脂肪與食用品質",
+        "可比較烘烤、油炸、去皮與調味對營養與感官品質的影響。",
+        ["雞腿 烹調方式 脂肪 食用品質", "雞腿 去皮 油炸 烘烤"],
+        [
+          "chicken thigh cooking method fat content",
+          "poultry meat sensory quality cooking",
+        ],
+        ["食品科學研究", "營養資料", "食品安全研究"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "手機",
+    aliases: ["智慧型手機", "行動電話", "手機裝置"],
+    englishNames: ["smartphone", "mobile phone", "cell phone"],
+    category: "product",
+    domain: "social_science",
+    topicKind: "known_entity",
+    matchTerms: ["手機", "智慧型手機", "行動電話", "smartphone", "mobile phone", "cell phone"],
+    excludedMeanings: ["mobile app company", "smartphone case brand", "telecom stock ticker"],
+    researchAngles: [
+      angle(
+        "使用與睡眠",
+        "手機使用時間、螢幕暴露與青少年睡眠品質之關係",
+        "可查睡眠品質、螢幕時間、藍光暴露與青少年行為研究。",
+        ["手機使用 睡眠品質 青少年", "智慧型手機 螢幕時間 睡眠"],
+        ["smartphone use sleep quality adolescents", "screen time smartphone sleep students"],
+        ["公共衛生研究", "青少年行為研究", "教育與健康資料"],
+      ),
+      angle(
+        "成癮與注意力",
+        "智慧型手機成癮、通知干擾與注意力表現",
+        "可研究 problematic smartphone use、專注力、成癮量表與學習表現。",
+        ["手機成癮 注意力 學習表現", "智慧型手機 通知干擾 專注力"],
+        ["smartphone addiction attention academic performance", "problematic smartphone use notification distraction"],
+        ["心理與行為研究", "教育研究", "系統性回顧"],
+      ),
+      angle(
+        "交通與安全",
+        "駕駛或步行時使用手機對交通安全的風險",
+        "可查 distracted driving、行人分心、事故風險與政策介入。",
+        ["手機 使用 交通安全 分心駕駛", "步行 使用手機 事故風險"],
+        ["mobile phone use traffic safety distracted driving", "smartphone pedestrian distraction injury risk"],
+        ["交通安全研究", "政府事故資料", "政策報告"],
+      ),
+      angle(
+        "教育應用",
+        "手機作為學習工具時對課堂互動與學習成效的影響",
+        "可比較行動學習、課堂互動、學業成就與教學策略。",
+        ["手機 行動學習 課堂互動 學習成效", "智慧型手機 教學 工具 學業表現"],
+        ["smartphone mobile learning classroom engagement", "smartphone educational tool learning outcomes"],
+        ["教育科技研究", "教學實驗", "學習成效研究"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "蛤蜊",
+    aliases: ["文蛤", "蜊仔", "雙殼貝"],
+    englishNames: ["clam", "hard clam", "bivalve"],
+    scientificNames: ["Meretrix lusoria", "Meretrix meretrix"],
+    category: "food",
+    domain: "food_nutrition",
+    topicKind: "known_entity",
+    matchTerms: ["蛤蜊", "文蛤", "clam", "hard clam", "bivalve", "meretrix"],
+    excludedMeanings: ["clam shell craft", "shell command", "shell script"],
+    researchAngles: [
+      angle(
+        "生態棲地",
+        "蛤蜊的潮間帶棲地、生長條件與水質關係",
+        "可查雙殼貝生態、養殖水質、底質與潮間帶研究。",
+        ["蛤蜊 生態 棲地 水質", "文蛤 潮間帶 底質 生長"],
+        ["clam habitat ecology water quality", "hard clam bivalve growth sediment"],
+        ["海洋生態研究", "水產養殖資料", "政府或機構資料"],
+      ),
+      angle(
+        "食用安全",
+        "蛤蜊食用安全、貝毒、重金屬與微生物風險",
+        "可查 shellfish safety、biotoxins、重金屬與衛生標準。",
+        ["蛤蜊 食用安全 貝毒 重金屬", "文蛤 微生物 食品安全"],
+        ["clam shellfish safety biotoxins heavy metals", "bivalve microbial food safety"],
+        FOOD_SOURCE_TYPES,
+      ),
+      angle(
+        "養殖管理",
+        "蛤蜊養殖管理、產地環境與永續漁業",
+        "可比較養殖密度、水質監測、病害與產銷資料。",
+        ["蛤蜊 養殖 管理 產地", "文蛤 養殖 水質 病害"],
+        ["hard clam aquaculture management water quality", "clam fisheries sustainability"],
+        ["水產養殖研究", "漁業統計", "產業資料"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "烏龜",
+    aliases: ["海龜", "陸龜", "龜類"],
+    englishNames: ["turtle", "tortoise", "chelonian"],
+    scientificNames: ["Testudines"],
+    category: "animal",
+    domain: "biology",
+    topicKind: "known_entity",
+    matchTerms: ["烏龜", "海龜", "陸龜", "龜類", "turtle", "tortoise", "chelonian", "testudines"],
+    excludedMeanings: ["Teenage Mutant Ninja Turtles", "turtle trading", "logo turtle"],
+    researchAngles: [
+      angle(
+        "棲地保育",
+        "烏龜棲地需求、族群監測與保育管理",
+        "可查濕地、河口、海岸棲地與保育監測資料。",
+        ["烏龜 棲地 保育 族群", "海龜 棲地 監測"],
+        ["turtle habitat conservation population monitoring", "sea turtle habitat management"],
+        ["生態研究", "保育報告", "政府或機構資料"],
+      ),
+      angle(
+        "外來種影響",
+        "外來龜種對本土烏龜族群與棲地的影響",
+        "可研究巴西龜、競爭關係、疾病傳播與放生問題。",
+        ["外來種 烏龜 巴西龜 本土生態", "龜類 競爭 疾病 放生"],
+        ["invasive turtle red-eared slider native turtle impact", "turtle competition disease transmission"],
+        ["生態保育研究", "野生動物管理", "環境教育資料"],
+      ),
+      angle(
+        "污染與生存",
+        "塑膠污染、漁業活動與人為干擾對烏龜生存的影響",
+        "可查塑膠攝食、纏繞、道路死亡與保育措施。",
+        ["烏龜 塑膠污染 人為干擾", "海龜 漁業 纏繞 攝食"],
+        ["turtle plastic pollution human disturbance", "sea turtle fisheries entanglement ingestion"],
+        ["海洋保育研究", "野生動物保護資料", "風險評估"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "無尾熊",
+    aliases: ["樹袋熊", "考拉"],
+    englishNames: ["koala"],
+    scientificNames: ["Phascolarctos cinereus"],
+    category: "animal",
+    domain: "biology",
+    topicKind: "known_entity",
+    matchTerms: ["無尾熊", "樹袋熊", "考拉", "koala", "phascolarctos cinereus"],
+    excludedMeanings: ["koala mattress", "toy koala", "cartoon koala"],
+    researchAngles: [
+      angle(
+        "棲地保育",
+        "無尾熊的桉樹棲地流失與保育策略",
+        "可查棲地破碎化、土地利用、保護區與復育政策。",
+        ["無尾熊 棲地 保育 桉樹", "樹袋熊 棲地破碎化"],
+        ["koala habitat conservation eucalyptus fragmentation", "Phascolarctos cinereus habitat loss"],
+        ["保育研究", "政府或機構資料", "生態監測"],
+      ),
+      angle(
+        "族群威脅",
+        "疾病、野火與道路事故對無尾熊族群的影響",
+        "可查 chlamydia、bushfire、road mortality 與族群趨勢。",
+        ["無尾熊 疾病 野火 道路 族群", "樹袋熊 chlamydia 保育"],
+        ["koala chlamydia bushfire road mortality population", "koala population threats conservation"],
+        ["獸醫研究", "保育報告", "族群調查"],
+      ),
+      angle(
+        "保育治理",
+        "無尾熊保育政策、社區參與與棲地連通性",
+        "可比較政策工具、土地管理、保育廊道與社區保育。",
+        ["無尾熊 保育政策 棲地連通性", "樹袋熊 社區保育 土地管理"],
+        ["koala conservation policy habitat connectivity", "koala corridor community conservation"],
+        ["政策報告", "保育機構資料", "環境治理研究"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "飛機",
+    aliases: ["飛航器", "固定翼飛機", "客機"],
+    englishNames: ["airplane", "aircraft", "aeroplane", "fixed-wing aircraft"],
+    category: "technology",
+    domain: "technology",
+    topicKind: "known_entity",
+    matchTerms: [
+      "飛機",
+      "飛航器",
+      "固定翼飛機",
+      "客機",
+      "airplane",
+      "aircraft",
+      "aeroplane",
+      "fixed-wing aircraft",
+    ],
+    excludedMeanings: ["airplane mode", "paper airplane", "paper plane", "飛航模式", "紙飛機"],
+    researchAngles: [
+      angle(
+        "機械與結構",
+        "飛機的機翼、機身結構與升力控制原理",
+        "可研究翼型、機身受力、控制面與飛行穩定的工程基礎。",
+        ["飛機 機翼 機身 結構 升力", "飛機 控制面 飛行穩定"],
+        ["aircraft wing fuselage structure lift", "airplane control surfaces flight stability"],
+        ["航太工程研究", "飛行力學教材", "工程白皮書"],
+      ),
+      angle(
+        "航空運作",
+        "飛機在民航、貨運與飛航安全中的運作機制",
+        "可查航線調度、機隊管理、飛安制度與機場協調流程。",
+        ["飛機 民航 貨運 飛航安全", "機隊管理 航線 調度"],
+        ["aircraft civil aviation cargo flight safety", "fleet management flight operations scheduling"],
+        ["民航資料", "飛安報告", "運輸管理研究"],
+      ),
+      angle(
+        "設計與建造",
+        "飛機的設計、材料選擇與製造組裝流程",
+        "可研究鋁合金、複合材料、機體製造、總裝與維修工程。",
+        ["飛機 設計 材料 製造 組裝", "飛機 建造 維修 工程"],
+        ["aircraft design materials manufacturing assembly", "airplane construction maintenance engineering"],
+        ["航太製造資料", "材料工程研究", "產業技術報告"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "直升機",
+    aliases: ["旋翼機", "直升飛機"],
+    englishNames: ["helicopter", "rotorcraft"],
+    category: "technology",
+    domain: "technology",
+    topicKind: "known_entity",
+    matchTerms: ["直升機", "旋翼機", "直升飛機", "helicopter", "rotorcraft"],
+    excludedMeanings: ["helicopter parenting", "helicopter money"],
+    researchAngles: [
+      angle(
+        "空氣動力學",
+        "直升機旋翼空氣動力學、升力控制與飛行穩定性",
+        "可查旋翼設計、升力、扭矩平衡與飛行控制原理。",
+        ["直升機 空氣動力學 旋翼 升力", "直升機 飛行穩定 控制"],
+        ["helicopter aerodynamics rotor lift stability", "rotorcraft flight control dynamics"],
+        ["航太工程研究", "飛行力學教材", "技術白皮書"],
+      ),
+      angle(
+        "救護應用",
+        "直升機救護、緊急醫療與災害救援應用成效",
+        "可研究 air ambulance、救援時效、偏遠地區醫療與任務限制。",
+        ["直升機 救護 緊急醫療 救援", "空中救護 災害 效益"],
+        ["helicopter emergency medical service outcomes", "air ambulance disaster rescue effectiveness"],
+        ["醫療系統研究", "政府或機構資料", "公共安全報告"],
+      ),
+      angle(
+        "風險與噪音",
+        "直升機事故風險、安全管理與噪音污染問題",
+        "可查事故調查、維修管理、飛安制度與社區噪音影響。",
+        ["直升機 事故 風險 安全管理", "直升機 噪音污染 社區"],
+        ["helicopter accident risk safety management", "helicopter noise pollution community impact"],
+        ["飛安報告", "交通安全研究", "環境噪音資料"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "陀螺",
+    aliases: ["陀螺儀", "旋轉陀螺"],
+    englishNames: ["spinning top", "gyroscope", "gyroscopic toy"],
+    category: "technology",
+    domain: "technology",
+    topicKind: "ambiguous",
+    matchTerms: [
+      "陀螺",
+      "陀螺儀",
+      "旋轉陀螺",
+      "spinning top",
+      "gyroscope",
+      "gyroscopic toy",
+    ],
+    excludedMeanings: ["top 10", "ranking", "置頂", "排行"],
+    researchAngles: [
+      angle(
+        "旋轉力學",
+        "陀螺的角動量、扭矩與旋轉穩定性原理",
+        "可研究角動量守恆、進動、摩擦與重心配置對穩定性的影響。",
+        ["陀螺 角動量 扭矩 旋轉穩定性", "陀螺 進動 旋轉力學 物理"],
+        [
+          "spinning top angular momentum",
+          "gyroscopic stability torque",
+          "rotational dynamics spinning top",
+          "precession of spinning top physics",
+        ],
+        ["物理研究", "力學教材", "實驗資料"],
+      ),
+      angle(
+        "感測與導航",
+        "陀螺儀在手機、無人機與導航系統中的姿態感測應用",
+        "可查 MEMS gyroscope、姿態估測、飛行控制與慣性導航。",
+        ["陀螺儀 感測器 導航 姿態控制", "MEMS 陀螺儀 手機 無人機"],
+        ["gyroscope sensor navigation attitude control", "MEMS gyroscope smartphone drone"],
+        ["感測器工程研究", "導航技術資料", "電子工程報告"],
+      ),
+      angle(
+        "設計與製作",
+        "陀螺的材料、平衡設計與 STEM 製作教學",
+        "可比較木質、塑膠、金屬陀螺在慣量、耐用度與教學展示上的差異。",
+        ["陀螺 材料 平衡 設計", "陀螺 製作 STEM 教學"],
+        ["spinning top material balance design", "spinning top STEM teaching prototype"],
+        ["材料設計研究", "教育實作資料", "STEM 教案"],
+      ),
+      angle(
+        "文化與遊戲",
+        "陀螺在民俗遊戲、兒童活動與文化傳承中的角色",
+        "可研究地方遊戲、競技形式、教具化與跨世代文化記憶。",
+        ["陀螺 民俗遊戲 文化", "陀螺 兒童活動 傳統玩具"],
+        ["spinning top folk game cultural heritage", "traditional spinning top children's play"],
+        ["文化研究", "教育活動資料", "民俗紀錄"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "微塑膠",
+    aliases: ["塑膠微粒", "塑膠污染"],
+    englishNames: ["microplastics", "microplastic", "plastic pollution"],
+    category: "social_issue",
+    domain: "environment",
+    topicKind: "known_entity",
+    matchTerms: ["微塑膠", "塑膠微粒", "塑膠污染", "microplastic", "microplastics", "plastic pollution"],
+    excludedMeanings: ["software plastic", "plastic surgery"],
+    researchAngles: [
+      angle(
+        "海洋生態",
+        "微塑膠對海洋生物攝食、毒性與生態功能的影響",
+        "可查海洋污染、生態毒理與海洋生物研究。",
+        ["微塑膠 海洋生物 攝食 毒性", "塑膠微粒 海洋生態 影響"],
+        ["microplastics marine organisms ingestion toxicity", "microplastics marine ecosystem ecological effects"],
+        ["生態毒理研究", "系統性回顧", "海洋污染資料"],
+      ),
+      angle(
+        "食物網累積",
+        "微塑膠在海洋食物網中的傳遞與生物累積風險",
+        "可查 food web、bioaccumulation、沉積物與沿岸生態系。",
+        ["微塑膠 海洋 食物網 生物累積", "塑膠污染 海洋 生態風險"],
+        ["microplastics marine food web bioaccumulation", "plastic pollution ecological risk marine"],
+        ["風險評估", "海洋生態研究", "綜述論文"],
+      ),
+      angle(
+        "監測治理",
+        "海洋微塑膠的來源監測、採樣方法與減量政策",
+        "可比較採樣方法、污水、漁業、包裝與治理策略。",
+        ["微塑膠 來源 監測 採樣 政策", "海洋塑膠污染 減量 治理"],
+        ["marine microplastics monitoring sampling policy", "plastic pollution mitigation governance"],
+        ["政府或機構資料", "環境監測", "政策報告"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "台灣半導體供應鏈",
+    aliases: ["台灣晶片供應鏈", "台灣半導體產業鏈", "台積電供應鏈"],
+    englishNames: ["Taiwan semiconductor supply chain", "Taiwan chip supply chain", "TSMC supply chain"],
+    category: "technology",
+    domain: "technology",
+    topicKind: "specific_research_topic",
+    matchTerms: ["台灣半導體供應鏈", "台灣 半導體 供應鏈", "台灣晶片供應鏈", "台積電供應鏈", "taiwan semiconductor supply chain", "tsmc supply chain"],
+    excludedMeanings: ["potato chips", "computer chips as snack pun"],
+    researchAngles: [
+      angle(
+        "產業分工",
+        "台灣半導體供應鏈中的晶圓代工、封測與設備材料分工",
+        "可查產業報告、企業年報、政府統計與上下游資料。",
+        ["台灣 半導體 供應鏈 晶圓代工 封測", "台積電 供應鏈 設備 材料"],
+        ["Taiwan semiconductor supply chain foundry packaging testing materials", "TSMC supply chain equipment materials"],
+        ["產業報告", "企業年報", "政府統計"],
+      ),
+      angle(
+        "供應鏈韌性",
+        "地緣政治與出口管制下台灣半導體供應鏈韌性",
+        "可查美中科技管制、供應鏈重組、地緣風險與政策報告。",
+        ["台灣 半導體 供應鏈 韌性 地緣政治", "半導體 出口管制 台灣 風險"],
+        ["Taiwan semiconductor supply chain resilience geopolitics", "semiconductor export controls Taiwan supply chain risk"],
+        ["政策報告", "國際機構資料", "產業分析"],
+      ),
+      angle(
+        "技術瓶頸",
+        "先進製程、封裝與關鍵材料對台灣半導體供應鏈的影響",
+        "可比較先進製程、CoWoS、EUV、材料與設備瓶頸。",
+        ["台灣 半導體 先進製程 封裝 EUV", "CoWoS 供應鏈 台灣 半導體"],
+        ["Taiwan semiconductor advanced process packaging EUV", "CoWoS supply chain Taiwan semiconductor"],
+        ["技術白皮書", "產業分析", "企業資料"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "鱷魚",
+    aliases: ["鱷", "短吻鱷"],
+    englishNames: ["crocodile", "alligator", "crocodilian"],
+    category: "animal",
+    domain: "biology",
+    topicKind: "known_entity",
+    matchTerms: ["鱷魚", "短吻鱷", "crocodile", "alligator", "crocodilian"],
+    excludedMeanings: ["crocodile brand", "crocodile leather fashion"],
+    researchAngles: [
+      angle(
+        "棲地與分布",
+        "鱷魚的濕地棲地、分布與生態角色",
+        "可查濕地生態、族群分布、食物鏈與保育資料。",
+        ["鱷魚 棲地 濕地 分布", "鱷魚 生態 食物鏈"],
+        ["crocodile wetland habitat distribution ecology", "crocodilian ecological role"],
+        ["生態研究", "自然史資料", "保育報告"],
+      ),
+      angle(
+        "人鱷衝突",
+        "人類活動、棲地縮減與人鱷衝突管理",
+        "可查土地利用、攻擊事件、防治策略與社區管理。",
+        ["鱷魚 人類衝突 棲地 管理", "鱷魚 保育 人為干擾"],
+        ["human crocodile conflict habitat management", "crocodile conservation human impact"],
+        ["政府或機構資料", "保育研究", "風險管理案例"],
+      ),
+      angle(
+        "保育與利用",
+        "鱷魚保育、養殖利用與野生族群管理",
+        "可比較保育法規、養殖、皮革利用與族群監測。",
+        ["鱷魚 保育 養殖 野生族群", "短吻鱷 保育 管理"],
+        ["crocodile conservation farming wild population management", "alligator conservation management"],
+        ["保育政策", "產業資料", "動物管理研究"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "恐龍",
+    aliases: ["非鳥類恐龍"],
+    englishNames: ["dinosaur", "non-avian dinosaur"],
+    category: "animal",
+    domain: "biology",
+    topicKind: "known_entity",
+    matchTerms: ["恐龍", "非鳥類恐龍", "dinosaur", "non-avian dinosaur"],
+    researchAngles: [
+      angle(
+        "化石與時代",
+        "恐龍的化石紀錄與中生代演化脈絡",
+        "可研究 Jurassic、Cretaceous 與 fossil record。",
+        ["恐龍 化石紀錄 中生代 侏羅紀 白堊紀", "恐龍 fossil record Mesozoic"],
+        [
+          "dinosaur fossil record Mesozoic",
+          "Jurassic Cretaceous dinosaur paleontology",
+        ],
+        ["古生物學研究", "自然史資料", "科普與教科書資料"],
+      ),
+      angle(
+        "滅絕機制",
+        "恐龍滅絕與小行星撞擊、環境變遷假說",
+        "可比較小行星撞擊、火山活動與氣候變遷證據。",
+        ["恐龍 滅絕 小行星撞擊 白堊紀末", "恐龍 滅絕 假說 環境變遷"],
+        [
+          "dinosaur extinction asteroid impact Cretaceous",
+          "non-avian dinosaur extinction hypothesis",
+        ],
+        ["古生物學研究", "地球科學資料", "綜述論文"],
+      ),
+      angle(
+        "鳥類演化",
+        "恐龍與鳥類演化的關係",
+        "可研究羽毛、骨骼與非鳥類恐龍到鳥類的演化證據。",
+        ["恐龍 鳥類演化 羽毛 化石", "非鳥類恐龍 鳥類 關係"],
+        [
+          "dinosaur bird evolution feather fossils",
+          "non-avian dinosaur avian evolution",
+        ],
+        ["演化生物學研究", "古生物學論文", "自然史資料"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "唐吉訶德",
+    aliases: ["唐吉柯德", "《唐吉訶德》"],
+    englishNames: ["Don Quixote"],
+    category: "historical_concept",
+    domain: "history_culture",
+    topicKind: "cultural_artifact",
+    matchTerms: ["唐吉訶德", "唐吉柯德", "don quixote"],
+    excludedMeanings: ["cod", "fish", "nutrition", "DHA", "EPA", "fatty acid", "seafood"],
+    researchAngles: [
+      angle(
+        "文本分析",
+        "《唐吉訶德》的文本分析與敘事特色",
+        "可研究小說結構、人物塑造與文本中的現實／幻想張力。",
+        ["唐吉訶德 文本分析 小說 敘事", "唐吉柯德 文本分析"],
+        [
+          "Don Quixote textual analysis",
+          "Don Quixote narrative structure novel analysis",
+        ],
+        ["文學研究", "專書", "期刊論文"],
+      ),
+      angle(
+        "諷刺與主題",
+        "塞萬提斯如何透過《唐吉訶德》諷刺騎士小說並呈現理想與現實衝突",
+        "可從騎士小說諷刺、人物理想與社會現實對照切入。",
+        ["唐吉訶德 騎士小說 諷刺 理想 現實", "塞萬提斯 唐吉訶德 主題"],
+        [
+          "Cervantes Don Quixote chivalric romance satire",
+          "Don Quixote idealism reality conflict",
+        ],
+        ["文學研究", "比較文學", "文化史資料"],
+      ),
+      angle(
+        "文學史地位",
+        "《唐吉訶德》在西班牙黃金時代文學與小說史中的地位",
+        "可討論西班牙黃金時代、現代小說起源與文學史影響。",
+        ["唐吉訶德 文學史 西班牙黃金時代", "唐吉訶德 現代小說 起源"],
+        [
+          "Don Quixote Spanish Golden Age literature",
+          "Cervantes modern novel literary history",
+        ],
+        ["文學史研究", "專書", "文化研究"],
+      ),
+    ],
+  },
+  {
+    canonicalName: "Salmonella food poisoning",
+    aliases: ["沙門氏菌食物中毒", "沙門氏菌感染", "沙門氏菌症"],
+    englishNames: [
+      "Salmonella",
+      "salmonellosis",
+      "Salmonella foodborne illness",
+      "non-typhoidal Salmonella",
+    ],
+    scientificNames: ["Salmonella enterica"],
+    category: "disease",
+    domain: "health",
+    topicKind: "specific_research_topic",
+    matchTerms: [
+      "salmonella food poisoning",
+      "salmonella foodborne illness",
+      "salmonellosis",
+      "salmonella infection",
+      "non-typhoidal salmonella",
+      "沙門氏菌食物中毒",
+      "沙門氏菌 感染",
+      "沙門氏菌症",
+    ],
+    excludedMeanings: [
+      "egg nutrition",
+      "egg white",
+      "egg yolk",
+      "protein content",
+      "dietary culture",
+    ],
+    researchAngles: [
+      angle(
+        "致病與症狀",
+        "Salmonella 食物中毒的感染途徑、症狀與高風險族群",
+        "可查 CDC、WHO、公共衛生監測與流行病學資料。",
+        ["沙門氏菌 食物中毒 感染途徑 症狀", "沙門氏菌症 高風險族群"],
+        [
+          "Salmonella food poisoning symptoms transmission",
+          "salmonellosis risk groups foodborne illness",
+        ],
+        FOODBORNE_SOURCE_TYPES,
+      ),
+      angle(
+        "食品污染來源",
+        "Salmonella 在家禽、蛋品與加工食品中的污染來源與風險控制",
+        "可研究 poultry、eggs、meat、交叉污染與食品安全標準。",
+        ["沙門氏菌 家禽 蛋品 食品污染", "沙門氏菌 食品安全 交叉污染"],
+        [
+          "Salmonella poultry eggs food contamination",
+          "Salmonella food safety cross contamination prevention",
+        ],
+        FOODBORNE_SOURCE_TYPES,
+      ),
+      angle(
+        "預防與監測",
+        "Salmonella 食源性疾病的預防、爆發調查與公共衛生監測",
+        "可查 outbreak investigation、監測資料、烹調保存與政策建議。",
+        ["沙門氏菌 爆發調查 預防 監測", "沙門氏菌 食源性疾病 公共衛生"],
+        [
+          "Salmonella outbreak investigation surveillance prevention",
+          "salmonellosis foodborne disease public health monitoring",
+        ],
+        FOODBORNE_SOURCE_TYPES,
+      ),
+    ],
+  },
+  {
     canonicalName: "雞蛋",
     aliases: ["蛋", "雞蛋產品", "蛋品"],
     englishNames: ["egg", "chicken egg", "hen egg"],
@@ -606,12 +1304,152 @@ function hasSpecificResearchCue(topic: string): boolean {
   );
 }
 
+function topicDetailTokens(topic: string): string[] {
+  return unique(
+    topic
+      .split(/[\s，,。；;：:、！？!?（）()「」"'`]+|的|與|和|及|在|中|之|用|對|或/g)
+      .map((term) => term.trim())
+      .filter((term) => {
+        if (!term) return false;
+        if (/^[A-Za-z]+$/.test(term)) return term.length >= 3;
+        return Array.from(term).length >= 2;
+      }),
+  );
+}
+
+function entryBaseTerms(entry: TopicLexiconEntry): string[] {
+  return unique([
+    entry.canonicalName,
+    ...entry.aliases,
+    ...entry.englishNames,
+    ...(entry.scientificNames ?? []),
+  ]);
+}
+
+function detailTopicForEntry(
+  topic: string,
+  entry: TopicLexiconEntry,
+): string {
+  const stripped = entryBaseTerms(entry).reduce((current, term) => {
+    if (!term) return current;
+    if (/[A-Za-z]/.test(term)) {
+      const escaped = normalizeAscii(term).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return normalizeAscii(current).replace(new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`, "gi"), " ");
+    }
+    return current.split(term).join(" ");
+  }, topic);
+  return normalizeTopicText(stripped.replace(/[，,。；;：:、]/g, " "));
+}
+
+function isSpecificResearchTopicForEntry(
+  topic: string,
+  entry: TopicLexiconEntry,
+): boolean {
+  if (hasSpecificResearchCue(topic)) return true;
+  const detailTopic = detailTopicForEntry(topic, entry);
+  if (!detailTopic) return false;
+  if (normalizeTopicText(detailTopic) === normalizeTopicText(topic)) return false;
+  return topicDetailTokens(detailTopic).length >= 2 || Array.from(detailTopic).length >= 6;
+}
+
+function scoreResearchAngleForTopic(
+  topic: string,
+  angle: TopicResearchAngle,
+): number {
+  const normalizedTopic = normalizeTopicText(topic);
+  const normalizedQuestion = normalizeTopicText(angle.researchQuestion);
+  if (normalizedTopic === normalizedQuestion) {
+    return 10_000;
+  }
+
+  const topicTokens = topicDetailTokens(normalizedTopic);
+  const angleText = [
+    angle.label,
+    angle.researchQuestion,
+    angle.whyResearchable,
+    ...angle.zhQueries,
+    ...angle.enQueries,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  let score = 0;
+  for (const token of topicTokens) {
+    const normalizedToken = token.toLowerCase();
+    if (angleText.includes(normalizedToken)) {
+      score += /[A-Za-z]/.test(token) ? 2 : 3;
+    }
+  }
+  if (
+    normalizedQuestion.includes(normalizedTopic) ||
+    normalizedTopic.includes(normalizedQuestion)
+  ) {
+    score += 50;
+  }
+  return score;
+}
+
+function focusedResearchAnglesForEntry(
+  topic: string,
+  entry: TopicLexiconEntry,
+): TopicResearchAngle[] {
+  const rankedAngles = entry.researchAngles
+    .map((researchAngle) => ({
+      researchAngle,
+      score: scoreResearchAngleForTopic(topic, researchAngle),
+    }))
+    .sort((left, right) => right.score - left.score);
+
+  const bestScore = rankedAngles[0]?.score ?? 0;
+  if (bestScore <= 0) {
+    return entry.researchAngles;
+  }
+  if (bestScore >= 10_000) {
+    return [rankedAngles[0]!.researchAngle];
+  }
+  return rankedAngles
+    .filter((item, index) => item.score > 0 && (index === 0 || item.score >= bestScore - 2))
+    .slice(0, 2)
+    .map((item) => item.researchAngle);
+}
+
+function englishHintTerms(topic: string): string[] {
+  const normalized = normalizeTopicText(topic);
+  if (!normalized) return [];
+  const hints = ENGLISH_TOPIC_HINTS.flatMap((hint) =>
+    hint.pattern.test(normalized) ? hint.englishTerms : [],
+  );
+  return unique(hints);
+}
+
 function isUnknownOrNoise(topic: string): boolean {
   const normalized = normalizeTopicText(topic);
   if (!normalized) return true;
   if (/^[^A-Za-z\u3400-\u9fff0-9]+$/.test(normalized)) return true;
   if (Array.from(normalized).length <= 1 && !/[A-Za-z]{2,}/.test(normalized))
     return true;
+  const normalizedAscii = normalizeAscii(normalized);
+  if (
+    /^(ai|dna|rna|co2|pm2\.5|5g|gpt\d*|python\d*)$/i.test(normalizedAscii)
+  ) {
+    return false;
+  }
+  if (
+    /^[a-z0-9]+$/.test(normalizedAscii) &&
+    /[a-z]/.test(normalizedAscii) &&
+    /\d/.test(normalizedAscii) &&
+    normalizedAscii.length >= 6
+  ) {
+    return true;
+  }
+  if (/^[a-z]{6,10}$/i.test(normalizedAscii)) {
+    const repeatedChunk = /(..).*\1/i.test(normalizedAscii);
+    const hardEnding = /[bcdfghjklmnpqrstvwxyz]{2}$/i.test(normalizedAscii);
+    const uncommonCluster = /(wc|cb|qb|qg|qk|qv|vx|xq|zx)/i.test(normalizedAscii);
+    if (hardEnding && (repeatedChunk || uncommonCluster)) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -669,17 +1507,46 @@ function isLikelyBroadCommonNoun(topic: string): boolean {
 
 function patternDomain(topic: string): TopicDomain {
   const text = `${topic} ${normalizeAscii(topic)}`;
+  if (/thixotropy|rheology|non-newtonian fluid/.test(text))
+    return "materials_design";
+  if (/exclave|enclave|territorial discontinuity|border geography/.test(text))
+    return "history_culture";
+  if (/telomerase|telomere|cellular senescence/.test(text))
+    return "health";
+  if (/唐吉訶德|唐吉柯德|quixote|cervantes|文學|小說|literature|novel|spanish golden age/.test(text))
+    return "history_culture";
+  if (/恐龍|dinosaur|paleontology|fossil|jurassic|cretaceous|中生代|古生物|化石/.test(text))
+    return "biology";
+  if (/羊駝|alpaca|camelid|vicugna pacos|駱馬/.test(text))
+    return "animal_science";
+  if (/無尾熊|樹袋熊|koala|phascolarctos|蛤蜊|文蛤|clam|bivalve|鱷魚|crocodile|alligator|烏龜|海龜|陸龜|turtle|tortoise|chelonian|testudines/.test(text))
+    return "biology";
+  if (/手機|智慧型手機|行動電話|smartphone|mobile phone|cell phone|screen time/.test(text))
+    return "social_science";
+  if (/微塑膠|塑膠微粒|塑膠污染|microplastic|microplastics|plastic pollution/.test(text))
+    return "environment";
+  if (/salmonella|salmonellosis|foodborne|food poisoning|pathogen|infection|outbreak|沙門氏(?:桿)?菌|食物中毒|食源性疾病/.test(text))
+    return "health";
+  if (/半導體|晶圓|晶片|台積電|供應鏈|semiconductor|foundry|tsmc|wafer|chip supply chain/.test(text))
+    return "technology";
+  if (/飛機|飛航器|固定翼飛機|客機|airplane|aircraft|aeroplane|aviation|直升機|旋翼機|直升飛機|helicopter|rotorcraft|air ambulance/.test(text))
+    return "technology";
   if (/車|汽車|電動車|品牌|市場|競爭|brand|automotive|vehicle|car/.test(text))
+    return "automotive_business";
+  if (/賓士|mercedes|benz|bmw|寶馬|寶士|audi|tesla|汽車品牌/.test(text))
     return "automotive_business";
   if (/吉他|音樂|樂器|guitar|music|instrument/.test(text))
     return "music_culture";
   if (/水壺|水瓶|保溫瓶|bottle|kettle/.test(text))
     return "household_safety";
-  if (/蛋|雞蛋|營養|食品|食物|飲食|egg|food|nutrition/.test(text))
+  if (/蛋|雞蛋|雞腿|雞肉|鱈魚|營養|食品|食物|飲食|egg|food|nutrition|chicken thigh|chicken leg|poultry|cod|atlantic cod|gadus morhua/.test(text))
+    return "food_nutrition";
+  if (/青椒|甜椒|辣椒|花椒|青花椒|pepper|chili|capsicum|bell pepper/.test(text))
     return "food_nutrition";
   if (/動物|生態|animal|ecology|biology/.test(text)) return "biology";
   if (/健康|醫學|疾病|health|medical|disease/.test(text)) return "health";
-  if (/科技|ai|演算法|technology|software/.test(text)) return "technology";
+  if (/科技|ai|演算法|technology|software|火箭|rocket|propulsion|aerospace/.test(text))
+    return "technology";
   if (/環境|永續|氣候|environment|climate|sustainability/.test(text))
     return "environment";
   if (/歷史|文化|社會|history|culture|social/.test(text))
@@ -687,10 +1554,89 @@ function patternDomain(topic: string): TopicDomain {
   return "general_research";
 }
 
-function genericAngles(topic: string, domain: TopicDomain): TopicResearchAngle[] {
+function applyCanonicalEnglishTopic(
+  angles: TopicResearchAngle[],
+  zhTopic: string,
+  canonicalEnglishTopic: string,
+): TopicResearchAngle[] {
+  if (!canonicalEnglishTopic || !/[A-Za-z]/.test(canonicalEnglishTopic)) {
+    return angles;
+  }
+  return angles.map((angle) => ({
+    ...angle,
+    enQueries: angle.enQueries.map((query) =>
+      query.includes(zhTopic) ? query.split(zhTopic).join(canonicalEnglishTopic) : query,
+    ),
+  }));
+}
+
+function compactEnglishConcepts(queries: string[]): string[] {
+  const lowWeight = new Set([
+    "definition",
+    "scope",
+    "evidence",
+    "research",
+    "case",
+    "study",
+    "dataset",
+    "comparison",
+    "differences",
+    "population",
+    "time",
+    "measurable",
+    "indicators",
+    "topic",
+  ]);
+  return unique(
+    queries.flatMap((query) => {
+      const cleaned = query
+        .replace(/[^A-Za-z0-9\s-]/g, " ")
+        .split(/\s+/)
+        .map((term) => term.trim())
+        .filter((term) => term && !lowWeight.has(term.toLowerCase()));
+      if (cleaned.length === 0) return [];
+      return [cleaned.slice(0, 5).join(" ")];
+    }),
+  );
+}
+
+function canonicalEnglishTopicFor(input: {
+  normalizedTopic: string;
+  language: TopicLanguage;
+  topicKind: TopicKind;
+  englishTerms: string[];
+  scientificNames: string[];
+}): string {
+  if (input.topicKind === "unknown_or_noise") return "";
+  if (input.englishTerms.length > 0) return input.englishTerms[0]!;
+  if (input.scientificNames.length > 0) return input.scientificNames[0]!;
+  if (
+    (input.language === "en" || input.language === "mixed") &&
+    /[A-Za-z]/.test(input.normalizedTopic)
+  ) {
+    return input.normalizedTopic;
+  }
+  return "";
+}
+
+function searchQueriesFromAngles(angles: TopicResearchAngle[]): TopicQueryPlan {
+  return {
+    zh: unique(angles.flatMap((angle) => angle.zhQueries)).slice(0, 10),
+    en: unique(angles.flatMap((angle) => angle.enQueries)).slice(0, 10),
+  };
+}
+
+
+function genericAngles(
+  topic: string,
+  domain: TopicDomain,
+  canonicalEnglishTopic = "",
+): TopicResearchAngle[] {
   const t = normalizeTopicText(topic) || "研究主題";
+  const finalize = (angles: TopicResearchAngle[]): TopicResearchAngle[] =>
+    applyCanonicalEnglishTopic(angles, t, canonicalEnglishTopic);
   if (domain === "automotive_business") {
-    return [
+    return finalize([
       angle(
         "市場競爭",
         `${t}的市場定位與主要競爭者分析`,
@@ -715,10 +1661,10 @@ function genericAngles(topic: string, domain: TopicDomain): TopicResearchAngle[]
         [`${t} brand image consumer perception`, `${t} consumer preference`],
         ["消費者研究", "行銷研究", "市場資料"],
       ),
-    ];
+    ]);
   }
   if (domain === "music_culture") {
-    return [
+    return finalize([
       angle(
         "歷史脈絡",
         `${t}的發展史與文化傳播`,
@@ -743,10 +1689,38 @@ function genericAngles(topic: string, domain: TopicDomain): TopicResearchAngle[]
         [`${t} material design user experience`],
         ["材料研究", "設計研究", "使用者研究"],
       ),
-    ];
+    ]);
   }
   if (domain === "food_nutrition" || domain === "beverage_health") {
-    return [
+    if (/青椒|甜椒|辣椒|花椒|青花椒|pepper|chili|capsicum/.test(normalizeAscii(topic) + " " + topic)) {
+      return finalize([
+        angle(
+          "營養與健康",
+          `${t}的營養成分與健康影響`,
+          "可比較維生素、植化素、辛香成分與健康討論。",
+          [`${t} 營養 健康`, `${t} 成分 分析`],
+          [`${t} nutrition health effects`, `${t} ingredient analysis`],
+          FOOD_SOURCE_TYPES,
+        ),
+        angle(
+          "栽培與產地",
+          `${t}的栽培條件、產地與農業管理`,
+          "可研究氣候、病蟲害、品種與產銷。",
+          [`${t} 栽培 產地 農業管理`, `${t} 病蟲害 品種`],
+          [`${t} cultivation origin agricultural management`, `${t} pests variety`],
+          ["農業資料", "產銷資料", "作物研究"],
+        ),
+        angle(
+          "飲食文化",
+          `${t}在料理與飲食文化中的角色`,
+          "可查地方菜系、調味用途與文化差異。",
+          [`${t} 料理 飲食文化`, `${t} 川菜 地方飲食`],
+          [`${t} culinary culture cuisine role`, `${t} regional food culture`],
+          ["文化研究", "飲食研究", "地方資料"],
+        ),
+      ]);
+    }
+    return finalize([
       angle(
         "營養與健康",
         `${t}的營養成分與健康影響`,
@@ -771,10 +1745,66 @@ function genericAngles(topic: string, domain: TopicDomain): TopicResearchAngle[]
         [`${t} consumption habit food culture`, `${t} market brand`],
         ["消費者研究", "文化研究", "產業資料"],
       ),
-    ];
+    ]);
+  }
+  if (domain === "technology" && /火箭|rocket|propulsion|aerospace/.test(normalizeAscii(topic) + " " + topic)) {
+    return finalize([
+      angle(
+        "推進原理",
+        `${t}的推進原理與物理基礎`,
+        "可研究牛頓第三運動定律、推力、質量與加速度。",
+        [`${t} 推進 原理 物理`, `${t} 牛頓第三定律`],
+        [`${t} propulsion physics Newton's third law`, `${t} thrust mass acceleration`],
+        ["物理研究", "工程資料", "科普或課程資料"],
+      ),
+      angle(
+        "燃料與引擎",
+        `${t}的燃料、引擎類型與性能比較`,
+        "可比較液體、固體與混合推進系統。",
+        [`${t} 燃料 引擎 類型`, `${t} 推進系統 比較`],
+        [`${t} fuel engine type comparison`, `${t} propulsion system performance`],
+        ["工程資料", "航太研究", "產業資料"],
+      ),
+      angle(
+        "任務與產業",
+        `${t}的發射任務、軌道應用與產業競爭`,
+        "可研究太空任務、商業航太與國際競爭。",
+        [`${t} 發射 任務 軌道`, `${t} 航太 產業 競爭`],
+        [`${t} launch mission orbit aerospace industry competition`],
+        ["航太產業資料", "政策資料", "企業或機構資料"],
+      ),
+    ]);
+  }
+  if (domain === "household_safety" && /橡皮擦|eraser|rubber|橡皮/.test(normalizeAscii(topic) + " " + topic)) {
+    return finalize([
+      angle(
+        "材料與原理",
+        `${t}的材料組成與擦除原理`,
+        "可研究橡膠、聚合物與紙面摩擦作用。",
+        [`${t} 材料 組成 擦除 原理`, `${t} 物理 摩擦`],
+        [`${t} material composition erasing principle`, `${t} friction paper graphite`],
+        PRODUCT_SOURCE_TYPES,
+      ),
+      angle(
+        "產品設計",
+        `${t}的製造、產品設計與使用效果比較`,
+        "可比較不同型號與用途的差異。",
+        [`${t} 製造 設計 使用效果`, `${t} 不同類型 比較`],
+        [`${t} manufacturing design performance comparison`, `${t} eraser types comparison`],
+        ["產品研究", "材料研究", "消費者資料"],
+      ),
+      angle(
+        "環境與衛生",
+        `${t}碎屑、材料與環境影響`,
+        "可討論碎屑、塑膠材料與廢棄物。",
+        [`${t} 碎屑 環境 材料`, `${t} 廢棄物`],
+        [`${t} debris environmental impact material waste`],
+        ["環境研究", "產品生命週期", "廢棄物資料"],
+      ),
+    ]);
   }
   if (domain === "household_safety" || domain === "consumer_product") {
-    return [
+    return finalize([
       angle(
         "材料安全",
         `${t}的材質、安全標準與使用風險`,
@@ -799,34 +1829,239 @@ function genericAngles(topic: string, domain: TopicDomain): TopicResearchAngle[]
         [`${t} life cycle assessment environmental impact recycling`],
         ["生命週期評估", "環境研究", "回收資料"],
       ),
-    ];
+    ]);
   }
-  return [
+  if (domain === "materials_design") {
+    if (/觸變性|thixotropy|rheology|non-newtonian fluid/.test(normalizeAscii(topic) + " " + topic)) {
+      return finalize([
+        angle(
+          "流變機制",
+          `${t}在剪切、靜置與微觀結構重組下的流變機制`,
+          "可研究剪切變稀、結構破壞與恢復時間，建立材料行為模型。",
+          [`${t} 流變 剪切變稀 結構重組`, `${t} 黏度 恢復 微觀結構`],
+          [
+            `${t} rheology shear thinning microstructure rebuilding`,
+            `${t} viscosity recovery structural breakdown`,
+          ],
+          ["流變研究", "材料科學論文", "工程測試資料"],
+        ),
+        angle(
+          "量測方法",
+          `${t}如何用流變儀、滯回曲線與可重現指標量測`,
+          "可比較黏度回復、剪切循環、觸變環面積與測試條件設計。",
+          [`${t} 流變儀 量測 指標`, `${t} 剪切循環 滯回曲線`],
+          [
+            `${t} rheometer measurement hysteresis loop`,
+            `${t} shear cycle test measurable indicators`,
+          ],
+          ["實驗方法論文", "儀器手冊", "工程標準"],
+        ),
+        angle(
+          "配方應用",
+          `${t}在塗料、膠體、3D 列印漿料或藥膏配方中的應用`,
+          "可研究添加劑、分散系統與製程條件如何影響施工性與穩定性。",
+          [`${t} 塗料 膠體 3D列印漿料`, `${t} 添加劑 配方 穩定性`],
+          [
+            `${t} coatings colloids 3D printing paste`,
+            `${t} formulation additives stability application`,
+          ],
+          ["材料應用研究", "產業技術資料", "配方工程研究"],
+        ),
+      ]);
+    }
+    return finalize([
+      angle(
+        "材料機制",
+        `${t}的材料特性、微觀結構與形成機制`,
+        "可查材料結構、加工條件與性能形成原因。",
+        [`${t} 材料特性 微觀結構 機制`, `${t} 加工條件 性能`],
+        [`${t} material properties microstructure mechanism`, `${t} processing conditions performance`],
+        ["材料研究", "工程論文", "技術資料"],
+      ),
+      angle(
+        "量測評估",
+        `${t}可以如何量測、建模與比較性能指標`,
+        "可比較實驗方法、量化指標、誤差來源與模型適用範圍。",
+        [`${t} 量測 建模 性能指標`, `${t} 實驗方法 比較`],
+        [`${t} measurement modeling performance indicators`, `${t} experimental methods comparison`],
+        ["實驗研究", "方法論文", "工程標準"],
+      ),
+      angle(
+        "設計應用",
+        `${t}如何影響產品設計、製程控制與應用場景`,
+        "可從配方設計、可製造性與使用情境切入。",
+        [`${t} 產品設計 製程控制 應用`, `${t} 配方 可製造性`],
+        [`${t} product design process control application`, `${t} formulation manufacturability`],
+        ["材料應用研究", "產業技術資料", "設計研究"],
+      ),
+    ]);
+  }
+  if (domain === "biology" || domain === "animal_science") {
+    return finalize([
+      angle(
+        "棲地與族群",
+        `${t}的棲地需求、族群分布與環境壓力`,
+        "可查生態調查、保育資料、族群監測與棲地變化。",
+        [`${t} 棲地 族群 分布`, `${t} 生態 保育`],
+        [`${t} habitat population ecology`, `${t} conservation distribution`],
+        ["生態研究", "保育機構資料", "自然史資料"],
+      ),
+      angle(
+        "行為與適應",
+        `${t}的行為、食性與生存適應`,
+        "可比較食性、繁殖、移動、避敵或生理適應。",
+        [`${t} 行為 食性 適應`, `${t} 繁殖 生態`],
+        [`${t} behavior diet adaptation`, `${t} reproduction ecology`],
+        ["動物行為研究", "生態論文", "物種資料庫"],
+      ),
+      angle(
+        "人為影響",
+        `${t}面臨的人為干擾、疾病或保育管理`,
+        "可查土地利用、污染、疾病、獵捕與保育政策。",
+        [`${t} 人為干擾 疾病 保育`, `${t} 保育 管理`],
+        [`${t} human impact disease conservation management`],
+        ["保育報告", "政府或機構資料", "學術研究"],
+      ),
+    ]);
+  }
+  if (domain === "technology") {
+    return finalize([
+      angle(
+        "技術架構",
+        `${t}的核心技術、關鍵元件與製程瓶頸`,
+        "可查技術白皮書、產業報告與工程研究。",
+        [`${t} 核心技術 關鍵元件`, `${t} 製程 瓶頸`],
+        [`${t} core technology key components`, `${t} manufacturing bottlenecks`],
+        ["技術白皮書", "產業報告", "工程研究"],
+      ),
+      angle(
+        "供應鏈與市場",
+        `${t}的供應鏈角色、主要廠商與市場變化`,
+        "可比較企業年報、產業統計、上下游供應鏈與投資趨勢。",
+        [`${t} 供應鏈 主要廠商 市場`, `${t} 產業 趨勢`],
+        [`${t} supply chain companies market`, `${t} industry trend`],
+        ["企業年報", "市場研究", "政府或機構資料"],
+      ),
+      angle(
+        "風險治理",
+        `${t}的地緣政治、資安、韌性或政策風險`,
+        "可查政策報告、出口管制、供應鏈韌性與標準。",
+        [`${t} 地緣政治 風險 韌性`, `${t} 政策 標準`],
+        [`${t} geopolitical risk resilience policy`, `${t} regulation standards`],
+        ["政策報告", "國際機構資料", "產業分析"],
+      ),
+    ]);
+  }
+  if (domain === "health") {
+    return finalize([
+      angle(
+        "暴露與機制",
+        `${t}的暴露途徑、作用機制與可測量指標`,
+        "可查流行病學、臨床研究與公共衛生資料。",
+        [`${t} 暴露 作用機制 指標`, `${t} 健康 研究`],
+        [`${t} exposure mechanism biomarkers`, `${t} health study`],
+        ["醫學研究", "公共衛生資料", "系統性回顧"],
+      ),
+      angle(
+        "族群差異",
+        `${t}對不同族群或年齡層的影響差異`,
+        "可比較樣本、年齡、性別、生活型態與風險因素。",
+        [`${t} 族群 差異 風險因素`, `${t} 青少年 成人 比較`],
+        [`${t} population differences risk factors`, `${t} adolescents adults comparison`],
+        ["流行病學研究", "臨床資料", "公共衛生報告"],
+      ),
+      angle(
+        "介入與建議",
+        `${t}的預防、介入或健康建議`,
+        "可查臨床指引、教育介入與政策建議。",
+        [`${t} 預防 介入 建議`, `${t} 指引 政策`],
+        [`${t} prevention intervention guideline`, `${t} policy recommendation`],
+        ["臨床指引", "公共衛生政策", "介入研究"],
+      ),
+    ]);
+  }
+  if (domain === "environment") {
+    return finalize([
+      angle(
+        "來源與傳輸",
+        `${t}的污染來源、傳輸路徑與環境分布`,
+        "可查監測資料、環境採樣與污染物來源研究。",
+        [`${t} 來源 傳輸 環境分布`, `${t} 監測 採樣`],
+        [`${t} sources transport environmental distribution`, `${t} monitoring sampling`],
+        ["環境監測", "污染研究", "政府或機構資料"],
+      ),
+      angle(
+        "生態影響",
+        `${t}對生物、食物網或生態系功能的影響`,
+        "可查生態毒理、風險評估與長期觀測研究。",
+        [`${t} 生態影響 生物 食物網`, `${t} 生態風險`],
+        [`${t} ecological effects organisms food web`, `${t} ecological risk`],
+        ["生態毒理研究", "系統性回顧", "風險評估"],
+      ),
+      angle(
+        "治理策略",
+        `${t}的減量、監測與政策治理策略`,
+        "可比較法規、技術、回收、教育與國際治理。",
+        [`${t} 減量 監測 政策`, `${t} 治理 策略`],
+        [`${t} mitigation monitoring policy`, `${t} governance strategy`],
+        ["政策報告", "國際機構資料", "治理案例"],
+      ),
+    ]);
+  }
+  if (domain === "history_culture") {
+    return finalize([
+      angle(
+        "文本與脈絡",
+        `${t}的文本內容、歷史背景與文化脈絡`,
+        "可查原典、學術評論、歷史資料與文化研究。",
+        [`${t} 文本 歷史背景 文化脈絡`, `${t} 主題 分析`],
+        [`${t} textual analysis historical context`, `${t} cultural interpretation`],
+        ["專書", "期刊論文", "歷史或文化資料"],
+      ),
+      angle(
+        "詮釋差異",
+        `${t}在不同時代、地區或群體中的詮釋差異`,
+        "可比較評論、翻譯、改編、教育使用與接受史。",
+        [`${t} 詮釋 接受史 改編`, `${t} 翻譯 評論`],
+        [`${t} reception history adaptation`, `${t} interpretation criticism`],
+        ["文化研究", "比較文學", "評論資料"],
+      ),
+      angle(
+        "影響與傳播",
+        `${t}的傳播路徑、社會影響與當代意義`,
+        "可查媒體、教育、出版、展演與公共討論資料。",
+        [`${t} 傳播 社會影響 當代意義`, `${t} 教育 媒體`],
+        [`${t} influence dissemination contemporary relevance`],
+        ["媒體資料", "教育研究", "文化史資料"],
+      ),
+    ]);
+  }
+  return finalize([
     angle(
-      "現況與脈絡",
-      `${t}的現況、背景與主要討論面向`,
-      "可先界定主體、使用情境與可查資料來源。",
-      [`${t} 現況 背景`, `${t} 主要議題`],
-      [`${t} overview current status`, `${t} key issues`],
+      "概念界定",
+      `${t}的核心概念、範圍界線與可驗證資料`,
+      "此為保守規則方向；建議先確認研究對象、地區、時間或比較對象。",
+      [`${t} 定義 範圍 資料`, `${t} 可驗證 指標`],
+      [`${t} definition scope evidence`, `${t} measurable indicators`],
       ["百科資料", "政府或機構資料", "學術資料庫"],
     ),
     angle(
-      "影響與風險",
-      `${t}可能造成的影響、風險或限制`,
-      "可查實證研究、統計資料與案例。",
-      [`${t} 影響 風險`, `${t} 案例 分析`],
-      [`${t} impact risk case study`],
+      "證據路徑",
+      `${t}可以用哪些指標、案例或資料集交叉驗證`,
+      "可用統計、案例、專家機構資料或研究論文建立證據鏈。",
+      [`${t} 指標 案例 資料集`, `${t} 研究 證據`],
+      [`${t} indicators case study dataset`, `${t} evidence research`],
       ["實證研究", "統計資料", "案例資料"],
     ),
     angle(
-      "改善與應用",
-      `${t}的應用情境與改善策略`,
-      "可比較不同做法、政策、設計或教育應用。",
-      [`${t} 應用 改善策略`, `${t} 方法 比較`],
-      [`${t} application strategy comparison`],
+      "比較問題",
+      `${t}在不同情境、族群或時間下的差異比較`,
+      "若題目仍偏廣，可先用比較對象縮小搜尋範圍。",
+      [`${t} 比較 情境 差異`, `${t} 族群 時間 比較`],
+      [`${t} comparison context differences`, `${t} population time comparison`],
       ["實務案例", "機構資料", "研究論文"],
     ),
-  ];
+  ]);
 }
 
 function entityFromEntry(entry: TopicLexiconEntry): TopicEntityInfo {
@@ -857,16 +2092,35 @@ function buildUnderstanding(input: {
 }): TopicUnderstandingResult {
   const researchAngles = input.researchAngles ?? [];
   const excludedMeanings = input.excludedMeanings ?? [];
+  const englishTerms = unique(input.englishTerms ?? []);
+  const scientificNames = unique(input.scientificNames ?? []);
+  const canonicalEnglishTopic = canonicalEnglishTopicFor({
+    normalizedTopic: input.normalizedTopic,
+    language: input.language,
+    topicKind: input.topicKind,
+    englishTerms,
+    scientificNames,
+  });
+  const searchQueries = searchQueriesFromAngles(researchAngles);
+  const coreConcepts = unique([
+    canonicalEnglishTopic,
+    ...englishTerms,
+    ...scientificNames,
+    ...compactEnglishConcepts(searchQueries.en),
+  ]).slice(0, 8);
   return {
     originalTopic: input.topic,
     normalizedTopic: input.normalizedTopic,
     language: input.language,
     topicKind: input.topicKind,
     domain: input.domain,
+    canonicalEnglishTopic,
     canonicalTerms: unique(input.canonicalTerms),
     aliases: unique(input.aliases ?? []),
-    englishTerms: unique(input.englishTerms ?? []),
-    scientificNames: unique(input.scientificNames ?? []),
+    englishTerms,
+    scientificNames,
+    coreConcepts,
+    searchQueries,
     excludedMeanings: unique(excludedMeanings),
     shouldSearchNow: input.shouldSearchNow,
     shouldSearchImmediately: input.shouldSearchNow,
@@ -888,6 +2142,8 @@ function isGenericTemplateTopic(topic: string): boolean {
 export function understandTopic(topic: string): TopicUnderstandingResult {
   const normalizedTopic = normalizeTopicText(topic);
   const language = detectLanguage(normalizedTopic);
+  const englishHints = englishHintTerms(normalizedTopic);
+  const domainHintText = [normalizedTopic, ...englishHints].join(" ").trim();
 
   if (isUnknownOrNoise(normalizedTopic)) {
     return buildUnderstanding({
@@ -904,10 +2160,15 @@ export function understandTopic(topic: string): TopicUnderstandingResult {
   }
 
   const entry = lexiconEntryForTopic(normalizedTopic);
-  const specificResearchTopic = hasSpecificResearchCue(normalizedTopic);
+  const specificResearchTopic = entry
+    ? isSpecificResearchTopicForEntry(normalizedTopic, entry)
+    : hasSpecificResearchCue(normalizedTopic);
 
   if (entry) {
     const entity = entityFromEntry(entry);
+    const focusedAngles = specificResearchTopic
+      ? focusedResearchAnglesForEntry(normalizedTopic, entry)
+      : entry.researchAngles;
     return buildUnderstanding({
       topic,
       normalizedTopic: specificResearchTopic
@@ -918,20 +2179,22 @@ export function understandTopic(topic: string): TopicUnderstandingResult {
         ? "specific_research_topic"
         : entry.topicKind,
       domain: entry.domain,
-      canonicalTerms: [entry.canonicalName],
+      canonicalTerms: specificResearchTopic
+        ? [normalizedTopic, entry.canonicalName]
+        : [entry.canonicalName],
       aliases: entry.aliases,
-      englishTerms: entry.englishNames,
+      englishTerms: unique([...entry.englishNames, ...englishHints]),
       scientificNames: entry.scientificNames ?? [],
       excludedMeanings: entry.excludedMeanings ?? [],
       shouldSearchNow: specificResearchTopic,
       needsClarification: !specificResearchTopic,
-      researchAngles: entry.researchAngles,
+      researchAngles: focusedAngles,
       entity,
     });
   }
 
   if (specificResearchTopic && !isGenericTemplateTopic(normalizedTopic)) {
-    const domain = patternDomain(normalizedTopic);
+    const domain = patternDomain(domainHintText || normalizedTopic);
     return buildUnderstanding({
       topic,
       normalizedTopic,
@@ -939,14 +2202,19 @@ export function understandTopic(topic: string): TopicUnderstandingResult {
       topicKind: "specific_research_topic",
       domain,
       canonicalTerms: [normalizedTopic],
+      englishTerms: englishHints,
       shouldSearchNow: true,
       needsClarification: false,
-      researchAngles: genericAngles(normalizedTopic, domain),
+      researchAngles: genericAngles(
+        normalizedTopic,
+        domain,
+        englishHints[0] ?? "",
+      ),
     });
   }
 
   if (isLikelyBroadCommonNoun(normalizedTopic) || isGenericTemplateTopic(normalizedTopic)) {
-    const domain = patternDomain(normalizedTopic);
+    const domain = patternDomain(domainHintText || normalizedTopic);
     return buildUnderstanding({
       topic,
       normalizedTopic: `${normalizedTopic}的可研究方向`,
@@ -954,13 +2222,18 @@ export function understandTopic(topic: string): TopicUnderstandingResult {
       topicKind: "broad_common_noun",
       domain,
       canonicalTerms: [normalizedTopic],
+      englishTerms: englishHints,
       shouldSearchNow: false,
       needsClarification: true,
-      researchAngles: genericAngles(normalizedTopic, domain),
+      researchAngles: genericAngles(
+        normalizedTopic,
+        domain,
+        englishHints[0] ?? "",
+      ),
     });
   }
 
-  const domain = patternDomain(normalizedTopic);
+  const domain = patternDomain(domainHintText || normalizedTopic);
   return buildUnderstanding({
     topic,
     normalizedTopic,
@@ -968,8 +2241,13 @@ export function understandTopic(topic: string): TopicUnderstandingResult {
     topicKind: "ambiguous",
     domain,
     canonicalTerms: [normalizedTopic],
+    englishTerms: englishHints,
     shouldSearchNow: false,
     needsClarification: true,
-    researchAngles: genericAngles(normalizedTopic, domain),
+    researchAngles: genericAngles(
+      normalizedTopic,
+      domain,
+      englishHints[0] ?? "",
+    ),
   });
 }

@@ -15,11 +15,18 @@ import type { EvidenceDerivation } from "@workspace/api-zod";
 export interface EvidenceCard {
   id: string;
   sourceId: string;
+  title: string;
+  sourceType: string;
+  reliability: string;
   claim: string;
+  mainClaim: string;
   evidence: string;
+  usableEvidence: string;
   quoteOrParaphrase: string;
   summary: string;
   relevance: string;
+  limitations: string[];
+  sectionTargets: string[];
   sourceTitle: string;
   sourceUrl: string | null;
   sourceDomain: string;
@@ -36,6 +43,7 @@ export interface EvidenceCard {
   confidence: string | null;
   confidenceScore: number;
   derivation: EvidenceDerivation;
+  abstractOnly?: boolean;
   limitation: string | null;
   citationText: string;
   pageOrLocation?: string;
@@ -86,10 +94,55 @@ function compactEvidenceText(source: SourceRecord): string {
   const abstract = source.abstract?.trim();
   if (abstract) {
     const firstSentence = abstract.split(/(?<=[.!?。！？])\s+/)[0]?.trim();
-    if (firstSentence) return firstSentence;
+    if (firstSentence) return localizeAcademicPhrases(firstSentence);
   }
   const locator = source.doi ? `DOI：${source.doi}` : source.url;
   return locator ? `來源位置：${locator}` : "此來源已接受，但仍缺少可驗證的重點摘錄。";
+}
+
+function cleanFragment(value: string | null | undefined): string {
+  return value?.replace(/\s+/g, " ").replace(/[。！？.!?；，、\s]+$/u, "").trim() ?? "";
+}
+
+function localizeAcademicPhrases(value: string): string {
+  const replacements: Array<[RegExp, string]> = [
+    [/orientation estimation/giu, "姿態估計"],
+    [/attitude estimation/giu, "姿態估計"],
+    [/sensor fusion/giu, "感測器融合"],
+    [/micromachined gyroscope/giu, "微機電陀螺儀"],
+    [/inertial measurement units?/giu, "慣性量測單元"],
+    [/\bIMU\b/gu, "慣性量測單元"],
+    [/gyroscope/giu, "陀螺儀"],
+    [/navigation/giu, "導航"],
+    [/rigid body dynamics/giu, "剛體動力學"],
+    [/angular momentum/giu, "角動量"],
+    [/rotational stability/giu, "旋轉穩定性"],
+    [/gyroscopic stability/giu, "陀螺穩定性"],
+    [/precession/giu, "進動"],
+    [/torque/giu, "扭矩"],
+    [/spinning top/giu, "陀螺"],
+  ];
+  return replacements.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), value);
+}
+
+function snippetMainClaim(
+  snippet: { snippetZhTw?: string; reasoningZhTw?: string; matchedFacet?: string },
+): string {
+  return (
+    cleanFragment(snippet.snippetZhTw) ||
+    cleanFragment(snippet.reasoningZhTw) ||
+    cleanFragment(snippet.matchedFacet) ||
+    "此片段提供可驗證的研究線索"
+  );
+}
+
+function fallbackMainClaim(source: SourceRecord, summaryText: string): string {
+  return (
+    cleanFragment(source.evidenceSummaryZhTw) ||
+    cleanFragment(source.sourceRelevanceReasonZhTw) ||
+    cleanFragment(localizeAcademicPhrases(summaryText)) ||
+    (source.title?.trim() ? `此來源討論${source.title.trim()}` : "此來源提供研究線索")
+  );
 }
 
 function confidenceScore(source: SourceRecord, hasSnippet: boolean): number {
@@ -123,9 +176,66 @@ function citationText(source: SourceRecord): string {
   return `${author}（${year}）`;
 }
 
+function reliabilityLabel(source: SourceRecord, hasSnippet: boolean): string {
+  const score =
+    source.finalScore ??
+    source.sourceQualityScore ??
+    source.relevanceScore ??
+    source.evidenceQuality ??
+    source.topicRelevance ??
+    null;
+  if (typeof score === "number") {
+    if (score >= 80) return "高";
+    if (score >= 60) return "中";
+    return "有限";
+  }
+  if (source.confidence === "高") return "高";
+  if (source.confidence === "中") return "中";
+  if (hasSnippet) return "中";
+  return "有限";
+}
+
+function sectionTargetsForEvidence(
+  sections: WorkflowReportSection[],
+): string[] {
+  const targets = new Set<string>();
+  for (const section of sections) {
+    switch (section) {
+      case "研究背景":
+        targets.add("abstract");
+        targets.add("introduction");
+        targets.add("research_question");
+        break;
+      case "文獻探討":
+        targets.add("abstract");
+        targets.add("research_question");
+        targets.add("literature_review");
+        targets.add("discussion");
+        targets.add("conclusion");
+        break;
+      case "研究方法":
+        targets.add("methodology");
+        targets.add("limitations");
+        break;
+      case "數據分析":
+        targets.add("abstract");
+        targets.add("findings");
+        targets.add("discussion");
+        targets.add("conclusion");
+        break;
+      case "結論":
+        targets.add("discussion");
+        targets.add("limitations");
+        targets.add("conclusion");
+        break;
+    }
+  }
+  return Array.from(targets);
+}
+
 function sourceToEvidenceCards(
   source: SourceRecord,
-  ordinal: number,
+  _ordinal: number,
   options: Pick<BuildEvidenceCardOptions, "topic" | "createdAt">,
 ): EvidenceCard[] {
   const id = sourceId(source);
@@ -143,11 +253,20 @@ function sourceToEvidenceCards(
       cards.push({
         id: `evidence:${id}:${index + 1}`,
         sourceId: id,
-        claim: `來源 ${ordinal}.${index + 1} 可支持「${snippet.matchedFacet}」相關論點。`,
+        title,
+        sourceType: source.sourceType,
+        reliability: reliabilityLabel(source, true),
+        claim: snippetMainClaim(snippet),
+        mainClaim: snippetMainClaim(snippet),
         evidence,
+        usableEvidence: evidence,
         quoteOrParaphrase: evidence,
         summary: snippet.reasoningZhTw || evidenceProfile.summaryZhTw || evidence,
         relevance: snippet.matchedFacet,
+        limitations: limitationForEvidence(source, derivation)
+          ? [limitationForEvidence(source, derivation)!]
+          : [],
+        sectionTargets: sectionTargetsForEvidence(baseSections),
         sourceTitle: title,
         sourceUrl: source.url,
         sourceDomain: sourceDomain(source.url),
@@ -164,6 +283,7 @@ function sourceToEvidenceCards(
         confidence: source.confidence?.trim() || null,
         confidenceScore: confidenceScore(source, true),
         derivation,
+        abstractOnly: derivation !== "fulltext-derived",
         limitation: limitationForEvidence(source, derivation),
         citationText: citationText(source),
         pageOrLocation: "abstract",
@@ -178,13 +298,20 @@ function sourceToEvidenceCards(
   cards.push({
     id: `evidence:${id}:0`,
     sourceId: id,
-    claim: sourceHasUsableAbstract(source)
-      ? `來源 ${ordinal} 可作為「${title}」的摘要型佐證。`
-      : `來源 ${ordinal} 僅提供「${title}」的書目線索。`,
+    title,
+    sourceType: source.sourceType,
+    reliability: reliabilityLabel(source, false),
+    claim: fallbackMainClaim(source, compactEvidenceText(source)),
+    mainClaim: fallbackMainClaim(source, compactEvidenceText(source)),
     evidence: compactEvidenceText(source),
+    usableEvidence: compactEvidenceText(source),
     quoteOrParaphrase: compactEvidenceText(source),
     summary: evidenceProfile.summaryZhTw || compactEvidenceText(source),
     relevance: source.mainEvidenceFacet || "研究背景",
+    limitations: limitationForEvidence(source, derivation)
+      ? [limitationForEvidence(source, derivation)!]
+      : [],
+    sectionTargets: sectionTargetsForEvidence(baseSections),
     sourceTitle: title,
     sourceUrl: source.url,
     sourceDomain: sourceDomain(source.url),
@@ -201,6 +328,7 @@ function sourceToEvidenceCards(
     confidence: source.confidence?.trim() || null,
     confidenceScore: confidenceScore(source, false),
     derivation,
+    abstractOnly: derivation !== "fulltext-derived",
     limitation: limitationForEvidence(source, derivation),
     citationText: citationText(source),
     pageOrLocation: derivation === "abstract-derived" ? "abstract" : undefined,
@@ -236,11 +364,18 @@ export function buildEvidenceCards(
       cards.push({
         ...generated,
         id: existing.id || generated.id,
+        title: generated.title,
+        sourceType: generated.sourceType,
+        reliability: options.resetText ? generated.reliability : existing.reliability || generated.reliability,
         claim: options.resetText ? generated.claim : existing.claim || generated.claim,
+        mainClaim: options.resetText ? generated.mainClaim : existing.mainClaim || generated.mainClaim,
         evidence: options.resetText ? generated.evidence : existing.evidence || generated.evidence,
+        usableEvidence: options.resetText ? generated.usableEvidence : existing.usableEvidence || generated.usableEvidence,
         quoteOrParaphrase: options.resetText ? generated.quoteOrParaphrase : existing.quoteOrParaphrase || generated.quoteOrParaphrase,
         summary: options.resetText ? generated.summary : existing.summary || generated.summary,
         relevance: options.resetText ? generated.relevance : existing.relevance || generated.relevance,
+        limitations: options.resetText ? generated.limitations : existing.limitations ?? generated.limitations,
+        sectionTargets: options.resetText ? generated.sectionTargets : existing.sectionTargets ?? generated.sectionTargets,
         sourceCategory: options.resetText ? generated.sourceCategory : existing.sourceCategory ?? generated.sourceCategory,
         doi: generated.doi,
         abstract: generated.abstract,
@@ -252,6 +387,7 @@ export function buildEvidenceCards(
         confidence: options.resetText ? generated.confidence : existing.confidence ?? generated.confidence,
         confidenceScore: options.resetText ? generated.confidenceScore : existing.confidenceScore ?? generated.confidenceScore,
         derivation: options.resetText ? generated.derivation : existing.derivation ?? generated.derivation,
+        abstractOnly: options.resetText ? generated.abstractOnly : existing.abstractOnly ?? generated.abstractOnly,
         limitation: options.resetText ? generated.limitation : existing.limitation ?? generated.limitation,
         citationText: options.resetText ? generated.citationText : existing.citationText ?? generated.citationText,
         pageOrLocation: options.resetText ? generated.pageOrLocation : existing.pageOrLocation ?? generated.pageOrLocation,

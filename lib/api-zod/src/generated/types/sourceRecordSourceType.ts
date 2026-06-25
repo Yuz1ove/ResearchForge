@@ -13,4 +13,7 @@ export const SourceRecordSourceType = {
   OpenAlex: 'OpenAlex',
   Crossref: 'Crossref',
   Semantic_Scholar: 'Semantic Scholar',
+  Official_Source: 'Official Source',
+  Institutional_Source: 'Institutional Source',
+  Authoritative_Media: 'Authoritative Media',
 } as const;

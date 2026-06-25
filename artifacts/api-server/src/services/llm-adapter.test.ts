@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   LlmAdapterError,
+  extractFirstJsonObject,
   extractModelText,
   requestOpenAICompatibleChatCompletion,
   resolveLlmConfig,
@@ -33,18 +34,26 @@ test("resolveLlmConfig falls back to OLLAMA env and supports explicit disable", 
     {
       OLLAMA_BASE_URL: "http://127.0.0.1:11434",
       OLLAMA_MODEL: "qwen3:4b",
+      OLLAMA_TIMEOUT_MS: "60000",
     },
   );
 
   assert.equal(config.baseUrl, "http://127.0.0.1:11434/v1");
   assert.equal(config.model, "qwen3:4b");
-  assert.equal(config.timeoutMs, 120_000);
+  assert.equal(config.timeoutMs, 60_000);
   assert.equal(config.disabled, true);
 });
 
 test("safeJsonParse accepts fenced JSON and extracts JSON objects from model chatter", () => {
   assert.deepEqual(safeJsonParse("```json\n{\"ok\":true}\n```"), { ok: true });
   assert.deepEqual(safeJsonParse("thinking...\n{\"ok\":true}\nthanks"), { ok: true });
+});
+
+test("extractFirstJsonObject returns the first balanced object and ignores trailing chatter", () => {
+  assert.equal(
+    extractFirstJsonObject("intro {\"ok\":true,\"nested\":{\"text\":\"brace } in string\"}} outro {\"later\":true}"),
+    "{\"ok\":true,\"nested\":{\"text\":\"brace } in string\"}}",
+  );
 });
 
 test("extractModelText reads common OpenAI and Ollama-compatible response fields", () => {
@@ -63,9 +72,51 @@ test("extractModelText reads common OpenAI and Ollama-compatible response fields
     }),
     "from content parts",
   );
+  assert.equal(
+    extractModelText({
+      choices: [
+        {
+          message: {
+            content: "",
+            reasoning:
+              "I should answer with JSON only. Final: {\"isValidTopic\":false,\"reason\":\"nonsense\"}",
+          },
+        },
+      ],
+    }),
+    "{\"isValidTopic\":false,\"reason\":\"nonsense\"}",
+  );
 });
 
-test("requestOpenAICompatibleChatCompletion treats empty model content as fallback", async () => {
+test("requestOpenAICompatibleChatCompletion can recover JSON from reasoning when content is empty", async () => {
+  const content = await requestOpenAICompatibleChatCompletion({
+    purpose: "planner",
+    messages: [{ role: "user", content: "{\"topic\":\"薯條\"}" }],
+    llm: {
+      baseUrl: "http://127.0.0.1:11434/v1",
+      model: "qwen3:4b",
+      timeoutMs: 1_000,
+    },
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: "",
+                reasoning:
+                  "分析後回覆如下：{\"expandedTopic\":\"薯條\",\"researchQuestions\":[\"薯條的油炸方式如何影響口感？\"],\"searchKeywords\":{\"zh\":[\"薯條\"],\"en\":[\"french fries\"],\"synonyms\":[],\"academic\":[]},\"sourceStrategy\":[\"食品研究\"],\"exclusions\":[]}",
+              },
+            },
+          ],
+        }),
+      ),
+  });
+
+  assert.match(content, /"expandedTopic":"薯條"/);
+});
+
+test("requestOpenAICompatibleChatCompletion still fails when reasoning contains no JSON object", async () => {
   await assert.rejects(
     requestOpenAICompatibleChatCompletion({
       purpose: "planner",

@@ -31,7 +31,7 @@ function source(overrides: Partial<SourceRecord> = {}): SourceRecord {
 test("sourceSummaryText uses abstract and truncates to a compact card length", () => {
   const summary = sourceSummaryText(source());
 
-  assert.match(summary, /本期刊文章|可提供|支撐/);
+  assert.match(summary, /主旨：|摘要重點/);
   assert.doesNotMatch(summary, /This study examines/);
   assert.ok(Array.from(summary).length <= 170);
 });
@@ -96,10 +96,27 @@ test("sourceSummaryForUser separates content summary from relation and recommend
     "可樂中的成分與攝取習慣對健康的影響",
   );
 
-  assert.match(summary.contentSummary, /這篇來源|可支撐|soft drink/i);
+  assert.match(summary.contentSummary, /主旨：|摘要重點|含糖飲料|soft drink/i);
   assert.doesNotMatch(summary.contentSummary, /This cohort study/);
   assert.match(summary.topicRelation, /主題|直接支撐|延伸/);
   assert.match(summary.recommendationReason, /採用|接受|確認|不建議/);
+});
+
+test("sourceSummaryForUser rewrites mixed English aircraft summaries into more natural Chinese", () => {
+  const summary = sourceSummaryForUser(
+    source({
+      title:
+        "A Runway Overrun Risk Assessment Model for Civil Aircraft Based on Quick Access Recorder Data",
+      abstract:
+        "In this paper, we propose a new dynamic runway overrun risk assessment model based on QAR data for civil aircraft safety.",
+      sourceCategory: "journal_article",
+      matchedFacets: ["aircraft", "flight safety"],
+    }),
+    "飛機",
+  );
+
+  assert.match(summary.contentSummary, /跑道衝出|風險評估|飛機|飛航安全/);
+  assert.doesNotMatch(summary.contentSummary, /In this paper|civil aircraft|QAR data|aircraft/i);
 });
 
 test("sourceSummaryForUser does not recommend off-topic sources", () => {
@@ -174,7 +191,7 @@ test("sourceSummaryForUser writes a complete zh-TW paragraph for spider habitat 
   );
 
   assert.equal(summary.recommendation, "recommended");
-  assert.match(summary.contentSummary, /這篇來源/);
+  assert.match(summary.contentSummary, /主旨：/);
   assert.match(summary.contentSummary, /棲地|microhabitat|ecology|蜘蛛|Spider/);
   assert.doesNotMatch(
     summary.contentSummary,
@@ -233,7 +250,7 @@ test("sourceSummaryForUser marks spider ecology sources as good and generic stra
   assert.match(spiderSummary.summaryQualityReason, /摘要/);
   assert.match(
     spiderSummary.contentSummary,
-    /蜘蛛主體|棲地需求|捕食策略|避敵行為|築網行為|生存適應/,
+    /主旨：|棲地|捕食|避敵|築網|生存|蜘蛛/,
   );
   assert.equal(driftSummary.recommendation, "not_recommended");
   assert.equal(driftSummary.summaryQuality, "irrelevant");

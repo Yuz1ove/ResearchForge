@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { normalizeSourceRecord, type SourceRecord } from "@workspace/api-zod";
+import { logger } from "../lib/logger";
 import {
   writeReportWithLlm,
   type ReportWriterInput,
@@ -52,10 +53,25 @@ function normalizeEvidenceCards(value: unknown): ReportWriterEvidenceCard[] {
       return {
         id,
         sourceId,
+        title: cleanString(data.title) ?? cleanString(data.sourceTitle) ?? "",
         claim: cleanString(data.claim) ?? "",
         evidence: cleanString(data.evidence) ?? "",
         summary: cleanString(data.summary) ?? "",
         relevance: cleanString(data.relevance) ?? "",
+        sourceType: cleanString(data.sourceType) ?? "",
+        reliability: cleanString(data.reliability) ?? "",
+        mainClaim: cleanString(data.mainClaim) ?? "",
+        usableEvidence: cleanString(data.usableEvidence) ?? "",
+        limitations: Array.isArray(data.limitations)
+          ? data.limitations
+              .map((item) => cleanString(item))
+              .filter((item): item is string => Boolean(item))
+          : [],
+        sectionTargets: Array.isArray(data.sectionTargets)
+          ? data.sectionTargets
+              .map((item) => cleanString(item))
+              .filter((item): item is string => Boolean(item))
+          : [],
         sourceTitle: cleanString(data.sourceTitle) ?? "",
         sourceProvider: cleanString(data.sourceProvider) ?? "",
         doi: cleanString(data.doi) ?? null,
@@ -72,6 +88,10 @@ function normalizeEvidenceCards(value: unknown): ReportWriterEvidenceCard[] {
           : [],
         citationText: cleanString(data.citationText) ?? "",
         limitation: cleanString(data.limitation) ?? null,
+        derivation: cleanString(data.derivation) ?? null,
+        evidenceGrounding: cleanString(data.evidenceGrounding) ?? null,
+        summaryStructuredStatus: cleanString(data.summaryStructuredStatus) ?? null,
+        llmSummaryStatus: cleanString(data.llmSummaryStatus) ?? null,
       };
     })
     .filter((card): card is ReportWriterEvidenceCard => Boolean(card));
@@ -83,7 +103,7 @@ export function normalizeGenerateReportRequest(body: unknown): ReportWriterInput
   const topic = cleanString(data.topic);
   const acceptedSources = normalizeAcceptedSources(data.acceptedSources);
   const evidenceCards = normalizeEvidenceCards(data.evidenceCards);
-  if (!topic || acceptedSources.length < 3) return null;
+  if (!topic || acceptedSources.length < 1) return null;
 
   return {
     topic,
@@ -105,13 +125,36 @@ export function createGenerateReportRouter({
     const normalized = normalizeGenerateReportRequest(req.body);
     if (!normalized) {
       res.status(400).json({
-        message: "請提供主題與至少 3 筆已接受來源。",
+        status: "invalid_input",
+        message: "請提供主題與至少 1 筆已接受來源。",
       });
       return;
     }
 
-    const result = await reportWriter(normalized);
-    res.json(result);
+    try {
+      const result = await reportWriter(normalized);
+      res.json(result);
+    } catch (error) {
+      const fallbackReason =
+        error instanceof Error ? error.message : "unknown report generation failure";
+      logger.warn({ err: error, route: "/api/generate-report" }, "Report generation failed");
+      res.status(200).json({
+        ok: false,
+        status: "error",
+        llm_status: "failed",
+        fallback_used: true,
+        model: process.env.OLLAMA_MODEL?.trim() || process.env.LLM_MODEL?.trim() || null,
+        message: "Report generation failed unexpectedly.",
+        warning: `LLM report writer fallback: ${fallbackReason}`,
+        sections: [],
+        reportGenerationProvider: process.env.LLM_PROVIDER?.trim() || "ollama",
+        reportGenerationModel:
+          process.env.OLLAMA_MODEL?.trim() || process.env.LLM_MODEL?.trim() || null,
+        reportGenerationStatus: "failed",
+        fallbackUsed: true,
+        fallbackReason,
+      });
+    }
   });
 
   return router;

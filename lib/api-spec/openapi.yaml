@@ -12,6 +12,8 @@ tags:
     description: Health operations
   - name: sources
     description: Source retrieval operations
+  - name: topics
+    description: Topic understanding operations
 paths:
   /healthz:
     get:
@@ -88,6 +90,37 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /topic-understanding:
+    post:
+      operationId: topicUnderstanding
+      tags: [topics]
+      summary: Understand a research topic
+      description: Expands a topic into structured research angles with deterministic fallback when local LLM is unavailable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TopicUnderstandingRequest"
+      responses:
+        "200":
+          description: Topic understanding result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicUnderstandingResult"
+        "400":
+          description: Invalid topic request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Topic understanding failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -131,6 +164,93 @@ components:
           type: string
       required:
         - topic
+    TopicUnderstandingRequest:
+      type: object
+      properties:
+        topic:
+          type: string
+          minLength: 1
+        reportType:
+          type: string
+        audience:
+          type: string
+        sourceMode:
+          type: string
+        language:
+          type: string
+      required:
+        - topic
+    TopicUnderstandingDiagnostics:
+      type: object
+      properties:
+        usedLocalLlm:
+          type: boolean
+        fallbackReason:
+          type: string
+          nullable: true
+        confidence:
+          type: number
+        model:
+          type: string
+          nullable: true
+        latencyMs:
+          type: number
+          nullable: true
+      required:
+        - usedLocalLlm
+        - confidence
+    TopicUnderstandingResult:
+      type: object
+      properties:
+        normalizedTopic:
+          type: string
+        domain:
+          type: string
+        subdomain:
+          type: string
+        entities:
+          type: array
+          items:
+            type: string
+        likelyMeanings:
+          type: array
+          items:
+            type: string
+        ambiguityWarnings:
+          type: array
+          items:
+            type: string
+        researchAngles:
+          type: array
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              angle:
+                type: string
+              reason:
+                type: string
+              searchQueries:
+                type: array
+                items:
+                  type: string
+            required:
+              - title
+              - angle
+              - reason
+              - searchQueries
+        diagnostics:
+          $ref: "#/components/schemas/TopicUnderstandingDiagnostics"
+      required:
+        - normalizedTopic
+        - domain
+        - subdomain
+        - entities
+        - likelyMeanings
+        - ambiguityWarnings
+        - researchAngles
+        - diagnostics
     SourceReviewState:
       type: string
       enum:
@@ -154,6 +274,15 @@ components:
         abstract:
           type: string
           nullable: true
+        snippet:
+          type: string
+          nullable: true
+        language:
+          type: string
+          nullable: true
+        abstractMissing:
+          type: boolean
+          nullable: true
         doi:
           type: string
           nullable: true
@@ -166,6 +295,9 @@ components:
             - OpenAlex
             - Crossref
             - Semantic Scholar
+            - Official Source
+            - Institutional Source
+            - Authoritative Media
         reviewState:
           $ref: "#/components/schemas/SourceReviewState"
         publisher:
@@ -270,6 +402,33 @@ components:
         shouldRecommendAccept:
           type: boolean
           nullable: true
+        topicRelevance:
+          type: number
+          nullable: true
+        evidenceQuality:
+          type: number
+          nullable: true
+        metadataCompleteness:
+          type: number
+          nullable: true
+        abstractQuality:
+          type: number
+          nullable: true
+        sourceTrust:
+          type: number
+          nullable: true
+        isMetadataOnly:
+          type: boolean
+          nullable: true
+        isPrimaryEvidence:
+          type: boolean
+          nullable: true
+        rejectionReason:
+          type: string
+          nullable: true
+        recommendation:
+          type: string
+          nullable: true
       required:
         - id
         - title
@@ -338,6 +497,8 @@ components:
             $ref: "#/components/schemas/SearchRelevanceDebug"
         searchTrace:
           $ref: "#/components/schemas/SearchTrace"
+        diagnostics:
+          $ref: "#/components/schemas/SourceSearchPipelineDiagnostics"
       required:
         - sources
     KeywordExpansionResult:
@@ -504,6 +665,8 @@ components:
             $ref: "#/components/schemas/SearchRelevanceDebug"
         searchTrace:
           $ref: "#/components/schemas/SearchTrace"
+        diagnostics:
+          $ref: "#/components/schemas/SourceSearchPipelineDiagnostics"
         llm_status:
           type: string
           enum:
@@ -735,6 +898,60 @@ components:
         - acceptedCount
         - rejectedCount
         - sourceDecisions
+    SourceSearchPipelineDiagnostics:
+      type: object
+      properties:
+        retrieved_count:
+          type: integer
+        deduped_count:
+          type: integer
+        rejected_count:
+          type: integer
+        candidate_count:
+          type: integer
+        displayed_count:
+          type: integer
+        primary_candidate_count:
+          type: integer
+        provider_status:
+          type: array
+          items:
+            type: object
+            properties:
+              provider:
+                type: string
+              query:
+                type: string
+              ok:
+                type: boolean
+              result_count:
+                type: integer
+              error_type:
+                type: string
+                nullable: true
+              error_message:
+                type: string
+                nullable: true
+            required:
+              - provider
+              - query
+              - ok
+              - result_count
+              - error_type
+              - error_message
+        warnings:
+          type: array
+          items:
+            type: string
+      required:
+        - retrieved_count
+        - deduped_count
+        - rejected_count
+        - candidate_count
+        - displayed_count
+        - primary_candidate_count
+        - provider_status
+        - warnings
     KeywordSourceGroup:
       type: object
       properties:
@@ -746,6 +963,9 @@ components:
             - OpenAlex
             - Crossref
             - Semantic Scholar
+            - Official Source
+            - Institutional Source
+            - Authoritative Media
         query:
           type: string
         results:

@@ -1,4 +1,9 @@
 import type { GeneratedReport, ReportInput, ContentBlock } from "./generateReport";
+import {
+  DEFAULT_REPORT_PRESENTATION,
+  primaryFontName,
+  type ReportPresentationSettings,
+} from "./reportPresentation.ts";
 
 // docx is heavy; it is lazy-loaded inside downloadDocx so it never enters the
 // initial bundle. `D` is the dynamically imported module namespace.
@@ -312,7 +317,11 @@ function docxDataTable(D: DocxModule, b: ContentBlock): (InstanceType<DocxModule
   ];
 }
 
-export async function downloadDocx(report: GeneratedReport, input: ReportInput) {
+export async function downloadDocx(
+  report: GeneratedReport,
+  input: ReportInput,
+  presentation: ReportPresentationSettings = DEFAULT_REPORT_PRESENTATION,
+) {
   const D = await import("docx");
   const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, PageNumber, Header, Footer, TableOfContents, PageBreak } = D;
   const today = new Date().toLocaleDateString("zh-TW");
@@ -366,7 +375,16 @@ export async function downloadDocx(report: GeneratedReport, input: ReportInput) 
   const doc = new Document({
     creator: "Report Factory AI",
     title: report.meta.title,
-    styles: { default: { document: { run: { size: 22 } } } },
+    styles: {
+      default: {
+        document: {
+          run: {
+            size: Math.round(presentation.fontSizePx * 1.5),
+            font: primaryFontName(presentation.fontFamily),
+          },
+        },
+      },
+    },
     sections: [
       {
         headers: {
@@ -444,7 +462,11 @@ function blockToHtml(b: ContentBlock): string {
   }
 }
 
-function buildPrintHtml(report: GeneratedReport, input: ReportInput): string {
+function buildPrintHtml(
+  report: GeneratedReport,
+  input: ReportInput,
+  presentation: ReportPresentationSettings,
+): string {
   const today = new Date().toLocaleDateString("zh-TW");
   const sectionsHtml = report.sections
     .map((s) => `<section><h2>${escapeHtml(s.heading)}</h2>${s.blocks.map(blockToHtml).join("")}</section>`)
@@ -458,12 +480,12 @@ function buildPrintHtml(report: GeneratedReport, input: ReportInput): string {
 <style>
   @page { margin: 22mm 18mm; }
   * { box-sizing: border-box; }
-  body { font-family: "Microsoft JhengHei","PingFang TC","Noto Sans TC","Heiti TC",sans-serif; color:#1e293b; line-height:1.9; font-size:12pt; margin:0; }
+  body { font-family: ${JSON.stringify(presentation.fontFamily)}; color:#1e293b; line-height:${presentation.lineHeight}; font-size:${presentation.fontSizePx}px; margin:0; }
   .cover { text-align:center; padding:38vh 0 0; page-break-after:always; }
-  .cover h1 { font-size:26pt; margin:0 0 16px; }
+  .cover h1 { font-size:${presentation.headingStyle === "classic" ? "26pt" : "24pt"}; margin:0 0 16px; letter-spacing:${presentation.headingStyle === "modern" ? "0.02em" : "0"}; }
   .cover .meta { color:#475569; font-size:11pt; margin:4px 0; }
-  h2 { font-size:15pt; border-bottom:2px solid #0ea5e9; padding-bottom:4px; margin:22px 0 10px; page-break-after:avoid; }
-  p { margin:0 0 10px; }
+  h2 { font-size:${presentation.headingStyle === "classic" ? "15pt" : "14pt"}; border-bottom:2px solid #0ea5e9; padding-bottom:4px; margin:22px 0 10px; page-break-after:avoid; letter-spacing:${presentation.headingStyle === "modern" ? "0.015em" : "0"}; }
+  p { margin:0 0 ${presentation.paragraphSpacingPx}px; }
   ul { margin:0 0 12px; padding-left:22px; }
   li { margin:0 0 5px; }
   .note { background:#fffbeb; border-left:3px solid #f59e0b; padding:6px 10px; color:#92400e; }
@@ -489,11 +511,15 @@ function buildPrintHtml(report: GeneratedReport, input: ReportInput): string {
 </body></html>`;
 }
 
-export function printPdf(report: GeneratedReport, input: ReportInput): boolean {
+export function printPdf(
+  report: GeneratedReport,
+  input: ReportInput,
+  presentation: ReportPresentationSettings = DEFAULT_REPORT_PRESENTATION,
+): boolean {
   const win = window.open("", "_blank");
   if (!win) return false;
   win.document.open();
-  win.document.write(buildPrintHtml(report, input));
+  win.document.write(buildPrintHtml(report, input, presentation));
   win.document.close();
   return true;
 }

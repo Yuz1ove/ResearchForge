@@ -1,0 +1,17 @@
+{
+  "name": "ResearchForge",
+  "short_name": "ResearchForge",
+  "description": "Turn sources into stronger research.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7F5F2",
+  "theme_color": "#1F2023",
+  "icons": [
+    {
+      "src": "/assets/researchforge_icon_square_512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

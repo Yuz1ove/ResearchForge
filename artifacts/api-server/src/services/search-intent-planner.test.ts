@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import type { SourceRecord } from "@workspace/api-zod";
 import {
@@ -21,6 +22,14 @@ const bmwTopic = "BMW";
 const classicalGuitarTopic = "古典吉他";
 const waterBottleTopic = "水壺";
 const eggTopic = "雞蛋";
+const codTopic = "鱈魚";
+const chickenThighTopic = "雞腿";
+const dinosaurTopic = "恐龍";
+const donQuixoteTopic = "唐吉柯德";
+const smartphoneTopic = "手機";
+const turtleTopic = "烏龜";
+const helicopterTopic = "直升機";
+const spinningTopTopic = "陀螺";
 const guineaPigBiomedicalTopic = "天竺鼠作為實驗動物在醫學研究中的應用";
 const llmWritingTopic = "大型語言模型對英文寫作學習的影響";
 const climateCausesTopic = "「氣候變遷」的成因與現況分析";
@@ -93,6 +102,90 @@ test("topic understanding classifies guinea pig, fries, and bubble before search
   assert.match(JSON.stringify(bubble), /surface tension|soap bubble/);
 });
 
+test("topic understanding gives phone turtle helicopter and spinning top domain-aware research angles", () => {
+  const smartphone = understandTopic(smartphoneTopic);
+  const turtle = understandTopic(turtleTopic);
+  const helicopter = understandTopic(helicopterTopic);
+  const spinningTop = understandTopic(spinningTopTopic);
+
+  assert.equal(smartphone.topicKind, "known_entity");
+  assert.equal(smartphone.domain, "social_science");
+  assert.equal(smartphone.needsClarification, true);
+  assert.match(JSON.stringify(smartphone), /睡眠品質|手機成癮|交通安全|行動學習|smartphone addiction/i);
+  assert.doesNotMatch(JSON.stringify(smartphone), /definition scope evidence|measurable indicators/i);
+
+  assert.equal(turtle.entity?.category, "animal");
+  assert.equal(turtle.domain, "biology");
+  assert.match(JSON.stringify(turtle), /棲地保育|外來種|塑膠污染|sea turtle|red-eared slider/i);
+  assert.doesNotMatch(JSON.stringify(turtle), /definition scope evidence|measurable indicators/i);
+
+  assert.equal(helicopter.entity?.category, "technology");
+  assert.equal(helicopter.domain, "technology");
+  assert.match(JSON.stringify(helicopter), /空氣動力學|緊急醫療|噪音污染|rotorcraft|air ambulance/i);
+  assert.doesNotMatch(JSON.stringify(helicopter), /definition scope evidence|measurable indicators/i);
+
+  assert.equal(spinningTop.entity?.category, "technology");
+  assert.equal(spinningTop.domain, "technology");
+  assert.equal(spinningTop.needsClarification, true);
+  assert.match(JSON.stringify(spinningTop), /角動量|進動|陀螺儀|MEMS|民俗遊戲|spinning top|gyroscope/i);
+  assert.doesNotMatch(JSON.stringify(spinningTop), /definition scope evidence|measurable indicators/i);
+});
+
+test("selected spinning top research angle stays focused instead of falling back to generic entity branches", () => {
+  const selectedTopic = "陀螺的角動量、扭矩與旋轉穩定性原理";
+  const understanding = understandTopic(selectedTopic);
+  const contentText = JSON.stringify({
+    normalizedTopic: understanding.normalizedTopic,
+    topicKind: understanding.topicKind,
+    researchAngles: understanding.researchAngles,
+    searchQueries: understanding.searchQueries,
+  });
+
+  assert.equal(understanding.topicKind, "specific_research_topic");
+  assert.equal(understanding.normalizedTopic, selectedTopic);
+  assert.equal(understanding.needsClarification, false);
+  assert.match(contentText, /角動量|扭矩|旋轉穩定性|進動|spinning top angular momentum|gyroscopic stability torque|rotational dynamics spinning top|precession of spinning top physics/i);
+  assert.doesNotMatch(contentText, /MEMS|smartphone drone|folk game|children's play/i);
+});
+
+test("rule fallback gives spinning top bilingual search intent instead of generic evidence-template queries", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: spinningTopTopic,
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const english = plan.englishQueries.join(" ");
+  const chinese = plan.chineseQueries.join(" ");
+
+  assert.match(english, /spinning top|gyroscope|MEMS|attitude control/i);
+  assert.match(chinese, /角動量|陀螺儀|民俗遊戲|STEM/);
+  assert.doesNotMatch(english, /definition scope evidence|measurable indicators|case study dataset/i);
+});
+
+test("topic understanding creates bilingual canonical concept and queries for rare technical Chinese terms", () => {
+  const thixotropy = understandTopic("觸變性");
+
+  assert.equal(thixotropy.topicKind, "broad_common_noun");
+  assert.equal(thixotropy.canonicalEnglishTopic, "thixotropy");
+  assert.equal(thixotropy.domain, "materials_design");
+  assert.ok(thixotropy.coreConcepts.some((concept) => /thixotropy/i.test(concept)));
+  assert.ok(thixotropy.searchQueries.en.some((query) => /thixotropy/i.test(query)));
+  assert.doesNotMatch(
+    thixotropy.searchQueries.en.join(" "),
+    /觸變性 definition scope evidence/i,
+  );
+});
+
+test("topic understanding rejects ascii garbage before planning fake cards", () => {
+  const invalid = understandTopic("hoeo2f2");
+
+  assert.equal(invalid.topicKind, "unknown_or_noise");
+  assert.equal(invalid.canonicalEnglishTopic, "");
+  assert.deepEqual(invalid.searchQueries.en, []);
+  assert.deepEqual(invalid.searchQueries.zh, []);
+});
+
 test("topic understanding resolves short entities into domain-specific research angles", () => {
   const cases = [
     {
@@ -134,6 +227,110 @@ test("topic understanding resolves short entities into domain-specific research 
       text,
       /research direction|research question|searchable topic|academic research/i,
     );
+  }
+});
+
+test("topic understanding keeps Don Quixote in literature without cod-fish drift", () => {
+  const understanding = understandTopic(donQuixoteTopic);
+  const contentText = JSON.stringify({
+    normalizedTopic: understanding.normalizedTopic,
+    researchAngles: understanding.researchAngles,
+    clarificationCards: understanding.clarificationCards,
+  });
+
+  assert.equal(understanding.needsClarification, true);
+  assert.match(
+    contentText,
+    /唐吉訶德|唐吉柯德|Don Quixote|Cervantes|騎士小說|西班牙黃金時代/i,
+  );
+  assert.doesNotMatch(contentText, /cod fish|omega-3|DHA|EPA|fatty acid|seafood/i);
+});
+
+test("rule fallback builds topic-specific query plans for cod chicken thigh dinosaur and Don Quixote", () => {
+  const cases = [
+    {
+      topic: codTopic,
+      expected: /Atlantic cod|Gadus morhua|omega-3|DHA|EPA|sustainable fisheries|seafood safety/i,
+      unexpected: /digital media|eye strain|breakfast cereal|maize/i,
+    },
+    {
+      topic: chickenThighTopic,
+      expected: /chicken thigh|chicken leg|poultry|Salmonella|food safety|fat content/i,
+      unexpected: /digital media|eye strain|breakfast cereal|maize|plant-based protein/i,
+    },
+    {
+      topic: dinosaurTopic,
+      expected: /paleontology|fossil record|Mesozoic|Cretaceous|bird evolution|非鳥類恐龍/i,
+      unexpected: /nutrition|DHA|EPA|seafood/i,
+    },
+    {
+      topic: donQuixoteTopic,
+      expected: /Don Quixote|Cervantes|騎士小說|理想與現實|西班牙黃金時代/i,
+      unexpected: /cod fish|omega-3|DHA|EPA|seafood/i,
+    },
+  ] as const;
+
+  for (const item of cases) {
+    const plan = buildRuleBasedSearchIntent({
+      topic: item.topic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    });
+    const queries = buildSearchIntentQueries(plan);
+    const text = [
+      plan.normalizedTopic,
+      ...plan.primaryConcepts,
+      ...plan.mustHaveTerms,
+      ...queries.highPrecision,
+      ...queries.english,
+      ...queries.chinese,
+      ...queries.broad,
+    ].join(" ");
+
+    assert.match(text, item.expected);
+    assert.doesNotMatch(text, item.unexpected);
+  }
+});
+
+test("rule fallback builds topic-specific query plans for phone turtle and helicopter", () => {
+  const cases = [
+    {
+      topic: smartphoneTopic,
+      expected: /smartphone addiction|sleep quality|traffic safety|mobile learning|青少年/i,
+      unexpected: /definition scope evidence|measurable indicators|case study dataset/i,
+    },
+    {
+      topic: turtleTopic,
+      expected: /turtle habitat|sea turtle|invasive turtle|plastic pollution|保育/i,
+      unexpected: /definition scope evidence|measurable indicators|case study dataset/i,
+    },
+    {
+      topic: helicopterTopic,
+      expected: /helicopter aerodynamics|air ambulance|noise pollution|safety management|旋翼/i,
+      unexpected: /definition scope evidence|measurable indicators|case study dataset/i,
+    },
+  ] as const;
+
+  for (const item of cases) {
+    const plan = buildRuleBasedSearchIntent({
+      topic: item.topic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    });
+    const queries = buildSearchIntentQueries(plan);
+    const text = [
+      plan.normalizedTopic,
+      ...plan.primaryConcepts,
+      ...plan.mustHaveTerms,
+      ...queries.highPrecision,
+      ...queries.english,
+      ...queries.chinese,
+    ].join(" ");
+
+    assert.match(text, item.expected);
+    assert.doesNotMatch(text, item.unexpected);
   }
 });
 
@@ -469,6 +666,91 @@ test("applying a research angle produces search-ready queries", () => {
   }
 });
 
+test("applying the spinning top mechanics angle makes source-search queries follow the selected expansion topic", () => {
+  const selectedTopic = "陀螺的角動量、扭矩與旋轉穩定性原理";
+  const plan = buildRuleBasedSearchIntent({
+    topic: selectedTopic,
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = [
+    ...queries.highPrecision,
+    ...queries.english,
+    ...queries.chinese,
+    ...queries.broad,
+  ].join(" ");
+
+  assert.equal(plan.topicUnderstanding?.normalizedTopic, selectedTopic);
+  assert.equal(plan.topicUnderstanding?.topicKind, "specific_research_topic");
+  assert.deepEqual(queries.coreConcepts, [
+    "spinning top",
+    "angular momentum",
+    "torque",
+    "rotational stability",
+    "gyroscopic precession",
+    "rigid body dynamics",
+    "Euler equations",
+    "Lagrange top",
+  ]);
+  assert.ok(
+    queries.coreEnglishAcademic.includes(
+      "spinning top angular momentum torque rotational stability",
+    ),
+  );
+  assert.ok(
+    queries.academicSynonyms.includes(
+      "gyroscopic precession torque angular momentum",
+    ),
+  );
+  assert.ok(
+    queries.education.includes(
+      "spinning top physics angular momentum explanation",
+    ),
+  );
+  assert.ok(queries.chineseSupplemental.includes("陀螺 角動量 扭矩 進動"));
+  assert.ok(queries.fallbackRelaxed.includes("Lagrange top"));
+  assert.ok(
+    queries.phases.some(
+      (phase) =>
+        phase.stage === "fallback_relaxed" &&
+        phase.queries.includes("Lagrange top"),
+    ),
+  );
+  assert.ok(
+    !queries.english.includes(selectedTopic) &&
+      !queries.chinese.includes(selectedTopic),
+  );
+  assert.match(queryText, /spinning top angular momentum/i);
+  assert.match(queryText, /gyroscopic stability torque/i);
+  assert.match(queryText, /rotational dynamics spinning top|precession of spinning top physics/i);
+  assert.match(queryText, /陀螺 角動量 扭矩 旋轉穩定性|陀螺 進動 旋轉力學 物理/i);
+  assert.doesNotMatch(queryText, /MEMS gyroscope smartphone drone|folk game|children's play/i);
+});
+
+test("BMW EV transition topic expands into product and supply-chain English queries", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: "BMW 在電動車轉型中的產品與供應鏈策略",
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = [
+    ...queries.highPrecision,
+    ...queries.english,
+    ...queries.chinese,
+    ...queries.broad,
+  ].join(" ");
+
+  assert.equal(plan.topicUnderstanding?.needsClarification, false);
+  assert.match(queryText, /BMW electric vehicle transition supply chain strategy/i);
+  assert.match(queryText, /BMW EV strategy battery supply chain/i);
+  assert.match(queryText, /BMW electric vehicle product strategy/i);
+  assert.match(queryText, /BMW Neue Klasse supply chain strategy/i);
+});
+
 test("rule fallback keeps climate change cause concepts in every main query family", () => {
   const plan = buildRuleBasedSearchIntent({
     topic: climateCausesTopic,
@@ -534,6 +816,49 @@ test("rule fallback keeps spider ecology queries anchored to spider, habitat, an
   assert.ok(
     !/高中教育|education students peer reviewed research/i.test(queryText),
   );
+});
+
+test("rule fallback turns egg nutrition protein quality into precise bilingual queries", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: "雞蛋的營養成分、蛋白質品質與胺基酸組成之研究",
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = [
+    ...queries.highPrecision,
+    ...queries.english,
+    ...queries.chinese,
+    ...queries.broad,
+  ].join(" ");
+
+  assert.equal(plan.topicType, "egg_nutrition_protein_quality");
+  for (const term of ["egg", "egg white", "egg yolk", "albumen", "yolk", "雞蛋", "蛋白", "蛋黃"]) {
+    assert.ok(plan.primaryConcepts.includes(term), `expected ${term}`);
+  }
+  for (const term of ["protein quality", "amino acid profile", "digestibility", "biological value", "胺基酸"]) {
+    assert.ok(plan.mustHaveTerms.includes(term), `expected must-have ${term}`);
+  }
+  assert.match(queryText, /egg nutrition protein quality/i);
+  assert.match(queryText, /egg protein amino acid profile/i);
+  assert.match(queryText, /chicken egg nutritional composition/i);
+  assert.match(queryText, /egg white protein digestibility/i);
+  assert.match(queryText, /albumen amino acid composition/i);
+  assert.match(queryText, /雞蛋 營養成分 蛋白質品質/);
+  assert.match(queryText, /雞蛋 胺基酸組成/);
+  const allQueries = [
+    ...queries.highPrecision,
+    ...queries.english,
+    ...queries.chinese,
+    ...queries.broad,
+  ].map((query) => query.trim().toLowerCase());
+  for (const forbidden of ["egg", "protein", "value", "nutrition"]) {
+    assert.equal(allQueries.includes(forbidden), false, `forbidden broad query ${forbidden}`);
+  }
+  for (const drift of ["basketball", "baseball", "volleyball", "climate", "airplane", "籃球", "氣候", "飛機"]) {
+    assert.ok(plan.penaltyTerms.includes(drift), `expected drift ${drift}`);
+  }
 });
 
 test("rule fallback expands broad spider habitat topics into multiple English academic queries", () => {
@@ -932,6 +1257,52 @@ test("ranking prefers high relevance and source quality before recency", () => {
   assert.ok((sources[0]?.finalScore ?? 0) > (sources[1]?.finalScore ?? 0));
 });
 
+test("AI learning reranking prefers secondary education over higher education drift", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: "AI 對高中生學習成效",
+    language: "zh-TW",
+  });
+  const { sources, relevanceDebug } = rerankSourcesBySearchIntent(
+    [
+      sourceRecord({
+        id: "higher-education-ai",
+        title: "Students' voices on generative AI in higher education",
+        abstract:
+          "This study explores university students' perceptions of generative AI in higher education, including learning outcomes, engagement, and academic achievement.",
+        year: 2023,
+        doi: "10.1000/higher-education-ai",
+        authors: ["Higher Education Researcher"],
+        containerTitle: "International Journal of Educational Technology",
+        sourceQualityScore: 100,
+        citationCount: 300,
+      }),
+      sourceRecord({
+        id: "secondary-ai-learning",
+        title: "Artificial intelligence tutoring for high school students' learning outcomes",
+        abstract:
+          "Artificial intelligence tutoring systems in secondary education are evaluated with high school students, measuring learning outcomes, academic achievement, engagement, and learning performance.",
+        year: 2022,
+        doi: "10.1000/secondary-ai-learning",
+        authors: ["Secondary Education Researcher"],
+        containerTitle: "Computers and Education",
+        sourceQualityScore: 95,
+        citationCount: 120,
+      }),
+    ],
+    plan,
+  );
+
+  assert.equal(sources[0]?.id, "secondary-ai-learning");
+  assert.equal(sources[0]?.relevanceLevel, "primary");
+  assert.ok(
+    relevanceDebug
+      .find((item) => item.sourceId === "higher-education-ai")
+      ?.penalties.some((penalty) =>
+        penalty.startsWith("higher_education_without_secondary_context"),
+      ),
+  );
+});
+
 test("marine microplastics reranking promotes marine ecology over unrelated heat or sports sources", () => {
   const plan = buildRuleBasedSearchIntent({
     topic: marineMicroplasticsTopic,
@@ -1065,6 +1436,61 @@ test("spider reranking rejects generic strategy papers that miss the spider subj
   );
 });
 
+test("egg nutrition reranking rejects sports climate aviation and metadata-only drift", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: "雞蛋的營養成分、蛋白質品質與胺基酸組成之研究",
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const ranked = rerankSourcesBySearchIntent(
+    [
+      sourceRecord({
+        id: "egg-amino-acid",
+        title: "Amino acid profile and protein quality of chicken egg white and yolk",
+        abstract:
+          "Chicken egg nutrition research compares egg white albumen and egg yolk amino acid composition, protein digestibility, essential amino acids, and biological value.",
+        doi: "10.1000/egg-amino",
+      }),
+      sourceRecord({
+        id: "basketball",
+        title: "Basketball training nutrition and sports performance",
+        abstract:
+          "This sports study evaluates athletes, basketball, volleyball, and training performance nutrition.",
+      }),
+      sourceRecord({
+        id: "climate",
+        title: "Climate effects on aviation and airplane fuel use",
+        abstract:
+          "Climate and airplane aviation emissions are modeled for aircraft fuel planning and flight operations.",
+      }),
+      sourceRecord({
+        id: "metadata-only",
+        title: "Egg protein amino acid composition in food science",
+        abstract: null,
+        doi: "10.1000/egg-metadata",
+      }),
+    ],
+    plan,
+  );
+
+  const direct = ranked.sources.find((source) => source.id === "egg-amino-acid");
+  const basketball = ranked.sources.find((source) => source.id === "basketball");
+  const climate = ranked.sources.find((source) => source.id === "climate");
+  const metadataOnly = ranked.sources.find((source) => source.id === "metadata-only");
+
+  assert.equal(direct?.relevanceLevel, "primary");
+  assert.equal(direct?.isPrimaryEvidence, true);
+  assert.equal(basketball?.relevanceLevel, "off_topic");
+  assert.equal(basketball?.reviewState, "rejected");
+  assert.equal(basketball?.shouldRecommendAccept, false);
+  assert.equal(climate?.relevanceLevel, "off_topic");
+  assert.equal(climate?.reviewState, "rejected");
+  assert.equal(metadataOnly?.evidenceGrounding, "metadata_only");
+  assert.notEqual(metadataOnly?.relevanceLevel, "primary");
+  assert.equal(metadataOnly?.isPrimaryEvidence, false);
+});
+
 test("source intent search labels primary candidates before building low-source warnings", async () => {
   const result = await searchIntentSources(
     {
@@ -1077,6 +1503,7 @@ test("source intent search labels primary candidates before building low-source 
       llm: { apiKey: "" },
       queryLimit: 1,
       includeDebug: true,
+      webFallback: { enabled: false },
       sourceSearch: {
         providerConfigs: {
           OpenAlex: {
@@ -1180,12 +1607,12 @@ test("source intent search labels primary candidates before building low-source 
   assert.equal(result.ok, true);
   assert.ok(result.sources.some((source) => source.relevanceLevel === "primary"));
   assert.ok(
-    result.sources.some(
-      (source) =>
-        source.title.includes("Spider monkeys") &&
-        source.relevanceLevel === "off_topic",
-    ),
+    !result.sources.some((source) => source.title.includes("Spider monkeys")),
   );
+  const spiderDecision = result.searchTrace.sourceDecisions.find((decision) =>
+    decision.title.includes("Spider monkeys"),
+  );
+  assert.ok(spiderDecision);
   assert.ok(
     !result.warnings.some((warning) => warning.includes("已找到 0 筆主要來源")),
   );
@@ -1199,11 +1626,12 @@ test("source intent search returns planner output and provider failures without 
       audience: "高中",
       language: "zh-TW",
     },
-    {
-      llm: { apiKey: "" },
-      queryLimit: 1,
-      includeDebug: true,
-      sourceSearch: {
+      {
+        llm: { apiKey: "" },
+        queryLimit: 1,
+        includeDebug: true,
+        webFallback: { enabled: false },
+        sourceSearch: {
         providerConfigs: {
           OpenAlex: {
             provider: "OpenAlex",
@@ -1280,9 +1708,18 @@ test("source intent search returns planner output and provider failures without 
       query.includes("urban heat island"),
     ),
   );
-  assert.equal(result.provider_status.length, 3);
-  assert.ok(result.provider_status.some((group) => group.ok === false));
-  assert.equal(result.sources[0]?.doi, "10.1000/uhi-campus");
+  const academicProviderStatus = result.provider_status.filter((group) =>
+    ["OpenAlex", "Semantic Scholar", "Crossref"].includes(group.provider),
+  );
+  assert.equal(new Set(academicProviderStatus.map((group) => group.provider)).size, 3);
+  assert.ok(academicProviderStatus.some((group) => group.ok === false));
+  assert.ok(
+    result.searchTrace.sourceDecisions.some(
+      (decision) =>
+        decision.provider === "Crossref" &&
+        decision.url === "https://doi.org/10.1000/uhi-campus",
+    ),
+  );
   assert.match(result.workflowId, /^[0-9a-f-]{36}$/i);
   assert.equal(result.topicHash.length > 0, true);
   assert.equal(result.queryPlanHash.length > 0, true);
@@ -1294,27 +1731,196 @@ test("source intent search returns planner output and provider failures without 
   );
 });
 
-test("source intent search does not hit providers when topic needs clarification", async () => {
-  const topics = [
-    guineaPigTopic,
-    bmwTopic,
-    classicalGuitarTopic,
-    waterBottleTopic,
-    eggTopic,
-  ];
+test("source intent search still retrieves for searchable topics that need clarification", async () => {
+  let providerCalled = false;
+  const result = await searchIntentSources(
+    {
+      topic: bmwTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    {
+      llm: { apiKey: "" },
+      queryLimit: 1,
+      webFallback: { enabled: false },
+      sourceSearch: {
+        providerConfigs: {
+          OpenAlex: {
+            provider: "OpenAlex",
+            endpoint: "https://example.test/openalex/works",
+            timeoutMs: 50,
+            queryLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+          Crossref: {
+            provider: "Crossref",
+            endpoint: "https://example.test/works",
+            timeoutMs: 50,
+            queryLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+          "Semantic Scholar": {
+            provider: "Semantic Scholar",
+            endpoint: "https://example.test/paper/search",
+            timeoutMs: 50,
+            queryLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+        },
+        fetchImpl: async () => {
+          providerCalled = true;
+          return new Response(JSON.stringify({ results: [] }));
+        },
+      },
+    },
+  );
 
-  for (const topic of topics) {
-    let providerCalled = false;
+  assert.equal(result.ok, true);
+  assert.equal(providerCalled, true);
+  assert.equal(result.searchIntent.needsClarification, true);
+  assert.ok(result.provider_status.length > 0);
+  assert.ok(result.planner.narrowedResearchQuestions?.length);
+  assert.doesNotMatch(
+    JSON.stringify(result.planner),
+    /research direction|research question|searchable topic|academic research/i,
+  );
+});
+
+test("source intent search skips invalid noise topics with empty diagnostics", async () => {
+  const result = await searchIntentSources(
+    {
+      topic: "hoeo2f2",
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    {
+      fetchImpl: async () => new Response("provider unavailable", { status: 500 }),
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "empty");
+  assert.equal(result.queryCount, 0);
+  assert.equal(result.llm_status, "skipped");
+  assert.equal(result.sources.length, 0);
+  assert.equal(result.queries.highPrecision.length, 0);
+  assert.ok(
+    result.warnings.includes("查無結果：輸入內容不像有效研究主題，請改用具體關鍵詞。"),
+  );
+});
+
+function publicSearchHtml(
+  results: Array<{ title: string; url: string; snippet: string }>,
+): string {
+  return results
+    .map(
+      (result) => `
+        <div class="result">
+          <a class="result__a" href="/l/?kh=-1&uddg=${encodeURIComponent(result.url)}">${result.title}</a>
+          <a class="result__snippet">${result.snippet}</a>
+        </div>
+      `,
+    )
+    .join("\n");
+}
+
+function openAlexWorks(
+  seed: string,
+  count: number,
+  terms: string[],
+): Record<string, unknown>[] {
+  const seedKey = createHash("sha256").update(seed).digest("hex").slice(0, 16);
+  const titlePrefix =
+    terms.length > 0 ? terms.join(" ") : seed.replace(/^https?:\/\//, "");
+  return Array.from({ length: count }, (_, index) => ({
+    id: `https://openalex.org/W${seedKey}-${index + 1}`,
+    display_name: `${titlePrefix} evidence study ${index + 1}`,
+    publication_year: 2024 - (index % 5),
+    doi: `https://doi.org/10.1000/${seedKey}-${index + 1}`,
+    abstract_inverted_index: Object.fromEntries(
+      terms.map((term, termIndex) => [term, [termIndex + index * 20]]),
+    ),
+    authorships: [{ author: { display_name: `Researcher ${index + 1}` } }],
+    primary_location: {
+      source: { display_name: "Journal of Applied Research" },
+    },
+    type: "article",
+    cited_by_count: 20 + index,
+  }));
+}
+
+function semanticPapers(
+  seed: string,
+  count: number,
+  abstract: string,
+): Record<string, unknown>[] {
+  const seedKey = createHash("sha256").update(seed).digest("hex").slice(0, 16);
+  return Array.from({ length: count }, (_, index) => ({
+    title: `${abstract} systematic evidence ${index + 1}`,
+    authors: [{ name: `Scholar ${index + 1}` }],
+    year: 2024 - (index % 4),
+    abstract,
+    externalIds: {
+      DOI: `10.1000/semantic-${seedKey}-${index + 1}`,
+    },
+    url: `https://semanticscholar.example/${seedKey}/${index + 1}`,
+    venue: "Educational and Social Research",
+    citationCount: 15 + index,
+    publicationTypes: ["JournalArticle"],
+  }));
+}
+
+function assertTopTwentyReviewable(result: { ok: boolean; sources: SourceRecord[] }) {
+  assert.equal(result.ok, true);
+  assert.equal(result.sources.length, 20);
+  assert.ok(
+    result.sources.every(
+      (source) =>
+        source.relevanceLevel !== "low" &&
+        source.relevanceLevel !== "off_topic" &&
+        source.classification !== "off_topic" &&
+        source.classification !== "trusted_but_off_topic",
+    ),
+  );
+}
+
+test("source intent search caps planner and summarizer LLM waits in retrieval flow", async () => {
+  const originalPlannerTimeout = process.env.SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS;
+  const originalSummaryTimeout = process.env.SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS;
+  process.env.SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS = "20";
+  process.env.SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS = "20";
+  let academicFetchCount = 0;
+  let fallbackFetchCount = 0;
+  let llmFetchCount = 0;
+
+  try {
     const result = await searchIntentSources(
       {
-        topic,
+        topic: "BMW 在電動車轉型中的產品與供應鏈策略",
         reportType: "研究報告",
         audience: "高中",
         language: "zh-TW",
       },
       {
-        llm: { apiKey: "" },
         queryLimit: 2,
+        includeDebug: true,
+        fetchImpl: async (_input, init) => {
+          llmFetchCount += 1;
+          return new Promise<Response>((_resolve, reject) => {
+            const abort = () => {
+              const error = new Error("aborted");
+              error.name = "AbortError";
+              reject(error);
+            };
+            if (init?.signal?.aborted) {
+              abort();
+              return;
+            }
+            init?.signal?.addEventListener("abort", abort, { once: true });
+          });
+        },
         sourceSearch: {
           providerConfigs: {
             OpenAlex: {
@@ -1339,28 +1945,420 @@ test("source intent search does not hit providers when topic needs clarification
               headers: { Accept: "application/json" },
             },
           },
+          fetchImpl: async (input) => {
+            academicFetchCount += 1;
+            const url = String(input);
+            if (url.includes("openalex")) {
+              return new Response(
+                JSON.stringify({
+                  results: [
+                    {
+                      id: "https://openalex.org/WBMW-TIMEOUT",
+                      display_name:
+                        "BMW electric vehicle supply chain strategy during product transition",
+                      publication_year: 2024,
+                      abstract_inverted_index: {
+                        BMW: [0],
+                        electric: [1],
+                        vehicle: [2],
+                        supply: [3],
+                        chain: [4],
+                        strategy: [5],
+                        product: [6],
+                        transition: [7],
+                      },
+                      authorships: [{ author: { display_name: "EV Scholar" } }],
+                      primary_location: {
+                        source: { display_name: "Automotive Strategy Journal" },
+                      },
+                      type: "article",
+                    },
+                  ],
+                }),
+              );
+            }
+            return new Response(JSON.stringify({ message: { items: [] }, data: [] }));
+          },
+        },
+        webFallback: {
+          endpoint: "https://example.test/search",
+          timeoutMs: 50,
+          maxResultsPerQuery: 2,
           fetchImpl: async () => {
-            providerCalled = true;
-            return new Response(JSON.stringify({ results: [] }));
+            fallbackFetchCount += 1;
+            return new Response(
+              publicSearchHtml([
+                {
+                  title: "BMW Group Report 2024",
+                  url: "https://www.bmwgroup.com/en/report/2024/",
+                  snippet:
+                    "BMW Group annual report describes electric vehicles, product strategy, supply chain, and sustainability.",
+                },
+              ]),
+            );
           },
         },
       },
     );
 
-    assert.equal(result.ok, true, topic);
-    assert.equal(providerCalled, false, topic);
-    assert.equal(result.searchIntent.needsClarification, true, topic);
-    assert.equal(result.sources.length, 0, topic);
-    assert.equal(result.provider_status.length, 0, topic);
-    assert.ok(result.planner.narrowedResearchQuestions?.length, topic);
-    assert.doesNotMatch(
-      JSON.stringify(result.planner),
-      /research direction|research question|searchable topic|academic research/i,
-      topic,
-    );
+    assert.equal(result.ok, true);
+    assert.equal(result.llm_status, "timeout");
+    assert.equal(result.sources.length > 0, true);
+    assert.equal(llmFetchCount >= 1, true);
+    assert.equal(academicFetchCount <= 24, true);
+    assert.equal(fallbackFetchCount <= 27, true);
     assert.ok(
-      result.warnings.some((warning) => warning.includes("需要先選擇具體研究方向")),
-      topic,
+      result.sources.some((source) => source.sourceType === "Official Source"),
     );
+  } finally {
+    if (originalPlannerTimeout === undefined) {
+      delete process.env.SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS;
+    } else {
+      process.env.SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS = originalPlannerTimeout;
+    }
+    if (originalSummaryTimeout === undefined) {
+      delete process.env.SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS;
+    } else {
+      process.env.SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS = originalSummaryTimeout;
+    }
   }
+});
+
+test("BMW EV strategy smoke returns academic, official, institutional, and media candidates", async () => {
+  const result = await searchIntentSources(
+    {
+      topic: "BMW 在電動車轉型中的產品與供應鏈策略",
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    {
+      llm: { apiKey: "" },
+      queryLimit: 3,
+      includeDebug: true,
+      sourceSearch: {
+        providerConfigs: {
+          OpenAlex: {
+            provider: "OpenAlex",
+            endpoint: "https://example.test/openalex/works",
+            timeoutMs: 50,
+            queryLimit: 2,
+            headers: { Accept: "application/json" },
+          },
+          Crossref: {
+            provider: "Crossref",
+            endpoint: "https://example.test/works",
+            timeoutMs: 50,
+            queryLimit: 2,
+            headers: { Accept: "application/json" },
+          },
+          "Semantic Scholar": {
+            provider: "Semantic Scholar",
+            endpoint: "https://example.test/paper/search",
+            timeoutMs: 50,
+            queryLimit: 2,
+            headers: { Accept: "application/json" },
+          },
+        },
+        fetchImpl: async (input) => {
+          const url = String(input);
+          if (url.includes("openalex")) {
+            return new Response(
+              JSON.stringify({
+                results: openAlexWorks(url, 8, [
+                  "BMW",
+                  "electric",
+                  "vehicle",
+                  "supply",
+                  "chain",
+                  "strategy",
+                  "battery",
+                  "transition",
+                ]),
+              }),
+            );
+          }
+          if (url.includes("paper/search")) {
+            return new Response(
+              JSON.stringify({
+                data: semanticPapers(
+                  url,
+                  6,
+                  "BMW and other electric vehicle manufacturers manage battery supply chain resilience, critical minerals, product platforms, and supplier risk during the EV transition.",
+                ),
+              }),
+            );
+          }
+
+          return new Response(
+            JSON.stringify({ message: { items: [] } }),
+          );
+        },
+      },
+      webFallback: {
+        endpoint: "https://example.test/search",
+        timeoutMs: 50,
+        maxResultsPerQuery: 3,
+        fetchImpl: async (input) => {
+          const url = String(input);
+          if (/Reuters|Financial Times|Guardian|NYTimes|CNBC/i.test(url)) {
+            return new Response(
+              publicSearchHtml([
+                {
+                  title: "BMW intensifies electric vehicle and battery strategy",
+                  url: "https://www.reuters.com/business/autos-transportation/bmw-electric-vehicles-battery-strategy-2024-01-01/",
+                  snippet:
+                    "Reuters reports on BMW electric vehicle product plans, battery supply chain pressure, and the Neue Klasse transition.",
+                },
+              ]),
+            );
+          }
+          if (/IEA|OECD|EU|government/i.test(url)) {
+            return new Response(
+              publicSearchHtml([
+                {
+                  title: "Global Supply Chains of EV Batteries",
+                  url: "https://www.iea.org/reports/global-supply-chains-of-ev-batteries",
+                  snippet:
+                    "IEA report on electric vehicle battery supply chains, critical minerals, manufacturing concentration, and resilience.",
+                },
+              ]),
+            );
+          }
+          return new Response(
+            publicSearchHtml([
+              {
+                title: "BMW Group Report 2024",
+                url: "https://www.bmwgroup.com/en/report/2024/",
+                snippet:
+                  "BMW Group annual report with electric vehicles, Neue Klasse product strategy, suppliers, and supply chain sustainability.",
+              },
+              {
+                title: "BMW Group Sustainability Report",
+                url: "https://www.bmwgroup.com/en/sustainability/report.html",
+                snippet:
+                  "BMW Group official sustainability reporting on electric vehicles, battery sourcing, supply chains, and carbon reduction.",
+              },
+            ]),
+          );
+        },
+      },
+    },
+  );
+
+  assertTopTwentyReviewable(result);
+  assert.ok(
+    result.sources.filter((source) =>
+      ["OpenAlex", "Semantic Scholar", "Official Source", "Institutional Source"].includes(
+        source.sourceType,
+      ),
+    ).length >= 2,
+  );
+  assert.ok(
+    result.sources.some((source) => source.sourceType === "Official Source"),
+  );
+  assert.ok(
+    result.provider_status.some(
+      (group) => group.provider === "Authoritative Media" && group.ok,
+    ),
+  );
+  assert.ok(
+    result.sources.some((source) =>
+      /BMW electric vehicle.*supply chain|BMW EV strategy battery supply chain/i.test(
+        source.queryUsed ?? "",
+      ),
+    ),
+  );
+  assert.ok(
+    result.keyword_expansion.search_queries.some((query) =>
+      /BMW electric vehicle transition supply chain strategy/i.test(query),
+    ),
+  );
+  assert.ok(!result.warnings.some((warning) => warning.includes("目前沒有找到符合搜尋意圖的來源")));
+});
+
+test("AI learning effect smoke returns top 20 ranked academic candidates", async () => {
+  const result = await searchIntentSources(
+    {
+      topic: "AI 對高中生學習成效",
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    {
+      llm: { apiKey: "" },
+      queryLimit: 4,
+      includeDebug: true,
+      webFallback: { enabled: false },
+      sourceSearch: {
+        providerConfigs: {
+          OpenAlex: {
+            provider: "OpenAlex",
+            endpoint: "https://example.test/openalex/works",
+            timeoutMs: 50,
+            queryLimit: 8,
+            headers: { Accept: "application/json" },
+          },
+          Crossref: {
+            provider: "Crossref",
+            endpoint: "https://example.test/works",
+            timeoutMs: 50,
+            queryLimit: 8,
+            headers: { Accept: "application/json" },
+          },
+          "Semantic Scholar": {
+            provider: "Semantic Scholar",
+            endpoint: "https://example.test/paper/search",
+            timeoutMs: 50,
+            queryLimit: 8,
+            headers: { Accept: "application/json" },
+          },
+        },
+        fetchImpl: async (input) => {
+          const url = String(input);
+          if (url.includes("openalex")) {
+            return new Response(
+              JSON.stringify({
+                results: openAlexWorks(
+                  url,
+                  10,
+                  [
+                    "artificial",
+                    "intelligence",
+                    "high",
+                    "school",
+                    "students",
+                    "learning",
+                    "outcomes",
+                    "achievement",
+                  ],
+                ),
+              }),
+            );
+          }
+          if (url.includes("paper/search")) {
+            return new Response(
+              JSON.stringify({
+                data: semanticPapers(
+                  url,
+                  10,
+                  "Artificial intelligence and generative AI tools in secondary education are associated with student learning outcomes, academic achievement, engagement, and learning performance.",
+                ),
+              }),
+            );
+          }
+          return new Response(JSON.stringify({ message: { items: [] } }));
+        },
+      },
+    },
+  );
+
+  assertTopTwentyReviewable(result);
+  assert.equal(result.planner.topicType, "ai_learning_effect_secondary_education");
+  assert.ok(
+    result.keyword_expansion.search_queries.some((query) =>
+      /artificial intelligence high school students learning outcomes/i.test(query),
+    ),
+  );
+});
+
+test("egg nutrition amino acid smoke retrieves 80 candidates and returns top 20 ranked sources", async () => {
+  const result = await searchIntentSources(
+    {
+      topic: "雞蛋的營養成分、蛋白質品質與胺基酸組成之研究",
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    {
+      llm: { apiKey: "" },
+      queryLimit: 4,
+      includeDebug: true,
+      webFallback: { enabled: false },
+      sourceSearch: {
+        providerConfigs: {
+          OpenAlex: {
+            provider: "OpenAlex",
+            endpoint: "https://example.test/openalex/works",
+            timeoutMs: 50,
+            queryLimit: 8,
+            headers: { Accept: "application/json" },
+          },
+          Crossref: {
+            provider: "Crossref",
+            endpoint: "https://example.test/works",
+            timeoutMs: 50,
+            queryLimit: 8,
+            headers: { Accept: "application/json" },
+          },
+          "Semantic Scholar": {
+            provider: "Semantic Scholar",
+            endpoint: "https://example.test/paper/search",
+            timeoutMs: 50,
+            queryLimit: 8,
+            headers: { Accept: "application/json" },
+          },
+        },
+        fetchImpl: async (input) => {
+          const url = String(input);
+          if (url.includes("openalex")) {
+            return new Response(
+              JSON.stringify({
+                results: openAlexWorks(
+                  url,
+                  10,
+                  [
+                    "egg",
+                    "nutrition",
+                    "protein",
+                    "quality",
+                    "amino",
+                    "acid",
+                    "albumen",
+                    "yolk",
+                    "digestibility",
+                  ],
+                ),
+              }),
+            );
+          }
+          if (url.includes("paper/search")) {
+            return new Response(
+              JSON.stringify({
+                data: semanticPapers(
+                  url,
+                  10,
+                  "Egg nutrition studies compare chicken egg white albumen and egg yolk amino acid profile, protein quality, digestibility, essential amino acids, and biological value.",
+                ),
+              }),
+            );
+          }
+          return new Response(JSON.stringify({ message: { items: [] } }));
+        },
+      },
+    },
+  );
+
+  assertTopTwentyReviewable(result);
+  assert.ok(result.diagnostics.retrieved_count >= 60);
+  assert.ok(result.diagnostics.displayed_count <= 20);
+  assert.equal(result.diagnostics.primary_candidate_count > 0, true);
+  assert.ok(
+    result.keyword_expansion.search_queries.some((query) =>
+      /egg nutrition protein quality/i.test(query),
+    ),
+  );
+  assert.ok(
+    result.keyword_expansion.search_queries.some((query) =>
+      /egg protein amino acid profile/i.test(query),
+    ),
+  );
+  assert.equal(
+    result.sources.some((source) =>
+      /basketball|baseball|volleyball|climate|airplane|籃球|棒球|排球|氣候|飛機/i.test(
+        `${source.title} ${source.abstract ?? ""}`,
+      ),
+    ),
+    false,
+  );
 });

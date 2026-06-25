@@ -82,6 +82,9 @@ test("draft generator includes section headings, source markers, and reference l
   assert.match(draft.text, /研究背景與動機/);
   assert.match(draft.text, /（來源 1）/);
   assert.match(draft.text, /資料缺口/);
+  assert.equal(draft.sectionEvidenceMap.length > 0, true);
+  assert.equal(draft.paragraphPlans.length > 0, true);
+  assert.equal(draft.debug.reportDraftGeneratedFromPlans, true);
   assert.doesNotMatch(draft.sections.find((section) => section.sectionId === "abstract")?.body ?? "", /來源 1 可支持/);
   assert.doesNotMatch(draft.sections.find((section) => section.sectionId === "abstract")?.body ?? "", /來源 1[：:]/);
   assert.match(draft.text, /參考資料/);
@@ -159,12 +162,11 @@ test("draft synthesis organizes evidence by section intent instead of source-car
   const evidence = draft.sections.find((section) => section.sectionId === "findings")?.body ?? "";
   const discussion = draft.sections.find((section) => section.sectionId === "discussion")?.body ?? "";
 
-  assert.match(literature, /文獻基礎|共同概念|資料面向/);
+  assert.match(literature, /文獻|整合來源/u);
   assert.doesNotMatch(literature, /來源 1 可支持|來源 2 可支持/);
-  assert.match(evidence, /背景與概念脈絡/);
-  assert.match(evidence, /資料與證據面向/);
+  assert.match(evidence, /可整理出的重點包括/u);
   assert.doesNotMatch(evidence, /來源 1[：:].*來源 2[：:]/s);
-  assert.match(discussion, /資料缺口/);
+  assert.match(discussion, /限制|可追溯的解讀/u);
 });
 
 test("draft writer never leaks instruction or scaffold text into report body", () => {
@@ -261,5 +263,5 @@ test("draft writer never leaks instruction or scaffold text into report body", (
   }
   assert.match(draft.text, /可樂成分與青少年健康影響/);
   assert.match(draft.text, /（來源 1）|（來源 2）|（來源 3）/);
-  assert.match(draft.text, /文獻整理與來源審查法/);
+  assert.match(draft.text, /來源審查與證據卡整理方式/u);
 });

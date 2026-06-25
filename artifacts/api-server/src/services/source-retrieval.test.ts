@@ -109,18 +109,21 @@ test("normalizes OpenAlex works and restores abstract inverted index", () => {
   assert.equal(source?.sourceKind, "journal");
 });
 
-test("normalizes incomplete source metadata without inventing values", () => {
+test("uses Semantic Scholar TLDR as a fallback abstract when the main abstract is missing", () => {
   const source = normalizeSemanticScholarPaper({
     title: "Incomplete but usable title",
     authors: [{ name: "" }],
-    tldr: { text: "Provider TLDR should not become a fake abstract." },
+    tldr: { text: "Provider TLDR can still provide a short but useful summary." },
   });
 
   assert.equal(source?.authors.length, 0);
   assert.equal(source?.year, null);
   assert.equal(source?.doi, null);
   assert.equal(source?.url, null);
-  assert.equal(source?.abstract, null);
+  assert.equal(
+    source?.abstract,
+    "Provider TLDR can still provide a short but useful summary.",
+  );
   assert.equal(source?.reviewState, "pending");
 });
 

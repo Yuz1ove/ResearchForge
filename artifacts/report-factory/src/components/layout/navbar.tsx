@@ -1,7 +1,8 @@
 import { Link, useLocation } from "wouter";
-import { Menu, X, BarChart } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { BrandWordmark } from "@/components/brand-wordmark";
 
 export function Navbar() {
   const [location] = useLocation();
@@ -19,10 +20,12 @@ export function Navbar() {
       <div className="container mx-auto px-4 h-16 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Link href="/" className="flex items-center gap-2" data-testid="link-logo">
-            <div className="bg-primary text-primary-foreground p-1.5 rounded-md">
-              <BarChart className="h-5 w-5" />
-            </div>
-            <span className="font-bold text-lg tracking-tight">ResearchForge</span>
+            <img
+              src="/assets/researchforge_icon_transparent.png"
+              alt="ResearchForge"
+              className="h-9 w-9 rounded-md bg-background object-contain p-0.5"
+            />
+            <BrandWordmark className="text-lg" />
           </Link>
         </div>
 

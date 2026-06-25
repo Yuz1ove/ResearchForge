@@ -17,6 +17,11 @@ import {
   type ReportInput,
   type TopicCategory,
 } from "./generateReport.ts";
+import {
+  DEFAULT_REPORT_PRESENTATION,
+  normalizeReportPresentation,
+  type ReportPresentationSettings,
+} from "./reportPresentation.ts";
 
 export type ReportGenerationMode = "blocked" | "quick_draft" | "full_report";
 
@@ -40,6 +45,25 @@ export interface GenerationReadiness {
 export interface GeneratorWorkflowVisibility {
   showEvidenceCards: boolean;
   showTechnicalLogs: boolean;
+}
+
+export interface ReportWorkspaceLlmDiagnostics {
+  reportGenerationProvider: string;
+  reportGenerationModel: string | null;
+  reportGenerationStatus: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped";
+  fallbackUsed: boolean;
+  fallbackReason: string | null;
+  message?: string | null;
+  warning: string | null;
+}
+
+export interface ReportWorkspaceSupplementalSearchDiagnostics {
+  attempted: boolean;
+  gaps: string[];
+  queries: string[];
+  rawResultCount: number;
+  filteredResultCount: number;
+  status: "skipped" | "attempted" | "insufficient";
 }
 
 export type ReportWorkspaceOutline = ReportOutline;
@@ -66,6 +90,9 @@ export interface ReportWorkspace {
   project: ResearchProject;
   evidenceCards: EvidenceCard[];
   qualityReport: QualityReport;
+  llmDiagnostics?: ReportWorkspaceLlmDiagnostics;
+  supplementalSearchDiagnostics?: ReportWorkspaceSupplementalSearchDiagnostics;
+  presentation: ReportPresentationSettings;
 }
 
 export interface ReportWorkspaceNavigationResult {
@@ -218,7 +245,7 @@ export function reportSourceGuardDiagnostics(
   );
   const messages: string[] = [];
 
-  if (acceptedSources.length < 3) {
+  if (acceptedSources.length < 1) {
     messages.push("accepted_sources_below_minimum");
   }
   if (workflowIds.size > 1) {
@@ -375,8 +402,6 @@ function diagnosticMessages(
   const requiredRelevant = full
     ? Math.min(5, config.fullReportSources)
     : Math.min(3, config.minimumAcceptedSources);
-  const requiredSummaries = full ? 4 : 1;
-  const requiredCoverage = full ? 2 : 1;
 
   if (diagnostics.acceptedSourceCount < requiredAccepted)
     messages.push(`已接受來源需至少 ${requiredAccepted} 筆`);
@@ -385,10 +410,6 @@ function diagnosticMessages(
       "目前主要／延伸來源不足。請重新搜尋或調整主題，至少需要 3 筆可驗證來源。",
     );
   }
-  if (diagnostics.usableSummaryCount < requiredSummaries)
-    messages.push(`可用摘要來源需至少 ${requiredSummaries} 筆`);
-  if (diagnostics.coverageCount < requiredCoverage)
-    messages.push(`來源 coverage 需至少涵蓋 ${requiredCoverage} 個章節面向`);
   if (diagnostics.lowQualityAcceptedCount > 0) {
     messages.push("系統找到多筆延伸或低相關來源，但它們不足以支撐本研究主題。");
   }
@@ -404,23 +425,15 @@ export function generationReadiness(
   const minimumUsableSources =
     diagnostics.primarySourceCount + diagnostics.secondarySourceCount;
   const preliminaryDiagnostics: string[] = [];
-  if (diagnostics.acceptedSourceCount < RESEARCH_DEPTH_CONFIG[depth].minimumAcceptedSources) {
+  if (diagnostics.acceptedSourceCount < 1) {
+    preliminaryDiagnostics.push("已接受來源至少需要 1 筆");
+  }
+  if (minimumUsableSources < 1) {
     preliminaryDiagnostics.push(
-      `已接受來源需至少 ${RESEARCH_DEPTH_CONFIG[depth].minimumAcceptedSources} 筆`,
+      "目前尚未建立可驗證來源。請先接受至少 1 筆與主題相關的來源。",
     );
   }
-  if (minimumUsableSources < 3) {
-    preliminaryDiagnostics.push(
-      "目前主要／延伸來源不足。請重新搜尋或調整主題，至少需要 3 筆可驗證來源。",
-    );
-  }
-  if (diagnostics.usableSummaryCount < 1) {
-    preliminaryDiagnostics.push("可用摘要來源需至少 1 筆");
-  }
-  if (diagnostics.coverageCount < 1) {
-    preliminaryDiagnostics.push("來源 coverage 需至少涵蓋 1 個章節面向");
-  }
-  if (diagnostics.lowQualityAcceptedCount > 0) {
+  if (diagnostics.lowQualityAcceptedCount > 0 && minimumUsableSources < 1) {
     preliminaryDiagnostics.push(
       "系統找到多筆延伸或低相關來源，但它們不足以支撐本研究主題。",
     );
@@ -440,8 +453,8 @@ export function generationReadiness(
     };
   }
 
-  if (diagnostics.primarySourceCount < 3 || fullDiagnosticList.length > 0) {
-    const secondaryOnlyWarning =
+  if (diagnostics.acceptedSourceCount < RESEARCH_DEPTH_CONFIG[depth].fullReportSources) {
+    const preliminaryWarning =
       diagnostics.primarySourceCount < 3
         ? [
             `主要來源僅 ${diagnostics.primarySourceCount} 筆；將以 ${diagnostics.secondarySourceCount} 筆延伸來源輔助生成初步報告，並標示主要來源不足。`,
@@ -453,10 +466,10 @@ export function generationReadiness(
       canGenerate: true,
       canGenerateFull: false,
       warning: `尚未達完整報告門檻：${[
-        ...secondaryOnlyWarning,
+        ...preliminaryWarning,
         ...fullDiagnosticList,
       ].join("、")}。`,
-      diagnostics: [...secondaryOnlyWarning, ...fullDiagnosticList],
+      diagnostics: [...preliminaryWarning, ...fullDiagnosticList],
       buttonLabel: "生成初步報告",
       progressLabel: "正在建立初步報告工作區",
     };
@@ -589,6 +602,7 @@ export function createReportWorkspace(
     input: effectiveInput,
     acceptedSources: boundAcceptedSources,
     project,
+    presentation: normalizeReportPresentation(DEFAULT_REPORT_PRESENTATION),
     ...buildWorkspaceParts(effectiveInput, boundAcceptedSources, project),
   };
 }
@@ -687,7 +701,7 @@ function hydrateStoredWorkspace(
       workspace.createdAt,
       workspace.updatedAt,
       "ready_to_export",
-	    );
+    );
   const topicHash = reportTopicFingerprint(input.topic);
   const workflowId = workspace.workflowId ?? createWorkflowId();
   const acceptedSources = bindSourcesToWorkspace(
@@ -703,7 +717,10 @@ function hydrateStoredWorkspace(
     workspace.evidenceCards &&
     workspace.qualityReport &&
     workspace.draft &&
-    workspace.outline
+    workspace.outline &&
+    workspace.draft.sectionEvidenceMap &&
+    workspace.draft.paragraphPlans &&
+    workspace.draft.debug
   ) {
     return {
       ...workspace,
@@ -715,6 +732,7 @@ function hydrateStoredWorkspace(
       sourceIds: workspace.sourceIds ?? sourceIds,
       input,
       acceptedSources,
+      presentation: normalizeReportPresentation(workspace.presentation),
       project,
     };
   }
@@ -729,6 +747,7 @@ function hydrateStoredWorkspace(
     sourceIds,
     input,
     acceptedSources,
+    presentation: normalizeReportPresentation(workspace.presentation),
     project,
     ...buildWorkspaceParts(input, acceptedSources, project),
   };
@@ -772,8 +791,18 @@ export function workspaceToGeneratedReport(
 ): GeneratedReport {
   return {
     ...workspace.report,
+    sections: workspace.draft.sections.map((section) => ({
+      heading: section.title,
+      blocks: [
+        {
+          type: "paragraph",
+          text: section.body,
+        },
+      ],
+    })),
     meta: {
       ...workspace.report.meta,
+      title: workspace.draft.title,
       category,
       acceptedSources: workspace.acceptedSources,
       bibliography: buildBibliography(

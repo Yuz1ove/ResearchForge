@@ -71,8 +71,10 @@ test("requestLlmReportDraft posts accepted sources and maps quick draft to preli
     return new Response(
       JSON.stringify({
         ok: true,
+        status: "success",
         llm_status: "success",
         fallback_used: false,
+        message: null,
         warning: null,
         sections: [
           {
@@ -123,9 +125,16 @@ test("mergeLlmReportDraft replaces matching draft section prose for preview", ()
 
   const merged = mergeLlmReportDraft(workspace, {
     ok: true,
+    status: "success",
     llm_status: "success",
     fallback_used: false,
+    message: null,
     warning: null,
+    reportGenerationProvider: "ollama",
+    reportGenerationModel: "test-model",
+    reportGenerationStatus: "success",
+    fallbackUsed: false,
+    fallbackReason: null,
     sections: [
       {
         sectionId: targetSection.sectionId,
@@ -165,9 +174,16 @@ test("mergeLlmReportDraft keeps references limited to accepted evidence cards", 
 
   const merged = mergeLlmReportDraft(workspace, {
     ok: true,
+    status: "success",
     llm_status: "success",
     fallback_used: false,
+    message: null,
     warning: null,
+    reportGenerationProvider: "ollama",
+    reportGenerationModel: "test-model",
+    reportGenerationStatus: "success",
+    fallbackUsed: false,
+    fallbackReason: null,
     sections: [
       {
         sectionId: targetSection.sectionId,
@@ -188,4 +204,84 @@ test("mergeLlmReportDraft keeps references limited to accepted evidence cards", 
     merged.report.meta.researchDraft.sections[0]?.citationIds.includes("unaccepted-source"),
     false,
   );
+});
+
+test("mergeLlmReportDraft keeps the existing draft when the LLM call fails", () => {
+  const workspace: ReportWorkspace = createReportWorkspace(
+    reportInput(),
+    [source(1), source(2), source(3)],
+    "full_report",
+    "rf-keep-draft",
+  );
+
+  const merged = mergeLlmReportDraft(workspace, {
+    ok: false,
+    status: "unavailable",
+    llm_status: "failed",
+    fallback_used: true,
+    message: "LLM report service unavailable.",
+    warning: "provider timeout",
+    reportGenerationProvider: "ollama",
+    reportGenerationModel: "test-model",
+    reportGenerationStatus: "failed",
+    fallbackUsed: true,
+    fallbackReason: "provider timeout",
+    sections: [],
+  });
+
+  assert.equal(merged.draft.text, workspace.draft.text);
+  assert.equal(merged.draft.sections[0]?.body, workspace.draft.sections[0]?.body);
+  assert.equal(merged.llmDiagnostics?.reportGenerationStatus, "failed");
+  assert.equal(
+    merged.report.meta.researchDraft.sections[0]?.body,
+    workspace.draft.sections[0]?.body,
+  );
+});
+
+test("mergeLlmReportDraft still applies constrained fallback sections when sections are returned", () => {
+  const workspace: ReportWorkspace = createReportWorkspace(
+    reportInput(),
+    [source(1), source(2), source(3)],
+    "full_report",
+    "rf-constrained-fallback",
+  );
+  const targetSection = workspace.draft.sections[0];
+  assert.ok(targetSection);
+
+  const merged = mergeLlmReportDraft(workspace, {
+    ok: false,
+    status: "error",
+    llm_status: "failed",
+    fallback_used: true,
+    message: "LLM report service unavailable.",
+    warning: "provider timeout",
+    reportGenerationProvider: "ollama",
+    reportGenerationModel: "test-model",
+    reportGenerationStatus: "failed",
+    fallbackUsed: true,
+    fallbackReason: "provider timeout",
+    sections: [
+      {
+        sectionId: targetSection.sectionId,
+        title: "摘要",
+        prose:
+          "本稿僅依已接受來源形成受限草稿，正文集中整理水餃的營養與飲食文化證據，並保留未補證部分。（來源 1）（來源 2）",
+        evidenceCardIds: workspace.evidenceCards.slice(0, 2).map((card) => card.id),
+        citationIds: ["source-1", "source-2"],
+        warnings: ["段落受限於摘要證據，尚未讀取全文。"],
+      },
+    ],
+  });
+
+  assert.match(merged.draft.sections[0]?.body ?? "", /受限草稿/);
+  assert.deepEqual(
+    merged.draft.sections[0]?.evidenceCardIds,
+    workspace.evidenceCards.slice(0, 2).map((card) => card.id),
+  );
+  assert.deepEqual(merged.draft.sections[0]?.citationIds, ["source-1", "source-2"]);
+  assert.deepEqual(
+    merged.draft.sections[0]?.warnings,
+    ["段落受限於摘要證據，尚未讀取全文。"],
+  );
+  assert.equal(merged.llmDiagnostics?.reportGenerationStatus, "failed");
 });

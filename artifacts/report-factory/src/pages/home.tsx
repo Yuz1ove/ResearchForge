@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Navbar } from "@/components/layout/navbar";
 import { Footer } from "@/components/layout/footer";
+import { BrandWordmark } from "@/components/brand-wordmark";
 import { Link } from "wouter";
 import {
   ArrowRight,
@@ -56,8 +57,8 @@ export function Home() {
               AI 報告生成器 · 學生與研究者專用
             </div>
 
-            <h1 className="text-4xl md:text-6xl font-bold tracking-tight text-foreground mb-6 leading-tight">
-              ResearchForge
+            <h1 className="mb-6 leading-tight text-4xl md:text-6xl text-foreground">
+              <BrandWordmark className="text-inherit" />
             </h1>
             <p className="text-xl md:text-2xl text-muted-foreground mb-4 font-medium">
               輸入主題，快速生成結構完整、格式清楚、<br className="hidden md:block" />

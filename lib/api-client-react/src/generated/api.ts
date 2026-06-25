@@ -25,7 +25,9 @@ import type {
   KeywordSourceSearchResult,
   SearchKeywordsRequest,
   SearchSourcesRequest,
-  SourceSearchResult
+  SourceSearchResult,
+  TopicUnderstandingRequest,
+  TopicUnderstandingResult
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -260,5 +262,77 @@ export const useSearchKeywords = <TError = ErrorType<ErrorResponse>,
         TContext
       > => {
       return useMutation(getSearchKeywordsMutationOptions(options));
+    }
+
+export const getTopicUnderstandingUrl = () => {
+
+
+
+
+  return `/api/topic-understanding`
+}
+
+/**
+ * Expands a topic into structured research angles with deterministic fallback when local LLM is unavailable.
+ * @summary Understand a research topic
+ */
+export const topicUnderstanding = async (topicUnderstandingRequest: TopicUnderstandingRequest, options?: RequestInit): Promise<TopicUnderstandingResult> => {
+
+  return customFetch<TopicUnderstandingResult>(getTopicUnderstandingUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      topicUnderstandingRequest,)
+  }
+);}
+
+
+
+
+export const getTopicUnderstandingMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof topicUnderstanding>>, TError,{data: BodyType<TopicUnderstandingRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof topicUnderstanding>>, TError,{data: BodyType<TopicUnderstandingRequest>}, TContext> => {
+
+const mutationKey = ['topicUnderstanding'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof topicUnderstanding>>, {data: BodyType<TopicUnderstandingRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  topicUnderstanding(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type TopicUnderstandingMutationResult = NonNullable<Awaited<ReturnType<typeof topicUnderstanding>>>
+    export type TopicUnderstandingMutationBody = BodyType<TopicUnderstandingRequest>
+    export type TopicUnderstandingMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Understand a research topic
+ */
+export const useTopicUnderstanding = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof topicUnderstanding>>, TError,{data: BodyType<TopicUnderstandingRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof topicUnderstanding>>,
+        TError,
+        {data: BodyType<TopicUnderstandingRequest>},
+        TContext
+      > => {
+      return useMutation(getTopicUnderstandingMutationOptions(options));
     }
 

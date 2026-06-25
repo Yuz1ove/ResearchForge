@@ -17,6 +17,10 @@ export interface SearchSourcesRequest {
   query?: string;
   /** @minLength 1 */
   topic?: string;
+  /** @minLength 1 */
+  originalTopic?: string;
+  /** @minLength 1 */
+  refinedTopic?: string;
   reportType?: string;
   audience?: string;
   sourceMode?: string;
@@ -30,6 +34,41 @@ export interface SearchKeywordsRequest {
   audience?: string;
   sourceMode?: string;
   language?: string;
+}
+
+export interface TopicUnderstandingRequest {
+  /** @minLength 1 */
+  topic: string;
+  reportType?: string;
+  audience?: string;
+  sourceMode?: string;
+  language?: string;
+}
+
+export interface TopicUnderstandingDiagnostics {
+  usedLocalLlm: boolean;
+  fallbackReason?: string | null;
+  confidence: number;
+  model?: string | null;
+  latencyMs?: number | null;
+}
+
+export type TopicUnderstandingResultResearchAnglesItem = {
+  title: string;
+  angle: string;
+  reason: string;
+  searchQueries: string[];
+};
+
+export interface TopicUnderstandingResult {
+  normalizedTopic: string;
+  domain: string;
+  subdomain: string;
+  entities: string[];
+  likelyMeanings: string[];
+  ambiguityWarnings: string[];
+  researchAngles: TopicUnderstandingResultResearchAnglesItem[];
+  diagnostics: TopicUnderstandingDiagnostics;
 }
 
 export type SourceReviewState = typeof SourceReviewState[keyof typeof SourceReviewState];
@@ -48,6 +87,9 @@ export const SourceRecordSourceType = {
   OpenAlex: 'OpenAlex',
   Crossref: 'Crossref',
   Semantic_Scholar: 'Semantic Scholar',
+  Official_Source: 'Official Source',
+  Institutional_Source: 'Institutional Source',
+  Authoritative_Media: 'Authoritative Media',
 } as const;
 
 export type SourceRecordSourceKind = typeof SourceRecordSourceKind[keyof typeof SourceRecordSourceKind] | null;
@@ -89,6 +131,9 @@ export interface SourceRecord {
   authors: string[];
   year: number | null;
   abstract: string | null;
+  snippet?: string | null;
+  language?: string | null;
+  abstractMissing?: boolean | null;
   doi: string | null;
   url: string | null;
   sourceType: SourceRecordSourceType;
@@ -117,6 +162,15 @@ export interface SourceRecord {
   sourceRelevanceReasonZhTw?: string | null;
   shouldShowInMainList?: boolean | null;
   shouldRecommendAccept?: boolean | null;
+  topicRelevance?: number | null;
+  evidenceQuality?: number | null;
+  metadataCompleteness?: number | null;
+  abstractQuality?: number | null;
+  sourceTrust?: number | null;
+  isMetadataOnly?: boolean | null;
+  isPrimaryEvidence?: boolean | null;
+  rejectionReason?: string | null;
+  recommendation?: string | null;
 }
 
 export type SourceSearchResultLlmStatus = typeof SourceSearchResultLlmStatus[keyof typeof SourceSearchResultLlmStatus];
@@ -165,6 +219,9 @@ export const KeywordSourceGroupProvider = {
   OpenAlex: 'OpenAlex',
   Crossref: 'Crossref',
   Semantic_Scholar: 'Semantic Scholar',
+  Official_Source: 'Official Source',
+  Institutional_Source: 'Institutional Source',
+  Authoritative_Media: 'Authoritative Media',
 } as const;
 
 export interface KeywordSourceGroup {
@@ -267,6 +324,24 @@ export interface SearchTrace {
   sourceDecisions: SourceDecisionTrace[];
 }
 
+export interface SourceSearchPipelineDiagnostics {
+  retrieved_count: number;
+  deduped_count: number;
+  rejected_count: number;
+  candidate_count: number;
+  displayed_count: number;
+  primary_candidate_count: number;
+  provider_status: Array<{
+    provider: string;
+    query: string;
+    ok: boolean;
+    result_count: number;
+    error_type: string | null;
+    error_message: string | null;
+  }>;
+  warnings: string[];
+}
+
 export interface SourceSearchResult {
   ok?: boolean;
   topic?: string;
@@ -285,6 +360,7 @@ export interface SourceSearchResult {
   planner?: SearchIntentPlan;
   relevance_debug?: SearchRelevanceDebug[];
   searchTrace?: SearchTrace;
+  diagnostics?: SourceSearchPipelineDiagnostics;
 }
 
 export type SearchIntentSourceSearchResultLlmStatus = typeof SearchIntentSourceSearchResultLlmStatus[keyof typeof SearchIntentSourceSearchResultLlmStatus];
@@ -313,6 +389,7 @@ export interface SearchIntentSourceSearchResult {
   planner: SearchIntentPlan;
   relevance_debug?: SearchRelevanceDebug[];
   searchTrace: SearchTrace;
+  diagnostics: SourceSearchPipelineDiagnostics;
   llm_status: SearchIntentSourceSearchResultLlmStatus;
   keyword_expansion: KeywordExpansionResult;
   groups: KeywordSourceGroup[];
@@ -340,4 +417,3 @@ export interface KeywordSourceSearchResult {
 export interface ErrorResponse {
   message: string;
 }
-

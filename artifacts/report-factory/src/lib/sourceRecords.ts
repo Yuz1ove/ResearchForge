@@ -68,6 +68,9 @@ export interface SourceRecordMetadata {
   provider?: string | null;
   queryUsed?: string | null;
   retrievedAt?: string | null;
+  snippet?: string | null;
+  language?: string | null;
+  abstractMissing?: boolean | null;
   dedupeKey?: string | null;
   sourceKind?: SourceKind | string | null;
   citationCount?: number | null;
@@ -98,7 +101,14 @@ export interface SourceRecordMetadata {
   mainEvidenceFacet?: string | null;
   evidenceSummaryZhTw?: string | null;
   llmSummaryZhTw?: string | null;
-  llmSummaryStatus?: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped" | null;
+  llmSummaryStatus?: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped" | "metadata-only" | "fetch-failed" | "llm-failed" | "fallback" | null;
+  summaryStructuredStatus?: "success" | "unavailable" | "invalid_input" | "insufficient_sources" | "error" | null;
+  summaryProvider?: string | null;
+  summaryModel?: string | null;
+  summaryStatus?: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped" | "metadata-only" | "fetch-failed" | "llm-failed" | "fallback" | null;
+  summaryFallbackUsed?: boolean | null;
+  summaryReason?: string | null;
+  summaryMessage?: string | null;
   evidenceSnippets?: SourceEvidenceSnippet[] | null;
   evidenceChain?: SourceEvidenceChainEntry[] | null;
   workflowId?: string | null;
@@ -115,6 +125,15 @@ export interface SourceRecordMetadata {
   rejectReason?: string | null;
   matchedTerms?: string[] | null;
   driftTerms?: string[] | null;
+  topicRelevance?: number | null;
+  evidenceQuality?: number | null;
+  metadataCompleteness?: number | null;
+  abstractQuality?: number | null;
+  sourceTrust?: number | null;
+  isMetadataOnly?: boolean | null;
+  isPrimaryEvidence?: boolean | null;
+  rejectionReason?: string | null;
+  recommendation?: string | null;
 }
 
 export type SourceRecord = ApiSourceRecord & SourceRecordMetadata;
@@ -354,7 +373,25 @@ function normalizeLlmSummaryStatus(value: unknown): SourceRecordMetadata["llmSum
     value === "timeout" ||
     value === "quota_exceeded" ||
     value === "failed" ||
-    value === "skipped"
+    value === "skipped" ||
+    value === "metadata-only" ||
+    value === "fetch-failed" ||
+    value === "llm-failed" ||
+    value === "fallback"
+  )
+    return value;
+  return null;
+}
+
+function normalizeStructuredSummaryStatus(
+  value: unknown,
+): SourceRecordMetadata["summaryStructuredStatus"] {
+  if (
+    value === "success" ||
+    value === "unavailable" ||
+    value === "invalid_input" ||
+    value === "insufficient_sources" ||
+    value === "error"
   )
     return value;
   return null;
@@ -489,7 +526,9 @@ function sourceHost(source: SourceRecord): string {
 function hasCredibleProvider(source: SourceRecord): boolean {
   const text = textForClassification(source);
   const host = sourceHost(source);
-  return /crossref|semantic scholar|openalex|pubmed|doi|scopus|web of science/.test(text)
+  return source.sourceType === "Official Source"
+    || source.sourceType === "Institutional Source"
+    || /crossref|semantic scholar|openalex|pubmed|doi|scopus|web of science/.test(text)
     || /\.gov(\.|$)|\.edu(\.|$)|gov\.tw$|who\.int$|un\.org$|oecd\.org$|worldbank\.org$|europa\.eu$/.test(host);
 }
 
@@ -501,7 +540,9 @@ export function classifySourceRecord(source: SourceRecord): SourceCategory {
   const host = sourceHost(source);
 
   if (
-    /\.gov(\.|$)|gov\.tw$|who\.int$|un\.org$|oecd\.org$|worldbank\.org$|europa\.eu$|unesco\.org$/.test(host)
+    source.sourceType === "Official Source"
+    || source.sourceType === "Institutional Source"
+    || /\.gov(\.|$)|gov\.tw$|who\.int$|un\.org$|oecd\.org$|worldbank\.org$|europa\.eu$|unesco\.org$/.test(host)
     || /government|ministry|department|agency|bureau|institute|institution|university|college|政府|部|署|局|院|研究院|大學|學院|官方|機構/.test(text)
   ) {
     return "government_or_institution";
@@ -519,7 +560,7 @@ export function classifySourceRecord(source: SourceRecord): SourceCategory {
     return "academic_paper";
   }
 
-  if (source.url || /news|article|blog|web|新聞|報導|網頁|網站/.test(text)) {
+  if (source.sourceType === "Authoritative Media" || source.url || /news|article|blog|web|新聞|報導|網頁|網站/.test(text)) {
     return "news_or_web";
   }
 
@@ -546,6 +587,12 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     authors: source.authors.map((author) => cleanText(author)).filter((author): author is string => Boolean(author)),
     year: typeof source.year === "number" && Number.isFinite(source.year) ? Math.trunc(source.year) : null,
     abstract: cleanText(source.abstract),
+    snippet: cleanText(source.snippet),
+    language: cleanText(source.language),
+    abstractMissing:
+      typeof source.abstractMissing === "boolean"
+        ? source.abstractMissing
+        : !cleanText(source.abstract),
     doi: normalizeDoi(source.doi),
     url: cleanText(source.url),
     sourceType: source.sourceType,
@@ -591,6 +638,15 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     evidenceSummaryZhTw: cleanText(source.evidenceSummaryZhTw),
     llmSummaryZhTw: cleanText(source.llmSummaryZhTw),
     llmSummaryStatus: normalizeLlmSummaryStatus(source.llmSummaryStatus),
+    summaryStructuredStatus: normalizeStructuredSummaryStatus(
+      source.summaryStructuredStatus,
+    ),
+    summaryProvider: cleanText(source.summaryProvider),
+    summaryModel: cleanText(source.summaryModel),
+    summaryStatus: normalizeLlmSummaryStatus(source.summaryStatus),
+    summaryFallbackUsed: typeof source.summaryFallbackUsed === "boolean" ? source.summaryFallbackUsed : null,
+    summaryReason: cleanText(source.summaryReason),
+    summaryMessage: cleanText(source.summaryMessage),
     evidenceSnippets: normalizeEvidenceSnippetList(source.evidenceSnippets),
     evidenceChain: normalizeEvidenceChainList(source.evidenceChain),
     workflowId: cleanText(source.workflowId),
@@ -607,6 +663,15 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     rejectReason: cleanText(source.rejectReason),
     matchedTerms: normalizeStringList(source.matchedTerms),
     driftTerms: normalizeStringList(source.driftTerms),
+    topicRelevance: normalizeOptionalScore(source.topicRelevance),
+    evidenceQuality: normalizeOptionalScore(source.evidenceQuality),
+    metadataCompleteness: normalizeOptionalScore(source.metadataCompleteness),
+    abstractQuality: normalizeOptionalScore(source.abstractQuality),
+    sourceTrust: normalizeOptionalScore(source.sourceTrust),
+    isMetadataOnly: typeof source.isMetadataOnly === "boolean" ? source.isMetadataOnly : null,
+    isPrimaryEvidence: typeof source.isPrimaryEvidence === "boolean" ? source.isPrimaryEvidence : null,
+    rejectionReason: cleanText(source.rejectionReason),
+    recommendation: cleanText(source.recommendation),
   };
   return {
     ...normalized,

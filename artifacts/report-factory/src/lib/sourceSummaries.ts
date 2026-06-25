@@ -23,6 +23,149 @@ import { buildTopicFacets } from "./topicFacets.ts";
 const FALLBACK_SUMMARY =
   "本來源目前缺少可用摘要，可先作為背景線索或資料缺口說明；若要作為主要證據，仍需補充可驗證摘要或原文片段。";
 
+const ENGLISH_NOISE_WORDS = new Set([
+  "about",
+  "after",
+  "among",
+  "analysis",
+  "and",
+  "article",
+  "based",
+  "between",
+  "data",
+  "effect",
+  "effects",
+  "from",
+  "have",
+  "into",
+  "model",
+  "paper",
+  "research",
+  "results",
+  "review",
+  "study",
+  "that",
+  "their",
+  "this",
+  "using",
+  "with",
+]);
+
+const ENGLISH_GLUE_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "as",
+  "at",
+  "by",
+  "for",
+  "from",
+  "in",
+  "into",
+  "of",
+  "on",
+  "or",
+  "that",
+  "the",
+  "through",
+  "to",
+  "using",
+  "via",
+  "with",
+]);
+
+const ACADEMIC_TERM_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/\bbased on\b/gi, "基於"],
+  [/\bcase study\b/gi, "案例研究"],
+  [/\bfuel efficiency\b/gi, "燃油效率"],
+  [/\bcontrol surfaces\b/gi, "控制面"],
+  [/\bflight stability\b/gi, "飛行穩定"],
+  [/\bobserved warming\b/gi, "觀測升溫"],
+  [/\bcurrent status\b/gi, "現況"],
+  [/\bclimate change indicators\b/gi, "氣候變遷指標"],
+  [/\btemperature trends\b/gi, "溫度趨勢"],
+  [/\bco2 concentration\b/gi, "二氧化碳濃度"],
+  [/\bconcentration\b/gi, "濃度"],
+  [/\bsea level change\b/gi, "海平面變化"],
+  [/\bdigital twin\b/gi, "數位分身"],
+  [/\bstructural life\b/gi, "結構壽命"],
+  [/\bstructural health monitoring\b/gi, "結構健康監測"],
+  [/\bcomposite structures\b/gi, "複合材料結構"],
+  [/\bcomposite materials\b/gi, "複合材料"],
+  [/\bfibre optic sensors?\b/gi, "光纖感測器"],
+  [/\bfiber optic sensors?\b/gi, "光纖感測器"],
+  [/\brecent advances\b/gi, "最新進展"],
+  [/\bapplications?\b/gi, "應用"],
+  [/\badvancement(s)?\b/gi, "進展"],
+  [/\breview\b/gi, "綜述"],
+  [/\baluminum alloys?\b/gi, "鋁合金"],
+  [/\bseries\b/gi, "系列"],
+  [/\bindicators\b/gi, "指標"],
+  [/\bCO2\b/g, "二氧化碳"],
+  [/\bcargo\b/gi, "貨運"],
+  [/\bfleet management\b/gi, "機隊管理"],
+  [/\bflight operations\b/gi, "飛航作業"],
+  [/\bscheduling\b/gi, "調度"],
+  [/\bassembly\b/gi, "組裝"],
+  [/\baerostructural\b/gi, "航太結構"],
+  [/\btwin-fuselage\b/gi, "雙機身"],
+  [/\bstrut-braced-wing\b/gi, "支柱撐翼"],
+  [/\bconfiguration(s)?\b/gi, "構型"],
+  [/\boverview\b/gi, "概述"],
+  [/\bcomparative\b/gi, "比較"],
+  [/\boptimization\b/gi, "最佳化"],
+  [/\boptimisation\b/gi, "最佳化"],
+  [/\bdynamic\b/gi, "動態"],
+  [/\bmodel(s)?\b/gi, "模型"],
+  [/\bdata\b/gi, "資料"],
+  [/\bstudy\b/gi, "研究"],
+  [/\bstudies\b/gi, "研究"],
+  [/\bresults show\b/gi, "結果顯示"],
+  [/\bperformance\b/gi, "性能"],
+  [/\bimprovement(s)?\b/gi, "改善"],
+  [/\bsafety\b/gi, "安全"],
+  [/\bunmanned\b/gi, "無人"],
+  [/\bmanned\b/gi, "有人"],
+  [/\blateral\b/gi, "側向"],
+  [/\bspacing\b/gi, "間距"],
+  [/\boperation(s)?\b/gi, "作業"],
+  [/\bmixed\b/gi, "混合"],
+  [/\bQAR\b/g, "快速存取記錄器"],
+  [/\bquick access recorder\b/gi, "快速存取記錄器"],
+  [/\brunway overrun\b/gi, "跑道衝出"],
+  [/\brisk assessment\b/gi, "風險評估"],
+  [/\bcivil aircraft\b/gi, "民航飛機"],
+  [/\bfixed-wing aircraft\b/gi, "固定翼飛機"],
+  [/\bflight parameters\b/gi, "飛行參數"],
+  [/\bflight safety\b/gi, "飛航安全"],
+  [/\btouchdown distance\b/gi, "接地距離"],
+  [/\bkinetic energy\b/gi, "動能"],
+  [/\bflight phase\b/gi, "飛行階段"],
+  [/\baircraft\b/gi, "飛機"],
+  [/\bairplane\b/gi, "飛機"],
+  [/\baeroplane\b/gi, "飛機"],
+  [/\baviation\b/gi, "航空"],
+  [/\bprediction\b/gi, "預測"],
+  [/\bdesign\b/gi, "設計"],
+  [/\bmaterials\b/gi, "材料"],
+  [/\bmanufacturing\b/gi, "製造"],
+  [/\bmaintenance\b/gi, "維修"],
+  [/\boptimization\b/gi, "最佳化"],
+  [/\bconfiguration\b/gi, "構型"],
+  [/\bwing\b/gi, "機翼"],
+  [/\bfuselage\b/gi, "機身"],
+  [/\bsoft drink\b/gi, "含糖飲料"],
+  [/\bsugar-sweetened beverage\b/gi, "含糖飲料"],
+  [/\bshort video\b/gi, "短影音"],
+  [/\battention\b/gi, "注意力"],
+  [/\bclimate change\b/gi, "氣候變遷"],
+  [/\bgreenhouse gas\b/gi, "溫室氣體"],
+  [/\bsea level\b/gi, "海平面"],
+  [/\bglobal warming\b/gi, "全球暖化"],
+  [/\bstudents?\b/gi, "學生"],
+  [/\badolescents?\b/gi, "青少年"],
+];
+
 function cleanText(value: string | null | undefined): string {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
@@ -43,67 +186,286 @@ function truncateText(text: string, maxLength = 160): string {
     .trim()}…`;
 }
 
-function topicLabel(topic: string): string {
-  return cleanText(topic) || "本研究主題";
+function looksMostlyAscii(text: string): boolean {
+  return /^[\x00-\x7F\s.,;:'"!?()[\]{}<>/%+-]+$/.test(cleanText(text));
 }
 
-function summaryFocusKeywords(text: string): string[] {
+function applyAcademicTermReplacements(text: string): string {
+  let normalized = normalizeDisplayTextToZhTw(cleanText(text));
+  for (const [pattern, replacement] of ACADEMIC_TERM_REPLACEMENTS) {
+    normalized = normalized.replace(pattern, replacement);
+  }
+  return normalized.replace(/\s+/g, " ").trim();
+}
+
+function polishReaderFacingText(text: string): string {
+  return cleanText(text)
+    .replace(/\b(for|and|of|on|in|with|from|to|via)\b/gi, " ")
+    .replace(/\b(new|current|overall|respectively|approach|approaches|framework|frameworks)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([，。；：、])/g, "$1")
+    .replace(/([（(])\s+/g, "$1")
+    .replace(/\s+([）)])/g, "$1")
+    .trim();
+}
+
+function stripAcademicSentenceLead(text: string): string {
+  return cleanText(text)
+    .replace(
+      /^in\s+this\s+((systematic|narrative|literature|cohort|case[- ]control|cross[- ]sectional|retrospective|prospective|observational|experimental|comparative|empirical)\s+){0,2}(study|paper|article|review|analysis)[,:]?\s*/i,
+      "",
+    )
+    .replace(
+      /^(this|the)\s+((systematic|narrative|literature|cohort|case[- ]control|cross[- ]sectional|retrospective|prospective|observational|experimental|comparative|empirical)\s+){0,2}(study|paper|article|review|analysis)[,:]?\s*/i,
+      "",
+    )
+    .replace(
+      /^(taking|using|based on)\b[^.]{0,160}?\b(case study|dataset|data)\b,?\s*/i,
+      "",
+    )
+    .replace(/^(we|authors?)\s+/i, "")
+    .replace(
+      /^(examines?|analyzes?|investigates?|evaluates?|explores?|proposes?|presents?|predicts?|describes?|reports?|discusses?)\s+/i,
+      "",
+    )
+    .replace(/^\s*(the)\s+/i, "")
+    .trim();
+}
+
+function englishWordCount(text: string): number {
+  return cleanText(text).match(/[A-Za-z]{3,}/g)?.length ?? 0;
+}
+
+function containsHeavyEnglish(text: string): boolean {
+  const normalized = cleanText(text);
+  const asciiLetters = normalized.match(/[A-Za-z]/g)?.length ?? 0;
+  const chars = Array.from(normalized).length || 1;
+  return englishWordCount(normalized) >= 4 || asciiLetters / chars >= 0.22;
+}
+
+function meaningfulResearchTerms(text: string): string[] {
+  return polishReaderFacingText(applyAcademicTermReplacements(text))
+    .split(/[，。；：、,;:()[\]{}<>/%+-]|\s+/)
+    .map((token) => cleanText(token))
+    .filter((token) => token.length >= 2)
+    .filter((token) => {
+      if (/[\u4e00-\u9fff]/u.test(token)) return true;
+      if (/^[A-Z0-9-]{2,6}$/.test(token)) return true;
+      if (ENGLISH_NOISE_WORDS.has(token.toLowerCase())) return false;
+      if (ENGLISH_GLUE_WORDS.has(token.toLowerCase())) return false;
+      return false;
+    })
+    .filter((token, index, items) => items.indexOf(token) === index)
+    .slice(0, 4);
+}
+
+function readerFacingActionDetail(action: string): string {
+  switch (action) {
+    case "提出並說明":
+      return "設計與判斷方式";
+    case "評估":
+      return "評估方式與風險判讀";
+    case "比較":
+      return "差異與表現比較";
+    case "預測":
+      return "預測方向與判斷依據";
+    case "探討":
+      return "核心議題與可能影響";
+    default:
+      return "核心重點";
+  }
+}
+
+function naturalChineseLead(
+  focus: string,
+  action: string,
+  facets: string[],
+  sentence: string,
+): string {
+  const terms = [
+    ...facets,
+    ...meaningfulResearchTerms(sentence),
+    ...meaningfulResearchTerms(focus),
+  ].filter((term, index, items) => term && items.indexOf(term) === index);
+  const termText = terms.slice(0, 3).join("、");
+  if (termText) {
+    return `內容聚焦${termText}，可用來理解${focus}的${readerFacingActionDetail(action)}。`;
+  }
+  return `內容聚焦${focus}，可用來快速掌握這篇研究的${readerFacingActionDetail(action)}。`;
+}
+
+function readerFacingFacetLabels(facets: string[]): string[] {
+  return facets
+    .map((facet) => polishReaderFacingText(applyAcademicTermReplacements(facet)))
+    .map((facet) => cleanText(facet))
+    .filter((facet, index, items) => facet && items.indexOf(facet) === index);
+}
+
+function normalizedUserFacingLlmSummary(
+  summary: string | null | undefined,
+  maxLength: number,
+): string {
+  const normalized = polishReaderFacingText(
+    applyAcademicTermReplacements(cleanText(summary)),
+  )
+    .replace(/^(這篇來源|此來源)屬於[^。！？!?]+[。！？!?]\s*/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return truncateText(normalized, maxLength);
+}
+
+function englishTitleKeywords(title: string): string[] {
+  return cleanText(title)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]+/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(
+      (token, index, items) =>
+        token.length >= 4 &&
+        !ENGLISH_NOISE_WORDS.has(token) &&
+        !/^\d+$/.test(token) &&
+        items.indexOf(token) === index,
+    )
+    .slice(0, 6);
+}
+
+function sourceFocusTitle(title: string, topic = "", facets: string[] = []): string {
+  const normalized = polishReaderFacingText(
+    applyAcademicTermReplacements(
+    cleanText(title)
+      .replace(/^(a|an|the)\s+/i, "")
+      .replace(/\s*[:|-]\s*.*/, ""),
+    ),
+  );
+  if (!containsHeavyEnglish(normalized)) {
+    return truncateText(normalized || cleanText(title), 72);
+  }
+  const topicText = cleanText(topic);
+  const termPool = [
+    ...readerFacingFacetLabels(facets),
+    ...meaningfulResearchTerms(normalized),
+  ].filter((term, index, items) => term && items.indexOf(term) === index);
+  const usefulTerms = termPool.filter(
+    (term) => term !== topicText && !topicText.includes(term),
+  );
+  if (usefulTerms.length >= 2) {
+    return truncateText(usefulTerms.slice(0, 3).join("、"), 72);
+  }
+  if (usefulTerms.length === 1 && topicText) {
+    return truncateText(`${topicText}${usefulTerms[0]}`, 72);
+  }
+  if (topicText) return truncateText(`${topicText}相關研究`, 72);
+  return truncateText(normalized || cleanText(title), 72);
+}
+
+function summaryActionLabel(text: string): string {
   const normalized = cleanText(text).toLowerCase();
-  const focus: string[] = [];
-  if (/greenhouse gas|greenhouse gases|溫室氣體/.test(normalized))
-    focus.push("溫室氣體");
-  if (/carbon dioxide|co2|二氧化碳/.test(normalized)) focus.push("二氧化碳");
-  if (/methane|甲烷/.test(normalized)) focus.push("甲烷");
-  if (/fossil fuel|fossil fuels|化石燃料/.test(normalized))
-    focus.push("化石燃料");
-  if (/observed warming|global warming|temperature trend|全球升溫|溫度趨勢/.test(normalized))
-    focus.push("觀測升溫");
-  if (/sea level|海平面/.test(normalized)) focus.push("海平面");
-  if (/spider|spiders|arachnid|araneae|蜘蛛|蛛形綱/.test(normalized))
-    focus.push("蜘蛛主體");
-  if (/habitat|microhabitat|棲地|微棲地/.test(normalized))
-    focus.push("棲地需求");
-  if (/predation|prey capture|foraging|捕食|獵食|覓食/.test(normalized))
-    focus.push("捕食策略");
-  if (/anti-predator|anti predator|camouflage|避敵|偽裝/.test(normalized))
-    focus.push("避敵行為");
-  if (/web building|web-building|web|築網|蛛網/.test(normalized))
-    focus.push("築網行為");
-  if (/survival|adaptation|behavior|behaviour|生存|適應|行為/.test(normalized))
-    focus.push("生存適應");
-  if (/ecology|ecological|生態/.test(normalized)) focus.push("生態關係");
-  return Array.from(new Set(focus));
+  if (/\b(propose|develop|present|design|build)\b/.test(normalized)) return "提出並說明";
+  if (/\b(predict|forecast)\b/.test(normalized)) return "預測";
+  if (/\b(compare|comparative)\b/.test(normalized)) return "比較";
+  if (/\b(assess|assessment|evaluate|evaluation)\b/.test(normalized)) return "評估";
+  if (/\b(analyze|analysis|investigate|investigation|examine|study|explore)\b/.test(normalized)) {
+    return "探討";
+  }
+  return "說明";
 }
 
-function sourceTypeNoun(source: SourceRecord): string {
-  const category = classifySourceRecord(source);
-  return SOURCE_CATEGORY_LABELS[category] ?? "研究來源";
-}
-
-function englishAbstractCueSummary(
+function titleOrFacetFocus(
   source: SourceRecord,
   topic: string,
-  assessment?: SourceRelevanceAssessment,
+  facets: string[],
 ): string {
+  const titleFocus = sourceFocusTitle(source.title, topic, facets);
+  if (titleFocus) return titleFocus;
+  if (facets.length > 0) return facets.slice(0, 2).join("、");
+  return "這篇研究主題";
+}
+
+function chooseBestAbstractSentence(
+  source: SourceRecord,
+  facets: string[],
+): string {
+  const sentences = splitSentences(source.abstract ?? "").slice(0, 4);
+  if (sentences.length === 0) return "";
+
+  const titleKeywords = englishTitleKeywords(source.title);
+  const scored = sentences.map((sentence, index) => {
+    const normalized = sentence.toLowerCase();
+    const titleHits = titleKeywords.reduce(
+      (score, keyword) => score + (normalized.includes(keyword) ? 2 : 0),
+      0,
+    );
+    const facetHits = facets.reduce(
+      (score, facet) =>
+        score +
+        (facet &&
+        normalized.includes(facet.toLowerCase())
+          ? 3
+          : 0),
+      0,
+    );
+    const verbBonus = /\b(propose|develop|present|predict|assess|evaluate|analyze|examine|study|investigate)\b/.test(
+      normalized,
+    )
+      ? 2
+      : 0;
+    const lengthBonus = sentence.length >= 48 ? 1 : 0;
+    return {
+      sentence,
+      score: titleHits + facetHits + verbBonus + lengthBonus - index,
+    };
+  });
+
+  scored.sort((left, right) => right.score - left.score);
+  return scored[0]?.sentence ?? sentences[0] ?? "";
+}
+
+function readerFacingAbstractSummary(
+  source: SourceRecord,
+  topic: string,
+  facets: string[] = [],
+  maxLength = 260,
+): string {
+  const abstract = cleanText(source.abstract);
   const topicText = topicLabel(topic);
-  const title = cleanText(source.title) || "此來源";
-  const focusKeywords = summaryFocusKeywords(
-    `${source.title ?? ""} ${source.abstract ?? ""}`,
-  ).slice(0, 5);
-  const facets = assessment?.matchedFacets?.slice(0, 2) ?? [];
-  const focusText = focusKeywords.length
-    ? focusKeywords.join("、")
-    : facets.length
-      ? facets.join("、")
-      : "主題背景與研究線索";
-  const sectionText =
-    sourceRecommendedSections(source).slice(0, 2).join("、") ||
-    "研究背景與文獻探討";
+  if (abstract.length < 24) return FALLBACK_SUMMARY;
+
+  const focus = titleOrFacetFocus(source, topicText, facets);
+  const facetLabels = readerFacingFacetLabels(facets);
+  const action = summaryActionLabel([source.title, abstract].join(" "));
+  const bestSentence = chooseBestAbstractSentence(source, facets) || abstract;
+  const normalizedSentence = polishReaderFacingText(
+    stripAcademicSentenceLead(applyAcademicTermReplacements(bestSentence)),
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+  const fallbackSentence = truncateText(
+    polishReaderFacingText(applyAcademicTermReplacements(bestSentence)),
+    128,
+  );
+  const lead = normalizedSentence || fallbackSentence;
+  const naturalLead = naturalChineseLead(focus, action, facetLabels, lead);
+  const relationText = facetLabels.length > 0
+    ? `，與「${topicText}」最相關的是${facetLabels.slice(0, 2).join("、")}`
+    : "";
+
+  if (!looksMostlyAscii(lead) && !containsHeavyEnglish(lead)) {
+    return truncateText(
+      `主旨：本文${action}「${focus}」${relationText}。摘要重點：${lead}。`,
+      maxLength,
+    );
+  }
 
   return truncateText(
-    `本${sourceTypeNoun(source)}〈${title}〉可提供${focusText}相關資料，能用來支撐「${topicText}」的${sectionText}討論。若要形成正式結論，仍應確認摘要片段是否直接對應研究問題。`,
-    220,
+    `主旨：本文${action}「${focus}」${relationText}。摘要重點：${naturalLead}`,
+    maxLength,
   );
+}
+
+function topicLabel(topic: string): string {
+  return cleanText(topic) || "本研究主題";
 }
 
 function textForSectionHints(source: SourceRecord): string {
@@ -130,17 +492,11 @@ export function sourceHasUsableAbstract(source: SourceRecord): boolean {
 }
 
 export function sourceSummaryText(source: SourceRecord): string {
-  if (!sourceHasUsableAbstract(source)) return FALLBACK_SUMMARY;
-
-  const sentences = splitSentences(source.abstract ?? "");
-  const selected = sentences.length
-    ? sentences.slice(0, 2).join(" ")
-    : cleanText(source.abstract);
-  const translated = normalizeDisplayTextToZhTw(selected);
-  if (/^[\x00-\x7F\s.,;:'"!?()[\]-]+$/.test(translated)) {
-    return truncateText(englishAbstractCueSummary(source, ""), 170);
+  if (cleanText(source.llmSummaryZhTw) && !source.summaryFallbackUsed) {
+    return normalizedUserFacingLlmSummary(source.llmSummaryZhTw, 220);
   }
-  return truncateText(translated, 170);
+  if (!sourceHasUsableAbstract(source)) return FALLBACK_SUMMARY;
+  return readerFacingAbstractSummary(source, source.topic ?? "", [], 170);
 }
 
 export function sourceParagraphSummary(
@@ -152,22 +508,19 @@ export function sourceParagraphSummary(
   const topicText = topicLabel(topic);
   const abstract = cleanText(source.abstract);
   const facets = assessment?.matchedFacets?.slice(0, 2) ?? [];
-  const sections = sourceRecommendedSections(source).slice(0, 2).join("、");
+  const facetLabels = readerFacingFacetLabels(facets);
+  const status = source.summaryStatus ?? source.llmSummaryStatus;
+
+  if (cleanText(source.llmSummaryZhTw) && !source.summaryFallbackUsed) {
+    return normalizedUserFacingLlmSummary(source.llmSummaryZhTw, 260);
+  }
 
   if (abstract.length >= 24) {
-    const focusKeywords = summaryFocusKeywords(`${title} ${abstract}`).slice(0, 5);
-    const focusText = focusKeywords.length
-      ? `摘要可辨識的重點包括${focusKeywords.join("、")}。`
-      : "";
-    const evidenceFocus = facets.length
-      ? `目前可見內容主要連到${facets.join("、")}。`
-      : `目前可見內容可用來輔助判斷「${topicText}」的研究脈絡。`;
-    return truncateText(
-      normalizeDisplayTextToZhTw(
-        `這篇來源〈${title}〉的摘要顯示，${focusText || "摘要內容提供主題相關線索。"}${evidenceFocus}它可支撐報告中的${sections || "研究背景與文獻探討"}段落。`,
-      ),
-      240,
-    );
+    return readerFacingAbstractSummary(source, topic, facets, 260);
+  }
+
+  if (status === "fetch-failed") {
+    return `fetch-failed：此來源〈${title}〉有 URL/DOI，但目前無法取得正文；原因：${source.summaryReason ?? "fetch failed"}。`;
   }
 
   if (
@@ -175,13 +528,13 @@ export function sourceParagraphSummary(
     cleanText(source.publisher) ||
     facets.length > 0
   ) {
-    const metadataFocus = facets.length
-      ? `題名或出版資訊與${facets.join("、")}有初步關聯`
+    const metadataFocus = facetLabels.length
+      ? `題名或出版資訊與${facetLabels.join("、")}有初步關聯`
       : `題名或出版資訊與「${topicText}」有初步關聯`;
-    return `此來源〈${title}〉目前主要提供書目資料，${metadataFocus}；可作為背景或延伸線索，若要成為主要證據仍需補充可驗證摘要。`;
+    return `metadata-only：此來源〈${title}〉目前主要提供書目資料，${metadataFocus}；若要成為主要證據仍需補充正文或可驗證摘要。`;
   }
 
-  return `此來源〈${title}〉目前只有基本書目資訊，可標示研究缺口，但不足以支撐正式結論。`;
+  return `metadata-only：此來源〈${title}〉目前只有基本書目資訊，可標示研究缺口，但不足以支撐正式結論。`;
 }
 
 export function sourceRecommendedSections(
@@ -355,7 +708,10 @@ function metadataBackedAssessment(
       source.missingRequiredFacets ?? fallback.missingRequiredFacets,
     evidenceGrounding: source.evidenceGrounding ?? fallback.evidenceGrounding,
     reasonZhTw: source.sourceRelevanceReasonZhTw ?? fallback.reasonZhTw,
-    shouldShowInMainList: relevanceLevel === "primary",
+    shouldShowInMainList:
+      source.shouldShowInMainList ??
+      (relevanceLevel === "primary" ||
+        (relevanceLevel === "secondary" && sourceHasUsableAbstract(source))),
     shouldRecommendAccept:
       source.shouldRecommendAccept ??
       (source.classification === "primary" &&
@@ -377,12 +733,17 @@ function relationFromAssessment(
 ): string {
   const topicText = cleanText(topic) || "本主題";
   const spiderTopic = isSpiderLikeTopic(profile);
+  const matchedLabels = readerFacingFacetLabels(assessment.matchedFacets);
+  const distinctMatchedLabels = matchedLabels.filter(
+    (term) => term !== topicText && !topicText.includes(term),
+  );
 
   if (assessment.relevanceLevel === "primary") {
     const matched =
-      assessment.matchedFacets.slice(0, 2).join("、") ||
-      topicCoreLabel(profile);
-    return `此來源直接支撐「${topicText}」的${matched}，可作為主要證據候選。`;
+      distinctMatchedLabels.slice(0, 2).join("、") || topicCoreLabel(profile);
+    return matched
+      ? `此來源直接支撐「${topicText}」的${matched}，可作為主要證據候選。`
+      : `此來源直接支撐「${topicText}」主題，可作為主要證據候選。`;
   }
 
   if (assessment.relevanceLevel === "secondary") {
@@ -547,7 +908,10 @@ export function sourceSummaryForUser(
     assessment,
     evidenceProfile,
   );
-  const llmSummary = cleanText(source.llmSummaryZhTw) || null;
+  const llmSummary =
+    cleanText(source.llmSummaryZhTw) && !source.summaryFallbackUsed
+      ? normalizedUserFacingLlmSummary(source.llmSummaryZhTw, 260)
+      : null;
   const contentSummary =
     llmSummary ??
     (evidenceProfile.evidenceSnippets.length > 0

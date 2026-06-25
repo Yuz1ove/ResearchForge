@@ -25,15 +25,8 @@ function source(index: number): SourceRecord {
   };
 }
 
-test("generate-report request normalization requires topic and three sources", () => {
+test("generate-report request normalization requires topic and at least one accepted source", () => {
   assert.equal(normalizeGenerateReportRequest({ topic: "可樂", acceptedSources: [] }), null);
-  assert.equal(
-    normalizeGenerateReportRequest({
-      topic: "可樂",
-      acceptedSources: [source(1), source(2)],
-    }),
-    null,
-  );
 
   const normalized = normalizeGenerateReportRequest({
     topic: "  可樂  ",
@@ -41,7 +34,7 @@ test("generate-report request normalization requires topic and three sources", (
     audience: "高中",
     language: "繁體中文",
     generationMode: "preliminary",
-    acceptedSources: [source(1), source(2), source(3)],
+    acceptedSources: [source(1)],
     evidenceCards: [
       {
         id: "evidence:source-1:0",
@@ -62,7 +55,7 @@ test("generate-report request normalization requires topic and three sources", (
 
   assert.equal(normalized?.topic, "可樂");
   assert.equal(normalized?.generationMode, "preliminary");
-  assert.equal(normalized?.acceptedSources.length, 3);
+  assert.equal(normalized?.acceptedSources.length, 1);
   assert.equal(
     normalized?.acceptedSources.every((item) => item.reviewState === "accepted"),
     true,
@@ -85,8 +78,10 @@ test("generate-report route passes normalized accepted sources to report writer"
       );
       return {
         ok: true,
+        status: "success",
         llm_status: "success",
         fallback_used: false,
+        message: null,
         warning: null,
         sections: [
           {
@@ -97,6 +92,11 @@ test("generate-report route passes normalized accepted sources to report writer"
             citationIds: ["source-1"],
           },
         ],
+        reportGenerationProvider: "ollama",
+        reportGenerationModel: "test-model",
+        reportGenerationStatus: "success",
+        fallbackUsed: false,
+        fallbackReason: null,
       };
     },
   });
@@ -108,7 +108,7 @@ test("generate-report route passes normalized accepted sources to report writer"
   const req = {
     body: {
       topic: "可樂",
-      acceptedSources: [source(1), source(2), source(3)],
+      acceptedSources: [source(1)],
       evidenceCards: [
         {
           id: "evidence:source-1:0",
@@ -142,7 +142,52 @@ test("generate-report route passes normalized accepted sources to report writer"
 
   assert.equal(statusCode, 200);
   assert.equal(writerTopic, "可樂");
-  assert.equal(writerSourceCount, 3);
+  assert.equal(writerSourceCount, 1);
   assert.equal(writerEvidenceCount, 1);
   assert.deepEqual((payload as { sections: unknown[] }).sections.length, 1);
+});
+
+test("generate-report route falls back instead of returning 500 when writer throws", async () => {
+  const router = createGenerateReportRouter({
+    reportWriter: async () => {
+      throw new Error("ollama unavailable");
+    },
+  });
+  const route = router.stack.find((layer) => layer.route?.path === "/generate-report");
+  assert.ok(route?.route);
+
+  let statusCode = 200;
+  let payload: unknown;
+  const req = {
+    body: {
+      topic: "可樂",
+      acceptedSources: [source(1)],
+    },
+  };
+  const res = {
+    status(code: number) {
+      statusCode = code;
+      return this;
+    },
+    json(value: unknown) {
+      payload = value;
+      return this;
+    },
+  };
+
+  await route.route.stack[0].handle(req as Request, res as unknown as Response, () => undefined);
+
+  assert.equal(statusCode, 200);
+  const result = payload as {
+    ok: boolean;
+    status: string;
+    fallback_used: boolean;
+    reportGenerationStatus: string;
+    fallbackReason: string;
+  };
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "error");
+  assert.equal(result.fallback_used, true);
+  assert.equal(result.reportGenerationStatus, "failed");
+  assert.match(result.fallbackReason, /ollama unavailable/);
 });

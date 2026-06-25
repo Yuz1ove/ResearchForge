@@ -6,12 +6,14 @@ import {
   type SourceRecord,
   type WorkflowReportSection,
 } from "./sourceRecords.ts";
+import { buildAcceptedSourceSynthesis } from "./acceptedSourceSynthesis.ts";
 import {
   sourceHasUsableAbstract,
   sourceRecommendedSections,
 } from "./sourceSummaries.ts";
 
 export interface AcceptedSourceDigest {
+  version: number;
   summary: string;
   coverage: string[];
   gaps: string[];
@@ -22,6 +24,8 @@ export interface BuildAcceptedSourceDigestOptions {
   topic?: string;
   currentYear?: number;
 }
+
+export const ACCEPTED_SOURCE_DIGEST_VERSION = 4;
 
 const SECTION_COVERAGE_LABELS: Record<WorkflowReportSection, string> = {
   研究背景: "背景資料",
@@ -60,6 +64,172 @@ function joinCoverage(items: string[]): string {
   if (items.length === 1) return items[0]!;
   if (items.length === 2) return `${items[0]}與${items[1]}`;
   return `${items.slice(0, -1).join("、")}與${items[items.length - 1]}`;
+}
+
+function proseList(items: string[], fallback: string): string {
+  if (items.length === 0) return fallback;
+  if (items.length === 1) return items[0]!;
+  if (items.length === 2) return `${items[0]}與${items[1]}`;
+  return `${items.slice(0, -1).join("、")}與${items[items.length - 1]}`;
+}
+
+function firstSentence(text: string | null | undefined): string {
+  const cleaned = cleanText(text);
+  if (!cleaned) return "";
+  const sentence = cleaned.split(/(?<=[。！？.!?])\s+/)[0]?.trim() ?? "";
+  return sentence || cleaned;
+}
+
+function stripCitationTone(text: string): string {
+  return text
+    .replace(/^此來源(?:屬於|目前|直接支持|聚焦於)?/u, "")
+    .replace(/^來源摘要：?/u, "")
+    .replace(/^原始摘要整理：?/u, "")
+    .replace(/^摘要：?/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function containsCjk(text: string): boolean {
+  return /[\u3400-\u9fff]/u.test(text);
+}
+
+function sourceSummaryLead(source: SourceRecord): string {
+  return (
+    stripCitationTone(firstSentence(source.evidenceSummaryZhTw)) ||
+    stripCitationTone(firstSentence(source.sourceRelevanceReasonZhTw)) ||
+    firstSentence(source.abstract) ||
+    cleanText(source.title)
+  );
+}
+
+function summaryHighlights(sources: SourceRecord[], limit = 3): string[] {
+  return sources
+    .map(sourceSummaryLead)
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function isMechanicalHighlight(text: string): boolean {
+  return /直接命中|摘要可支撐主題|可作為主要證據|相關性高|主證據/u.test(text);
+}
+
+function detailSentence(points: string[]): string {
+  if (points.length === 0) return "";
+  if (points.every((point) => containsCjk(point) && point.length <= 18 && !/[。；：]/u.test(point))) {
+    return `現有來源重點集中在${proseList(points, "核心研究面向")}。`;
+  }
+  if (points.length === 1) return `依目前來源，可確認的重點是：${points[0]}。`;
+  return `依目前來源，可確認的重點包括：${points.join("；")}。`;
+}
+
+function thematicHighlights(sources: SourceRecord[]): string[] {
+  const labels: string[] = [];
+
+  for (const source of sources) {
+    const text = sourceText(source);
+
+    if (/aircraft|aerospace|structure|structural|fatigue|life prediction|digital twin|airframe|alloy|composite|sensor|monitoring/i.test(text)) {
+      pushUnique(labels, "結構、材料與壽命管理");
+    }
+    if (/flight dynamics|aeroelastic|aerodynamic|laminar|lift|drag|control system|fluid dynamics/i.test(text)) {
+      pushUnique(labels, "氣動設計與飛行性能");
+    }
+    if (/electric|electrification|battery|power supply|hybrid|hydrogen|fuel cell|propulsion/i.test(text)) {
+      pushUnique(labels, "電動化、氫能與新型推進");
+    }
+    if (/environment|climate|emission|carbon|fuel consumption|sustain|pollution/i.test(text)) {
+      pushUnique(labels, "環境衝擊、燃料效率與減碳");
+    }
+    if (/manufacturing|additive manufacturing|supply chain|fabrication/i.test(text)) {
+      pushUnique(labels, "製造流程與供應鏈");
+    }
+    if (/worker|mortality|health|occupational/i.test(text)) {
+      pushUnique(labels, "產業勞動與健康風險");
+    }
+  }
+
+  return labels.slice(0, 4);
+}
+
+function limitationSentence(
+  sources: SourceRecord[],
+  limitations: string[],
+  insufficientSummary: boolean,
+): string {
+  const firstLimitation = limitations
+    .map((item) => item.replace(/。+$/u, "").trim())
+    .find(Boolean);
+  const mostlyAbstractGrounded = sources.every(
+    (source) =>
+      source.evidenceGrounding === "abstract_grounded" ||
+      !source.evidenceGrounding,
+  );
+
+  if (insufficientSummary) {
+    return firstLimitation
+      ? `不過，仍有部分來源只有摘要或書目線索，因此目前只能保守整理為：${firstLimitation}。`
+      : "不過，仍有部分來源只有摘要或書目線索，正式結論前還需要再補齊更完整的可驗證內容。";
+  }
+
+  if (mostlyAbstractGrounded) {
+    return "現階段多數內容仍來自摘要層級整理；若要寫成更完整的正式報告，仍建議再補全文片段、在地案例或官方統計。";
+  }
+
+  if (firstLimitation) {
+    return `現階段仍需注意：${firstLimitation}。`;
+  }
+
+  return "";
+}
+
+function buildNarrativeSummary(
+  sources: SourceRecord[],
+  topic: string,
+  coverage: string[],
+  insufficientSummary: boolean,
+): string {
+  const synthesis = buildAcceptedSourceSynthesis(sources);
+  const topicText = topic ? `「${topic}」` : "此主題";
+  const sourceTypeText = joinCoverage(
+    Array.from(new Set(sources.map(categoryCoverage))).slice(0, 4),
+  );
+  const coverageText = proseList(
+    coverage.slice(0, 4),
+    "背景、文獻與可驗證資料",
+  );
+  const directHighlights = synthesis.mainClaimsZhTw.slice(0, 3).filter(Boolean);
+  const fallbackHighlights = Array.from(new Set(summaryHighlights(sources, 4)));
+  const usableFallbackHighlights = fallbackHighlights.filter(
+    (item) => !isMechanicalHighlight(item),
+  );
+  const highlights =
+    directHighlights.length > 0 && directHighlights.some(containsCjk)
+      ? directHighlights
+      : usableFallbackHighlights.some(containsCjk) && usableFallbackHighlights.length >= 2
+        ? usableFallbackHighlights.slice(0, 3)
+        : thematicHighlights(sources);
+  const consensus = synthesis.consensusPointsZhTw[0] ?? "";
+  const detail = detailSentence(highlights);
+  const limitation = limitationSentence(
+    sources,
+    synthesis.limitationsZhTw,
+    insufficientSummary,
+  );
+  const sourceCountSentence = `目前已接受 ${sources.length} 筆來源，資料類型以${sourceTypeText}為主，涵蓋${coverageText}。`;
+  const consensusSentence = consensus
+    ? `${consensus} 這表示現階段已能整理出初步共識，但不能超出來源真正提供的內容。`
+    : "";
+
+  return [
+    `${topicText}的工作摘要只根據目前已接受來源整理，不沿用舊模板或預設結論。`,
+    sourceCountSentence,
+    detail,
+    consensusSentence,
+    limitation,
+  ]
+    .filter(Boolean)
+    .join("");
 }
 
 function categoryCoverage(source: SourceRecord): string {
@@ -188,6 +358,7 @@ export function buildAcceptedSourceDigest(
 
   if (accepted.length === 0) {
     return {
+      version: ACCEPTED_SOURCE_DIGEST_VERSION,
       summary: "尚未接受任何來源；目前無法建立資料基礎摘要，也不應生成正式報告結論。",
       coverage,
       gaps,
@@ -195,22 +366,11 @@ export function buildAcceptedSourceDigest(
     };
   }
 
-  const coverageText = joinCoverage(coverage.slice(0, 5));
-  const sourceTypeText = joinCoverage(
-    Array.from(new Set(accepted.map(categoryCoverage))).slice(0, 4),
-  );
   const insufficientSummary = accepted.some((source) => !sourceHasUsableAbstract(source));
-  const topicText = topic ? `「${topic}」` : "此主題";
-
-  const summary = [
-    `目前已接受 ${accepted.length} 筆來源，資料類型主要包含${sourceTypeText}。`,
-    `整體可先支撐${topicText}的${coverageText}等方向，但只能作為草稿前的資料基礎判斷。`,
-    insufficientSummary
-      ? "目前部分來源摘要不足，系統會保守使用其書目與主題線索；正式報告不應假裝已取得完整證據。"
-      : "這些來源可依研究問題整合為背景、證據與限制，不適合被視為完整結論。",
-  ].join("");
+  const summary = buildNarrativeSummary(accepted, topic, coverage, insufficientSummary);
 
   return {
+    version: ACCEPTED_SOURCE_DIGEST_VERSION,
     summary,
     coverage,
     gaps,
