@@ -170,3 +170,103 @@ test("search source topic-style route response includes search intent fields", a
   assert.ok(result.warnings?.some((warning) => warning.includes("部分來源提供者")));
   assert.equal(result.sources?.length, 1);
 });
+
+
+test("search source topic-style route sanitizes legacy generic fallback before response serialization", async () => {
+  const router = createSearchSourcesRouter({
+    topicSearchHandler: async (input) => {
+      const source = sourceRecord("Toast quality and consumer preference");
+      return {
+        ok: true,
+        topic: input.topic,
+        searchIntent: {
+          primaryConcepts: [input.topic],
+          contextConcepts: [],
+          outcomeConcepts: [],
+          populationConcepts: [],
+          lowWeightTerms: [],
+          mustHaveTerms: [input.topic],
+          plannerStatus: "rule_fallback",
+          fallbackUsed: true,
+        },
+        queries: {
+          chinese: ["吐司 definition scope evidence"],
+          english: ["toast measurable indicators"],
+          highPrecision: ["toast case study dataset"],
+          broad: ["toast evidence research"],
+        },
+        results: [source],
+        sources: [source],
+        provider_status: [],
+        warnings: [],
+        planner: {
+          normalizedTopic: input.topic,
+          primaryConcepts: [input.topic],
+          contextConcepts: [],
+          outcomeConcepts: [],
+          populationConcepts: [],
+          lowWeightTerms: [],
+          mustHaveTerms: [input.topic],
+          shouldHaveTerms: [],
+          penaltyTerms: [],
+          negativeTerms: [],
+          chineseQueries: ["吐司 definition scope evidence"],
+          englishQueries: ["toast measurable indicators"],
+          reasoningNotes: ["legacy fallback"],
+          plannerStatus: "rule_fallback",
+          fallbackUsed: true,
+        },
+        llm_status: "failed",
+        keyword_expansion: {
+          normalized_topic: input.topic,
+          domains: ["general_academic_research"],
+          search_queries: ["toast case study dataset"],
+          english_queries: ["toast measurable indicators"],
+          chinese_queries: ["吐司 definition scope evidence"],
+          preferred_source_types: ["peer_reviewed_journal"],
+          avoid_source_types: ["content_farm"],
+          reasoning_notes: ["legacy fallback"],
+          fallback_used: true,
+          llm_status: "failed",
+        },
+        groups: [],
+      };
+    },
+  });
+
+  const route = router.stack.find((layer) => layer.route?.path === "/search-sources");
+  assert.ok(route);
+  assert.ok(route.route);
+
+  let payload: unknown;
+  const req = { body: { topic: "吐司", language: "zh-TW" } };
+  const res = {
+    status() {
+      return this;
+    },
+    json(value: unknown) {
+      payload = value;
+      return this;
+    },
+  };
+
+  await route.route.stack[0].handle(req as Request, res as unknown as Response, () => undefined);
+
+  const result = payload as {
+    queries?: { chinese: string[]; english: string[]; highPrecision: string[]; broad: string[] };
+    keyword_expansion?: { search_queries: string[]; chinese_queries: string[]; english_queries: string[] };
+  };
+  const allQueries = [
+    ...(result.queries?.chinese ?? []),
+    ...(result.queries?.english ?? []),
+    ...(result.queries?.highPrecision ?? []),
+    ...(result.queries?.broad ?? []),
+    ...(result.keyword_expansion?.search_queries ?? []),
+    ...(result.keyword_expansion?.chinese_queries ?? []),
+    ...(result.keyword_expansion?.english_queries ?? []),
+  ];
+
+  assert.ok(allQueries.length > 0);
+  assert.ok(allQueries.every((query) => !/definition|scope|dataset|evidence/i.test(query)));
+  assert.ok(allQueries.some((query) => /核心特性|結構與用途|材料與製程|使用情境/.test(query)));
+});

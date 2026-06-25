@@ -7,6 +7,7 @@ import {
 import { logger } from "../lib/logger";
 import { searchSources, SourceSearchError } from "../services/source-retrieval";
 import {
+  sanitizeSearchIntentSourceSearchResult,
   searchIntentSources,
   type SearchIntentPlannerInput,
   type SearchIntentSourceSearchResult,
@@ -71,7 +72,7 @@ export function createSearchSourcesRouter({
 
     try {
       if (normalized.kind === "topic") {
-        const result = await topicSearchHandler(normalized.input);
+        const result = sanitizeSearchIntentSourceSearchResult(await topicSearchHandler(normalized.input));
         res.json(SearchSourcesResponse.parse(result));
         return;
       }

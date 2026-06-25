@@ -4,8 +4,12 @@ import type { SourceRecord } from "@workspace/api-zod";
 import {
   buildRuleBasedSearchIntent,
   buildSearchIntentQueries,
+  hasLegacyGenericTemplate,
+  inferSearchIntentTopicProfile,
   planSearchIntent,
+  removeLegacyGenericAngles,
   rerankSourcesBySearchIntent,
+  sanitizeSearchIntentPlan,
   searchIntentSources,
 } from "./search-intent-planner";
 
@@ -249,4 +253,81 @@ test("source intent search returns planner output and provider failures without 
   assert.ok(result.provider_status.some((group) => group.ok === false));
   assert.equal(result.sources[0]?.doi, "10.1000/uhi-campus");
   assert.ok(result.warnings.some((warning) => warning.includes("部分來源提供者")));
+});
+
+
+test("legacy generic template detector removes old definition/scope style queries and backfills domain fallback", () => {
+  const plan = sanitizeSearchIntentPlan(
+    { topic: "吐司", language: "zh-TW" },
+    {
+      ...buildRuleBasedSearchIntent({ topic: "吐司", language: "zh-TW" }),
+      chineseQueries: ["吐司 definition scope evidence", "吐司 measurable indicators"],
+      englishQueries: ["toast case study dataset", "toast evidence research"],
+    },
+  );
+
+  assert.equal(hasLegacyGenericTemplate("toast definition scope evidence", "吐司"), true);
+  assert.deepEqual(removeLegacyGenericAngles(["toast definition scope evidence", "toast food composition"], "吐司"), {
+    queries: ["toast food composition"],
+    hits: ["toast definition scope evidence"],
+  });
+  assert.ok(plan.legacyTemplateHits?.length);
+  assert.ok(plan.chineseQueries.every((query) => !/definition|scope|dataset|evidence/i.test(query)));
+  assert.ok(plan.englishQueries.every((query) => !/definition|scope|dataset|evidence/i.test(query)));
+  assert.ok(plan.chineseQueries.some((query) => /核心特性|結構與用途|材料與製程|使用情境/.test(query)));
+});
+
+test("unknown or noise topics skip provider queries entirely", async () => {
+  let providerCalled = false;
+  const result = await searchIntentSources(
+    { topic: "xk29qzz", language: "zh-TW" },
+    {
+      fetchImpl: async () => {
+        providerCalled = true;
+        throw new Error("provider should not be called for noise topics");
+      },
+      sourceSearch: {
+        fetchImpl: async () => {
+          providerCalled = true;
+          throw new Error("provider should not be called for noise topics");
+        },
+      },
+    },
+  );
+
+  assert.equal(providerCalled, false);
+  assert.equal(result.planner.topicKind, "unknown_or_noise");
+  assert.equal(result.planner.domain, "unknown");
+  assert.equal(result.planner.fallbackFamily, null);
+  assert.deepEqual(result.queries.chinese, []);
+  assert.deepEqual(result.queries.english, []);
+  assert.deepEqual(result.keyword_expansion.search_queries, []);
+  assert.deepEqual(result.provider_status, []);
+});
+
+test("topic profile inference classifies domain-level fallback families without topic-specific hardcode", () => {
+  assert.deepEqual(inferSearchIntentTopicProfile("指南針的工作原理"), {
+    topicKind: "descriptive_topic",
+    domain: "mechanism",
+    fallbackFamily: "mechanism",
+    shouldSearchNow: true,
+  });
+  assert.deepEqual(inferSearchIntentTopicProfile("咖啡因對青少年睡眠的影響"), {
+    topicKind: "descriptive_topic",
+    domain: "health",
+    fallbackFamily: "health",
+    shouldSearchNow: true,
+  });
+  assert.deepEqual(inferSearchIntentTopicProfile("塑膠袋對海洋生態的影響"), {
+    topicKind: "descriptive_topic",
+    domain: "environment",
+    fallbackFamily: "environment",
+    shouldSearchNow: true,
+  });
+  assert.deepEqual(inferSearchIntentTopicProfile("AI輔助學習對高中生學習成效的影響"), {
+    topicKind: "descriptive_topic",
+    domain: "social",
+    fallbackFamily: "social",
+    shouldSearchNow: true,
+  });
 });
