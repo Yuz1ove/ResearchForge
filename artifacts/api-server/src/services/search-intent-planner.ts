@@ -8692,6 +8692,21 @@ export async function searchIntentSources(
       fetchImpl: options?.fetchImpl,
     },
   );
+  logger.info(
+    {
+      event: "researchforge.source_summaries",
+      workflowId,
+      topic: plan.normalizedTopic,
+      summaries: sources.map((source) => ({
+        id: source.id,
+        title: source.title,
+        summarySourceType: source.summarySourceType ?? null,
+        summaryConfidence: source.summaryConfidence ?? null,
+        summaryStatus: source.summaryStatus ?? source.llmSummaryStatus ?? null,
+      })),
+    },
+    "ResearchForge source summary diagnostics",
+  );
   const primaryCount = sources.filter(
     (source) => source.relevanceLevel === "primary",
   ).length;

@@ -25,3 +25,30 @@ export * from "./generated/types/searchRelevanceDebug";
 export * from "./generated/types/searchSourcesRequest";
 export * from "./generated/types/sourceRecordSourceType";
 export * from "./generated/types/sourceSearchResult";
+export type {
+  SourceRecord,
+  SourceRecordInput,
+  SourceProvider,
+  SourceReviewState,
+  SourceRelevanceLevel,
+  SourceEvidenceGroundingStatus,
+  SourceSummarySourceType,
+  SourceSummaryConfidence,
+  SourceKind,
+  SourceRelevanceClassification,
+} from "./source-record";
+export {
+  SOURCE_PROVIDERS,
+  SOURCE_REVIEW_STATES,
+  SOURCE_RELEVANCE_LEVELS,
+  SOURCE_EVIDENCE_GROUNDING_STATUSES,
+  SOURCE_SUMMARY_SOURCE_TYPES,
+  SOURCE_SUMMARY_CONFIDENCE_LEVELS,
+  SOURCE_KINDS,
+  SOURCE_RELEVANCE_CLASSIFICATIONS,
+  sourceRecordKey,
+  normalizeSourceRecord,
+  dedupeSourceRecords,
+  acceptedSourceRecords,
+  rejectedSourceRecords,
+} from "./source-record";

@@ -10,6 +10,15 @@ export type EvidenceGroundingStatus =
   | "snippet_grounded"
   | "metadata_only"
   | "insufficient";
+export type SourceSummarySourceType =
+  | "abstract"
+  | "snippet"
+  | "fulltext"
+  | "metadataFallback";
+export type SourceSummaryConfidence = "high" | "medium" | "low";
+export type TopicalRelevanceLabel = "high" | "medium" | "low" | "irrelevant";
+export type EvidenceSufficiency = "strong" | "moderate" | "weak" | "insufficient";
+export type SourceUsageRecommendation = "primary" | "secondary" | "reference" | "exclude";
 
 export type SourceKind = "journal" | "conference" | "book" | "dataset" | "web" | "unknown";
 
@@ -78,6 +87,18 @@ export interface SourceRecordMetadata {
   isPeerReviewed?: boolean | null;
   sourceQualityScore?: number | null;
   scoreReasons?: string[] | null;
+  topicalRelevanceScore?: number | null;
+  topicalRelevanceLabel?: TopicalRelevanceLabel | null;
+  matchedAnchorConcepts?: string[] | null;
+  matchedApplicationConcepts?: string[] | null;
+  negativeSignals?: string[] | null;
+  shouldRejectImmediately?: boolean | null;
+  evidenceSufficiency?: EvidenceSufficiency | null;
+  usableAsPrimaryEvidence?: boolean | null;
+  usableAsSecondaryEvidence?: boolean | null;
+  usageRecommendation?: SourceUsageRecommendation | null;
+  qualityWarnings?: string[] | null;
+  manuallyForced?: boolean | null;
   sourceCategory?: SourceCategory | string | null;
   usableSections?: WorkflowReportSection[] | string[] | null;
   confidence?: SourceConfidence | string | null;
@@ -93,6 +114,14 @@ export interface SourceRecordMetadata {
   sourceRelevanceReasonZhTw?: string | null;
   shouldShowInMainList?: boolean | null;
   shouldRecommendAccept?: boolean | null;
+  readableSummaryZhTW?: string | null;
+  summarySourceType?: SourceSummarySourceType | null;
+  summaryConfidence?: SourceSummaryConfidence | null;
+  relevanceReasonZhTW?: string | null;
+  summaryWarnings?: string[] | null;
+  originalAbstract?: string | null;
+  originalSnippet?: string | null;
+  extractedText?: string | null;
   authorityLevel?: "high" | "medium" | "check" | "insufficient_summary" | "low_relevance" | null;
   authorityScore?: number | null;
   authorityLabel?: string | null;
@@ -332,6 +361,91 @@ function normalizeSourceClassification(value: unknown): SourceRecordMetadata["cl
 
 function normalizeOptionalScore(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeSummarySourceType(value: unknown): SourceSummarySourceType | null {
+  if (
+    value === "abstract" ||
+    value === "snippet" ||
+    value === "fulltext" ||
+    value === "metadataFallback"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeTopicalRelevanceLabel(
+  value: unknown,
+): TopicalRelevanceLabel | null {
+  if (
+    value === "high" ||
+    value === "medium" ||
+    value === "low" ||
+    value === "irrelevant"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeEvidenceSufficiency(
+  value: unknown,
+): EvidenceSufficiency | null {
+  if (
+    value === "strong" ||
+    value === "moderate" ||
+    value === "weak" ||
+    value === "insufficient"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeUsageRecommendation(
+  value: unknown,
+): SourceUsageRecommendation | null {
+  if (
+    value === "primary" ||
+    value === "secondary" ||
+    value === "reference" ||
+    value === "exclude"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", "\"")
+    .replaceAll("&#39;", "'")
+    .replaceAll("&nbsp;", " ");
+}
+
+function sanitizeReviewText(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return decodeHtmlEntities(trimmed)
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<nav\b[^>]*>[\s\S]*?<\/nav>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\b(undefined|null|NaN)\b/gi, " ")
+    .replace(/https?:\/\/\S{30,}/gi, " ")
+    .replace(/[。.!?]{3,}/g, "。")
+    .replace(/[，,]{3,}/g, "，")
+    .replace(/\s+/g, " ")
+    .trim() || null;
+}
+
+function normalizeSummaryConfidence(value: unknown): SourceSummaryConfidence | null {
+  if (value === "high" || value === "medium" || value === "low") return value;
+  return null;
 }
 
 function normalizeNonNegativeInteger(value: unknown): number | null {
@@ -583,11 +697,11 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
   const normalized: SourceRecord = {
     ...source,
     id: cleanText(source.id) ?? "",
-    title: cleanText(source.title) ?? "",
-    authors: source.authors.map((author) => cleanText(author)).filter((author): author is string => Boolean(author)),
+    title: sanitizeReviewText(source.title) ?? "",
+    authors: source.authors.map((author) => sanitizeReviewText(author)).filter((author): author is string => Boolean(author)),
     year: typeof source.year === "number" && Number.isFinite(source.year) ? Math.trunc(source.year) : null,
-    abstract: cleanText(source.abstract),
-    snippet: cleanText(source.snippet),
+    abstract: sanitizeReviewText(source.abstract),
+    snippet: sanitizeReviewText(source.snippet),
     language: cleanText(source.language),
     abstractMissing:
       typeof source.abstractMissing === "boolean"
@@ -597,8 +711,8 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     url: cleanText(source.url),
     sourceType: source.sourceType,
     reviewState: sourceReviewState(source),
-    publisher: cleanText(source.publisher),
-    containerTitle: cleanText(source.containerTitle),
+    publisher: sanitizeReviewText(source.publisher),
+    containerTitle: sanitizeReviewText(source.containerTitle),
     accessedAt: cleanText(source.accessedAt),
     provider: cleanText(source.provider),
     queryUsed: cleanText(source.queryUsed),
@@ -610,6 +724,28 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     isPeerReviewed: typeof source.isPeerReviewed === "boolean" ? source.isPeerReviewed : null,
     sourceQualityScore: normalizeOptionalScore(source.sourceQualityScore),
     scoreReasons: normalizeStringList(source.scoreReasons),
+    topicalRelevanceScore: normalizeOptionalScore(source.topicalRelevanceScore),
+    topicalRelevanceLabel: normalizeTopicalRelevanceLabel(source.topicalRelevanceLabel),
+    matchedAnchorConcepts: normalizeStringList(source.matchedAnchorConcepts),
+    matchedApplicationConcepts: normalizeStringList(source.matchedApplicationConcepts),
+    negativeSignals: normalizeStringList(source.negativeSignals),
+    shouldRejectImmediately:
+      typeof source.shouldRejectImmediately === "boolean"
+        ? source.shouldRejectImmediately
+        : null,
+    evidenceSufficiency: normalizeEvidenceSufficiency(source.evidenceSufficiency),
+    usableAsPrimaryEvidence:
+      typeof source.usableAsPrimaryEvidence === "boolean"
+        ? source.usableAsPrimaryEvidence
+        : null,
+    usableAsSecondaryEvidence:
+      typeof source.usableAsSecondaryEvidence === "boolean"
+        ? source.usableAsSecondaryEvidence
+        : null,
+    usageRecommendation: normalizeUsageRecommendation(source.usageRecommendation),
+    qualityWarnings: normalizeStringList(source.qualityWarnings),
+    manuallyForced:
+      typeof source.manuallyForced === "boolean" ? source.manuallyForced : null,
     sourceCategory: normalizeSourceCategory(source.sourceCategory),
     usableSections: normalizeUsableSections(source.usableSections),
     confidence: normalizeSourceConfidence(source.confidence),
@@ -627,6 +763,14 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     sourceRelevanceReasonZhTw: cleanText(source.sourceRelevanceReasonZhTw),
     shouldShowInMainList: typeof source.shouldShowInMainList === "boolean" ? source.shouldShowInMainList : null,
     shouldRecommendAccept: typeof source.shouldRecommendAccept === "boolean" ? source.shouldRecommendAccept : null,
+    readableSummaryZhTW: sanitizeReviewText(source.readableSummaryZhTW),
+    summarySourceType: normalizeSummarySourceType(source.summarySourceType),
+    summaryConfidence: normalizeSummaryConfidence(source.summaryConfidence),
+    relevanceReasonZhTW: sanitizeReviewText(source.relevanceReasonZhTW),
+    summaryWarnings: normalizeStringList(source.summaryWarnings),
+    originalAbstract: sanitizeReviewText(source.originalAbstract),
+    originalSnippet: sanitizeReviewText(source.originalSnippet),
+    extractedText: sanitizeReviewText(source.extractedText),
     authorityLevel: normalizeAuthorityLevel(source.authorityLevel),
     authorityScore: typeof source.authorityScore === "number" && Number.isFinite(source.authorityScore)
       ? source.authorityScore

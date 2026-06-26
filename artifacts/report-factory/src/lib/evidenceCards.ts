@@ -77,6 +77,19 @@ interface BuildEvidenceCardOptions {
 
 const RECOMMENDED_ACCEPTED_SOURCE_COUNT = 10;
 
+function sourceEligibleForEvidenceCard(source: SourceRecord): boolean {
+  const topicalLabel = source.topicalRelevanceLabel;
+  const sufficiency = source.evidenceSufficiency;
+  const summaryMode = source.summarySourceType;
+
+  if (topicalLabel === "irrelevant") return false;
+  if (summaryMode === "metadataFallback") return false;
+  if (topicalLabel && topicalLabel !== "high" && topicalLabel !== "medium") return false;
+  if (sufficiency && sufficiency !== "strong" && sufficiency !== "moderate") return false;
+  if (summaryMode && summaryMode !== "fulltext" && summaryMode !== "abstract") return false;
+  return true;
+}
+
 function sourceId(source: SourceRecord): string {
   return source.id || sourceRecordKey(source);
 }
@@ -343,7 +356,9 @@ export function buildEvidenceCards(
   existingCards: EvidenceCard[] = [],
   options: BuildEvidenceCardOptions = {},
 ): EvidenceCard[] {
-  const acceptedSources = acceptedSourceRecords(sources);
+  const acceptedSources = acceptedSourceRecords(sources).filter(
+    sourceEligibleForEvidenceCard,
+  );
   const existingById = new Map(existingCards.map((card) => [card.id, card]));
   const seen = new Set<string>();
   const cards: EvidenceCard[] = [];

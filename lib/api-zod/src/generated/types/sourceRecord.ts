@@ -46,8 +46,74 @@ export interface SourceRecord {
   missingRequiredFacets?: string[] | null;
   evidenceGrounding?: SourceRecordEvidenceGrounding;
   sourceRelevanceReasonZhTw?: string | null;
+  llmSummaryZhTw?: string | null;
+  readableSummaryZhTW?: string | null;
+  summarySourceType?: 'abstract' | 'snippet' | 'fulltext' | 'metadataFallback' | null;
+  summaryConfidence?: 'high' | 'medium' | 'low' | null;
+  relevanceReasonZhTW?: string | null;
+  summaryWarnings?: string[] | null;
+  originalAbstract?: string | null;
+  originalSnippet?: string | null;
+  extractedText?: string | null;
+  llmSummaryStatus?:
+    | 'success'
+    | 'timeout'
+    | 'quota_exceeded'
+    | 'failed'
+    | 'skipped'
+    | 'metadata-only'
+    | 'fetch-failed'
+    | 'llm-failed'
+    | 'fallback'
+    | null;
+  summaryStructuredStatus?:
+    | 'success'
+    | 'unavailable'
+    | 'invalid_input'
+    | 'insufficient_sources'
+    | 'error'
+    | null;
+  summaryProvider?: string | null;
+  summaryModel?: string | null;
+  summaryStatus?:
+    | 'success'
+    | 'timeout'
+    | 'quota_exceeded'
+    | 'failed'
+    | 'skipped'
+    | 'metadata-only'
+    | 'fetch-failed'
+    | 'llm-failed'
+    | 'fallback'
+    | null;
+  summaryFallbackUsed?: boolean | null;
+  summaryReason?: string | null;
+  summaryMessage?: string | null;
   shouldShowInMainList?: boolean | null;
   shouldRecommendAccept?: boolean | null;
+  workflowId?: string | null;
+  topic?: string | null;
+  normalizedTopic?: string | null;
+  topicHash?: string | null;
+  queryPlanHash?: string | null;
+  authorityScore?: number | null;
+  summaryUsabilityScore?: number | null;
+  metadataCompletenessScore?: number | null;
+  recencyScore?: number | null;
+  languageFitScore?: number | null;
+  finalScore?: number | null;
+  classification?:
+    | 'primary'
+    | 'review'
+    | 'low_quality'
+    | 'off_topic'
+    | 'trusted_but_off_topic'
+    | 'stale_topic'
+    | 'stale_workflow'
+    | null;
+  rejectReason?: string | null;
+  matchedTerms?: string[] | null;
+  driftTerms?: string[] | null;
   topicRelevance?: number | null;
   evidenceQuality?: number | null;
   metadataCompleteness?: number | null;

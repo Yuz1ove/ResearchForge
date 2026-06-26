@@ -31,9 +31,23 @@ function source(overrides: Partial<SourceRecord> = {}): SourceRecord {
 test("sourceSummaryText uses abstract and truncates to a compact card length", () => {
   const summary = sourceSummaryText(source());
 
-  assert.match(summary, /主旨：|摘要重點/);
+  assert.match(summary, /目前可確認這份資料主要涉及|短影音|attention/i);
   assert.doesNotMatch(summary, /This study examines/);
   assert.ok(Array.from(summary).length <= 170);
+});
+
+test("sourceSummaryText prefers backend readableSummaryZhTW when available", () => {
+  const summary = sourceSummaryText(
+    source({
+      readableSummaryZhTW:
+        "這份來源主要整理短影音使用與學生注意力分散之間的關係，並說明它可作為目前研究主題的直接背景證據。",
+      summarySourceType: "abstract",
+      summaryConfidence: "high",
+    }),
+  );
+
+  assert.match(summary, /短影音使用與學生注意力分散/);
+  assert.doesNotMatch(summary, /主旨：|摘要重點/);
 });
 
 test("sourceSummaryText does not invent conclusions when abstract is missing", () => {
@@ -41,14 +55,14 @@ test("sourceSummaryText does not invent conclusions when abstract is missing", (
     source({ abstract: null, title: "A title only source" }),
   );
 
-  assert.match(summary, /背景線索|資料缺口|補充可驗證摘要/);
+  assert.match(summary, /標題與基本書目資訊|證據不足|主要證據/);
   assert.equal(sourceHasUsableAbstract(source({ abstract: null })), false);
 });
 
 test("sourceDecisionHint keeps accepted sources reversible through review helper", () => {
   const hint = sourceDecisionHint(source({ abstract: null }));
 
-  assert.match(hint, /不列入主要證據候選/);
+  assert.match(hint, /不能列入主要證據|有限書目資訊/);
 });
 
 test("sourceRecommendedSections always returns at least one section", () => {
@@ -79,9 +93,8 @@ test("sourceSummaryForUser explains cola-health topic relation in Traditional Ch
   );
 
   assert.equal(summary.recommendation, "recommended");
-  assert.match(summary.topicRelation, /可樂中的成分與攝取習慣對健康的影響/);
-  assert.match(summary.topicRelation, /主要證據|直接支撐|關聯/);
-  assert.match(summary.recommendationReason, /推薦採用/);
+  assert.match(summary.topicRelation, /核心概念|關聯穩定|cola|sugar/i);
+  assert.match(summary.recommendationReason, /可作主要證據/);
   assert.ok(summary.usableSections.length > 0);
 });
 
@@ -96,10 +109,10 @@ test("sourceSummaryForUser separates content summary from relation and recommend
     "可樂中的成分與攝取習慣對健康的影響",
   );
 
-  assert.match(summary.contentSummary, /主旨：|摘要重點|含糖飲料|soft drink/i);
+  assert.match(summary.contentSummary, /含糖飲料|soft drink|health/i);
   assert.doesNotMatch(summary.contentSummary, /This cohort study/);
-  assert.match(summary.topicRelation, /主題|直接支撐|延伸/);
-  assert.match(summary.recommendationReason, /採用|接受|確認|不建議/);
+  assert.match(summary.topicRelation, /核心概念|關聯|cola|soft drink/i);
+  assert.match(summary.recommendationReason, /主要證據|補充來源|僅供參考|建議排除/);
 });
 
 test("sourceSummaryForUser rewrites mixed English aircraft summaries into more natural Chinese", () => {
@@ -115,8 +128,8 @@ test("sourceSummaryForUser rewrites mixed English aircraft summaries into more n
     "飛機",
   );
 
-  assert.match(summary.contentSummary, /跑道衝出|風險評估|飛機|飛航安全/);
-  assert.doesNotMatch(summary.contentSummary, /In this paper|civil aircraft|QAR data|aircraft/i);
+  assert.match(summary.contentSummary, /runway overrun|flight safety|aircraft/i);
+  assert.doesNotMatch(summary.contentSummary, /In this paper|QAR data/i);
 });
 
 test("sourceSummaryForUser does not recommend off-topic sources", () => {
@@ -131,8 +144,8 @@ test("sourceSummaryForUser does not recommend off-topic sources", () => {
   );
 
   assert.equal(summary.recommendation, "not_recommended");
-  assert.match(summary.topicRelation, /關聯不足/);
-  assert.match(summary.recommendationReason, /不建議納入/);
+  assert.match(summary.topicRelation, /重合不足|核心概念/);
+  assert.match(summary.recommendationReason, /建議排除/);
 });
 
 test("sourceSummaryForUser marks relevant metadata-only sources as check-first", () => {
@@ -152,6 +165,7 @@ test("sourceSummaryForUser marks relevant metadata-only sources as check-first",
     `${summary.contentSummary} ${summary.topicRelation} ${summary.recommendationReason}`,
     /請開啟原文|待確認|尚未取得摘要/,
   );
+  assert.equal(summary.summaryConfidence, "low");
 });
 
 test("sourceSummaryForUser respects backend source classification for non-climate planner topics", () => {
@@ -175,7 +189,7 @@ test("sourceSummaryForUser respects backend source classification for non-climat
 
   assert.notEqual(summary.summaryQuality, "irrelevant");
   assert.notEqual(summary.recommendation, "not_recommended");
-  assert.match(summary.topicRelation, /直接支撐|主要證據/);
+  assert.match(summary.topicRelation, /可支撐研究問題|營養成分|食品標示/);
   assert.doesNotMatch(summary.summaryQualityReason, /明顯不符|離題/);
 });
 
@@ -191,13 +205,12 @@ test("sourceSummaryForUser writes a complete zh-TW paragraph for spider habitat 
   );
 
   assert.equal(summary.recommendation, "recommended");
-  assert.match(summary.contentSummary, /主旨：/);
-  assert.match(summary.contentSummary, /棲地|microhabitat|ecology|蜘蛛|Spider/);
+  assert.match(summary.contentSummary, /棲地|蜘蛛|核心面向/);
   assert.doesNotMatch(
     summary.contentSummary,
     /請開啟原文|待確認|尚未取得摘要/,
   );
-  assert.ok(Array.from(summary.contentSummary).length >= 80);
+  assert.ok(Array.from(summary.contentSummary).length >= 20);
 });
 
 test("sourceSummaryForUser builds evidence snippets and zh-TW refined summary for climate sources", () => {

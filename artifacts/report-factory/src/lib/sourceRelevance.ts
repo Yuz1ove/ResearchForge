@@ -3,6 +3,10 @@ import {
   buildSourceEvidenceProfile,
   type EvidenceGrounding,
 } from "./sourceEvidence.ts";
+import {
+  buildTopicAnchorProfile,
+  evaluateSourceQuality,
+} from "./sourceQuality.ts";
 import { buildTopicFacets, type TopicFacets } from "./topicFacets.ts";
 
 export interface SourceIntentProfile {
@@ -482,48 +486,138 @@ export function applySourceRelevanceAssessments(
   topic: string,
 ): SourceRecord[] {
   const topicFacets = buildTopicFacets(topic);
-  const profile = buildSourceIntentProfile(topic);
   const useFacetAssessment = topicFacets.requiredFacets.length > 0;
+  const anchorProfile = buildTopicAnchorProfile(topic);
 
   return sources
     .map((source) => {
+      const quality = evaluateSourceQuality(source, topic);
       const assessment = (() => {
-        if (!useFacetAssessment)
-          return buildSourceRelevanceAssessment(source, profile);
-        const facetAssessment = buildSourceFacetAssessment(source, topicFacets);
-        const sourceText = textForSource(source);
-        const coreMatches = matchedTopicCore(sourceText, topicFacets);
+        if (useFacetAssessment) {
+          const facetAssessment = buildSourceFacetAssessment(source, topicFacets);
+          const sourceText = textForSource(source);
+          const coreMatches = matchedTopicCore(sourceText, topicFacets);
+          return {
+            ...facetAssessment,
+            reasons: [quality.topical.relevanceReasonZhTW],
+            matchedCoreConcepts:
+              quality.topical.matchedAnchorConcepts.length > 0
+                ? quality.topical.matchedAnchorConcepts
+                : coreMatches,
+            missingCoreConcepts: topicFacets.topicCore.filter(
+              (term) => !coreMatches.includes(term),
+            ),
+          };
+        }
+
+        const relevanceLevel: SourceFacetRelevanceLevel =
+          quality.topical.topicalRelevanceLabel === "high"
+            ? quality.sufficiency.usableAsPrimaryEvidence
+              ? "primary"
+              : "clue"
+            : quality.topical.topicalRelevanceLabel === "medium"
+              ? quality.sufficiency.usableAsSecondaryEvidence
+                ? "secondary"
+                : "clue"
+              : quality.topical.topicalRelevanceLabel === "low"
+                ? "low"
+                : "off_topic";
+        const evidenceGrounding: EvidenceGrounding =
+          quality.sufficiency.summaryMode === "fulltext"
+            ? "snippet_grounded"
+            : quality.sufficiency.summaryMode === "abstract"
+              ? "abstract_grounded"
+              : quality.sufficiency.summaryMode === "snippet"
+                ? "snippet_grounded"
+                : quality.sufficiency.summaryMode === "metadataFallback"
+                  ? "metadata_only"
+                  : "insufficient";
+
         return {
-          ...facetAssessment,
-          reasons: [facetAssessment.reasonZhTw],
-          matchedCoreConcepts: coreMatches,
-          missingCoreConcepts: topicFacets.topicCore.filter(
-            (term) => !coreMatches.includes(term),
+          relevanceLevel,
+          relevanceScore: quality.topical.topicalRelevanceScore,
+          reasons: [quality.topical.relevanceReasonZhTW],
+          matchedCoreConcepts: quality.topical.matchedAnchorConcepts,
+          missingCoreConcepts: anchorProfile.anchorConcepts.filter(
+            (term) => !quality.topical.matchedAnchorConcepts.includes(term),
           ),
+          matchedFacets: unique([
+            ...quality.topical.matchedAnchorConcepts,
+            ...quality.topical.matchedApplicationConcepts,
+          ]),
+          missingRequiredFacets: [],
+          evidenceGrounding,
+          reasonZhTw: quality.topical.relevanceReasonZhTW,
+          shouldShowInMainList:
+            quality.topical.topicalRelevanceLabel === "high" ||
+            quality.topical.topicalRelevanceLabel === "medium",
+          shouldRecommendAccept:
+            quality.usageRecommendation === "primary" ||
+            quality.usageRecommendation === "secondary",
         };
       })();
 
-      const evidenceProfile = useFacetAssessment
-        ? buildSourceEvidenceProfile(source, topicFacets)
-        : null;
+      const evidenceProfile = buildSourceEvidenceProfile(source, topicFacets);
+      const mergedWarnings = unique([
+        ...(source.summaryWarnings ?? []),
+        ...quality.summary.qualityWarnings,
+        quality.sufficiency.sufficiencyReasonZhTW,
+      ]);
+      const shouldShowInMainList =
+        (assessment.relevanceLevel === "primary" ||
+          assessment.relevanceLevel === "secondary" ||
+          assessment.relevanceLevel === "clue") &&
+        quality.sufficiency.summaryMode !== "metadataFallback" &&
+        quality.sufficiency.summaryMode !== "reject";
+
+      const usableAsPrimaryEvidence =
+        quality.sufficiency.usableAsPrimaryEvidence &&
+        quality.topical.topicalRelevanceLabel === "high";
+      const usableAsSecondaryEvidence =
+        quality.sufficiency.usableAsSecondaryEvidence &&
+        quality.topical.topicalRelevanceLabel !== "irrelevant";
 
       return {
         ...source,
         relevanceLevel: assessment.relevanceLevel,
         relevanceScore: assessment.relevanceScore,
         relevanceReasons: assessment.reasons,
+        topicalRelevanceScore: quality.topical.topicalRelevanceScore,
+        topicalRelevanceLabel: quality.topical.topicalRelevanceLabel,
+        matchedAnchorConcepts: quality.topical.matchedAnchorConcepts,
+        matchedApplicationConcepts: quality.topical.matchedApplicationConcepts,
+        negativeSignals: quality.topical.negativeSignals,
+        shouldRejectImmediately: quality.topical.shouldRejectImmediately,
+        evidenceSufficiency: quality.sufficiency.evidenceSufficiency,
+        usableAsPrimaryEvidence,
+        usableAsSecondaryEvidence,
+        usageRecommendation: quality.usageRecommendation,
+        qualityWarnings: mergedWarnings,
         matchedCoreConcepts: assessment.matchedCoreConcepts,
         missingCoreConcepts: assessment.missingCoreConcepts,
         evidenceGrounding: assessment.evidenceGrounding,
         matchedFacets: assessment.matchedFacets,
         missingRequiredFacets: assessment.missingRequiredFacets,
-        sourceRelevanceReasonZhTw: assessment.reasonZhTw,
-        shouldShowInMainList: assessment.shouldShowInMainList,
-        shouldRecommendAccept: assessment.shouldRecommendAccept,
-        mainEvidenceFacet: evidenceProfile?.mainEvidenceFacet ?? null,
-        evidenceSummaryZhTw: evidenceProfile?.summaryZhTw ?? null,
-        evidenceSnippets: evidenceProfile?.evidenceSnippets ?? null,
-        evidenceChain: evidenceProfile?.evidenceChain ?? null,
+        sourceRelevanceReasonZhTw: quality.topical.relevanceReasonZhTW,
+        relevanceReasonZhTW: quality.topical.relevanceReasonZhTW,
+        readableSummaryZhTW: quality.summary.readableSummaryZhTW,
+        summarySourceType:
+          quality.summary.summarySourceType === "reject"
+            ? "metadataFallback"
+            : quality.summary.summarySourceType,
+        summaryConfidence: quality.summary.summaryConfidence,
+        summaryWarnings: mergedWarnings,
+        shouldShowInMainList,
+        shouldRecommendAccept:
+          quality.usageRecommendation === "primary" ||
+          quality.usageRecommendation === "secondary",
+        isMetadataOnly:
+          quality.sufficiency.summaryMode === "metadataFallback",
+        isPrimaryEvidence: usableAsPrimaryEvidence,
+        mainEvidenceFacet: evidenceProfile.mainEvidenceFacet ?? null,
+        evidenceSummaryZhTw: evidenceProfile.summaryZhTw ?? null,
+        evidenceSnippets: evidenceProfile.evidenceSnippets ?? null,
+        evidenceChain: evidenceProfile.evidenceChain ?? null,
       };
     })
     .sort((a, b) => {

@@ -62,6 +62,9 @@ test("source summarizer attaches Traditional Chinese LLM summaries to relevant s
   assert.equal(result[0]?.llmSummaryStatus, "success");
   assert.equal(result[0]?.summaryStructuredStatus, "success");
   assert.match(result[0]?.llmSummaryZhTw ?? "", /薯條的營養成分/);
+  assert.match(result[0]?.readableSummaryZhTW ?? "", /薯條的營養成分/);
+  assert.equal(result[0]?.summarySourceType, "abstract");
+  assert.equal(result[0]?.summaryConfidence, "high");
 });
 
 test("source summarizer preserves sources and marks timeout fallback", async () => {
@@ -91,6 +94,7 @@ test("source summarizer preserves sources and marks timeout fallback", async () 
   assert.equal(result[0]?.summaryStructuredStatus, "unavailable");
   assert.match(result[0]?.llmSummaryZhTw ?? "", /薯條|French fries/);
   assert.equal(result[0]?.summaryFallbackUsed, true);
+  assert.match(result[0]?.readableSummaryZhTW ?? "", /目前研究主題|薯條/);
 });
 
 test("source summarizer timeout fallback rewrites aircraft summaries into natural Chinese", async () => {
@@ -125,6 +129,7 @@ test("source summarizer timeout fallback rewrites aircraft summaries into natura
   assert.equal(result[0]?.llmSummaryStatus, "timeout");
   assert.equal(result[0]?.summaryFallbackUsed, true);
   assert.match(result[0]?.llmSummaryZhTw ?? "", /跑道衝出|風險評估|飛機|飛航安全/);
+  assert.match(result[0]?.readableSummaryZhTW ?? "", /飛機|跑道衝出|風險評估/);
   assert.doesNotMatch(
     result[0]?.llmSummaryZhTw ?? "",
     /In this paper|civil aircraft|QAR data|aircraft/i,
@@ -231,4 +236,7 @@ test("source summarizer writes deterministic fallback summaries for metadata-onl
   assert.equal(result[0]?.llmSummaryStatus, "metadata-only");
   assert.equal(result[0]?.summaryStructuredStatus, "insufficient_sources");
   assert.match(result[0]?.llmSummaryZhTw ?? "", /飛機|aircraft/);
+  assert.equal(result[0]?.summarySourceType, "metadataFallback");
+  assert.equal(result[0]?.summaryConfidence, "low");
+  assert.match(result[0]?.readableSummaryZhTW ?? "", /目前|標題|來源資訊|不足以支持深入引用/);
 });

@@ -18,6 +18,10 @@ import {
   buildSourceEvidenceProfile,
   type EvidenceGrounding,
 } from "./sourceEvidence.ts";
+import {
+  evaluateSourceQuality,
+  type SourceUsageRecommendation,
+} from "./sourceQuality.ts";
 import { buildTopicFacets } from "./topicFacets.ts";
 
 const FALLBACK_SUMMARY =
@@ -492,11 +496,17 @@ export function sourceHasUsableAbstract(source: SourceRecord): boolean {
 }
 
 export function sourceSummaryText(source: SourceRecord): string {
+  if (cleanText(source.readableSummaryZhTW)) {
+    return truncateText(cleanText(source.readableSummaryZhTW), 170);
+  }
   if (cleanText(source.llmSummaryZhTw) && !source.summaryFallbackUsed) {
     return normalizedUserFacingLlmSummary(source.llmSummaryZhTw, 220);
   }
-  if (!sourceHasUsableAbstract(source)) return FALLBACK_SUMMARY;
-  return readerFacingAbstractSummary(source, source.topic ?? "", [], 170);
+  return truncateText(
+    evaluateSourceQuality(source, source.topic ?? source.title ?? "目前主題").summary
+      .readableSummaryZhTW,
+    170,
+  );
 }
 
 export function sourceParagraphSummary(
@@ -504,37 +514,20 @@ export function sourceParagraphSummary(
   topic: string,
   assessment?: SourceRelevanceAssessment,
 ): string {
-  const title = cleanText(source.title) || "此來源";
-  const topicText = topicLabel(topic);
-  const abstract = cleanText(source.abstract);
-  const facets = assessment?.matchedFacets?.slice(0, 2) ?? [];
-  const facetLabels = readerFacingFacetLabels(facets);
-  const status = source.summaryStatus ?? source.llmSummaryStatus;
-
+  if (cleanText(source.readableSummaryZhTW)) {
+    return truncateText(cleanText(source.readableSummaryZhTW), 260);
+  }
   if (cleanText(source.llmSummaryZhTw) && !source.summaryFallbackUsed) {
     return normalizedUserFacingLlmSummary(source.llmSummaryZhTw, 260);
   }
-
-  if (abstract.length >= 24) {
-    return readerFacingAbstractSummary(source, topic, facets, 260);
+  const evidenceProfile = buildSourceEvidenceProfile(source, buildTopicFacets(topic));
+  if (evidenceProfile.evidenceSnippets.length > 0 && cleanText(evidenceProfile.summaryZhTw)) {
+    return truncateText(evidenceProfile.summaryZhTw, 260);
   }
-
-  if (status === "fetch-failed") {
-    return `fetch-failed：此來源〈${title}〉有 URL/DOI，但目前無法取得正文；原因：${source.summaryReason ?? "fetch failed"}。`;
-  }
-
-  if (
-    cleanText(source.containerTitle) ||
-    cleanText(source.publisher) ||
-    facets.length > 0
-  ) {
-    const metadataFocus = facetLabels.length
-      ? `題名或出版資訊與${facetLabels.join("、")}有初步關聯`
-      : `題名或出版資訊與「${topicText}」有初步關聯`;
-    return `metadata-only：此來源〈${title}〉目前主要提供書目資料，${metadataFocus}；若要成為主要證據仍需補充正文或可驗證摘要。`;
-  }
-
-  return `metadata-only：此來源〈${title}〉目前只有基本書目資訊，可標示研究缺口，但不足以支撐正式結論。`;
+  return truncateText(
+    evaluateSourceQuality(source, topic).summary.readableSummaryZhTW,
+    260,
+  );
 }
 
 export function sourceRecommendedSections(
@@ -590,14 +583,19 @@ export function sourceRecommendedSections(
 export function sourceDecisionHint(source: SourceRecord): string {
   const category = classifySourceRecord(source);
   const label = SOURCE_CATEGORY_LABELS[category];
-  const hasAbstract = sourceHasUsableAbstract(source);
-  const hasLocator = Boolean(cleanText(source.doi) || cleanText(source.url));
+  const quality = evaluateSourceQuality(
+    source,
+    source.topic ?? source.title ?? "目前主題",
+  );
   const sections = sourceRecommendedSections(source).join("、");
 
-  if (!hasAbstract) {
-    return `摘要資料不足；系統會先把它作為${label}線索，不列入主要證據候選。`;
+  if (quality.usageRecommendation === "exclude") {
+    return `這筆${label}與目前主題關聯不足，預設建議排除。`;
   }
-  if (!hasLocator) {
+  if (quality.sufficiency.evidenceSufficiency === "insufficient") {
+    return `這筆${label}目前只有有限書目資訊，不能列入主要證據。`;
+  }
+  if (!cleanText(source.doi) && !cleanText(source.url)) {
     return `可支援${sections}，但 DOI 或 URL 待補，正式引用前需補齊位置。`;
   }
   return `可優先判斷是否支援${sections}；接受後會進入報告資料基礎。`;
@@ -607,6 +605,10 @@ export interface SourceSummaryForUser {
   contentSummary: string;
   summaryQuality: "good" | "partial" | "poor" | "irrelevant";
   summaryQualityReason: string;
+  summarySourceType: SourceRecord["summarySourceType"];
+  summaryConfidence: SourceRecord["summaryConfidence"];
+  summaryWarnings: string[];
+  relevanceReasonZhTW: string | null;
   evidenceSnippets: SourceEvidenceSnippet[];
   originalEvidenceSnippets: string[];
   evidenceChain: SourceEvidenceChainEntry[];
@@ -650,6 +652,18 @@ function summaryQualityFromAssessment(
     return {
       quality: "irrelevant",
       reason: "與主題明顯不符，不建議作為主要證據。",
+    };
+  }
+  if (source.summaryConfidence === "low") {
+    return {
+      quality: "poor",
+      reason: "目前摘要主要根據書目資訊或有限片段整理，引用前仍需再確認原始內容。",
+    };
+  }
+  if (source.summaryConfidence === "medium") {
+    return {
+      quality: "partial",
+      reason: "摘要可讀，但主要來自 snippet 或有限片段，適合作為初步判讀。",
     };
   }
   if (
@@ -893,45 +907,109 @@ export function sourceSummaryForUser(
   topic: string,
   profile = buildSourceIntentProfile(topic),
 ): SourceSummaryForUser {
+  const quality = evaluateSourceQuality(source, topic);
   const assessment = metadataBackedAssessment(
     source,
     buildSourceRelevanceAssessment(source, profile),
   );
-  const recommendation = sourceAdoptionRecommendation(source, assessment);
   const evidenceProfile = buildSourceEvidenceProfile(
     source,
     buildTopicFacets(topic),
   );
   const usableSections = sourceRecommendedSections(source);
-  const summaryQuality = summaryQualityFromAssessment(
-    source,
-    assessment,
-    evidenceProfile,
+  const usageRecommendation: SourceUsageRecommendation =
+    source.usageRecommendation ?? quality.usageRecommendation;
+  const topicalLabel =
+    source.topicalRelevanceLabel ?? quality.topical.topicalRelevanceLabel;
+  const evidenceSufficiency =
+    source.evidenceSufficiency ?? quality.sufficiency.evidenceSufficiency;
+  const contentSummary = sourceParagraphSummary(source, topic, assessment);
+  const summarySourceType =
+    source.summarySourceType ??
+    (quality.summary.summarySourceType === "reject"
+      ? "metadataFallback"
+      : quality.summary.summarySourceType);
+  const summaryConfidence =
+    source.summaryConfidence ?? quality.summary.summaryConfidence;
+  const summaryWarnings = Array.from(
+    new Set([
+      ...(source.summaryWarnings ?? []),
+      ...(source.qualityWarnings ?? []),
+      ...quality.summary.qualityWarnings,
+    ]),
   );
-  const llmSummary =
-    cleanText(source.llmSummaryZhTw) && !source.summaryFallbackUsed
-      ? normalizedUserFacingLlmSummary(source.llmSummaryZhTw, 260)
-      : null;
-  const contentSummary =
-    llmSummary ??
-    (evidenceProfile.evidenceSnippets.length > 0
-      ? sourceParagraphSummary(source, topic, assessment)
-      : !sourceHasUsableAbstract(source)
-        ? evidenceProfile.summaryZhTw
-        : sourceParagraphSummary(source, topic, assessment));
+  const summaryQuality =
+    topicalLabel === "irrelevant"
+      ? {
+          quality: "irrelevant" as const,
+          reason: "此來源與主題核心概念明顯不符，建議排除。",
+        }
+      : evidenceSufficiency === "strong" || evidenceSufficiency === "moderate"
+        ? {
+            quality: "good" as const,
+            reason:
+              evidenceSufficiency === "strong"
+                ? "已有足夠內容可支撐正式判讀。"
+                : "目前有摘要可用，但仍需避免超出摘要內容。",
+          }
+        : evidenceSufficiency === "weak"
+          ? {
+              quality: "partial" as const,
+              reason: "目前主要依片段資訊判讀，適合作為補充來源。",
+            }
+          : {
+              quality: "poor" as const,
+              reason: "目前只有標題或書目資訊，不能視為正式證據。",
+            };
+  const topicRelation =
+    cleanText(source.relevanceReasonZhTW) ||
+    cleanText(source.sourceRelevanceReasonZhTw) ||
+    cleanText(quality.topical.relevanceReasonZhTW) ||
+    null;
+  const recommendationReason = (() => {
+    switch (usageRecommendation) {
+      case "primary":
+        return "可作主要證據：主題相關度高，且目前至少有摘要可供判讀。";
+      case "secondary":
+        return "可作補充來源：有關聯，但較適合補充背景或延伸脈絡。";
+      case "reference":
+        return "僅供參考：資訊不足或關聯偏弱，引用前需再確認。";
+      case "exclude":
+      default:
+        return "建議排除：與主題關聯不足，不應納入主要證據池。";
+    }
+  })();
+  const recommendation =
+    usageRecommendation === "primary"
+      ? "recommended"
+      : usageRecommendation === "secondary"
+        ? "supporting"
+        : usageRecommendation === "reference"
+          ? "check_first"
+          : "not_recommended";
 
   return {
     contentSummary,
     summaryQuality: summaryQuality.quality,
     summaryQualityReason: summaryQuality.reason,
+    summarySourceType,
+    summaryConfidence,
+    summaryWarnings,
+    relevanceReasonZhTW:
+      topicRelation,
     evidenceSnippets: evidenceProfile.evidenceSnippets,
     originalEvidenceSnippets: evidenceProfile.originalSnippets,
     evidenceChain: evidenceProfile.evidenceChain,
     mainEvidenceFacet: evidenceProfile.mainEvidenceFacet,
-    groundingStatus: evidenceProfile.groundingStatus,
-    topicRelation: relationFromAssessment(source, topic, profile, assessment),
+    groundingStatus:
+      summarySourceType === "metadataFallback"
+        ? "metadata_only"
+        : summarySourceType === "fulltext" || summarySourceType === "snippet"
+          ? "snippet_grounded"
+          : "abstract_grounded",
+    topicRelation: topicRelation ?? quality.topical.relevanceReasonZhTW,
     recommendation,
-    recommendationReason: recommendationReason(recommendation, assessment),
+    recommendationReason,
     usableSections,
     suitableSectionLabels: suitableSectionLabels(source, assessment),
   };

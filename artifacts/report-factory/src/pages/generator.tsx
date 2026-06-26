@@ -88,6 +88,10 @@ import {
   sourceHasUsableAbstract,
   sourceSummaryForUser,
 } from "@/lib/sourceSummaries";
+import {
+  deriveSourceSearchUiState,
+  type SourceSearchUiState,
+} from "@/lib/sourceSearchUiState";
 import { applySourceRelevanceAssessments } from "@/lib/sourceRelevance";
 import { applySourceAuthorityAndLanguage } from "@/lib/sourceAuthority";
 import { supplementTrustedClimateSources } from "@/lib/trustedClimateSources";
@@ -130,53 +134,6 @@ import {
 } from "lucide-react";
 
 // ─── Default form state ───────────────────────────────────────────────────────
-
-type SourceSearchUiState =
-  | "idle"
-  | "loading"
-  | "success"
-  | "empty"
-  | "failed";
-
-type SourceSearchUiStateInput = {
-  activeStep: "topic" | "search" | "manage" | "generate";
-  isSearchingSources: boolean;
-  sourceCount: number;
-  sourceSearchStatus: "idle" | "loading" | "done" | "empty" | "error";
-  sourceSearchMessage?: string;
-  backendMessage?: string;
-};
-
-function hasProviderTimeoutMessage(value: string | null | undefined): boolean {
-  if (!value) return false;
-  return /timed out|timeout|逾時/i.test(value);
-}
-
-function deriveSourceSearchUiState(
-  input: SourceSearchUiStateInput,
-): SourceSearchUiState {
-  if (input.isSearchingSources || input.sourceSearchStatus === "loading") {
-    return "loading";
-  }
-
-  if (input.sourceCount > 0) {
-    return "success";
-  }
-
-  const hasProviderTimeout =
-    hasProviderTimeoutMessage(input.sourceSearchMessage) ||
-    hasProviderTimeoutMessage(input.backendMessage);
-
-  if (input.sourceSearchStatus === "error" || hasProviderTimeout) {
-    return "failed";
-  }
-
-  if (input.activeStep === "search" || input.sourceSearchStatus === "empty") {
-    return "empty";
-  }
-
-  return "idle";
-}
 
 type ReportInputStringKey = {
   [K in keyof ReportInput]: ReportInput[K] extends string ? K : never;
@@ -995,13 +952,10 @@ function sourceAcceptBlockReason(
   if (lock && source.queryPlanHash && source.queryPlanHash !== lock.queryPlanHash)
     return "query_plan_mismatch";
   if (
-    source.classification === "off_topic" ||
-    source.classification === "trusted_but_off_topic" ||
     source.classification === "stale_topic" ||
     source.classification === "stale_workflow"
   )
     return source.classification;
-  if (source.relevanceLevel === "off_topic") return "off_topic";
   return null;
 }
 
@@ -1009,7 +963,30 @@ function sourceCanEnterReport(
   source: SourceRecord,
   lock: SourceWorkflowLock | null,
 ): boolean {
-  return sourceAcceptBlockReason(source, lock) === null;
+  if (sourceAcceptBlockReason(source, lock) !== null) return false;
+  if (source.topicalRelevanceLabel === "irrelevant") return false;
+  if (
+    source.topicalRelevanceLabel &&
+    source.topicalRelevanceLabel !== "high" &&
+    source.topicalRelevanceLabel !== "medium"
+  ) {
+    return false;
+  }
+  if (
+    source.evidenceSufficiency &&
+    source.evidenceSufficiency !== "strong" &&
+    source.evidenceSufficiency !== "moderate"
+  ) {
+    return false;
+  }
+  if (
+    source.summarySourceType &&
+    source.summarySourceType !== "fulltext" &&
+    source.summarySourceType !== "abstract"
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function applyWorkflowLockToSources(
@@ -1231,35 +1208,20 @@ function sourceReviewBadgeVariant(
   }
 }
 
-function sourceRelevanceLabel(level: SourceRecord["relevanceLevel"]): string {
-  switch (level) {
-    case "primary":
-      return "主要來源";
-    case "secondary":
-      return "延伸來源";
-    case "clue":
-      return "線索來源";
-    case "low":
-      return "低相關";
-    case "off_topic":
-      return "離題";
-    default:
-      return "相關度待確認";
-  }
-}
-
 function sourceRelevanceBadgeVariant(
-  level: SourceRecord["relevanceLevel"],
+  level: SourceRecord["topicalRelevanceLabel"] | SourceRecord["relevanceLevel"],
 ): "default" | "secondary" | "outline" | "destructive" {
   switch (level) {
+    case "high":
     case "primary":
       return "default";
+    case "medium":
     case "secondary":
       return "secondary";
     case "clue":
-      return "outline";
     case "low":
       return "outline";
+    case "irrelevant":
     case "off_topic":
       return "destructive";
     default:
@@ -1268,35 +1230,80 @@ function sourceRelevanceBadgeVariant(
 }
 
 function sourceRelevanceTierLabel(
-  level: SourceRecord["relevanceLevel"],
+  level: SourceRecord["topicalRelevanceLabel"] | SourceRecord["relevanceLevel"],
 ): string {
   switch (level) {
+    case "high":
+      return "高相關";
+    case "medium":
+      return "中相關";
+    case "low":
+      return "低相關";
+    case "irrelevant":
+      return "不相關";
     case "primary":
-      return "高";
+      return "高相關";
     case "secondary":
     case "clue":
-      return "中";
-    case "low":
+      return "中相關";
     case "off_topic":
-      return "低";
+      return "低相關";
     default:
       return "待確認";
   }
 }
 
 function evidenceGroundingLabel(
-  status: SourceRecord["evidenceGrounding"],
+  status: SourceRecord["evidenceSufficiency"] | SourceRecord["evidenceGrounding"],
 ): string {
   switch (status) {
+    case "strong":
+      return "內容充足";
+    case "moderate":
+      return "有摘要可用";
+    case "weak":
+      return "僅片段可判斷";
+    case "insufficient":
+      return "證據不足";
     case "abstract_grounded":
     case "snippet_grounded":
       return "有摘要可用";
     case "metadata_only":
-      return "只有 metadata";
-    case "insufficient":
-      return "摘要不足";
+      return "僅標題資訊";
     default:
       return "片段待確認";
+  }
+}
+
+function usageRecommendationLabel(
+  recommendation: SourceRecord["usageRecommendation"],
+): string {
+  switch (recommendation) {
+    case "primary":
+      return "可作主要證據";
+    case "secondary":
+      return "可作補充來源";
+    case "exclude":
+      return "建議排除";
+    case "reference":
+    default:
+      return "僅供參考";
+  }
+}
+
+function usageRecommendationBadgeVariant(
+  recommendation: SourceRecord["usageRecommendation"],
+): "default" | "secondary" | "outline" | "destructive" {
+  switch (recommendation) {
+    case "primary":
+      return "default";
+    case "secondary":
+      return "secondary";
+    case "exclude":
+      return "destructive";
+    case "reference":
+    default:
+      return "outline";
   }
 }
 
@@ -1334,6 +1341,18 @@ function summaryQualityBadgeVariant(
 }
 
 function sourceSummaryStatusLabel(source: SourceRecord): string {
+  if (source.summarySourceType === "metadataFallback") {
+    return "書目資訊初步摘要";
+  }
+  if (source.summarySourceType === "fulltext") {
+    return "全文摘要";
+  }
+  if (source.summarySourceType === "abstract") {
+    return "摘要整理";
+  }
+  if (source.summarySourceType === "snippet") {
+    return "片段整理";
+  }
   switch (source.summaryStructuredStatus) {
     case "success":
       return "LLM 摘要";
@@ -1376,6 +1395,9 @@ function sourceSummaryStatusLabel(source: SourceRecord): string {
 function sourceSummaryStatusVariant(
   source: SourceRecord,
 ): "default" | "secondary" | "outline" | "destructive" {
+  if (source.summaryConfidence === "low") return "outline";
+  if (source.summaryConfidence === "medium") return "secondary";
+  if (source.summaryConfidence === "high") return "default";
   switch (source.summaryStructuredStatus) {
     case "success":
       return "default";
@@ -1544,11 +1566,8 @@ function selectableCandidateSources(sources: SourceRecord[]): SourceRecord[] {
   return sources.filter((source) => {
     if (sourceReviewState(source) !== "pending") return false;
     if (
-      source.classification === "off_topic" ||
-      source.classification === "trusted_but_off_topic" ||
       source.classification === "stale_topic" ||
-      source.classification === "stale_workflow" ||
-      source.relevanceLevel === "off_topic"
+      source.classification === "stale_workflow"
     ) {
       return false;
     }
@@ -1587,6 +1606,9 @@ function SourceReviewCard({
   const summary = sourceSummaryForUser(source, topic);
   const hasAbstract = sourceHasUsableAbstract(source);
   const relevanceLevel = source.relevanceLevel ?? null;
+  const topicalLabel = source.topicalRelevanceLabel ?? null;
+  const evidenceSufficiency = source.evidenceSufficiency ?? null;
+  const usageRecommendation = source.usageRecommendation ?? null;
   const relevanceReasons = source.relevanceReasons ?? [];
   const scoreReasons = source.scoreReasons ?? [];
   const snippet = abstractSnippet(source);
@@ -1633,12 +1655,15 @@ function SourceReviewCard({
   const summaryQuality = summary.summaryQuality;
   const acceptButtonLabel =
     summary.recommendation === "not_recommended"
-      ? "仍要接受"
+      ? "強制保留"
       : summary.recommendation === "supporting"
-        ? "作為輔助"
+        ? "接受為補充來源"
         : summary.recommendation === "check_first"
           ? "確認後接受"
           : "接受來源";
+  const acceptButtonVariant =
+    summary.recommendation === "recommended" ? "default" : "outline";
+  const isForceAccepted = Boolean(source.manuallyForced);
 
   return (
     <Collapsible
@@ -1688,30 +1713,30 @@ function SourceReviewCard({
                       {reviewLabel}
                     </Badge>
                     <Badge
-                      variant={sourceRelevanceBadgeVariant(relevanceLevel)}
+                      variant={sourceRelevanceBadgeVariant(topicalLabel ?? relevanceLevel)}
                     >
-                      相關度 {sourceRelevanceTierLabel(relevanceLevel)}
+                      主題相關度：{sourceRelevanceTierLabel(topicalLabel ?? relevanceLevel)}
                     </Badge>
-                    {source.isPrimaryEvidence && (
-                      <Badge variant="default">主要證據</Badge>
-                    )}
+                    <Badge variant={summaryQualityBadgeVariant(summaryQuality)}>
+                      證據充足度：{evidenceGroundingLabel(evidenceSufficiency ?? summary.groundingStatus)}
+                    </Badge>
+                    <Badge variant={usageRecommendationBadgeVariant(usageRecommendation)}>
+                      用途建議：{usageRecommendationLabel(usageRecommendation)}
+                    </Badge>
                     {!showTechnicalDetails ? (
                       languageLabel !== "來源語言待確認" ? (
-                        <Badge variant="outline">{languageLabel}</Badge>
+                        <Badge variant="outline">語言：{languageLabel}</Badge>
                       ) : null
                     ) : (
                       <>
                         <Badge variant="secondary">可信度 {confidence}</Badge>
                         <Badge variant="outline">{authorityLabel}</Badge>
                         <Badge variant="outline">{languageLabel}</Badge>
-                        <Badge variant={summaryQualityBadgeVariant(summaryQuality)}>
-                          {summaryQualityLabel(summaryQuality)}
-                        </Badge>
                         <Badge variant={sourceSummaryStatusVariant(source)}>
                           {sourceSummaryStatusLabel(source)}
                         </Badge>
                         <Badge variant={hasAbstract ? "outline" : "secondary"}>
-                          {evidenceGroundingLabel(summary.groundingStatus)}
+                          {evidenceGroundingLabel(evidenceSufficiency ?? summary.groundingStatus)}
                         </Badge>
                         <Badge variant="outline">{sourceTypeLabel}</Badge>
                         <Badge variant="secondary">{providerLabel}</Badge>
@@ -1725,6 +1750,9 @@ function SourceReviewCard({
                         {source.isOpenAccess && <Badge variant="outline">Open Access</Badge>}
                         {incomplete && (
                           <Badge variant="outline">引用資料不完整</Badge>
+                        )}
+                        {isForceAccepted && (
+                          <Badge variant="outline">人工強制保留</Badge>
                         )}
                       </>
                     )}
@@ -1755,14 +1783,29 @@ function SourceReviewCard({
                   <p className="text-sm leading-6 text-foreground/90">
                     {summary.contentSummary}
                   </p>
+                  {summary.summaryConfidence === "low" && (
+                    <p className="text-xs leading-5 text-amber-700">
+                      目前此摘要信心較低，主要依書目資訊或有限片段整理；若要正式引用，建議先再確認原始來源。
+                    </p>
+                  )}
+                  {summary.summaryWarnings.length > 0 && (
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      {summary.summaryWarnings[0]}
+                    </p>
+                  )}
+                  {isForceAccepted && (
+                    <p className="text-xs leading-5 text-amber-700">
+                      這筆來源是人工強制保留，不會自動視為主要證據，也不會直接進入正式 evidence cards。
+                    </p>
+                  )}
                 </div>
                 <div className="grid gap-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2">
                   <p>
-                    <span className="font-medium text-foreground">與主題關聯：</span>
+                    <span className="font-medium text-foreground">相關判斷：</span>
                     {summary.topicRelation}
                   </p>
                   <p>
-                    <span className="font-medium text-foreground">採用建議：</span>
+                    <span className="font-medium text-foreground">使用建議：</span>
                     {summary.recommendationReason}
                   </p>
                 </div>
@@ -1894,11 +1937,7 @@ function SourceReviewCard({
               <Button
                 type="button"
                 size="sm"
-                variant={
-                  summary.recommendation === "recommended"
-                    ? "default"
-                    : "outline"
-                }
+                variant={acceptButtonVariant}
                 className="min-h-[36px]"
                 onClick={() => onReview(sourceId, "accepted")}
               >
@@ -3988,7 +4027,6 @@ export function Generator() {
     ? "search"
     : activeStep;
   const sourceSearchUiState = deriveSourceSearchUiState({
-    activeStep: visibleStep,
     isSearchingSources,
     sourceCount: currentWorkflowSources.length,
     sourceSearchStatus,
@@ -4308,10 +4346,10 @@ export function Generator() {
           reportTopicForWorkflow,
         ),
       );
-      const relevanceAssessedSources =
-        result.searchTrace || result.planner
-          ? dedupedSources
-          : applySourceRelevanceAssessments(dedupedSources, reportTopicForWorkflow);
+      const relevanceAssessedSources = applySourceRelevanceAssessments(
+        dedupedSources,
+        reportTopicForWorkflow,
+      );
       const normalizedSources = applySourceAuthorityAndLanguage(
         relevanceAssessedSources,
       );
@@ -4443,10 +4481,10 @@ export function Generator() {
     sourceId: string,
     reviewState: SourceReviewState,
   ) => {
+    const source = sources.find(
+      (item) => (item.id || sourceRecordKey(item)) === sourceId,
+    );
     if (reviewState === "accepted") {
-      const source = sources.find(
-        (item) => (item.id || sourceRecordKey(item)) === sourceId,
-      );
       const blockReason = source
         ? sourceAcceptBlockReason(source, sourceWorkflowLock)
         : "source_not_found";
@@ -4465,8 +4503,36 @@ export function Generator() {
       }
     }
 
+    const shouldForceKeep =
+      reviewState === "accepted" &&
+      source &&
+      (source.usageRecommendation === "exclude" ||
+        source.topicalRelevanceLabel === "irrelevant" ||
+        source.evidenceSufficiency === "insufficient" ||
+        source.evidenceSufficiency === "weak");
+
     setSources((current) =>
-      updateSourceReviewState(current, sourceId, reviewState),
+      updateSourceReviewState(current, sourceId, reviewState).map((item) => {
+        const key = item.id || sourceRecordKey(item);
+        if (key !== sourceId) return item;
+        return normalizeSourceForReview({
+          ...item,
+          manuallyForced: reviewState === "accepted" ? Boolean(shouldForceKeep) : false,
+          usableAsPrimaryEvidence:
+            reviewState === "accepted" && shouldForceKeep
+              ? false
+              : item.usableAsPrimaryEvidence,
+          qualityWarnings:
+            reviewState === "accepted" && shouldForceKeep
+              ? Array.from(
+                  new Set([
+                    ...(item.qualityWarnings ?? []),
+                    "此來源為人工強制保留，不可視為主要證據。",
+                  ]),
+                )
+              : item.qualityWarnings,
+        });
+      }),
     );
   };
 

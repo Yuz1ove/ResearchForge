@@ -195,16 +195,24 @@ function evidenceCardStatusLabel(card: ReportWorkspace["evidenceCards"][number])
 
 function sourceStatusLabels(source: ReportWorkspace["acceptedSources"][number]): string[] {
   const labels = ["已接受", sourceCategoryLabel(source.sourceCategory)];
-  if (source.sourceLanguageLabel === "英文來源" || source.sourceLanguage === "en") {
-    labels.push("英文來源");
-  }
+  if (source.topicalRelevanceLabel === "high") labels.push("高相關");
+  if (source.topicalRelevanceLabel === "medium") labels.push("中相關");
+  if (source.topicalRelevanceLabel === "low") labels.push("低相關");
+  if (source.topicalRelevanceLabel === "irrelevant") labels.push("建議排除");
+  if (source.evidenceSufficiency === "strong") labels.push("內容充足");
+  if (source.evidenceSufficiency === "moderate") labels.push("有摘要可用");
   if (
+    source.evidenceSufficiency === "weak" ||
     source.evidenceGrounding === "metadata_only" ||
     source.evidenceGrounding === "insufficient" ||
     !source.abstract
   ) {
-    labels.push("摘要不足");
+    labels.push("證據不足");
   }
+  if (source.usageRecommendation === "primary") labels.push("可作主要證據");
+  if (source.usageRecommendation === "secondary") labels.push("可作補充來源");
+  if (source.usageRecommendation === "reference") labels.push("僅供參考");
+  if (source.usageRecommendation === "exclude") labels.push("建議排除");
   return Array.from(new Set(labels));
 }
 

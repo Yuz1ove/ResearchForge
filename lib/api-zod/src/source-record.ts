@@ -22,6 +22,17 @@ export const SOURCE_EVIDENCE_GROUNDING_STATUSES = [
 ] as const;
 export type SourceEvidenceGroundingStatus = (typeof SOURCE_EVIDENCE_GROUNDING_STATUSES)[number];
 
+export const SOURCE_SUMMARY_SOURCE_TYPES = [
+  "abstract",
+  "snippet",
+  "fulltext",
+  "metadataFallback",
+] as const;
+export type SourceSummarySourceType = (typeof SOURCE_SUMMARY_SOURCE_TYPES)[number];
+
+export const SOURCE_SUMMARY_CONFIDENCE_LEVELS = ["high", "medium", "low"] as const;
+export type SourceSummaryConfidence = (typeof SOURCE_SUMMARY_CONFIDENCE_LEVELS)[number];
+
 export const SOURCE_KINDS = ["journal", "conference", "book", "dataset", "web", "unknown"] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
@@ -72,6 +83,14 @@ export interface SourceRecord {
   evidenceGrounding?: SourceEvidenceGroundingStatus | null;
   sourceRelevanceReasonZhTw?: string | null;
   llmSummaryZhTw?: string | null;
+  readableSummaryZhTW?: string | null;
+  summarySourceType?: SourceSummarySourceType | null;
+  summaryConfidence?: SourceSummaryConfidence | null;
+  relevanceReasonZhTW?: string | null;
+  summaryWarnings?: string[] | null;
+  originalAbstract?: string | null;
+  originalSnippet?: string | null;
+  extractedText?: string | null;
   llmSummaryStatus?: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped" | "metadata-only" | "fetch-failed" | "llm-failed" | "fallback" | null;
   summaryStructuredStatus?: "success" | "unavailable" | "invalid_input" | "insufficient_sources" | "error" | null;
   summaryProvider?: string | null;
@@ -229,6 +248,24 @@ function normalizeEvidenceGrounding(
   value: SourceRecordInput["evidenceGrounding"],
 ): SourceRecord["evidenceGrounding"] {
   if ((SOURCE_EVIDENCE_GROUNDING_STATUSES as readonly unknown[]).includes(value)) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeSummarySourceType(
+  value: SourceRecordInput["summarySourceType"],
+): SourceRecord["summarySourceType"] {
+  if ((SOURCE_SUMMARY_SOURCE_TYPES as readonly unknown[]).includes(value)) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeSummaryConfidence(
+  value: SourceRecordInput["summaryConfidence"],
+): SourceRecord["summaryConfidence"] {
+  if ((SOURCE_SUMMARY_CONFIDENCE_LEVELS as readonly unknown[]).includes(value)) {
     return value;
   }
   return null;
@@ -419,6 +456,14 @@ function metadataFields(source: Pick<
   | "evidenceGrounding"
   | "sourceRelevanceReasonZhTw"
   | "llmSummaryZhTw"
+  | "readableSummaryZhTW"
+  | "summarySourceType"
+  | "summaryConfidence"
+  | "relevanceReasonZhTW"
+  | "summaryWarnings"
+  | "originalAbstract"
+  | "originalSnippet"
+  | "extractedText"
   | "llmSummaryStatus"
   | "summaryStructuredStatus"
   | "summaryProvider"
@@ -481,6 +526,16 @@ function metadataFields(source: Pick<
       ? { sourceRelevanceReasonZhTw: source.sourceRelevanceReasonZhTw }
       : {}),
     ...(source.llmSummaryZhTw != null ? { llmSummaryZhTw: source.llmSummaryZhTw } : {}),
+    ...(source.readableSummaryZhTW != null
+      ? { readableSummaryZhTW: source.readableSummaryZhTW }
+      : {}),
+    ...(source.summarySourceType != null ? { summarySourceType: source.summarySourceType } : {}),
+    ...(source.summaryConfidence != null ? { summaryConfidence: source.summaryConfidence } : {}),
+    ...(source.relevanceReasonZhTW != null ? { relevanceReasonZhTW: source.relevanceReasonZhTW } : {}),
+    ...(source.summaryWarnings != null ? { summaryWarnings: source.summaryWarnings } : {}),
+    ...(source.originalAbstract != null ? { originalAbstract: source.originalAbstract } : {}),
+    ...(source.originalSnippet != null ? { originalSnippet: source.originalSnippet } : {}),
+    ...(source.extractedText != null ? { extractedText: source.extractedText } : {}),
     ...(source.llmSummaryStatus != null ? { llmSummaryStatus: source.llmSummaryStatus } : {}),
     ...(source.summaryStructuredStatus != null
       ? { summaryStructuredStatus: source.summaryStructuredStatus }
@@ -567,6 +622,19 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
     sourceRelevanceReasonZhTw:
       existing.sourceRelevanceReasonZhTw ?? incoming.sourceRelevanceReasonZhTw ?? null,
     llmSummaryZhTw: existing.llmSummaryZhTw ?? incoming.llmSummaryZhTw ?? null,
+    readableSummaryZhTW:
+      existing.readableSummaryZhTW ?? incoming.readableSummaryZhTW ?? null,
+    summarySourceType: existing.summarySourceType ?? incoming.summarySourceType ?? null,
+    summaryConfidence: existing.summaryConfidence ?? incoming.summaryConfidence ?? null,
+    relevanceReasonZhTW:
+      existing.relevanceReasonZhTW ?? incoming.relevanceReasonZhTW ?? null,
+    summaryWarnings: mergeOptionalStringLists(
+      existing.summaryWarnings,
+      incoming.summaryWarnings,
+    ),
+    originalAbstract: existing.originalAbstract ?? incoming.originalAbstract ?? null,
+    originalSnippet: existing.originalSnippet ?? incoming.originalSnippet ?? null,
+    extractedText: existing.extractedText ?? incoming.extractedText ?? null,
     llmSummaryStatus: existing.llmSummaryStatus ?? incoming.llmSummaryStatus ?? null,
     summaryStructuredStatus:
       existing.summaryStructuredStatus ?? incoming.summaryStructuredStatus ?? null,
@@ -754,6 +822,14 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     evidenceGrounding: normalizeEvidenceGrounding(source.evidenceGrounding),
     sourceRelevanceReasonZhTw: cleanText(source.sourceRelevanceReasonZhTw),
     llmSummaryZhTw: cleanText(source.llmSummaryZhTw),
+    readableSummaryZhTW: cleanText(source.readableSummaryZhTW),
+    summarySourceType: normalizeSummarySourceType(source.summarySourceType),
+    summaryConfidence: normalizeSummaryConfidence(source.summaryConfidence),
+    relevanceReasonZhTW: cleanText(source.relevanceReasonZhTW),
+    summaryWarnings: cleanStringList(source.summaryWarnings),
+    originalAbstract: cleanText(source.originalAbstract),
+    originalSnippet: cleanText(source.originalSnippet),
+    extractedText: cleanText(source.extractedText),
     llmSummaryStatus: normalizeSummaryStatus(source.llmSummaryStatus),
     summaryStructuredStatus: normalizeStructuredStatus(source.summaryStructuredStatus),
     summaryProvider: cleanText(source.summaryProvider),

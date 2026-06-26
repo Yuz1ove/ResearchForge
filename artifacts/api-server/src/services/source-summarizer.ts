@@ -24,12 +24,22 @@ export type SourceSummaryStatus =
   | "llm-failed"
   | "fallback";
 
-export type SourceWithLlmSummary = SourceRecord & {
+type SourceSummaryCapableRecord = SourceRecord & {
   llmSummaryZhTw?: string | null;
   llmSummaryStatus?: SourceSummaryStatus | null;
   summaryStructuredStatus?: LlmStructuredStatus | null;
   summaryMessage?: string | null;
+  readableSummaryZhTW?: string | null;
+  summarySourceType?: "abstract" | "snippet" | "fulltext" | "metadataFallback" | null;
+  summaryConfidence?: "high" | "medium" | "low" | null;
+  relevanceReasonZhTW?: string | null;
+  summaryWarnings?: string[] | null;
+  originalAbstract?: string | null;
+  originalSnippet?: string | null;
+  extractedText?: string | null;
 };
+
+export type SourceWithLlmSummary = SourceSummaryCapableRecord;
 
 export interface SourceSummarizerOptions {
   llm?: Partial<OpenAICompatibleLlmConfig>;
@@ -38,7 +48,7 @@ export interface SourceSummarizerOptions {
 }
 
 type PreparedSummaryTarget = {
-  source: SourceRecord;
+  source: SourceSummaryCapableRecord;
   textForSummary: string;
   preStatus: SourceSummaryStatus | null;
   reason: string | null;
@@ -208,6 +218,41 @@ const ACADEMIC_TERM_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bconfiguration\b/gi, "構型"],
   [/\bwing\b/gi, "機翼"],
   [/\bfuselage\b/gi, "機身"],
+  [/\bSalmonella\b/gi, "沙門氏桿菌"],
+  [/\bsalmonellosis\b/gi, "沙門氏菌感染"],
+  [/\bfood safety\b/gi, "食品安全"],
+  [/\bfood handling practices\b/gi, "食品處理實務"],
+  [/\bgastrointestinal disorder\b/gi, "腸胃道疾病"],
+  [/\bgastroenteritis\b/gi, "腸胃炎"],
+  [/\babdominal cramps\b/gi, "腹部絞痛"],
+  [/\bbloody diarrhoea\b/gi, "血便腹瀉"],
+  [/\bbloody diarrhea\b/gi, "血便腹瀉"],
+  [/\bdiarrhoea\b/gi, "腹瀉"],
+  [/\bdiarrhea\b/gi, "腹瀉"],
+  [/\bfever\b/gi, "發燒"],
+  [/\bmyalgia\b/gi, "肌肉痠痛"],
+  [/\bheadache\b/gi, "頭痛"],
+  [/\bnausea\b/gi, "噁心"],
+  [/\bvomiting\b/gi, "嘔吐"],
+  [/\bfoodborne outbreak illnesses\b/gi, "食源性群聚疾病"],
+  [/\bpoultry\b/gi, "家禽"],
+  [/\bcattle\b/gi, "牛隻"],
+  [/\bready to eat\b/gi, "即食"],
+  [/\bfood handlers\b/gi, "食品處理人員"],
+  [/\bmicroplastics?\b/gi, "微塑膠"],
+  [/\bhuman exposure\b/gi, "人體暴露"],
+  [/\bingestion\b/gi, "攝食"],
+  [/\binhalation\b/gi, "吸入"],
+  [/\bdermal contact\b/gi, "皮膚接觸"],
+  [/\bcell membranes?\b/gi, "細胞膜"],
+  [/\bbreastmilk\b/gi, "母乳"],
+  [/\btoxic effects?\b/gi, "毒性影響"],
+  [/\bmarine organisms?\b/gi, "海洋生物"],
+  [/\bhuman cell lines?\b/gi, "人體細胞株"],
+  [/\bprospective study\b/gi, "前瞻性研究"],
+  [/\bobservational study\b/gi, "觀察研究"],
+  [/\bredox reactions?\b/gi, "氧化還原反應"],
+  [/\boxidation-reduction reactions?\b/gi, "氧化還原反應"],
 ];
 
 function cleanText(value: string | null | undefined): string {
@@ -329,11 +374,11 @@ function naturalChineseLead(
   return `內容聚焦${focus}，可用來快速掌握這篇研究的${readerFacingActionDetail(action)}。`;
 }
 
-function combinedVisibleText(source: SourceRecord): string {
+function combinedVisibleText(source: SourceSummaryCapableRecord): string {
   return cleanText([source.abstract, source.snippet].filter(Boolean).join(" "));
 }
 
-function summaryInputText(source: SourceRecord, bodyText?: string): string {
+function summaryInputText(source: SourceSummaryCapableRecord, bodyText?: string): string {
   return cleanText(
     [
       source.title,
@@ -390,7 +435,7 @@ function sourceFocusTitle(title: string, topic = ""): string {
     return truncateText(usefulTerms.slice(0, 3).join("、"), 72);
   }
   if (usefulTerms.length === 1 && topicText) {
-    return truncateText(`${topicText}${usefulTerms[0]}`, 72);
+    return truncateText(`${topicText}與${usefulTerms[0]}相關研究`, 72);
   }
   if (topicText) return truncateText(`${topicText}相關研究`, 72);
   return truncateText(normalized || cleanText(title), 72);
@@ -408,7 +453,7 @@ function summaryActionLabel(text: string): string {
   return "說明";
 }
 
-function chooseBestBodySentence(source: SourceRecord, bodyText: string): string {
+function chooseBestBodySentence(source: SourceSummaryCapableRecord, bodyText: string): string {
   const sentences = splitSentences(bodyText).slice(0, 4);
   if (sentences.length === 0) return "";
 
@@ -474,6 +519,206 @@ function deterministicFallbackSummary(
       .join(" "),
     260,
   );
+}
+
+function stripHtmlAndNoise(text: string): string {
+  return htmlToText(text)
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/\b(source_text|text_status|relevance|schema)\b\s*:\s*/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeReaderSummary(text: string): string {
+  return truncateText(stripHtmlAndNoise(text), 220);
+}
+
+function summarySourceTypeForTarget(
+  target: PreparedSummaryTarget,
+): NonNullable<SourceSummaryCapableRecord["summarySourceType"]> {
+  if (target.preStatus === "metadata-only" || target.preStatus === "fetch-failed") {
+    return "metadataFallback";
+  }
+  if (cleanText(target.source.extractedText).length >= 160 || target.reason === "fetched_url_body") {
+    return "fulltext";
+  }
+  if (cleanText(target.source.originalAbstract ?? target.source.abstract).length >= 80) {
+    return "abstract";
+  }
+  if (cleanText(target.source.originalSnippet ?? target.source.snippet).length >= 24) {
+    return "snippet";
+  }
+  return "metadataFallback";
+}
+
+function summaryConfidenceForType(
+  sourceType: NonNullable<SourceSummaryCapableRecord["summarySourceType"]>,
+): NonNullable<SourceSummaryCapableRecord["summaryConfidence"]> {
+  switch (sourceType) {
+    case "fulltext":
+    case "abstract":
+      return "high";
+    case "snippet":
+      return "medium";
+    case "metadataFallback":
+    default:
+      return "low";
+  }
+}
+
+function summaryWarningsForTarget(target: PreparedSummaryTarget): string[] {
+  if (target.preStatus === "fetch-failed") {
+    return ["目前無法取得來源正文，摘要先依可見摘要與書目資訊保守整理。"];
+  }
+  if (target.preStatus === "metadata-only") {
+    return ["目前僅能根據標題與來源資訊初步判斷，尚不足以支持深入引用。"];
+  }
+  if (cleanText(target.source.originalSnippet ?? target.source.snippet).length > 0 &&
+      cleanText(target.source.originalAbstract ?? target.source.abstract).length < 80) {
+    return ["目前摘要主要來自 snippet 或簡短描述，建議接受前再確認原始來源。"];
+  }
+  return [];
+}
+
+function compactMatchedFacet(source: SourceSummaryCapableRecord): string | null {
+  const candidates = [
+    ...(source.matchedFacets ?? []),
+    ...(source.matchedTerms ?? []),
+    ...(source.matchedCoreConcepts ?? []),
+  ]
+    .map((item) => cleanText(item))
+    .filter(Boolean);
+  return candidates[0] ?? null;
+}
+
+function relevanceReasonSummary(topic: string, source: SourceSummaryCapableRecord): string {
+  const explicit = cleanText(source.relevanceReasonZhTW ?? source.sourceRelevanceReasonZhTw);
+  if (explicit) return explicit;
+  const facet = compactMatchedFacet(source);
+  if (facet) return `可用來補充「${topic}」中與「${facet}」相關的證據線索。`;
+  if (source.relevanceLevel === "primary") {
+    return `可作為「${topic}」的主要證據候選。`;
+  }
+  if (source.relevanceLevel === "secondary" || source.relevanceLevel === "clue") {
+    return `可作為「${topic}」的延伸或背景線索。`;
+  }
+  return `與「${topic}」的直接關聯有限，需保守引用。`;
+}
+
+function metadataFallbackSummary(
+  topic: string,
+  target: PreparedSummaryTarget,
+): string {
+  const title = cleanText(target.source.title) || "此來源";
+  const snippet = cleanText(target.source.originalSnippet ?? target.source.snippet);
+  const relation = relevanceReasonSummary(topic, target.source);
+  const titleLead = title ? `此來源目前以〈${title}〉的題名為主` : "此來源目前只有基本書目資訊";
+  const snippetLead = snippet
+    ? `，可初步看出內容聚焦於${truncateText(stripHtmlAndNoise(snippet), 48)}`
+    : "";
+  return truncateText(
+    `${titleLead}${snippetLead}。${relation} 但目前尚未取得足夠摘要或全文內容，不宜當成完整研究結論。`,
+    170,
+  );
+}
+
+function readableEvidenceExcerpt(target: PreparedSummaryTarget): string {
+  const candidate =
+    cleanText(target.source.originalAbstract ?? target.source.abstract) ||
+    cleanText(target.source.extractedText) ||
+    cleanText(target.source.originalSnippet ?? target.source.snippet) ||
+    cleanText(target.textForSummary);
+  if (!candidate) return "";
+  return excerptForFallback(
+    polishReaderFacingText(
+      stripAcademicSentenceLead(applyAcademicTermReplacements(stripHtmlAndNoise(candidate))),
+    ),
+  );
+}
+
+function composeReadableSummaryZhTW(input: {
+  topic: string;
+  source: SourceSummaryCapableRecord;
+  baseSummary: string;
+  summarySourceType: NonNullable<SourceSummaryCapableRecord["summarySourceType"]>;
+  summaryConfidence: NonNullable<SourceSummaryCapableRecord["summaryConfidence"]>;
+}): string {
+  const relation = relevanceReasonSummary(input.topic, input.source);
+  if (input.summarySourceType === "metadataFallback") {
+    return metadataFallbackSummary(input.topic, {
+      source: input.source,
+      textForSummary: input.baseSummary,
+      preStatus: "metadata-only",
+      reason: "metadata_fallback",
+    });
+  }
+  const cleanedSummary = normalizeReaderSummary(input.baseSummary);
+  if (cleanedSummary && /[\u4e00-\u9fff]/u.test(cleanedSummary) && !containsHeavyEnglish(cleanedSummary)) {
+    const merged = cleanedSummary.includes("與目前研究主題")
+      ? cleanedSummary
+      : `${cleanedSummary} 與目前研究主題的關聯在於：${relation}`;
+    return truncateText(merged, 170);
+  }
+  const focus = sourceFocusTitle(input.source.title, input.topic);
+  const evidenceExcerpt = readableEvidenceExcerpt({
+    source: input.source,
+    textForSummary: input.baseSummary,
+    preStatus: null,
+    reason: null,
+  });
+  if (evidenceExcerpt) {
+    const detail = containsHeavyEnglish(evidenceExcerpt)
+      ? naturalChineseLead(
+          focus || cleanText(input.topic) || "本研究主題",
+          summaryActionLabel([input.source.title, evidenceExcerpt].join(" ")),
+          evidenceExcerpt,
+        )
+      : evidenceExcerpt;
+    return truncateText(
+      [
+        focus ? `這份來源主要討論${focus}。` : null,
+        `摘要指出${detail.replace(/^[，。]+|[，。]+$/g, "")}。`,
+        `與目前研究主題的關聯在於：${relation}`,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      170,
+    );
+  }
+  const merged = cleanedSummary.includes("與目前研究主題")
+    ? cleanedSummary
+    : `${cleanedSummary} 與目前研究主題的關聯在於：${relation}`;
+  return truncateText(merged, 170);
+}
+
+function buildReadableSummaryPayload(input: {
+  topic: string;
+  target: PreparedSummaryTarget;
+  summaryText: string;
+}): Pick<
+  SourceWithLlmSummary,
+  | "readableSummaryZhTW"
+  | "summarySourceType"
+  | "summaryConfidence"
+  | "relevanceReasonZhTW"
+  | "summaryWarnings"
+> {
+  const summarySourceType = summarySourceTypeForTarget(input.target);
+  const summaryConfidence = summaryConfidenceForType(summarySourceType);
+  const relevanceReasonZhTW = relevanceReasonSummary(input.topic, input.target.source);
+  return {
+    readableSummaryZhTW: composeReadableSummaryZhTW({
+      topic: input.topic,
+      source: input.target.source,
+      baseSummary: input.summaryText,
+      summarySourceType,
+      summaryConfidence,
+    }),
+    summarySourceType,
+    summaryConfidence,
+    relevanceReasonZhTW,
+    summaryWarnings: summaryWarningsForTarget(input.target),
+  };
 }
 
 function chunkTargets(
@@ -542,16 +787,23 @@ async function fetchReadableText(
 }
 
 async function prepareSummaryTarget(
-  source: SourceRecord,
+  source: SourceSummaryCapableRecord,
   options: SourceSummarizerOptions,
 ): Promise<PreparedSummaryTarget> {
   const abstract = cleanText(source.abstract);
   const snippet = cleanText(source.snippet);
+  const originalAbstract = cleanText(source.originalAbstract ?? source.abstract);
+  const originalSnippet = cleanText(source.originalSnippet ?? source.snippet);
+  const sourceWithOriginals: SourceSummaryCapableRecord = {
+    ...source,
+    originalAbstract: originalAbstract || null,
+    originalSnippet: originalSnippet || null,
+  };
   const visibleText = combinedVisibleText(source);
   const visibleSummaryInput = summaryInputText(source);
   if (visibleSummaryInput.length >= 120) {
     return {
-      source,
+      source: sourceWithOriginals,
       textForSummary: visibleSummaryInput,
       preStatus: null,
       reason: abstract ? "abstract_available" : "snippet_available",
@@ -561,7 +813,7 @@ async function prepareSummaryTarget(
   const url = sourceFetchUrl(source);
   if (!url) {
     return {
-      source,
+      source: sourceWithOriginals,
       textForSummary: visibleSummaryInput || cleanText(source.title),
       preStatus: "metadata-only",
       reason: "no_abstract_snippet_url_or_doi",
@@ -574,10 +826,11 @@ async function prepareSummaryTarget(
     if (mergedText.length >= 160) {
       return {
         source: {
-          ...source,
+          ...sourceWithOriginals,
           abstract: abstract || truncateText(fetchedText, 1_200),
           snippet: snippet || truncateText(fetchedText, 500),
           abstractMissing: false,
+          extractedText: truncateText(fetchedText, MAX_SUMMARY_INPUT_CHARS),
         },
         textForSummary: mergedText,
         preStatus: null,
@@ -585,14 +838,14 @@ async function prepareSummaryTarget(
       };
     }
     return {
-      source,
+      source: sourceWithOriginals,
       textForSummary: mergedText || visibleSummaryInput || cleanText(source.title),
       preStatus: "metadata-only",
       reason: "fetched_body_too_short",
     };
   } catch (error) {
     return {
-      source,
+      source: sourceWithOriginals,
       textForSummary: visibleSummaryInput || cleanText(source.title),
       preStatus: "fetch-failed",
       reason: fetchFailedReason(error),
@@ -838,10 +1091,16 @@ export async function summarizeSourcesWithLlm(
       const preStatus = preStatusSources.get(source.id);
       if (!preStatus) return source;
       const preStatusValue = resolvedPreStatus(preStatus);
+      const readableSummary = buildReadableSummaryPayload({
+        topic,
+        target: preStatus,
+        summaryText: deterministicFallbackSummary(topic, preStatus),
+      });
       return {
         ...source,
         ...preStatus.source,
         llmSummaryZhTw: deterministicFallbackSummary(topic, preStatus),
+        ...readableSummary,
         llmSummaryStatus: preStatusValue,
         summaryStructuredStatus: structuredStatusForPreStatus(preStatusValue),
         summaryProvider,
@@ -894,10 +1153,17 @@ export async function summarizeSourcesWithLlm(
     const preStatus = preStatusSources.get(source.id);
     if (preStatus) {
       const preStatusValue = resolvedPreStatus(preStatus);
+      const fallbackSummary = deterministicFallbackSummary(topic, preStatus);
+      const readableSummary = buildReadableSummaryPayload({
+        topic,
+        target: preStatus,
+        summaryText: fallbackSummary,
+      });
       return {
         ...source,
         ...preStatus.source,
-        llmSummaryZhTw: deterministicFallbackSummary(topic, preStatus),
+        llmSummaryZhTw: fallbackSummary,
+        ...readableSummary,
         llmSummaryStatus: preStatusValue,
         summaryStructuredStatus: structuredStatusForPreStatus(preStatusValue),
         summaryProvider,
@@ -915,10 +1181,16 @@ export async function summarizeSourcesWithLlm(
     const prepared = preparedById.get(source.id);
     const success = successfulSummaries.get(source.id);
     if (success && prepared) {
+      const readableSummary = buildReadableSummaryPayload({
+        topic,
+        target: prepared,
+        summaryText: success.summary,
+      });
       return {
         ...source,
         ...prepared.source,
         llmSummaryZhTw: success.summary,
+        ...readableSummary,
         llmSummaryStatus: "success",
         summaryStructuredStatus: "success",
         summaryProvider: success.provider,
@@ -932,10 +1204,17 @@ export async function summarizeSourcesWithLlm(
 
     const failure = failedSummaries.get(source.id);
     if (failure && prepared) {
+      const fallbackSummary = deterministicFallbackSummary(topic, prepared);
+      const readableSummary = buildReadableSummaryPayload({
+        topic,
+        target: prepared,
+        summaryText: fallbackSummary,
+      });
       return {
         ...source,
         ...prepared.source,
-        llmSummaryZhTw: deterministicFallbackSummary(topic, prepared),
+        llmSummaryZhTw: fallbackSummary,
+        ...readableSummary,
         llmSummaryStatus: failure.status,
         summaryStructuredStatus: failure.structuredStatus,
         summaryProvider: failure.provider,
