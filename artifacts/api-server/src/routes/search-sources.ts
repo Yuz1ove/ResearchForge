@@ -13,6 +13,12 @@ import {
 } from "../services/search-intent-planner";
 
 const INVALID_SEARCH_MESSAGE = "請輸入有效的查詢關鍵字。";
+const LEGACY_TEMPLATE_TERMS = [
+  "definition scope evidence",
+  "measurable indicators",
+  "case study dataset",
+  "evidence research",
+] as const;
 
 export type SearchSourcesHandler = (query: string) => Promise<SourceRecord[]>;
 export type TopicSearchSourcesHandler = (input: SearchIntentPlannerInput) => Promise<SearchIntentSourceSearchResult>;
@@ -40,6 +46,70 @@ function extractString(body: unknown, key: string): string | undefined {
   return trimmed || undefined;
 }
 
+function extractStringArray(body: unknown, key: string): string[] | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const value = (body as Record<string, unknown>)[key];
+  if (!Array.isArray(value)) return undefined;
+  const normalized = value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter(Boolean);
+  return normalized.length ? Array.from(new Set(normalized)) : undefined;
+}
+
+function extractSubtopics(
+  body: unknown,
+  key: string,
+): SearchIntentPlannerInput["subtopics"] | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const value = (body as Record<string, unknown>)[key];
+  if (!Array.isArray(value)) return undefined;
+
+  const normalized = value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const data = item as Record<string, unknown>;
+      const id =
+        typeof data.id === "string" && data.id.trim() ? data.id.trim() : undefined;
+      const titleZh =
+        typeof data.titleZh === "string" && data.titleZh.trim()
+          ? data.titleZh.trim()
+          : undefined;
+      const titleEn =
+        typeof data.titleEn === "string" && data.titleEn.trim()
+          ? data.titleEn.trim()
+          : undefined;
+      const queryZh = extractStringArray(data, "queryZh") ?? [];
+      const queryEn = extractStringArray(data, "queryEn") ?? [];
+      const mustIncludeTerms = extractStringArray(data, "mustIncludeTerms");
+      const excludeTerms = extractStringArray(data, "excludeTerms");
+      const expectedSourceTypes = extractStringArray(data, "expectedSourceTypes");
+      if (!id || !titleZh) return null;
+      return {
+        id,
+        titleZh,
+        ...(titleEn ? { titleEn } : {}),
+        ...(queryZh.length ? { queryZh } : {}),
+        ...(queryEn.length ? { queryEn } : {}),
+        ...(mustIncludeTerms?.length ? { mustIncludeTerms } : {}),
+        ...(excludeTerms?.length ? { excludeTerms } : {}),
+        ...(expectedSourceTypes?.length ? { expectedSourceTypes } : {}),
+      };
+    })
+    .filter(
+      (
+        item,
+      ): item is NonNullable<SearchIntentPlannerInput["subtopics"]>[number] =>
+        Boolean(item),
+    );
+
+  return normalized.length ? normalized : undefined;
+}
+
+function legacyTemplateHits(values: string[]): string[] {
+  const normalized = values.join(" ").toLowerCase();
+  return LEGACY_TEMPLATE_TERMS.filter((term) => normalized.includes(term));
+}
+
 export function normalizeSearchSourcesRequest(body: unknown): NormalizedSearchSourcesRequest | null {
   const parsed = SearchSourcesBody.safeParse(body);
   if (!parsed.success) return null;
@@ -56,9 +126,31 @@ export function normalizeSearchSourcesRequest(body: unknown): NormalizedSearchSo
     extractString(body, "refinedTopic") ??
     extractString(body, "expandedTopic") ??
     extractString(body, "refined_topic");
-  const selectedTopic = activeResearchTopic ?? refinedTopic ?? originalTopic;
+  const displayTitle = extractString(body, "displayTitle");
+  const canonicalTopicZh = extractString(body, "canonicalTopicZh");
+  const canonicalTopicEn = extractString(body, "canonicalTopicEn");
+  const querySeedZh = extractStringArray(body, "querySeedZh");
+  const querySeedEn = extractStringArray(body, "querySeedEn");
+  const subtopics = extractSubtopics(body, "subtopics");
+  const mustIncludeTerms = extractStringArray(body, "mustIncludeTerms");
+  const excludeTerms = extractStringArray(body, "excludeTerms");
+  const domainHints = extractStringArray(body, "domainHints");
+  const selectedResearchPlanId = extractString(body, "selectedResearchPlanId");
+  const workflowId = extractString(body, "workflowId");
+  const selectedTopic =
+    canonicalTopicZh ??
+    activeResearchTopic ??
+    refinedTopic ??
+    originalTopic ??
+    displayTitle;
 
-  if (originalTopic || refinedTopic || activeResearchTopic) {
+  if (
+    originalTopic ||
+    refinedTopic ||
+    activeResearchTopic ||
+    displayTitle ||
+    canonicalTopicZh
+  ) {
     return {
       kind: "topic",
       input: {
@@ -73,6 +165,17 @@ export function normalizeSearchSourcesRequest(body: unknown): NormalizedSearchSo
         audience: extractString(parsed.data, "audience"),
         language: extractString(parsed.data, "language"),
         sourceMode: extractString(parsed.data, "sourceMode"),
+        ...(displayTitle ? { displayTitle } : {}),
+        ...(canonicalTopicZh ? { canonicalTopicZh } : {}),
+        ...(canonicalTopicEn ? { canonicalTopicEn } : {}),
+        ...(querySeedZh?.length ? { querySeedZh } : {}),
+        ...(querySeedEn?.length ? { querySeedEn } : {}),
+        ...(subtopics?.length ? { subtopics } : {}),
+        ...(mustIncludeTerms?.length ? { mustIncludeTerms } : {}),
+        ...(excludeTerms?.length ? { excludeTerms } : {}),
+        ...(domainHints?.length ? { domainHints } : {}),
+        ...(selectedResearchPlanId ? { selectedResearchPlanId } : {}),
+        ...(workflowId ? { workflowId } : {}),
       },
     };
   }
@@ -99,6 +202,38 @@ export function createSearchSourcesRouter({
     try {
       if (normalized.kind === "topic") {
         const result = await topicSearchHandler(normalized.input);
+        const legacyHits = legacyTemplateHits([
+          ...(result.planner.chineseQueries ?? []),
+          ...(result.planner.englishQueries ?? []),
+          ...(result.queries.chinese ?? []),
+          ...(result.queries.english ?? []),
+          ...(result.queries.coreEnglishAcademic ?? []),
+          ...(result.queries.academicSynonyms ?? []),
+          ...(result.queries.education ?? []),
+          ...(result.queries.fallbackRelaxed ?? []),
+        ]);
+        logger.info(
+          {
+            routeName: "/api/search-sources",
+            inputTopic: normalized.input.topic,
+            plannerUsed: true,
+            functionName: "searchIntentSources",
+            topicKind:
+              result.planner.topicUnderstanding?.topicKind ??
+              result.searchIntent.topicKind ??
+              null,
+            domain: result.planner.topicUnderstanding?.domain ?? null,
+            chineseQueries: result.planner.chineseQueries,
+            englishQueries: result.planner.englishQueries,
+            legacyTemplateHits: legacyHits,
+            containsLegacyTemplate: legacyHits.length > 0,
+            plannerStatus: result.planner.plannerStatus,
+            fallbackUsed: result.planner.fallbackUsed,
+            workflowId: result.workflowId,
+            queryPlanHash: result.queryPlanHash,
+          },
+          "ResearchForge runtime trace",
+        );
         res.json({
           ...result,
           ok: true,

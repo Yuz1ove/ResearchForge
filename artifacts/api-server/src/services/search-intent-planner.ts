@@ -5,6 +5,7 @@ import {
 } from "@workspace/api-zod";
 import {
   entitySearchTerms,
+  sanitizeAndBackfillAngles,
   understandTopic,
   type TopicClarificationCard,
   type TopicDomain,
@@ -37,10 +38,32 @@ export interface SearchIntentPlannerInput {
   topic: string;
   originalTopic?: string;
   refinedTopic?: string;
+  displayTitle?: string;
+  canonicalTopicZh?: string;
+  canonicalTopicEn?: string;
+  querySeedZh?: string[];
+  querySeedEn?: string[];
+  subtopics?: PlannerSubtopic[];
+  mustIncludeTerms?: string[];
+  excludeTerms?: string[];
+  domainHints?: string[];
+  selectedResearchPlanId?: string;
+  workflowId?: string;
   reportType?: string;
   audience?: string;
   language?: "zh-TW" | "en" | string;
   sourceMode?: string;
+}
+
+export interface PlannerSubtopic {
+  id: string;
+  titleZh: string;
+  titleEn?: string;
+  queryZh?: string[];
+  queryEn?: string[];
+  mustIncludeTerms?: string[];
+  excludeTerms?: string[];
+  expectedSourceTypes?: string[];
 }
 
 export type SearchIntentPlannerStatus =
@@ -71,8 +94,13 @@ export interface SearchIntentPlan {
   topicUnderstanding?: TopicUnderstandingResult;
   originalTopic?: string;
   activeResearchTopic?: string;
+  displayTitle?: string;
+  canonicalTopicZh?: string;
   canonicalEnglishTopic?: string;
   coreConcepts?: string[];
+  suppliedQuerySeedZh?: string[];
+  suppliedQuerySeedEn?: string[];
+  subtopics?: PlannerSubtopic[];
 }
 
 export interface SearchIntentQueryPhase {
@@ -301,6 +329,7 @@ export interface SearchIntentSourceSearchResult {
   groups: SourceProviderSearchResult[];
   status?: "ok" | "empty";
   queryCount?: number;
+  low_confidence_results?: boolean;
 }
 
 type SearchIntentPlannerErrorCode =
@@ -4256,6 +4285,249 @@ function llmStatusFromPlannerStatus(
   return "failed";
 }
 
+function sanitizePlannerPlanQueries(
+  input: SearchIntentPlannerInput,
+  plan: SearchIntentPlan,
+): SearchIntentPlan {
+  const topicUnderstanding = plan.topicUnderstanding ?? understandTopic(input.topic);
+  const suppliedQuerySeedZh = cleanQueryList(input.querySeedZh ?? [], MAX_QUERY_COUNT);
+  const suppliedQuerySeedEn = cleanQueryList(input.querySeedEn ?? [], MAX_QUERY_COUNT);
+  const suppliedSubtopics = input.subtopics ?? [];
+  const subtopicQueryZh = cleanQueryList(
+    suppliedSubtopics.flatMap((subtopic) => subtopic.queryZh ?? []),
+    MAX_QUERY_COUNT,
+  );
+  const subtopicQueryEn = cleanQueryList(
+    suppliedSubtopics.flatMap((subtopic) => subtopic.queryEn ?? []),
+    MAX_QUERY_COUNT,
+  );
+  const canonicalTopicZh =
+    cleanString(input.canonicalTopicZh) ??
+    cleanString(plan.canonicalTopicZh) ??
+    input.topic.trim();
+  if (topicUnderstanding.topicKind === "unknown_or_noise") {
+    return {
+      ...plan,
+      topicUnderstanding,
+      originalTopic: input.originalTopic?.trim() || input.topic.trim(),
+      activeResearchTopic: input.topic.trim(),
+      displayTitle: cleanString(input.displayTitle) ?? input.topic.trim(),
+      canonicalTopicZh,
+      canonicalEnglishTopic: "",
+      chineseQueries: [],
+      englishQueries: [],
+      narrowedResearchQuestions: [],
+      coreConcepts: [],
+      suppliedQuerySeedZh: [],
+      suppliedQuerySeedEn: [],
+      subtopics: suppliedSubtopics,
+    };
+  }
+
+  const activeResearchTopic = input.topic.trim();
+  const canonicalEnglishTopic =
+    cleanString(input.canonicalTopicEn) ??
+    cleanString(plan.canonicalEnglishTopic) ??
+    cleanString(topicUnderstanding.canonicalEnglishTopic) ??
+    suppliedQuerySeedEn.find((query) => /[A-Za-z]/.test(query)) ??
+    subtopicQueryEn.find((query) => /[A-Za-z]/.test(query)) ??
+    (/[A-Za-z]/.test(activeResearchTopic) ? activeResearchTopic : "");
+  const englishTopic =
+    canonicalEnglishTopic || (/[A-Za-z]/.test(activeResearchTopic) ? activeResearchTopic : "");
+  const mergedMustHaveTerms = cleanConceptList(
+    [
+      ...plan.mustHaveTerms,
+      ...(input.mustIncludeTerms ?? []),
+      ...suppliedQuerySeedZh,
+      ...suppliedQuerySeedEn,
+      ...subtopicQueryZh,
+      ...subtopicQueryEn,
+    ],
+    18,
+  );
+  const mergedPenaltyTerms = unique([
+    ...plan.penaltyTerms,
+    ...plan.negativeTerms,
+    ...(input.excludeTerms ?? []),
+    ...suppliedSubtopics.flatMap((subtopic) => subtopic.excludeTerms ?? []),
+  ]).slice(0, 18);
+
+  return {
+    ...plan,
+    topicUnderstanding,
+    originalTopic: input.originalTopic?.trim() || input.topic.trim(),
+    activeResearchTopic,
+    displayTitle: cleanString(input.displayTitle) ?? activeResearchTopic,
+    canonicalTopicZh,
+    canonicalEnglishTopic,
+    coreConcepts: cleanConceptList(
+      [
+        ...(plan.coreConcepts?.length ? plan.coreConcepts : topicUnderstanding.coreConcepts),
+        canonicalTopicZh,
+        canonicalEnglishTopic,
+        ...(input.mustIncludeTerms ?? []),
+        ...suppliedQuerySeedZh,
+        ...suppliedQuerySeedEn,
+      ],
+      12,
+    ),
+    primaryConcepts: cleanConceptList(
+      [
+        canonicalTopicZh,
+        canonicalEnglishTopic,
+        ...suppliedQuerySeedZh,
+        ...suppliedQuerySeedEn,
+        ...subtopicQueryZh,
+        ...subtopicQueryEn,
+        ...plan.primaryConcepts,
+      ],
+      14,
+    ),
+    contextConcepts: cleanConceptList(
+      [
+        ...plan.contextConcepts,
+        ...(input.domainHints ?? []),
+        ...suppliedSubtopics.map((subtopic) => subtopic.titleZh),
+        ...suppliedSubtopics.map((subtopic) => subtopic.titleEn ?? ""),
+      ],
+      14,
+    ),
+    mustHaveTerms: mergedMustHaveTerms,
+    shouldHaveTerms: cleanConceptList(
+      [
+        ...plan.shouldHaveTerms,
+        ...suppliedQuerySeedZh,
+        ...suppliedQuerySeedEn,
+        ...subtopicQueryZh,
+        ...subtopicQueryEn,
+      ],
+      18,
+    ),
+    penaltyTerms: mergedPenaltyTerms,
+    negativeTerms: mergedPenaltyTerms,
+    chineseQueries: sanitizeAndBackfillAngles({
+      topic: canonicalTopicZh,
+      values: [
+        ...suppliedQuerySeedZh,
+        ...subtopicQueryZh,
+        ...plan.chineseQueries,
+      ],
+      topicKind: topicUnderstanding.topicKind,
+      domain: topicUnderstanding.domain,
+      coreConcepts: topicUnderstanding.coreConcepts,
+      aliases: topicUnderstanding.aliases,
+      canonicalEnglishTopic: topicUnderstanding.canonicalEnglishTopic,
+      language: "zh",
+    }).slice(0, MAX_QUERY_COUNT),
+    englishQueries: sanitizeAndBackfillAngles({
+      topic: englishTopic,
+      values: [
+        ...suppliedQuerySeedEn,
+        ...subtopicQueryEn,
+        ...plan.englishQueries,
+      ],
+      topicKind: topicUnderstanding.topicKind,
+      domain: topicUnderstanding.domain,
+      coreConcepts: topicUnderstanding.coreConcepts,
+      aliases: topicUnderstanding.aliases,
+      canonicalEnglishTopic: topicUnderstanding.canonicalEnglishTopic,
+      language: "en",
+    }).slice(0, MAX_QUERY_COUNT),
+    reasoningNotes: unique(
+      [
+        ...plan.reasoningNotes,
+        suppliedQuerySeedZh.length || suppliedQuerySeedEn.length
+          ? "Frontend research query seeds were prioritized before deterministic query expansion."
+          : "",
+      ].filter(Boolean),
+    ).slice(0, 10),
+    suppliedQuerySeedZh,
+    suppliedQuerySeedEn,
+    subtopics: suppliedSubtopics,
+  };
+}
+
+function sanitizeSearchIntentQuerySet(
+  plan: SearchIntentPlan,
+  querySet: SearchIntentQuerySet,
+): SearchIntentQuerySet {
+  const topicUnderstanding = plan.topicUnderstanding ?? understandTopic(plan.normalizedTopic);
+  const englishTopic =
+    plan.canonicalEnglishTopic ||
+    topicUnderstanding.canonicalEnglishTopic ||
+    (/[A-Za-z]/.test(plan.activeResearchTopic ?? plan.normalizedTopic)
+      ? plan.activeResearchTopic ?? plan.normalizedTopic
+      : "");
+  const sanitizeZh = (values: string[]) =>
+    sanitizeAndBackfillAngles({
+      topic: plan.activeResearchTopic ?? plan.normalizedTopic,
+      values,
+      topicKind: topicUnderstanding.topicKind,
+      domain: topicUnderstanding.domain,
+      coreConcepts: topicUnderstanding.coreConcepts,
+      aliases: topicUnderstanding.aliases,
+      canonicalEnglishTopic: topicUnderstanding.canonicalEnglishTopic,
+      language: "zh",
+    });
+  const sanitizeEn = (values: string[]) =>
+    sanitizeAndBackfillAngles({
+      topic: englishTopic,
+      values,
+      topicKind: topicUnderstanding.topicKind,
+      domain: topicUnderstanding.domain,
+      coreConcepts: topicUnderstanding.coreConcepts,
+      aliases: topicUnderstanding.aliases,
+      canonicalEnglishTopic: topicUnderstanding.canonicalEnglishTopic,
+      language: "en",
+    });
+
+  const coreEnglishAcademic = cleanQueryList(sanitizeEn(querySet.coreEnglishAcademic), 6);
+  const academicSynonyms = cleanQueryList(sanitizeEn(querySet.academicSynonyms), 6);
+  const education = cleanQueryList(sanitizeEn(querySet.education), 4);
+  const chineseSupplemental = cleanQueryList(sanitizeZh(querySet.chineseSupplemental), 6);
+  const fallbackRelaxed = cleanQueryList(
+    unique([
+      ...sanitizeEn(querySet.fallbackRelaxed),
+      ...sanitizeZh(querySet.fallbackRelaxed),
+    ]),
+    6,
+  );
+
+  return {
+    ...querySet,
+    chinese: cleanQueryList(sanitizeZh(querySet.chinese), MAX_QUERY_COUNT),
+    english: cleanQueryList(sanitizeEn(querySet.english), MAX_QUERY_COUNT),
+    highPrecision: cleanQueryList(
+      unique([
+        ...sanitizeEn(querySet.highPrecision),
+        ...sanitizeZh(querySet.highPrecision),
+      ]),
+      MAX_QUERY_COUNT,
+    ),
+    broad: cleanQueryList(
+      unique([
+        ...sanitizeEn(querySet.broad),
+        ...sanitizeZh(querySet.broad),
+      ]),
+      MAX_QUERY_COUNT,
+    ),
+    coreEnglishAcademic,
+    academicSynonyms,
+    education,
+    chineseSupplemental,
+    fallbackRelaxed,
+    phases: ([
+      { stage: "core_english_academic", queries: coreEnglishAcademic },
+      { stage: "academic_synonym", queries: academicSynonyms },
+      { stage: "education_explanation", queries: education },
+      { stage: "chinese_supplemental", queries: chineseSupplemental },
+      { stage: "fallback_relaxed", queries: fallbackRelaxed },
+    ] satisfies SearchIntentQueryPhase[]).filter(
+      (phase) => phase.queries.length > 0,
+    ),
+  };
+}
+
 function mergeFamilyCriticalTerms(
   input: SearchIntentPlannerInput,
   plan: SearchIntentPlan,
@@ -4526,7 +4798,10 @@ function coerceSearchIntentPlan(
       : ["LLM planner returned valid JSON."],
   };
 
-  return mergeFamilyCriticalTerms(input, merged);
+  return sanitizePlannerPlanQueries(
+    input,
+    mergeFamilyCriticalTerms(input, merged),
+  );
 }
 
 async function requestLlmSearchIntentPlan(
@@ -4682,7 +4957,10 @@ export async function planSearchIntent(
   };
 
   try {
-    return await requestLlmSearchIntentPlan(normalizedInput, options);
+    return sanitizePlannerPlanQueries(
+      normalizedInput,
+      await requestLlmSearchIntentPlan(normalizedInput, options),
+    );
   } catch (error) {
     try {
       const understanding = await understandTopicWithFallback({
@@ -4697,23 +4975,29 @@ export async function planSearchIntent(
         fallbackReason(error),
         statusFromError(error),
       );
-      return mergeFamilyCriticalTerms(
+      return sanitizePlannerPlanQueries(
         normalizedInput,
-        mergeFallbackPlans(
-          ruleFallback,
-          buildUnderstandingFallbackSearchIntent(
-            normalizedInput,
-            understanding,
-            fallbackReason(error),
-            statusFromError(error),
+        mergeFamilyCriticalTerms(
+          normalizedInput,
+          mergeFallbackPlans(
+            ruleFallback,
+            buildUnderstandingFallbackSearchIntent(
+              normalizedInput,
+              understanding,
+              fallbackReason(error),
+              statusFromError(error),
+            ),
           ),
         ),
       );
     } catch {
-      return buildRuleBasedSearchIntent(
+      return sanitizePlannerPlanQueries(
         normalizedInput,
-        fallbackReason(error),
-        statusFromError(error),
+        buildRuleBasedSearchIntent(
+          normalizedInput,
+          fallbackReason(error),
+          statusFromError(error),
+        ),
       );
     }
   }
@@ -4812,6 +5096,8 @@ function stripTopicLiteralQueries(
       plan.normalizedTopic,
       plan.originalTopic,
       plan.activeResearchTopic,
+      plan.displayTitle,
+      plan.canonicalTopicZh,
       plan.topicUnderstanding?.normalizedTopic,
     ]
       .map((value) => value?.trim())
@@ -4911,19 +5197,36 @@ function queryBucketsForPlan(plan: SearchIntentPlan): {
     understanding?.canonicalEnglishTopic ??
     plan.canonicalEnglishTopic ??
     "";
+  const seededEnglishQueries = cleanQueryList(
+    [
+      ...(plan.suppliedQuerySeedEn ?? []),
+      ...(plan.subtopics?.flatMap((subtopic) => subtopic.queryEn ?? []) ?? []),
+      ...plan.englishQueries,
+    ],
+    MAX_QUERY_COUNT,
+  );
+  const seededChineseQueries = cleanQueryList(
+    [
+      ...(plan.suppliedQuerySeedZh ?? []),
+      ...(plan.subtopics?.flatMap((subtopic) => subtopic.queryZh ?? []) ?? []),
+      ...plan.chineseQueries,
+    ],
+    MAX_QUERY_COUNT,
+  );
   const baseCoreConcepts = cleanConceptList([
     ...plan.primaryConcepts,
     ...(plan.coreConcepts ?? []),
+    plan.canonicalTopicZh ?? "",
     canonicalEnglishTopic,
     ...(understanding?.coreConcepts ?? []),
   ]);
   const cleanedEnglishQueries = stripTopicLiteralQueries(
-    plan.englishQueries,
+    seededEnglishQueries,
     plan,
     MAX_QUERY_COUNT,
   );
   const cleanedChineseQueries = stripTopicLiteralQueries(
-    plan.chineseQueries,
+    seededChineseQueries,
     plan,
     MAX_QUERY_COUNT,
   );
@@ -7466,10 +7769,16 @@ function sourceDriftTerms(
 function sourceFinalScore(scores: {
   relevanceScore: number;
   sourceQualityScore: number;
+  metadataCompletenessScore: number;
+  summaryUsabilityScore: number;
+  recencyScore: number;
 }): number {
   return Math.round(
-    scores.relevanceScore * 0.6 +
-      scores.sourceQualityScore * 0.4,
+    scores.relevanceScore * 0.4 +
+      scores.sourceQualityScore * 0.25 +
+      scores.metadataCompletenessScore * 0.2 +
+      scores.summaryUsabilityScore * 0.1 +
+      scores.recencyScore * 0.05,
   );
 }
 
@@ -7557,6 +7866,9 @@ function sourceWithRelevanceMetadata(
   const finalScore = sourceFinalScore({
     relevanceScore,
     sourceQualityScore,
+    metadataCompletenessScore,
+    summaryUsabilityScore,
+    recencyScore,
   });
   const classification = sourceClassification({
     relevanceScore,
@@ -7908,6 +8220,56 @@ function topReviewableSources(
   return [...reviewable, ...supplemental].slice(0, targetCount);
 }
 
+function lowConfidenceRecallCandidates(
+  sources: SourceRecord[],
+  targetCount = 10,
+): SourceRecord[] {
+  return sources
+    .filter((source) => {
+      if (source.reviewState === "rejected") return false;
+      if (
+        source.classification === "stale_topic" ||
+        source.classification === "stale_workflow"
+      ) {
+        return false;
+      }
+      const hasRichMetadata =
+        Boolean(source.doi) ||
+        Boolean(source.abstract?.trim()) ||
+        Boolean(source.containerTitle?.trim()) ||
+        (source.metadataCompletenessScore ?? 0) >= 50 ||
+        (source.sourceQualityScore ?? 0) >= 55;
+      const hasTopicClue =
+        (source.relevanceScore ?? 0) >= 10 ||
+        (source.matchedTerms?.length ?? 0) > 0 ||
+        (source.matchedCoreConcepts?.length ?? 0) > 0;
+      const trustedProvider =
+        source.sourceType === "OpenAlex" ||
+        source.sourceType === "Crossref" ||
+        source.sourceType === "Semantic Scholar" ||
+        source.sourceType === "Official Source" ||
+        source.sourceType === "Institutional Source";
+      return hasRichMetadata && (hasTopicClue || trustedProvider);
+    })
+    .slice(0, targetCount)
+    .map((source) =>
+      normalizeSourceRecord({
+        ...source,
+        reviewState: "pending",
+        classification: "review",
+        relevanceLevel:
+          source.relevanceLevel === "off_topic" ? "clue" : source.relevanceLevel ?? "clue",
+        rejectReason: null,
+        rejectionReason: null,
+        shouldShowInMainList: false,
+        shouldRecommendAccept: false,
+        sourceRelevanceReasonZhTw:
+          source.sourceRelevanceReasonZhTw ??
+          "目前此來源與主題的直接命中較弱，但 metadata 與摘要完整度仍足以保留為低信心候選。",
+      }),
+    );
+}
+
 function sourceRejectedForDiagnostics(source: SourceRecord): boolean {
   return (
     source.reviewState === "rejected" ||
@@ -8035,8 +8397,13 @@ export async function searchIntentSources(
     topicUnderstanding,
     originalTopic: input.originalTopic?.trim() || input.topic.trim(),
     activeResearchTopic: input.topic.trim(),
+    displayTitle: cleanString(input.displayTitle) ?? plan.displayTitle ?? input.topic.trim(),
+    canonicalTopicZh:
+      cleanString(input.canonicalTopicZh) ?? plan.canonicalTopicZh ?? input.topic.trim(),
     canonicalEnglishTopic:
+      cleanString(input.canonicalTopicEn) ||
       plan.canonicalEnglishTopic ||
+      input.querySeedEn?.find((query) => /[A-Za-z]/.test(query)) ||
       genericUnderstanding.canonicalEnglishTopic ||
       topicUnderstanding.canonicalEnglishTopic,
     coreConcepts: plan.coreConcepts?.length
@@ -8160,8 +8527,11 @@ export async function searchIntentSources(
       queryCount: 0,
     };
   }
-  const querySet = buildSearchIntentQueries(plan);
-  const workflowId = randomUUID();
+  const querySet = sanitizeSearchIntentQuerySet(
+    plan,
+    buildSearchIntentQueries(plan),
+  );
+  const workflowId = cleanString(input.workflowId) ?? randomUUID();
   const topicHash = topicHashForSearch(plan.normalizedTopic);
   const queryPlanHash = queryPlanHashForSearch(plan, querySet);
   const workflowContext: SourceWorkflowContext = {
@@ -8308,9 +8678,15 @@ export async function searchIntentSources(
   const filteredResultsCount = Math.max(0, dedupedSources.length - reviewableRankedCount);
   const rejectionReasons = rejectionReasonSummary(reranked.sources);
   const rankedSources = topReviewableSources(reranked.sources, TARGET_SOURCE_COUNT);
+  const lowConfidenceResults =
+    rankedSources.length === 0 && dedupedSources.length > 0
+      ? lowConfidenceRecallCandidates(reranked.sources, 10)
+      : [];
+  const sourcesForSummary =
+    lowConfidenceResults.length > 0 ? lowConfidenceResults : rankedSources;
   const sources = await summarizeSourcesWithLlm(
     plan.normalizedTopic,
-    rankedSources,
+    sourcesForSummary,
     {
       llm: summaryLlm,
       fetchImpl: options?.fetchImpl,
@@ -8342,6 +8718,11 @@ export async function searchIntentSources(
       : []),
     ...(reviewableRankedCount < TARGET_SOURCE_COUNT
       ? ["目前高相關來源不足，建議調整題目或關鍵詞。"]
+      : []),
+    ...(lowConfidenceResults.length > 0
+      ? [
+          "目前找到的來源信心較低，建議重新生成研究查詢或補充關鍵詞；系統已保留可再審查候選。",
+        ]
       : []),
     ...(sources.length > 0 && primaryCount < 3
       ? [
@@ -8464,5 +8845,6 @@ export async function searchIntentSources(
     groups,
     status: sources.length > 0 ? "ok" : "empty",
     queryCount: queries.length,
+    ...(lowConfidenceResults.length > 0 ? { low_confidence_results: true } : {}),
   };
 }

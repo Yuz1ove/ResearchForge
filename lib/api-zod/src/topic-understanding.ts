@@ -44,6 +44,15 @@ export type TopicDomain =
   | "history_culture"
   | "general_research";
 
+export type FallbackFamily =
+  | "food"
+  | "biology"
+  | "mechanism"
+  | "health"
+  | "environment"
+  | "social"
+  | "general_object";
+
 export interface TopicClarificationCard {
   label: string;
   suggestedTopic: string;
@@ -137,6 +146,23 @@ const GENERIC_TEMPLATE_TERMS = [
   "具體問題切入",
 ];
 
+const LEGACY_GENERIC_PATTERNS = [
+  /definition\s+scope\s+evidence/i,
+  /measurable\s+indicators/i,
+  /indicators\s+case\s+study\s+dataset/i,
+  /evidence\s+research/i,
+  /\bdefinition\b/i,
+  /\bscope\b/i,
+  /\bcase\s+study\b/i,
+  /\bdataset\b/i,
+];
+
+const LEGACY_GENERIC_ANGLE_PATTERNS = [
+  /核心概念、範圍界線與可驗證資料/u,
+  /可以用哪些指標、案例或資料集交叉驗證/u,
+  /在不同情境、族群或時間下的差異比較/u,
+];
+
 function angle(
   label: string,
   researchQuestion: string,
@@ -157,6 +183,398 @@ function angle(
     enQueries,
     suggestedSourceTypes,
   };
+}
+
+export function hasLegacyGenericTemplate(value: string): boolean {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return false;
+  return LEGACY_GENERIC_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function hasLegacyGenericAngleText(value: string): boolean {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return false;
+  return LEGACY_GENERIC_ANGLE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+export function removeLegacyGenericAngles(values: string[]): string[] {
+  return unique(
+    values
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean)
+      .filter((value) => !hasLegacyGenericTemplate(value)),
+  );
+}
+
+function fallbackAngleSeedsForFamily(
+  family: FallbackFamily,
+): Array<{
+  label: string;
+  researchQuestionTemplate: (topic: string) => string;
+  whyResearchable: string;
+  zhFacets: string[];
+  enFacets: string[];
+  suggestedSourceTypes: string[];
+}> {
+  switch (family) {
+    case "food":
+      return [
+        {
+          label: "飲食脈絡",
+          researchQuestionTemplate: (topic) => `${topic}的起源、飲食文化與消費情境`,
+          whyResearchable: "食物主題可先從飲食文化、消費情境與歷史脈絡建立研究範圍。",
+          zhFacets: ["起源與飲食文化", "消費情境"],
+          enFacets: ["food culture", "consumption context"],
+          suggestedSourceTypes: FOOD_SOURCE_TYPES,
+        },
+        {
+          label: "成分與製程",
+          researchQuestionTemplate: (topic) => `${topic}的原料組成、製作方式與加工保存`,
+          whyResearchable: "這能把泛食物名詞轉成原料、製程與保存等可搜尋問題。",
+          zhFacets: ["原料組成", "製作方式", "加工保存"],
+          enFacets: ["ingredients", "production process", "food processing storage"],
+          suggestedSourceTypes: FOOD_SOURCE_TYPES,
+        },
+        {
+          label: "營養與市場",
+          researchQuestionTemplate: (topic) => `${topic}的營養特性、產品類型與市場差異`,
+          whyResearchable: "營養、產品類型與市場比較通常能補足正式報告的證據面向。",
+          zhFacets: ["營養特性", "產品類型", "市場差異"],
+          enFacets: ["nutrition", "product types", "market comparison"],
+          suggestedSourceTypes: FOOD_SOURCE_TYPES,
+        },
+      ];
+    case "biology":
+      return [
+        {
+          label: "生態特徵",
+          researchQuestionTemplate: (topic) => `${topic}的生態特徵、生活史與行為模式`,
+          whyResearchable: "生物或物種主題通常可先從生態、生活史與行為特徵建立研究角度。",
+          zhFacets: ["生態特徵", "生活史", "行為模式"],
+          enFacets: ["ecology", "life cycle", "behavior"],
+          suggestedSourceTypes: ["生態研究", "動物行為研究", "物種資料庫"],
+        },
+        {
+          label: "棲地與互動",
+          researchQuestionTemplate: (topic) => `${topic}的棲地分布、環境適應與生態角色`,
+          whyResearchable: "棲地分布與生態角色有助於把主題收斂到可比較的環境脈絡。",
+          zhFacets: ["棲地分布", "環境適應", "生態角色"],
+          enFacets: ["habitat distribution", "environmental adaptation", "ecosystem role"],
+          suggestedSourceTypes: ["生態研究", "保育資料", "自然史資料"],
+        },
+        {
+          label: "人類影響",
+          researchQuestionTemplate: (topic) => `${topic}與人類活動、疾病壓力或保育管理的關係`,
+          whyResearchable: "人為影響與保育管理能補足結論與建議章節需要的應用面向。",
+          zhFacets: ["人類活動", "疾病壓力", "保育管理"],
+          enFacets: ["human impact", "disease pressure", "conservation management"],
+          suggestedSourceTypes: ["保育報告", "政府或機構資料", "學術研究"],
+        },
+      ];
+    case "mechanism":
+      return [
+        {
+          label: "基本原理",
+          researchQuestionTemplate: (topic) => `${topic}的基本原理、核心機制與關鍵變數`,
+          whyResearchable: "機制型主題要先拆出原理、機制與變數，才能建立可搜尋概念。",
+          zhFacets: ["基本原理", "核心機制", "關鍵變數"],
+          enFacets: ["principle", "mechanism", "key factors"],
+          suggestedSourceTypes: ["工程研究", "物理研究", "教學資料"],
+        },
+        {
+          label: "量測與應用",
+          researchQuestionTemplate: (topic) => `${topic}的量測方法、應用場景與實驗解釋`,
+          whyResearchable: "量測方法與應用場景能補強只用完整題目搜尋時的召回不足。",
+          zhFacets: ["量測方法", "應用場景", "實驗解釋"],
+          enFacets: ["measurement methods", "applications", "experimental explanation"],
+          suggestedSourceTypes: ["工程研究", "教學資料", "技術文件"],
+        },
+        {
+          label: "限制與誤差",
+          researchQuestionTemplate: (topic) => `${topic}的限制、誤差來源與改良方向`,
+          whyResearchable: "限制與誤差可直接支撐討論章節，也能引導補查資料。",
+          zhFacets: ["限制", "誤差來源", "改良方向"],
+          enFacets: ["limitations", "error sources", "improvement direction"],
+          suggestedSourceTypes: ["實驗研究", "方法論文", "工程標準"],
+        },
+      ];
+    case "health":
+      return [
+        {
+          label: "暴露與來源",
+          researchQuestionTemplate: (topic) => `${topic}的暴露來源、接觸情境與風險族群`,
+          whyResearchable: "健康主題需要先界定暴露來源與風險族群，後續文獻才不會失焦。",
+          zhFacets: ["暴露來源", "接觸情境", "風險族群"],
+          enFacets: ["exposure sources", "risk groups", "exposure context"],
+          suggestedSourceTypes: ["公共衛生資料", "流行病學研究", "醫學研究"],
+        },
+        {
+          label: "作用機制",
+          researchQuestionTemplate: (topic) => `${topic}的生理機制、健康影響與主要症狀`,
+          whyResearchable: "這能把健康議題拆成機制、影響與症狀等可驗證面向。",
+          zhFacets: ["生理機制", "健康影響", "主要症狀"],
+          enFacets: ["biological mechanism", "health effects", "clinical symptoms"],
+          suggestedSourceTypes: ["醫學研究", "臨床資料", "系統性回顧"],
+        },
+        {
+          label: "介入與治理",
+          researchQuestionTemplate: (topic) => `${topic}的預防介入、公共衛生回應與研究限制`,
+          whyResearchable: "介入與治理資料能支撐討論、限制與建議章節。",
+          zhFacets: ["預防介入", "公共衛生回應", "研究限制"],
+          enFacets: ["prevention intervention", "public health response", "research limitations"],
+          suggestedSourceTypes: ["臨床指引", "公共衛生政策", "介入研究"],
+        },
+      ];
+    case "environment":
+      return [
+        {
+          label: "污染與來源",
+          researchQuestionTemplate: (topic) => `${topic}的來源、傳輸路徑與暴露情境`,
+          whyResearchable: "環境議題需要先把來源與暴露路徑拆開，才能形成可搜尋策略。",
+          zhFacets: ["來源", "傳輸路徑", "暴露情境"],
+          enFacets: ["sources", "transport pathways", "exposure context"],
+          suggestedSourceTypes: ["環境監測", "污染研究", "政府或機構資料"],
+        },
+        {
+          label: "生態與健康",
+          researchQuestionTemplate: (topic) => `${topic}對生態系、人體健康與風險評估的影響`,
+          whyResearchable: "這能把環境主題連到生態毒理與風險評估來源。",
+          zhFacets: ["生態系影響", "人體健康", "風險評估"],
+          enFacets: ["ecosystem effects", "human health", "risk assessment"],
+          suggestedSourceTypes: ["生態毒理研究", "風險評估", "系統性回顧"],
+        },
+        {
+          label: "治理與永續",
+          researchQuestionTemplate: (topic) => `${topic}的監測、治理策略與永續回應`,
+          whyResearchable: "治理與永續面向能支撐政策與建議章節。",
+          zhFacets: ["監測方法", "治理策略", "永續回應"],
+          enFacets: ["monitoring methods", "governance strategy", "sustainability response"],
+          suggestedSourceTypes: ["政策報告", "國際機構資料", "治理案例"],
+        },
+      ];
+    case "social":
+      return [
+        {
+          label: "背景與發展",
+          researchQuestionTemplate: (topic) => `${topic}的背景脈絡、發展過程與核心議題`,
+          whyResearchable: "社會文化主題要先收斂背景與核心議題，避免過度發散。",
+          zhFacets: ["背景脈絡", "發展過程", "核心議題"],
+          enFacets: ["background context", "development process", "key issues"],
+          suggestedSourceTypes: ["社會研究", "政策報告", "教育研究"],
+        },
+        {
+          label: "經驗與影響",
+          researchQuestionTemplate: (topic) => `${topic}對參與者經驗、社會文化意義與主要影響`,
+          whyResearchable: "參與者經驗與影響差異能直接對接實證或案例資料。",
+          zhFacets: ["參與者經驗", "社會文化意義", "主要影響"],
+          enFacets: ["participant experience", "social cultural meaning", "major effects"],
+          suggestedSourceTypes: ["社會研究", "案例研究", "文化資料"],
+        },
+        {
+          label: "爭議與未來",
+          researchQuestionTemplate: (topic) => `${topic}的爭議、限制與未來發展方向`,
+          whyResearchable: "這能支撐討論與未來趨勢章節。",
+          zhFacets: ["爭議", "限制", "未來發展"],
+          enFacets: ["controversies", "limitations", "future trends"],
+          suggestedSourceTypes: ["評論資料", "政策研究", "趨勢報告"],
+        },
+      ];
+    case "general_object":
+    default:
+      return [
+        {
+          label: "背景與脈絡",
+          researchQuestionTemplate: (topic) => `${topic}的背景脈絡、主要類型與核心特徵`,
+          whyResearchable: "一般物件主題需要先拆成背景、類型與特徵，避免停在空泛模板。",
+          zhFacets: ["背景脈絡", "主要類型", "核心特徵"],
+          enFacets: ["background context", "types", "key characteristics"],
+          suggestedSourceTypes: ["百科資料", "政府或機構資料", "學術資料庫"],
+        },
+        {
+          label: "形成與應用",
+          researchQuestionTemplate: (topic) => `${topic}的形成過程、使用方式與應用情境`,
+          whyResearchable: "這能把短詞主題轉成可被搜尋與比較的情境化問題。",
+          zhFacets: ["形成過程", "使用方式", "應用情境"],
+          enFacets: ["formation process", "usage patterns", "application context"],
+          suggestedSourceTypes: ["案例資料", "應用研究", "機構資料"],
+        },
+        {
+          label: "限制與發展",
+          researchQuestionTemplate: (topic) => `${topic}的爭議、限制與後續發展趨勢`,
+          whyResearchable: "限制與趨勢可以支撐討論章節，也能引導下一輪補查。",
+          zhFacets: ["爭議", "限制", "發展趨勢"],
+          enFacets: ["controversies", "limitations", "future trends"],
+          suggestedSourceTypes: ["研究論文", "評論資料", "趨勢報告"],
+        },
+      ];
+  }
+}
+
+function buildAngleQueries(topic: string, facets: string[]): string[] {
+  const normalizedTopic = normalizeTopicText(topic);
+  if (!normalizedTopic) return [];
+  return unique(facets.map((facet) => `${normalizedTopic} ${facet}`.trim()));
+}
+
+export function chooseFallbackFamily(input: {
+  topic: string;
+  topicKind?: string;
+  domain?: string;
+  coreConcepts?: string[];
+  aliases?: string[];
+  canonicalEnglishTopic?: string;
+}): FallbackFamily {
+  const domain = String(input.domain ?? "").toLowerCase();
+  const haystack = normalizeAscii(
+    [
+      input.topic,
+      ...(input.coreConcepts ?? []),
+      ...(input.aliases ?? []),
+      input.canonicalEnglishTopic ?? "",
+      domain,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  ).toLowerCase();
+
+  if (domain === "food_nutrition" || domain === "beverage_health") return "food";
+  if (domain === "animal_science" || domain === "biology") return "biology";
+  if (domain === "technology" || domain === "materials_design") return "mechanism";
+  if (domain === "health") return "health";
+  if (domain === "environment") return "environment";
+  if (domain === "social_science" || domain === "history_culture") return "social";
+
+  if (/food|nutrition|beverage|diet|cuisine|bakery|bread|grain|wheat|rice|tea|coffee|soda|cola/.test(haystack)) {
+    return "food";
+  }
+  if (/animal|biology|ecology|species|habitat|wildlife|zoology|conservation|veterinary/.test(haystack)) {
+    return "biology";
+  }
+  if (/physics|mechanics|mechanism|technology|engineering|device|principle|torque|momentum|precession|sensor|measurement/.test(haystack)) {
+    return "mechanism";
+  }
+  if (/health|medicine|disease|infection|sleep|public health|toxicology|clinical|symptom|exposure/.test(haystack)) {
+    return "health";
+  }
+  if (/environment|pollution|sustainability|recycling|ecosystem|climate|marine|waste|governance/.test(haystack)) {
+    return "environment";
+  }
+  if (/education|culture|society|social|learning|tourism|history|policy|stakeholder/.test(haystack)) {
+    return "social";
+  }
+  return "general_object";
+}
+
+export function buildDomainFallbackAngles(
+  topic: string,
+  family: FallbackFamily,
+): { zh: string[]; en: string[] } {
+  const normalizedTopic = normalizeTopicText(topic);
+  if (!normalizedTopic) {
+    return { zh: [], en: [] };
+  }
+  const seeds = fallbackAngleSeedsForFamily(family);
+  const zh = unique(
+    seeds.flatMap((seed) => buildAngleQueries(normalizedTopic, seed.zhFacets)),
+  );
+  const enTopic = /[A-Za-z]/.test(normalizedTopic) ? normalizedTopic : "";
+  const en = enTopic
+    ? unique(seeds.flatMap((seed) => buildAngleQueries(enTopic, seed.enFacets)))
+    : [];
+  return { zh, en };
+}
+
+export function sanitizeAndBackfillAngles(input: {
+  topic: string;
+  values: string[];
+  topicKind?: string;
+  domain?: string;
+  coreConcepts?: string[];
+  aliases?: string[];
+  canonicalEnglishTopic?: string;
+  language?: "zh" | "en";
+}): string[] {
+  const cleaned = removeLegacyGenericAngles(input.values);
+  if (cleaned.length > 0) return cleaned;
+  if (input.topicKind === "unknown_or_noise") return [];
+  const family = chooseFallbackFamily(input);
+  const fallback = buildDomainFallbackAngles(input.topic, family);
+  return input.language === "en" ? fallback.en : fallback.zh;
+}
+
+function buildDomainFallbackResearchAngles(input: {
+  topic: string;
+  domain: TopicDomain;
+  topicKind: TopicKind;
+  coreConcepts?: string[];
+  aliases?: string[];
+  canonicalEnglishTopic?: string;
+}): TopicResearchAngle[] {
+  if (input.topicKind === "unknown_or_noise") return [];
+  const family = chooseFallbackFamily({
+    topic: input.topic,
+    topicKind: input.topicKind,
+    domain: input.domain,
+    coreConcepts: input.coreConcepts,
+    aliases: input.aliases,
+    canonicalEnglishTopic: input.canonicalEnglishTopic,
+  });
+  const normalizedTopic = normalizeTopicText(input.topic) || "研究主題";
+  const englishTopic =
+    input.canonicalEnglishTopic && /[A-Za-z]/.test(input.canonicalEnglishTopic)
+      ? input.canonicalEnglishTopic
+      : "";
+
+  return fallbackAngleSeedsForFamily(family).map((seed) =>
+    angle(
+      seed.label,
+      seed.researchQuestionTemplate(normalizedTopic),
+      seed.whyResearchable,
+      buildAngleQueries(normalizedTopic, seed.zhFacets),
+      englishTopic ? buildAngleQueries(englishTopic, seed.enFacets) : [],
+      seed.suggestedSourceTypes,
+    ),
+  );
+}
+
+function sanitizeResearchAngles(input: {
+  topic: string;
+  domain: TopicDomain;
+  topicKind: TopicKind;
+  aliases?: string[];
+  coreConcepts?: string[];
+  canonicalEnglishTopic?: string;
+  angles: TopicResearchAngle[];
+}): TopicResearchAngle[] {
+  if (input.topicKind === "unknown_or_noise") return [];
+  const cleaned = input.angles
+    .map((researchAngle) => {
+      const dropAngle =
+        hasLegacyGenericTemplate(researchAngle.label) ||
+        hasLegacyGenericAngleText(researchAngle.researchQuestion) ||
+        hasLegacyGenericTemplate(researchAngle.whyResearchable);
+      const zhQueries = removeLegacyGenericAngles(researchAngle.zhQueries);
+      const enQueries = removeLegacyGenericAngles(researchAngle.enQueries);
+      if (dropAngle && zhQueries.length === 0 && enQueries.length === 0) {
+        return null;
+      }
+      return {
+        ...researchAngle,
+        zhQueries,
+        enQueries,
+      };
+    })
+    .filter((researchAngle): researchAngle is TopicResearchAngle => Boolean(researchAngle));
+
+  if (cleaned.length > 0) return cleaned;
+  return buildDomainFallbackResearchAngles({
+    topic: input.topic,
+    domain: input.domain,
+    topicKind: input.topicKind,
+    aliases: input.aliases,
+    coreConcepts: input.coreConcepts,
+    canonicalEnglishTopic: input.canonicalEnglishTopic,
+  });
 }
 
 const FOOD_SOURCE_TYPES = ["營養標示資料", "食品安全研究", "公共衛生資料"];
@@ -1519,7 +1937,7 @@ function patternDomain(topic: string): TopicDomain {
     return "biology";
   if (/羊駝|alpaca|camelid|vicugna pacos|駱馬/.test(text))
     return "animal_science";
-  if (/無尾熊|樹袋熊|koala|phascolarctos|蛤蜊|文蛤|clam|bivalve|鱷魚|crocodile|alligator|烏龜|海龜|陸龜|turtle|tortoise|chelonian|testudines/.test(text))
+  if (/無尾熊|樹袋熊|koala|phascolarctos|蛤蜊|文蛤|clam|bivalve|鱷魚|crocodile|alligator|烏龜|海龜|陸龜|turtle|tortoise|chelonian|testudines|螞蟻|ant|ants|蜜蜂|bee|bees|蟑螂|cockroach|cockroaches|昆蟲|insect|insects/.test(text))
     return "biology";
   if (/手機|智慧型手機|行動電話|smartphone|mobile phone|cell phone|screen time/.test(text))
     return "social_science";
@@ -1852,7 +2270,7 @@ function genericAngles(
           [`${t} 流變儀 量測 指標`, `${t} 剪切循環 滯回曲線`],
           [
             `${t} rheometer measurement hysteresis loop`,
-            `${t} shear cycle test measurable indicators`,
+            `${t} shear cycle test reproducible metrics`,
           ],
           ["實驗方法論文", "儀器手冊", "工程標準"],
         ),
@@ -2036,32 +2454,14 @@ function genericAngles(
       ),
     ]);
   }
-  return finalize([
-    angle(
-      "概念界定",
-      `${t}的核心概念、範圍界線與可驗證資料`,
-      "此為保守規則方向；建議先確認研究對象、地區、時間或比較對象。",
-      [`${t} 定義 範圍 資料`, `${t} 可驗證 指標`],
-      [`${t} definition scope evidence`, `${t} measurable indicators`],
-      ["百科資料", "政府或機構資料", "學術資料庫"],
-    ),
-    angle(
-      "證據路徑",
-      `${t}可以用哪些指標、案例或資料集交叉驗證`,
-      "可用統計、案例、專家機構資料或研究論文建立證據鏈。",
-      [`${t} 指標 案例 資料集`, `${t} 研究 證據`],
-      [`${t} indicators case study dataset`, `${t} evidence research`],
-      ["實證研究", "統計資料", "案例資料"],
-    ),
-    angle(
-      "比較問題",
-      `${t}在不同情境、族群或時間下的差異比較`,
-      "若題目仍偏廣，可先用比較對象縮小搜尋範圍。",
-      [`${t} 比較 情境 差異`, `${t} 族群 時間 比較`],
-      [`${t} comparison context differences`, `${t} population time comparison`],
-      ["實務案例", "機構資料", "研究論文"],
-    ),
-  ]);
+  return finalize(
+    buildDomainFallbackResearchAngles({
+      topic: t,
+      domain,
+      topicKind: "broad_common_noun",
+      canonicalEnglishTopic,
+    }),
+  );
 }
 
 function entityFromEntry(entry: TopicLexiconEntry): TopicEntityInfo {
@@ -2090,7 +2490,7 @@ function buildUnderstanding(input: {
   researchAngles?: TopicResearchAngle[];
   entity?: TopicEntityInfo;
 }): TopicUnderstandingResult {
-  const researchAngles = input.researchAngles ?? [];
+  const rawResearchAngles = input.researchAngles ?? [];
   const excludedMeanings = input.excludedMeanings ?? [];
   const englishTerms = unique(input.englishTerms ?? []);
   const scientificNames = unique(input.scientificNames ?? []);
@@ -2100,6 +2500,19 @@ function buildUnderstanding(input: {
     topicKind: input.topicKind,
     englishTerms,
     scientificNames,
+  });
+  const researchAngles = sanitizeResearchAngles({
+    topic: input.normalizedTopic || input.topic,
+    domain: input.domain,
+    topicKind: input.topicKind,
+    aliases: input.aliases,
+    coreConcepts: unique([
+      ...input.canonicalTerms,
+      ...englishTerms,
+      ...scientificNames,
+    ]),
+    canonicalEnglishTopic,
+    angles: rawResearchAngles,
   });
   const searchQueries = searchQueriesFromAngles(researchAngles);
   const coreConcepts = unique([

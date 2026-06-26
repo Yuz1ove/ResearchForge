@@ -687,53 +687,6 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
           </section>
         )}
 
-        {workspace.llmDiagnostics && (
-          <details className="mb-4 rounded-lg border border-border bg-card px-4 py-3 text-sm shadow-sm" data-testid="preview-llm-diagnostics">
-            <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2">
-              <span className="font-medium text-foreground">報告生成 diagnostics</span>
-              <Badge variant={workspace.llmDiagnostics.fallbackUsed ? "secondary" : "default"}>
-                {workspace.llmDiagnostics.reportGenerationProvider}
-              </Badge>
-              <Badge variant="outline">
-                {llmStatusLabel(workspace.llmDiagnostics)}
-              </Badge>
-            </summary>
-            <div className="mt-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline">
-                  {workspace.llmDiagnostics.reportGenerationModel ?? "model 待確認"}
-                </Badge>
-              </div>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                {llmStatusMessage(workspace.llmDiagnostics)}
-              </p>
-            </div>
-          </details>
-        )}
-
-        <details className="mb-4 rounded-lg border border-border bg-card px-4 py-3 text-sm shadow-sm" data-testid="preview-pipeline-diagnostics">
-          <summary className="cursor-pointer font-medium text-foreground">
-            報告 pipeline diagnostics
-          </summary>
-          <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
-            {JSON.stringify(
-              {
-                acceptedSources: workspace.draft.debug?.acceptedSourcesCount ?? workspace.acceptedSources.length,
-                evidenceCards: workspace.draft.debug?.evidenceCardsCount ?? workspace.evidenceCards.length,
-                evidenceCardAbstractOnly: workspace.draft.debug?.evidenceCardAbstractOnly ?? [],
-                sectionEvidenceMap: workspace.draft.sectionEvidenceMap ?? [],
-                evidenceGaps: workspace.draft.debug?.evidenceGaps ?? [],
-                supplementalSearch: workspace.supplementalSearchDiagnostics ?? null,
-                paragraphPlans: workspace.draft.paragraphPlans ?? [],
-                reportDraftGeneratedFromPlans:
-                  workspace.draft.debug?.reportDraftGeneratedFromPlans ?? false,
-              },
-              null,
-              2,
-            )}
-          </pre>
-        </details>
-
         <section className="mb-5 rounded-lg border border-border bg-card p-4 shadow-sm sm:p-5" data-testid="preview-quality-report">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div>

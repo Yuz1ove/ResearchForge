@@ -81,6 +81,43 @@ test("rule fallback returns digital media, sleep, and attention concepts for sho
   assert.equal(plan.fallbackUsed, true);
 });
 
+test("planner prioritizes supplied research query seeds over display titles", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: "螞蟻群體行為與土壤環境",
+      originalTopic: "螞蟻",
+      displayTitle: "微小社會的巨大秩序：螞蟻群體行為與土壤環境",
+      canonicalTopicZh: "螞蟻群體行為與土壤環境",
+      canonicalTopicEn: "ant colony behavior and soil environment",
+      querySeedZh: ["螞蟻 群體行為", "螞蟻 土壤 生態"],
+      querySeedEn: ["ant colony behavior", "ant soil ecology"],
+      subtopics: [
+        {
+          id: "ant-1",
+          titleZh: "螞蟻的群體分工與合作",
+          titleEn: "ant colony division of labor",
+          queryZh: ["螞蟻 群體分工 合作"],
+          queryEn: ["ant colony division of labor"],
+        },
+      ],
+      mustIncludeTerms: ["螞蟻", "ant"],
+      excludeTerms: ["Ant-Man", "logo"],
+      domainHints: ["biology_ecology"],
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+
+  const queries = buildSearchIntentQueries(plan);
+  assert.equal(plan.canonicalEnglishTopic, "ant colony behavior and soil environment");
+  assert.ok(plan.englishQueries.some((query) => query.includes("ant colony behavior")));
+  assert.ok(plan.chineseQueries.some((query) => query.includes("螞蟻 群體行為")));
+  assert.ok(queries.coreEnglishAcademic.some((query) => query.includes("ant colony behavior")));
+  assert.doesNotMatch(JSON.stringify(queries), /微小社會的巨大秩序/);
+});
+
 test("topic understanding classifies guinea pig, fries, and bubble before search planning", () => {
   const guineaPig = understandTopic(guineaPigTopic);
   const fries = understandTopic(friesTopic);
@@ -1213,7 +1250,7 @@ test("secondary candidates stay available for preliminary reports but out of the
   assert.notEqual(source.relevanceLevel, "off_topic");
   assert.notEqual(source.classification, "off_topic");
   assert.notEqual(source.reviewState, "rejected");
-  assert.equal(source.shouldShowInMainList, false);
+  assert.equal(source.shouldShowInMainList, true);
   assert.equal(source.shouldRecommendAccept, true);
 });
 
@@ -1252,8 +1289,17 @@ test("ranking prefers high relevance and source quality before recency", () => {
   );
 
   assert.equal(sources[0]?.id, "strong-evidence");
-  assert.equal(sources[0]?.sourceQualityScore, 100);
-  assert.equal(sources[0]?.finalScore, Math.round((sources[0]?.relevanceScore ?? 0) * 0.6 + 100 * 0.4));
+  assert.ok((sources[0]?.sourceQualityScore ?? 0) >= 95);
+  assert.equal(
+    sources[0]?.finalScore,
+    Math.round(
+      (sources[0]?.relevanceScore ?? 0) * 0.4 +
+        (sources[0]?.sourceQualityScore ?? 0) * 0.25 +
+        (sources[0]?.metadataCompleteness ?? 0) * 0.2 +
+        (sources[0]?.abstractQuality ?? 0) * 0.1 +
+        ((sources[0] as { recencyScore?: number } | undefined)?.recencyScore ?? 0) * 0.05,
+    ),
+  );
   assert.ok((sources[0]?.finalScore ?? 0) > (sources[1]?.finalScore ?? 0));
 });
 

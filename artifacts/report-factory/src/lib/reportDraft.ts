@@ -126,6 +126,16 @@ const SECTION_EVIDENCE_MAP: Record<string, WorkflowReportSection[]> = {
   title: [],
 };
 
+const INSTRUCTION_TEXT_PATTERNS = [
+  /應討論/gu,
+  /可再補充/gu,
+  /請撰寫/gu,
+  /本段應/gu,
+  /寫作指引/giu,
+  /section guideline/giu,
+  /instruction/giu,
+];
+
 function cleanText(value: string | null | undefined): string {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
@@ -267,6 +277,15 @@ function buildResearchQuestions(topic: string, claims: string[], gaps: string[])
   ];
 }
 
+function sanitizeReportParagraph(text: string): string {
+  let sanitized = text.trim();
+  for (const pattern of INSTRUCTION_TEXT_PATTERNS) {
+    sanitized = sanitized.replace(pattern, "");
+  }
+  sanitized = sanitized.replace(/\s+/g, " ").trim();
+  return sanitized || "目前可用證據不足，本段暫不形成正式結論。";
+}
+
 function sectionTitleFor(sectionId: string, title: string): string {
   return sectionId === "title" ? "標題" : title.replace(/^[一二三四五六七八九十]+、/, "");
 }
@@ -380,24 +399,24 @@ function renderParagraphPlan(
   const sourceSummary = evidenceTitleSummary(cards, context.evidenceNumbers, 3);
 
   if (plan.sectionId === "research_question") {
-    return [
+    return sanitizeReportParagraph([
       plan.topicSentence,
       ...buildResearchQuestions(context.topic, plan.claims, context.acceptedSourceDigest.gaps),
       plan.claims.length > 0 ? `目前問題設定主要參考${sourceSummary}。` : "",
       plan.limitationOrTransition,
     ]
       .filter(Boolean)
-      .join("\n");
+      .join("\n"));
   }
 
   if (cards.length === 0) {
-    return [
+    return sanitizeReportParagraph([
       plan.topicSentence,
       `目前沒有可直接支撐本節的 evidence card，因此僅能標示資料缺口：${proseList(plan.missingEvidence, "尚缺直接證據")}。`,
       plan.limitationOrTransition,
     ]
       .filter(Boolean)
-      .join("");
+      .join(""));
   }
 
   const claimsSentence =
@@ -410,52 +429,52 @@ function renderParagraphPlan(
 
   switch (plan.sectionId) {
     case "abstract":
-      return [plan.topicSentence, claimsSentence, sourceSentence, plan.limitationOrTransition]
+      return sanitizeReportParagraph([plan.topicSentence, claimsSentence, sourceSentence, plan.limitationOrTransition]
         .filter(Boolean)
-        .join("");
+        .join(""));
     case "introduction":
-      return [
+      return sanitizeReportParagraph([
         plan.topicSentence,
         claimsSentence,
-        `這些來源使研究背景不再只停留在原始題目，而能收斂到已被文獻提及的具體面向。`,
+        `綜合目前來源，研究背景可收斂到已被文獻提及的具體面向，而非只停留在原始題目。`,
         plan.limitationOrTransition,
       ]
         .filter(Boolean)
-        .join("");
+        .join(""));
     case "literature_review":
-      return [
+      return sanitizeReportParagraph([
         plan.topicSentence,
         claimsSentence,
         sourceSentence,
-        `因此，本節採交叉整理的方式整合來源，而不是把每篇文獻逐一改寫成摘要。`,
+        `本節以交叉整理方式整合來源共識、差異與限制。`,
         plan.limitationOrTransition,
       ]
         .filter(Boolean)
-        .join("");
+        .join(""));
     case "methodology":
-      return [
+      return sanitizeReportParagraph([
         plan.topicSentence,
-        `本次草稿共整理 ${context.acceptedSources.length} 筆已接受來源與 ${context.evidenceCards.length} 張證據卡，並以章節用途與可驗證片段分配寫作依據。`,
+        `本報告整理 ${context.acceptedSources.length} 筆已接受來源與 ${context.evidenceCards.length} 張證據卡，並依章節用途分配可驗證片段。`,
         sourceSentence,
         plan.limitationOrTransition,
       ]
         .filter(Boolean)
-        .join("");
+        .join(""));
     case "findings":
-      return [plan.topicSentence, claimsSentence, sourceSentence, plan.limitationOrTransition]
+      return sanitizeReportParagraph([plan.topicSentence, claimsSentence, sourceSentence, plan.limitationOrTransition]
         .filter(Boolean)
-        .join("");
+        .join(""));
     case "discussion":
-      return [
+      return sanitizeReportParagraph([
         plan.topicSentence,
         claimsSentence,
-        `綜合判讀時，可以先把上述證據視為支持方向，而不是直接視為已完成的最終定論。`,
+        `綜合判讀時，較合理的做法是把上述證據視為目前可支持的方向，並保留尚未被完全證實的部分。`,
         plan.limitationOrTransition,
       ]
         .filter(Boolean)
-        .join("");
+        .join(""));
     case "limitations":
-      return [
+      return sanitizeReportParagraph([
         plan.topicSentence,
         cards.some(abstractOnly)
           ? "目前部分來源仍屬摘要層級整理，若要形成更完整的理論推論，仍需補進可讀全文或更直接的實驗／教學資料。"
@@ -463,20 +482,20 @@ function renderParagraphPlan(
         plan.limitationOrTransition,
       ]
         .filter(Boolean)
-        .join("");
+        .join(""));
     case "conclusion":
-      return [
+      return sanitizeReportParagraph([
         plan.topicSentence,
         claimsSentence,
-        `因此，現階段較合理的寫法是把已支持的部分整理成初步結論，並把${proseList(context.acceptedSourceDigest.gaps.slice(0, 2), "剩餘資料缺口")}留待後續補查。`,
+        `因此，現階段可先把已獲支持的部分整理成初步結論，並同步保留${proseList(context.acceptedSourceDigest.gaps.slice(0, 2), "剩餘資料缺口")}。`,
         plan.limitationOrTransition,
       ]
         .filter(Boolean)
-        .join("");
+        .join(""));
     default:
-      return [plan.topicSentence, claimsSentence, sourceSentence, plan.limitationOrTransition]
+      return sanitizeReportParagraph([plan.topicSentence, claimsSentence, sourceSentence, plan.limitationOrTransition]
         .filter(Boolean)
-        .join("");
+        .join(""));
   }
 }
 

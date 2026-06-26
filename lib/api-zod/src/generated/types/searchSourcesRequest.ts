@@ -14,6 +14,33 @@ export interface SearchSourcesRequest {
   query?: string;
   /** @minLength 1 */
   topic?: string;
+  /** @minLength 1 */
+  originalTopic?: string;
+  /** @minLength 1 */
+  refinedTopic?: string;
+  /** @minLength 1 */
+  displayTitle?: string;
+  /** @minLength 1 */
+  canonicalTopicZh?: string;
+  /** @minLength 1 */
+  canonicalTopicEn?: string;
+  querySeedZh?: string[];
+  querySeedEn?: string[];
+  subtopics?: Array<{
+    id: string;
+    titleZh: string;
+    titleEn?: string;
+    queryZh?: string[];
+    queryEn?: string[];
+    mustIncludeTerms?: string[];
+    excludeTerms?: string[];
+    expectedSourceTypes?: string[];
+  }>;
+  mustIncludeTerms?: string[];
+  excludeTerms?: string[];
+  domainHints?: string[];
+  selectedResearchPlanId?: string;
+  workflowId?: string;
   reportType?: string;
   audience?: string;
   sourceMode?: string;

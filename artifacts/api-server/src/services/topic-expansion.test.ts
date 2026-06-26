@@ -1,7 +1,23 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { expandTopicWithOllama, normalizeTopicExpansion } from "./topic-expansion";
+import { understandTopic } from "@workspace/api-zod/topic-understanding";
+import type { TopicExpansionDomain } from "@workspace/api-zod/topic-expansion";
+import {
+  buildKeywordExpansion,
+  candidateMergeAndRerank,
+  candidateTopicGeneration,
+  classifyEntityType,
+  classifyInputKind,
+  classifySecondaryDomains,
+  classifyTopicDomain,
+  expandTopicWithOllama,
+  normalizeTopicExpansion,
+} from "./topic-expansion";
+
+function domains(...values: TopicExpansionDomain[]): TopicExpansionDomain[] {
+  return values;
+}
 
 const validEggExpansion = {
   expandedTopic: "雞蛋的營養成分、蛋白質品質與必需胺基酸價值",
@@ -142,8 +158,11 @@ test("Ollama raw JSON success returns ok without fallback", async () => {
     assert.equal(result.diagnostics.fallback_used, false);
     assert.equal(result.diagnostics.model, "gemma4:e2b");
     assert.equal(result.diagnostics.llm_status, "success");
-    assert.equal(result.diagnostics.temperature, 0);
+    assert.equal(result.diagnostics.temperature, 0.2);
     assert.equal(result.diagnostics.cacheHit, false);
+    assert.equal(result.generationMode, "llm_polished");
+    assert.equal(result.inputKind, "complete_research_topic");
+    assert.equal(result.topicDomain, "health_medical");
     assert.match(result.diagnostics.requestId ?? "", /^[0-9a-f-]{36}$/i);
     assert.match(result.diagnostics.generatedAt ?? "", /^\d{4}-\d{2}-\d{2}T/);
     assert.equal(
@@ -224,19 +243,20 @@ test("field normalization maps common aliases and fills missing keyword buckets"
   assert.deepEqual(normalized.exclusions, ["籃球"]);
 });
 
-test("invalid schema returns explicit error instead of fake expansion", async () => {
+test("invalid schema falls back to domain-aware expansion instead of fake template output", async () => {
   await withEnv(baseEnv(), async () => {
     const result = await expandTopicWithOllama(
       { topic: "雞蛋的營養成分與蛋白質價值" },
       { fetchImpl: createOllamaFetch(JSON.stringify({ expandedTopic: "雞蛋營養" })) },
     );
 
-    assert.equal(result.status, "error");
+    assert.equal(result.status, "success");
+    assert.equal(result.generationMode, "title_fallback");
     assert.equal(result.diagnostics.provider_status, "schema_validation_failed");
     assert.equal(result.diagnostics.fallbackUsed, true);
-    assert.ok(result.diagnostics.validationErrors?.some((message) => message.includes("researchQuestions")));
-    assert.equal(result.expandedTopic, "");
-    assert.deepEqual(result.researchQuestions, []);
+    assert.equal(result.fallbackReason, "LOCAL_LLM_JSON_PARSE_FAILED");
+    assert.ok(result.directions?.length);
+    assert.match(JSON.stringify(result), /營養|蛋白質|健康影響/);
   });
 });
 
@@ -274,13 +294,14 @@ test("airplane topic expansion stays grounded in mechanics, aviation, and constr
   });
 });
 
-test("Don Quixote topic expansion rejects cod-fish drift without inventing fallback content", async () => {
+test("Don Quixote topic expansion rejects cod-fish drift and falls back to humanities directions", async () => {
   await withEnv(baseEnv(), async () => {
     const result = await expandTopicWithOllama(
       { topic: "唐吉柯德", reportType: "研究報告", audience: "高中" },
       { fetchImpl: createOllamaFetch(JSON.stringify(pollutedDonQuixoteExpansion)) },
     );
-    assert.equal(result.status, "error");
+    assert.equal(result.status, "success");
+    assert.equal(result.generationMode, "title_fallback");
     assert.equal(result.diagnostics.provider_status, "schema_validation_failed");
     assert.equal(result.diagnostics.fallbackUsed, true);
     assert.ok(
@@ -288,8 +309,13 @@ test("Don Quixote topic expansion rejects cod-fish drift without inventing fallb
         /drift_terms_detected|canonical_topic_terms_missing/i.test(message),
       ),
     );
-    assert.equal(result.expandedTopic, "");
-    assert.deepEqual(result.searchKeywords.zh, []);
+    const visibleContent = JSON.stringify({
+      expandedTopic: result.expandedTopic,
+      researchQuestions: result.researchQuestions,
+      directions: result.directions,
+    });
+    assert.match(visibleContent, /歷史|文本|文化|詮釋|傳播/);
+    assert.doesNotMatch(visibleContent, /鱈魚|DHA|EPA|cod fish|seafood safety/i);
   });
 });
 
@@ -328,13 +354,13 @@ test("ascii gibberish topic is rejected by local LLM validity check before fake 
     assert.equal(result.diagnostics.provider_status, "invalid_input");
     assert.equal(result.diagnostics.fallbackUsed, true);
     assert.ok(result.message);
-    assert.match(result.message, /查無足夠研究方向|無意義字串/);
+    assert.match(result.message, /無法辨識有效研究主題|無意義字串/);
     assert.deepEqual(result.researchQuestions, []);
     assert.equal(fetchStub.getChatCompletionCalls(), 0);
   });
 });
 
-test("known topics fall back to taxonomy-grounded expansion when LLM is unavailable", async () => {
+test("known topics fall back to domain-aware expansion when LLM is unavailable", async () => {
   await withEnv(baseEnv(), async () => {
     const result = await expandTopicWithOllama(
       { topic: "飛機", reportType: "研究報告", audience: "高中" },
@@ -344,7 +370,8 @@ test("known topics fall back to taxonomy-grounded expansion when LLM is unavaila
 
     assert.equal(result.status, "success");
     assert.equal(result.diagnostics.fallbackUsed, true);
-    assert.match(result.message ?? "", /taxonomy fallback/i);
+    assert.equal(result.generationMode, "title_fallback");
+    assert.match(result.message ?? "", /快速回傳標題候選|規則式標題候選/i);
     assert.match(combined, /機翼|機身|民航|飛航安全|材料|製造|組裝/);
   });
 });
@@ -362,7 +389,8 @@ test("spinning top fallback stays domain-specific instead of returning generic t
     assert.equal(result.diagnostics.canonicalEnglishTopic, "spinning top");
     assert.equal(result.diagnostics.domain, "technology");
     assert.ok(result.diagnostics.searchQueries?.en.some((query) => /gyroscope|spinning top/i.test(query)));
-    assert.match(result.message ?? "", /taxonomy fallback/i);
+    assert.equal(result.generationMode, "title_fallback");
+    assert.match(result.message ?? "", /快速回傳標題候選|規則式標題候選/i);
     assert.match(combined, /角動量|進動|陀螺儀|MEMS|民俗遊戲|spinning top|gyroscope/i);
     assert.doesNotMatch(combined, /核心概念、範圍界線與可驗證資料|可用哪些指標、案例或資料集交叉驗證/);
   });
@@ -383,5 +411,294 @@ test("rare valid Chinese topics expose canonical English diagnostics and bilingu
     assert.ok(result.diagnostics.searchQueries?.en.some((query) => /thixotropy/i.test(query)));
     assert.match(combined, /流變|剪切|流變儀|塗料|膠體|3D列印漿料/i);
     assert.doesNotMatch(combined, /核心概念、範圍界線與可驗證資料|可用哪些指標、案例或資料集交叉驗證/);
+  });
+});
+
+test("classifyInputKind detects keyword phrase research topic broad and gibberish", () => {
+  assert.equal(classifyInputKind("水母", understandTopic("水母")), "single_keyword");
+  assert.equal(classifyInputKind("手機成癮", understandTopic("手機成癮")), "short_phrase");
+  assert.equal(
+    classifyInputKind(
+      "水母大量繁殖對海洋生態與漁業的影響",
+      understandTopic("水母大量繁殖對海洋生態與漁業的影響"),
+    ),
+    "complete_research_topic",
+  );
+  assert.equal(classifyInputKind("AI", understandTopic("AI")), "too_broad");
+  assert.equal(classifyInputKind("hoeo2f2", understandTopic("hoeo2f2")), "gibberish");
+});
+
+test("classifyTopicDomain and secondary domains map representative topics", () => {
+  const ant = understandTopic("螞蟻");
+  assert.equal(classifyEntityType("螞蟻", ant, "single_keyword"), "animal");
+  assert.equal(classifyTopicDomain("螞蟻", ant, "single_keyword"), "biology_ecology");
+  const jellyfish = understandTopic("水母");
+  assert.equal(classifyTopicDomain("水母", jellyfish, "single_keyword"), "biology_ecology");
+  const turtle = understandTopic("烏龜");
+  assert.equal(classifyTopicDomain("烏龜", turtle, "single_keyword"), "biology_ecology");
+  const cheetah = understandTopic("獵豹");
+  assert.equal(classifyTopicDomain("獵豹", cheetah, "single_keyword"), "biology_ecology");
+  const toast = understandTopic("吐司");
+  assert.equal(classifyEntityType("吐司", toast, "single_keyword"), "food");
+  assert.equal(classifyTopicDomain("吐司", toast, "single_keyword"), "health_medical");
+  const ions = understandTopic("負離子");
+  assert.equal(classifyEntityType("負離子", ions, "single_keyword"), "scientific_concept");
+  assert.match(
+    classifyTopicDomain("負離子", ions, "single_keyword"),
+    /natural_science|concept_feature/,
+  );
+  const smartphone = understandTopic("手機成癮");
+  assert.equal(classifyEntityType("手機成癮", smartphone, "short_phrase"), "social_issue");
+  assert.equal(
+    classifyTopicDomain("手機成癮", smartphone, "short_phrase"),
+    "education_psychology",
+  );
+  assert.deepEqual(
+    classifySecondaryDomains("手機成癮", smartphone, "education_psychology"),
+    ["health_medical"],
+  );
+  const climate = understandTopic("氣候變遷");
+  assert.equal(classifyEntityType("氣候變遷", climate, "short_phrase"), "social_issue");
+  assert.equal(
+    classifyTopicDomain("氣候變遷", climate, "short_phrase"),
+    "social_policy",
+  );
+  assert.deepEqual(
+    classifySecondaryDomains("氣候變遷", climate, "social_policy"),
+    ["natural_science"],
+  );
+});
+
+test("keyword expansion includes domain-specific bilingual terms", () => {
+  const jellyfishContext = {
+    understood: understandTopic("水母"),
+    inputKind: "single_keyword" as const,
+    topicDomain: "biology_ecology" as const,
+    entityType: "animal" as const,
+    secondaryDomains: domains("health_medical"),
+    englishTopic: "jellyfish",
+  };
+  const jellyfish = buildKeywordExpansion(jellyfishContext);
+  assert.ok(jellyfish.coreTermsEn.includes("jellyfish"));
+  assert.ok(jellyfish.relatedTermsEn.includes("jellyfish bloom"));
+  assert.ok(jellyfish.relatedTermsZh.includes("海洋生態"));
+  assert.ok(jellyfish.relatedTermsZh.includes("螫傷"));
+
+  const ionsContext = {
+    understood: understandTopic("負離子"),
+    inputKind: "single_keyword" as const,
+    topicDomain: "natural_science" as const,
+    entityType: "scientific_concept" as const,
+    secondaryDomains: domains("concept_feature"),
+    englishTopic: "negative ions",
+  };
+  const ions = buildKeywordExpansion(ionsContext);
+  assert.ok(ions.coreTermsEn.includes("negative ions"));
+  assert.ok(ions.relatedTermsEn.includes("air quality"));
+  assert.ok(ions.relatedTermsEn.includes("health claims"));
+
+  const smartphoneContext = {
+    understood: understandTopic("手機成癮"),
+    inputKind: "short_phrase" as const,
+    topicDomain: "education_psychology" as const,
+    entityType: "social_issue" as const,
+    secondaryDomains: domains("health_medical"),
+    englishTopic: "smartphone addiction",
+  };
+  const smartphone = buildKeywordExpansion(smartphoneContext);
+  assert.ok(smartphone.relatedTermsEn.includes("sleep quality"));
+  assert.ok(smartphone.relatedTermsEn.includes("attention"));
+  assert.ok(smartphone.relatedTermsEn.includes("social media"));
+});
+
+test("candidate rerank keeps diverse non-generic directions with full query plans", () => {
+  const context = {
+    understood: understandTopic("水母"),
+    inputKind: "single_keyword" as const,
+    topicDomain: "biology_ecology" as const,
+    entityType: "animal" as const,
+    secondaryDomains: domains("health_medical"),
+    englishTopic: "jellyfish",
+  };
+  const keywordExpansion = buildKeywordExpansion(context);
+  const candidates = candidateTopicGeneration(context, keywordExpansion);
+  const ranked = candidateMergeAndRerank(candidates, context, keywordExpansion);
+
+  assert.ok(candidates.length > ranked.length);
+  assert.ok(ranked.length >= 3);
+  assert.equal(new Set(ranked.map((item) => item.diversityKey)).size, ranked.length);
+  const serialized = JSON.stringify(ranked);
+  assert.doesNotMatch(serialized, /背景脈絡、主要類型與核心特徵|形成過程、使用方式與應用情境|爭議、限制與後續發展趨勢|核心概念、範圍界線與可驗證資料/);
+  for (const item of ranked) {
+    assert.ok(item.queryPlan.primaryQueriesZh.length >= 3);
+    assert.ok(item.queryPlan.primaryQueriesEn.length >= 3);
+    assert.ok(item.excludeTerms.length >= 3);
+  }
+});
+
+test("entityType lens guard keeps animal and food topics away from scientific definition fallback", async () => {
+  await withEnv(baseEnv(), async () => {
+    const ant = await expandTopicWithOllama(
+      { topic: "螞蟻", reportType: "研究報告", audience: "高中" },
+      { fetchImpl: createUnavailableOllamaFetch() },
+    );
+    assert.equal(ant.status, "success");
+    assert.equal(ant.entityType, "animal");
+    assert.equal(ant.topicDomain, "biology_ecology");
+    assert.ok(
+      ant.diagnostics.selectedLensIds?.some((lensId: string) =>
+        ["behavior_adaptation", "ecology_role", "invasive_management", "mechanism_process"].includes(
+          lensId,
+        ),
+      ),
+    );
+    assert.ok(ant.diagnostics.rejectedLensIds?.includes("definition_measurement"));
+    assert.ok(ant.diagnostics.rejectedLensIds?.includes("health_claims"));
+    assert.doesNotMatch(
+      JSON.stringify(ant.directions ?? []),
+      /科學定義與量測方法|健康宣稱或常見迷思|形成機制、應用場景與限制條件/,
+    );
+
+    const toast = await expandTopicWithOllama(
+      { topic: "吐司", reportType: "研究報告", audience: "高中" },
+      { fetchImpl: createUnavailableOllamaFetch() },
+    );
+    assert.equal(toast.status, "success");
+    assert.equal(toast.entityType, "food");
+    assert.equal(toast.topicDomain, "health_medical");
+    assert.ok(toast.diagnostics.rejectedLensIds?.includes("definition_measurement"));
+    assert.doesNotMatch(
+      JSON.stringify(toast.directions ?? []),
+      /科學定義與量測方法|健康宣稱或常見迷思/,
+    );
+
+    const ions = await expandTopicWithOllama(
+      { topic: "負離子", reportType: "研究報告", audience: "高中" },
+      { fetchImpl: createUnavailableOllamaFetch() },
+    );
+    assert.equal(ions.status, "success");
+    assert.equal(ions.entityType, "scientific_concept");
+    assert.equal(ions.topicDomain, "natural_science");
+    assert.ok(
+      ions.diagnostics.selectedLensIds?.includes("definition_measurement"),
+    );
+    assert.ok(
+      ions.directions?.some((direction) => /如何定義與觀察|核心指標與量測設計/.test(direction.title)),
+    );
+  });
+});
+
+test("title enhancement fallback returns 3-5 visible title candidates without legacy template text", async () => {
+  await withEnv(baseEnv(), async () => {
+    const ant = await expandTopicWithOllama(
+      { topic: "螞蟻", reportType: "研究報告", audience: "高中" },
+      { fetchImpl: createUnavailableOllamaFetch() },
+    );
+    assert.equal(ant.generationMode, "title_fallback");
+    assert.ok((ant.titleCandidates?.length ?? 0) >= 3);
+    assert.ok((ant.titleCandidates?.length ?? 0) <= 5);
+    assert.match(ant.titleCandidates?.[0]?.title ?? "", /螞蟻|秩序|生態/);
+    assert.ok(ant.hiddenResearchPlan);
+    assert.ok((ant.hiddenResearchPlan?.querySeedZh.length ?? 0) >= 1);
+
+    const bubble = await expandTopicWithOllama(
+      { topic: "泡泡實驗", reportType: "研究報告", audience: "高中" },
+      { fetchImpl: createUnavailableOllamaFetch() },
+    );
+    assert.ok((bubble.titleCandidates?.length ?? 0) >= 3);
+    assert.match(
+      JSON.stringify(bubble.titleCandidates ?? []),
+      /泡泡實驗|泡泡|原理|觀察|科學/,
+    );
+
+    const redox = await expandTopicWithOllama(
+      { topic: "氧化還原反應", reportType: "研究報告", audience: "高中" },
+      { fetchImpl: createUnavailableOllamaFetch() },
+    );
+    assert.ok((redox.titleCandidates?.length ?? 0) >= 3);
+    assert.match(
+      JSON.stringify(redox.titleCandidates ?? []),
+      /氧化還原反應|原理|應用|科學解釋/,
+    );
+
+    const visibleTitles = JSON.stringify([
+      ...(ant.titleCandidates ?? []).map((candidate) => candidate.title),
+      ...(bubble.titleCandidates ?? []).map((candidate) => candidate.title),
+      ...(redox.titleCandidates ?? []).map((candidate) => candidate.title),
+    ]);
+    assert.doesNotMatch(
+      visibleTitles,
+      /科學定義與量測方法|形成機制、應用場景與限制條件|背景脈絡、主要類型與核心特徵|爭議、限制與後續發展趨勢/,
+    );
+  });
+});
+
+test("expandTopic integration smoke covers hybrid planner topics", async () => {
+  await withEnv(baseEnv(), async () => {
+    const topics = [
+      {
+        topic: "螞蟻",
+        domain: "biology_ecology",
+        inputKind: "single_keyword",
+        entityType: "animal",
+      },
+      { topic: "水母", domain: "biology_ecology", inputKind: "single_keyword", entityType: "animal" },
+      { topic: "烏龜", domain: "biology_ecology", inputKind: "single_keyword", entityType: "animal" },
+      { topic: "獵豹", domain: "biology_ecology", inputKind: "single_keyword", entityType: "animal" },
+      {
+        topic: "吐司",
+        domain: "health_medical",
+        inputKind: "single_keyword",
+        entityType: "food",
+      },
+      { topic: "負離子", domain: "natural_science", inputKind: "single_keyword", entityType: "scientific_concept" },
+      {
+        topic: "手機成癮",
+        domain: "education_psychology",
+        inputKind: "short_phrase",
+        entityType: "social_issue",
+      },
+      {
+        topic: "氣候變遷",
+        domain: "social_policy",
+        inputKind: "short_phrase",
+        entityType: "social_issue",
+      },
+      { topic: "水餃", domain: "health_medical", inputKind: "single_keyword", entityType: "food" },
+      { topic: "可樂", domain: "health_medical", inputKind: "single_keyword", entityType: "food" },
+    ] as const;
+
+    for (const sample of topics) {
+      const result = await expandTopicWithOllama(
+        { topic: sample.topic, reportType: "研究報告", audience: "高中" },
+        { fetchImpl: createUnavailableOllamaFetch() },
+      );
+
+      assert.equal(result.status, "success");
+      assert.equal(result.inputKind, sample.inputKind);
+      assert.equal(result.topicDomain, sample.domain);
+      assert.equal(result.entityType, sample.entityType);
+      assert.equal(result.generationMode, "title_fallback");
+      assert.ok((result.candidateCount ?? 0) > (result.directions?.length ?? 0));
+      assert.ok(result.keywordExpansion);
+      assert.ok((result.directions?.length ?? 0) >= 3);
+      assert.ok((result.titleCandidates?.length ?? 0) >= 3);
+      for (const direction of result.directions ?? []) {
+        assert.ok(direction.researchQuestion);
+        assert.ok(direction.queryZh.length >= 3);
+        assert.ok(direction.queryEn.length >= 3);
+        assert.ok(direction.expectedEvidence.length >= 1);
+        assert.ok(direction.evidenceNeed.length >= 1);
+      }
+    }
+
+    const gibberish = await expandTopicWithOllama(
+      { topic: "hoeo2f2", reportType: "研究報告", audience: "高中" },
+      { fetchImpl: createUnavailableOllamaFetch() },
+    );
+    assert.equal(gibberish.status, "invalid_input");
+    assert.equal(gibberish.inputKind, "gibberish");
+    assert.equal(gibberish.candidateCount, 0);
+    assert.deepEqual(gibberish.directions, []);
   });
 });

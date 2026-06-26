@@ -63,6 +63,63 @@ test("search source request normalization promotes refined topic to active searc
   );
 });
 
+test("search source request normalization keeps research-plan payload fields", () => {
+  assert.deepEqual(
+    normalizeSearchSourcesRequest({
+      originalTopic: "螞蟻",
+      topic: "螞蟻群體行為與土壤環境",
+      displayTitle: "微小社會的巨大秩序：螞蟻群體行為與土壤環境",
+      canonicalTopicZh: "螞蟻群體行為與土壤環境",
+      canonicalTopicEn: "ant colony behavior and soil environment",
+      querySeedZh: ["螞蟻 群體行為", "螞蟻 土壤 生態"],
+      querySeedEn: ["ant colony behavior", "ant soil ecology"],
+      mustIncludeTerms: ["螞蟻", "ant"],
+      excludeTerms: ["Ant-Man", "logo"],
+      domainHints: ["biology_ecology"],
+      subtopics: [
+        {
+          id: "ant-1",
+          titleZh: "螞蟻的群體分工與合作",
+          queryZh: ["螞蟻 群體分工 合作"],
+          queryEn: ["ant colony division of labor"],
+        },
+      ],
+      selectedResearchPlanId: "ant-plan",
+      workflowId: "wf-ant-001",
+    }),
+    {
+      kind: "topic",
+      input: {
+        topic: "螞蟻群體行為與土壤環境",
+        originalTopic: "螞蟻",
+        refinedTopic: "螞蟻群體行為與土壤環境",
+        displayTitle: "微小社會的巨大秩序：螞蟻群體行為與土壤環境",
+        canonicalTopicZh: "螞蟻群體行為與土壤環境",
+        canonicalTopicEn: "ant colony behavior and soil environment",
+        querySeedZh: ["螞蟻 群體行為", "螞蟻 土壤 生態"],
+        querySeedEn: ["ant colony behavior", "ant soil ecology"],
+        subtopics: [
+          {
+            id: "ant-1",
+            titleZh: "螞蟻的群體分工與合作",
+            queryZh: ["螞蟻 群體分工 合作"],
+            queryEn: ["ant colony division of labor"],
+          },
+        ],
+        mustIncludeTerms: ["螞蟻", "ant"],
+        excludeTerms: ["Ant-Man", "logo"],
+        domainHints: ["biology_ecology"],
+        selectedResearchPlanId: "ant-plan",
+        workflowId: "wf-ant-001",
+        reportType: undefined,
+        audience: undefined,
+        language: undefined,
+        sourceMode: undefined,
+      },
+    },
+  );
+});
+
 function sourceRecord(title: string): SourceRecord {
   return {
     id: `title:Crossref:${title.toLowerCase()}`,

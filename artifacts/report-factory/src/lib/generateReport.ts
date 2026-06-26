@@ -1,6 +1,12 @@
 // generateReport.ts
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock report generation engine for Report Factory AI.
+// TODO(researchforge-report-pipeline): keep report generation aligned with the
+// same staged planner architecture used by topic expansion:
+// acceptedSources / evidenceCards -> candidateClaims -> claimMergeAndRerank ->
+// sectionOutline -> paragraphDrafts -> evidenceCitationCheck ->
+// optionalLlmPolish -> finalReportParagraphs. Text polishing must preserve
+// citation integrity and must not invent unsupported claims.
 //
 // To connect a real model later: replace the body of `generateReport()` with an
 // async call to /api/generate (or the OpenAI chat completions endpoint) that
@@ -264,10 +270,23 @@ export interface GeneratedReport {
   sections: ReportSection[];
 }
 
+import type { HiddenResearchPlan } from "@workspace/api-zod/topic-expansion";
+
 export interface TopicExpansionCard {
   title: string;
   angle: string;
   reason: string;
+  style?: string;
+  displayOnly?: boolean;
+  category?: string;
+  researchQuestion?: string;
+  scope?: string;
+  sourceTypes?: string[];
+  queryZh?: string[];
+  queryEn?: string[];
+  expectedEvidence?: string[];
+  evidenceNeed?: string[];
+  searchPriority?: number;
   researchValue?: string;
   dataDirections?: string[];
   chineseKeywords?: string[];
@@ -275,6 +294,8 @@ export interface TopicExpansionCard {
   suggestedQuery?: string;
   searchBoundary?: string;
   excludedTerms?: string[];
+  broadSuggestion?: boolean;
+  hiddenResearchPlan?: HiddenResearchPlan | null;
 }
 
 function cardFromClarification(

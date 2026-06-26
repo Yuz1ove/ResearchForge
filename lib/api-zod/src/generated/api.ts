@@ -30,6 +30,26 @@ export const SearchSourcesBody = zod.object({
   "topic": zod.string().min(1).optional(),
   "originalTopic": zod.string().min(1).optional(),
   "refinedTopic": zod.string().min(1).optional(),
+  "displayTitle": zod.string().min(1).optional(),
+  "canonicalTopicZh": zod.string().min(1).optional(),
+  "canonicalTopicEn": zod.string().min(1).optional(),
+  "querySeedZh": zod.array(zod.string().min(1)).optional(),
+  "querySeedEn": zod.array(zod.string().min(1)).optional(),
+  "subtopics": zod.array(zod.object({
+  "id": zod.string().min(1),
+  "titleZh": zod.string().min(1),
+  "titleEn": zod.string().min(1).optional(),
+  "queryZh": zod.array(zod.string().min(1)).optional(),
+  "queryEn": zod.array(zod.string().min(1)).optional(),
+  "mustIncludeTerms": zod.array(zod.string().min(1)).optional(),
+  "excludeTerms": zod.array(zod.string().min(1)).optional(),
+  "expectedSourceTypes": zod.array(zod.string().min(1)).optional()
+})).optional(),
+  "mustIncludeTerms": zod.array(zod.string().min(1)).optional(),
+  "excludeTerms": zod.array(zod.string().min(1)).optional(),
+  "domainHints": zod.array(zod.string().min(1)).optional(),
+  "selectedResearchPlanId": zod.string().min(1).optional(),
+  "workflowId": zod.string().min(1).optional(),
   "reportType": zod.string().optional(),
   "audience": zod.string().optional(),
   "sourceMode": zod.string().optional(),
@@ -445,4 +465,3 @@ export const TopicUnderstandingResponse = zod.object({
   "latencyMs": zod.number().nullish()
 })
 })
-

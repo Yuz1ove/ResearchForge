@@ -8,7 +8,7 @@
     "build": "vite build --config vite.config.ts",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --experimental-strip-types --test src/lib/sourceRecords.test.ts src/lib/sourceSummaries.test.ts src/lib/sourceRelevance.test.ts src/lib/sourceAuthority.test.ts src/lib/sourceDigest.test.ts src/lib/acceptedSourceSynthesis.test.ts src/lib/searchPreflight.test.ts src/lib/zhTwLabels.test.ts src/lib/evidenceCards.test.ts src/lib/reportOutline.test.ts src/lib/reportDraft.test.ts src/lib/reportWorkspace.test.ts src/lib/reportPreviewGuards.test.ts src/lib/llmReportWriter.test.ts src/lib/generateReport.test.ts src/lib/qualityJudge.test.ts src/lib/researchWorkflowSchemas.test.ts"
+    "test": "node --experimental-strip-types --test src/lib/sourceRecords.test.ts src/lib/sourceSummaries.test.ts src/lib/sourceRelevance.test.ts src/lib/sourceAuthority.test.ts src/lib/sourceDigest.test.ts src/lib/acceptedSourceSynthesis.test.ts src/lib/searchPreflight.test.ts src/lib/zhTwLabels.test.ts src/lib/evidenceCards.test.ts src/lib/reportOutline.test.ts src/lib/reportDraft.test.ts src/lib/reportWorkspace.test.ts src/lib/reportPreviewGuards.test.ts src/lib/llmReportWriter.test.ts src/lib/generateReport.test.ts src/lib/qualityJudge.test.ts src/lib/researchWorkflowSchemas.test.ts src/lib/titleUiSafety.test.ts src/lib/selectedTitleSearchSeed.test.ts"
   },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",

@@ -1,4 +1,9 @@
 import {
+  buildDomainFallbackAngles,
+  chooseFallbackFamily,
+  hasLegacyGenericTemplate,
+  removeLegacyGenericAngles,
+  sanitizeAndBackfillAngles,
   understandTopic,
   type TopicDomain,
   type TopicUnderstandingResult,
@@ -257,12 +262,12 @@ function domainCoreConcepts(
     household_safety: ["risk", "usage context", "safety guideline", "prevention"],
     materials_design: ["materials", "structure", "design", "manufacturing"],
     biology: ["biology", "mechanism", "classification", "observation"],
-    health: ["health impact", "mechanism", "risk", "evidence"],
+    health: ["health impact", "mechanism", "risk", "intervention"],
     technology: ["mechanism", "engineering", "application", "measurement"],
     environment: ["environmental impact", "exposure", "ecology", "policy"],
     social_science: ["background", "stakeholders", "data", "policy"],
-    history_culture: ["history", "cultural context", "comparison", "case study"],
-    general_research: ["definition", "scope", "evidence", "application"],
+    history_culture: ["history", "cultural context", "comparison", "interpretation"],
+    general_research: ["background", "context", "application", "limitations"],
   };
   return uniqueStrings([topic, ...defaults[domain]]);
 }
@@ -273,12 +278,12 @@ function bilingualQueries(
   englishSuffixes: string[],
 ): string[] {
   const normalizedEnglishTopic = containsLatin(englishTopic) ? englishTopic.trim() : "";
-  return uniqueStrings([
+  return removeLegacyGenericAngles(uniqueStrings([
     ...zhQueries,
     ...(normalizedEnglishTopic
       ? englishSuffixes.map((suffix) => `${normalizedEnglishTopic} ${suffix}`.trim())
       : []),
-  ]);
+  ]));
 }
 
 function angleTemplates(
@@ -717,13 +722,14 @@ function angleTemplates(
 
 function taxonomyQueries(result: TopicUnderstandingResult | undefined): string[] {
   if (!result) return [];
-  return uniqueStrings(
+  return removeLegacyGenericAngles(uniqueStrings(
     result.researchAngles.flatMap((angle) => [...angle.zhQueries, ...angle.enQueries]),
-  );
+  ));
 }
 
 function isLowValueTemplateQuery(query: string): boolean {
-  return /definition|scope|concept|evidence|measurable indicators|indicators|dataset|research questions|official data review|定義|範圍|可驗證|指標|資料集|研究證據|研究面向/i.test(query);
+  return hasLegacyGenericTemplate(query) ||
+    /concept|research questions|official data review|定義|範圍|可驗證|指標|資料集|研究證據|研究面向/i.test(query);
 }
 
 function shouldReuseTaxonomyQueries(result: TopicUnderstandingResult | undefined): boolean {
@@ -833,13 +839,27 @@ export function understandTopicHeuristically(
     ...profileCoreConcepts(profile, subject, canonicalEnglishTopic),
     ...domainCoreConcepts(domain, subject),
   ]).slice(0, 8);
+  const fallbackFamily = chooseFallbackFamily({
+    topic: normalizedTopic,
+    topicKind,
+    domain,
+    coreConcepts,
+    aliases: taxonomy?.aliases ?? [],
+    canonicalEnglishTopic,
+  });
+  const domainFallbackQueries = buildDomainFallbackAngles(
+    canonicalEnglishTopic || normalizedTopic,
+    fallbackFamily,
+  );
   const heuristicAngles = angleTemplates(domain, normalizedTopic, canonicalEnglishTopic)
     .map((angle) => ({
       title: angle.title,
       angle: angle.angle,
       reason: angle.reason,
-      searchQueries: uniqueStrings([
-        ...angle.queries,
+      searchQueries: sanitizeAndBackfillAngles({
+        topic: canonicalEnglishTopic || normalizedTopic,
+        values: uniqueStrings([
+          ...removeLegacyGenericAngles(angle.queries),
         ...(shouldReuseTaxonomyQueries(taxonomy)
           ? taxonomyQueries(taxonomy).filter((query) =>
               !isLowValueTemplateQuery(query) &&
@@ -849,7 +869,14 @@ export function understandTopicHeuristically(
                   query.toLowerCase().includes(canonicalEnglishTopic.toLowerCase()))),
             )
           : []),
-      ]).slice(0, 6),
+        ]),
+        topicKind,
+        domain,
+        coreConcepts,
+        aliases: taxonomy?.aliases ?? [],
+        canonicalEnglishTopic,
+        language: containsLatin(canonicalEnglishTopic || normalizedTopic) ? "en" : "zh",
+      }).slice(0, 6),
     }))
     .slice(0, 4);
   const likelyMeanings = uniqueStrings([
@@ -879,7 +906,19 @@ export function understandTopicHeuristically(
     likelyMeanings,
     ambiguityWarnings,
     excludedDriftTerms: taxonomy?.excludedDriftTerms ?? [],
-    researchAngles: heuristicAngles,
+    researchAngles: heuristicAngles.length > 0
+      ? heuristicAngles
+      : [
+          {
+            title: `${subject}的研究方向`,
+            angle: `${subject}的背景脈絡與主要觀察面向`,
+            reason: "已移除 legacy generic fallback，改用領域層級的保守研究角度。",
+            searchQueries: uniqueStrings([
+              ...domainFallbackQueries.zh,
+              ...domainFallbackQueries.en,
+            ]).slice(0, 6),
+          },
+        ],
     diagnostics: {
       usedLocalLlm: false,
       fallbackReason: taxonomy ? "heuristic-with-taxonomy-enrichment" : "heuristic-fallback",

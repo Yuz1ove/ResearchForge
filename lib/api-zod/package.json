@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./llm-status": "./src/llm-status.ts",
+    "./research-tools": "./src/research-tools.ts",
     "./topic-expansion": "./src/topic-expansion.ts",
     "./topic-understanding": "./src/topic-understanding.ts"
   },

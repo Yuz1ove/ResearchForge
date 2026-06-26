@@ -28,6 +28,7 @@ import {
   type SourceSearchResult,
 } from "@workspace/api-client-react";
 import type {
+  TitleCandidateStyle,
   TopicExpansionDiagnostics,
   TopicExpansionResponse,
 } from "@workspace/api-zod/topic-expansion";
@@ -42,6 +43,13 @@ import {
   TOPIC_CATEGORIES,
   type TopicExpansionCard,
 } from "@/lib/generateReport";
+import {
+  buildSelectedTitleSearchPayload,
+  createSelectedTitleSearchSeed,
+  titleStyleBadgeLabel,
+  topicExpansionToTitleCards,
+  type SelectedTitleSearchSeed,
+} from "@/lib/topicTitleEnhancement";
 import {
   buildPreflightSearchQuery,
   runSearchPreflight,
@@ -123,6 +131,53 @@ import {
 
 // ─── Default form state ───────────────────────────────────────────────────────
 
+type SourceSearchUiState =
+  | "idle"
+  | "loading"
+  | "success"
+  | "empty"
+  | "failed";
+
+type SourceSearchUiStateInput = {
+  activeStep: "topic" | "search" | "manage" | "generate";
+  isSearchingSources: boolean;
+  sourceCount: number;
+  sourceSearchStatus: "idle" | "loading" | "done" | "empty" | "error";
+  sourceSearchMessage?: string;
+  backendMessage?: string;
+};
+
+function hasProviderTimeoutMessage(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return /timed out|timeout|逾時/i.test(value);
+}
+
+function deriveSourceSearchUiState(
+  input: SourceSearchUiStateInput,
+): SourceSearchUiState {
+  if (input.isSearchingSources || input.sourceSearchStatus === "loading") {
+    return "loading";
+  }
+
+  if (input.sourceCount > 0) {
+    return "success";
+  }
+
+  const hasProviderTimeout =
+    hasProviderTimeoutMessage(input.sourceSearchMessage) ||
+    hasProviderTimeoutMessage(input.backendMessage);
+
+  if (input.sourceSearchStatus === "error" || hasProviderTimeout) {
+    return "failed";
+  }
+
+  if (input.activeStep === "search" || input.sourceSearchStatus === "empty") {
+    return "empty";
+  }
+
+  return "idle";
+}
+
 type ReportInputStringKey = {
   [K in keyof ReportInput]: ReportInput[K] extends string ? K : never;
 }[keyof ReportInput];
@@ -197,6 +252,11 @@ type SearchRequestDebugState = {
   backendMessage: string;
   payloadOriginalTopic: string;
   payloadActiveResearchTopic: string;
+  payloadDisplayTitle?: string;
+  payloadCanonicalTopicZh?: string;
+  payloadCanonicalTopicEn?: string;
+  payloadQuerySeedZh?: string[];
+  payloadQuerySeedEn?: string[];
 };
 
 type SourceWorkflowLock = {
@@ -422,59 +482,6 @@ function apiUrl(path: string): string {
   return `${base.replace(/\/+$/, "")}${path}`;
 }
 
-function uniqueKeywordTerms(terms: string[], maxCount: number): string[] {
-  const unique: string[] = [];
-  for (const term of terms) {
-    const trimmed = term.trim();
-    if (!trimmed || unique.includes(trimmed)) continue;
-    unique.push(trimmed);
-    if (unique.length >= maxCount) break;
-  }
-  return unique;
-}
-
-function topicExpansionSuggestedQuery(
-  question: string,
-  zhKeywords: string[],
-  enKeywords: string[],
-): string {
-  return uniqueKeywordTerms(
-    [question, ...zhKeywords.slice(0, 3), ...enKeywords.slice(0, 4)],
-    8,
-  ).join(" ");
-}
-
-function topicExpansionToCards(
-  result: TopicExpansionResponse,
-): TopicExpansionCard[] {
-  if (
-    result.sourceStrategy.includes("invalid-topic") ||
-    result.expandedTopic.startsWith("查無結果")
-  ) {
-    return [];
-  }
-  const zhKeywords = uniqueKeywordTerms(result.searchKeywords.zh, 5);
-  const enKeywords = uniqueKeywordTerms(result.searchKeywords.en, 5);
-
-  return result.researchQuestions.map((question, index) => ({
-    title: question,
-    angle: result.sourceStrategy[index] ?? `研究問題 ${index + 1}`,
-    reason: result.expandedTopic,
-    researchValue: result.expandedTopic,
-    dataDirections: result.sourceStrategy.slice(0, 2),
-    chineseKeywords: zhKeywords,
-    englishKeywords: enKeywords,
-    suggestedQuery:
-      topicExpansionSuggestedQuery(question, zhKeywords, enKeywords) ||
-      result.expandedTopic,
-    searchBoundary:
-      result.exclusions.length > 0
-        ? `排除詞：${result.exclusions.slice(0, 3).join("、")}`
-        : "套用後會直接進入來源搜尋，並自動帶入中英文 query plan。",
-    excludedTerms: result.exclusions.slice(0, 4),
-  }));
-}
-
 function buildResearchDirectionCards(
   topic: string,
   detectedCategory: TopicCategory | null,
@@ -482,19 +489,11 @@ function buildResearchDirectionCards(
 ): TopicExpansionCard[] {
   void topic;
   void detectedCategory;
-  const cards = apiResult?.status === "success" ? topicExpansionToCards(apiResult) : [];
+  const cards =
+    apiResult?.status === "success" ? topicExpansionToTitleCards(apiResult) : [];
   return cards.slice(0, 4).map((card) => ({
     ...card,
-    angle: card.angle || "研究方向",
-    reason: card.reason.length > 90 ? `${card.reason.slice(0, 89)}…` : card.reason,
-    researchValue:
-      card.researchValue && card.researchValue.length > 90
-        ? `${card.researchValue.slice(0, 89)}…`
-        : card.researchValue,
-    searchBoundary:
-      card.searchBoundary && card.searchBoundary.length > 48
-        ? `${card.searchBoundary.slice(0, 47)}…`
-        : card.searchBoundary,
+    angle: card.angle || "題目",
   }));
 }
 
@@ -525,10 +524,16 @@ function logTopicExpansionDiagnostics(
   if (!diagnostics) return;
   console.info("[ResearchForge][topic-expansion]", {
     topic,
+    inputKind: diagnostics.inputKind,
+    topicDomain: diagnostics.topicDomain,
+    secondaryDomains: diagnostics.secondaryDomains,
+    generationMode: diagnostics.generationMode,
     llm_status: diagnostics.llm_status,
     provider: diagnostics.provider,
     model: diagnostics.model,
+    modelUsed: diagnostics.modelUsed,
     temperature: diagnostics.temperature,
+    llmLatencyMs: diagnostics.llmLatencyMs,
     cacheHit: diagnostics.cacheHit,
     fallback_used: diagnostics.fallback_used ?? diagnostics.fallbackUsed,
     fallbackReason: diagnostics.fallbackReason,
@@ -536,6 +541,8 @@ function logTopicExpansionDiagnostics(
     rawResponseHash: diagnostics.rawResponseHash,
     generatedAt: diagnostics.generatedAt,
     provider_status: diagnostics.provider_status,
+    candidateCount: diagnostics.candidateCount,
+    keywordExpansion: diagnostics.keywordExpansion,
     canonicalEnglishTopic: diagnostics.canonicalEnglishTopic,
     domain: diagnostics.domain,
     coreConcepts: diagnostics.coreConcepts,
@@ -2192,7 +2199,7 @@ function SearchStepPanel({
   refinedTopic,
   reportType,
   audience,
-  status,
+  uiState,
   message,
   sourceCount,
   isSearching,
@@ -2205,7 +2212,7 @@ function SearchStepPanel({
   refinedTopic: string;
   reportType: string;
   audience: string;
-  status: "idle" | "loading" | "done" | "empty" | "error";
+  uiState: SourceSearchUiState;
   message: string;
   sourceCount: number;
   isSearching: boolean;
@@ -2259,7 +2266,7 @@ function SearchStepPanel({
         </div>
       </div>
 
-      {status === "loading" ? (
+      {uiState === "loading" ? (
         <div
           className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-12 text-center shadow-sm"
           data-testid="sources-loading"
@@ -2281,7 +2288,7 @@ function SearchStepPanel({
         </div>
       ) : (
         <div className="rounded-lg border border-border bg-card p-4 text-center shadow-sm">
-          {status === "done" && sourceCount > 0 ? (
+          {uiState === "success" && sourceCount > 0 ? (
             <>
               <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-green-100 text-green-700">
                 <CheckCircle2 className="h-8 w-8" />
@@ -2293,7 +2300,7 @@ function SearchStepPanel({
                 {message || "已整理來源，接下來會進入管理來源工作區。"}
               </p>
             </>
-          ) : status === "empty" ? (
+          ) : uiState === "empty" ? (
             <>
               <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
                 <Search className="h-8 w-8" />
@@ -2306,7 +2313,7 @@ function SearchStepPanel({
                   "目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。"}
               </p>
             </>
-          ) : status === "error" ? (
+          ) : uiState === "failed" ? (
             <>
               <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-destructive/10 text-destructive">
                 <XCircle className="h-8 w-8" />
@@ -2357,7 +2364,7 @@ function SearchStepPanel({
               data-testid="button-search-sources"
             >
               <Search className="mr-2 h-4 w-4" />
-              {status === "error" || status === "empty"
+              {uiState === "failed" || uiState === "empty"
                 ? "重新搜尋"
                 : "搜尋來源"}
             </Button>
@@ -2662,15 +2669,19 @@ function TopicStepPanel({
   topicExpansionDiagnostics,
   topicExpansionMessage,
   topicExpansionStatus,
+  topicDiagnosticsOpen,
   advancedOpen,
   detectedCategory,
   needsClarification,
   autoSearchEnabled,
+  selectedTitleSearchSeed,
   workspaceResume,
   researchDepthLabel,
+  canContinueToSearch,
   onInputChange,
   onExpandTopic,
   onApplyExpansion,
+  onTopicDiagnosticsOpenChange,
   onAdvancedOpenChange,
   onNext,
   onClearWorkspace,
@@ -2680,22 +2691,25 @@ function TopicStepPanel({
   topicExpansionDiagnostics: TopicExpansionDiagnostics | null;
   topicExpansionMessage: string | null;
   topicExpansionStatus: "idle" | "loading" | "done" | "timeout-fallback" | "error";
+  topicDiagnosticsOpen: boolean;
   advancedOpen: boolean;
   detectedCategory: TopicCategory | null;
   needsClarification: boolean;
   autoSearchEnabled: boolean;
+  selectedTitleSearchSeed: SelectedTitleSearchSeed | null;
   workspaceResume: WorkspaceResumeState | null;
   researchDepthLabel: string;
+  canContinueToSearch: boolean;
   onInputChange: (key: ReportInputStringKey, value: string) => void;
   onExpandTopic: () => void;
-  onApplyExpansion: (title: string) => void;
+  onApplyExpansion: (card: TopicExpansionCard) => void;
+  onTopicDiagnosticsOpenChange: (open: boolean) => void;
   onAdvancedOpenChange: (open: boolean) => void;
   onNext: () => void;
   onClearWorkspace: () => void;
 }) {
   const AUTO = "自動偵測";
   const hasTopic = Boolean(input.topic.trim());
-  const canContinueToSearch = hasTopic;
   const isExpandingTopic = topicExpansionStatus === "loading";
   const expansionTimedOut =
     expansions.length === 0 &&
@@ -2718,7 +2732,7 @@ function TopicStepPanel({
                 主題 {hasTopic ? "已設定" : "未設定"}
               </Badge>
               <Badge variant="outline">
-                {expansions.length} 個研究方向
+                {expansions.length} 個標題候選
               </Badge>
             </div>
           </div>
@@ -2752,7 +2766,7 @@ function TopicStepPanel({
               ) : (
                 <Sparkles className="mr-2 h-4 w-4" />
               )}
-              {isExpandingTopic ? "正在擴寫研究方向" : "擴寫主題"}
+              {isExpandingTopic ? "正在優化報告題目" : "優化題目"}
             </Button>
             {isExpandingTopic && (
               <div
@@ -2760,7 +2774,15 @@ function TopicStepPanel({
                 data-testid="topic-expansion-loading"
               >
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                <span>正在分析主題，正在擴寫研究方向。</span>
+                <span>正在產生標題靈感，稍後就能挑選報告題目。</span>
+              </div>
+            )}
+            {!canContinueToSearch && hasTopic && topicExpansionStatus !== "loading" && (
+              <div
+                className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs leading-5 text-destructive"
+                data-testid="topic-invalid-message"
+              >
+                目前無法把這段輸入判定為有效題目，請改用具體且有語意的主題後再優化或搜尋來源。
               </div>
             )}
             {expansionTimedOut && (
@@ -2768,7 +2790,7 @@ function TopicStepPanel({
                 className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800"
                 data-testid="topic-expansion-timeout"
               >
-                擴寫逾時，未生成 AI 結果。
+                題目優化逾時，尚未取得 AI 潤色結果。
               </div>
             )}
             {!isExpandingTopic &&
@@ -2781,8 +2803,8 @@ function TopicStepPanel({
                 >
                   {topicExpansionMessage ??
                     (topicExpansionStatus === "error"
-                      ? "擴寫失敗，請稍後再試。"
-                      : "查無結果：輸入內容不像有效研究主題，請改用具體關鍵詞。")}
+                      ? "題目優化失敗，請稍後再試。"
+                      : "無法辨識有效題目，請改用具體且有語意的主題。")}
                   {topicExpansionDiagnostics ? (
                     <span className="ml-2">
                       provider={topicExpansionDiagnostics.provider_status}
@@ -2794,6 +2816,9 @@ function TopicStepPanel({
 
             {expansions.length > 0 && (
               <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                <p className="text-xs leading-5 text-muted-foreground">
+                  選擇一個你喜歡的報告題目，ResearchForge 會在下一步幫你搜尋資料來源。
+                </p>
                 {expansions.map((card, i) => (
                   <article
                     key={`${card.title}-${card.angle}`}
@@ -2802,144 +2827,201 @@ function TopicStepPanel({
                   >
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
-                        <Badge variant="secondary" className="mb-2">
-                          {card.angle}
-                        </Badge>
+                        <div className="mb-2 flex flex-wrap gap-2">
+                          <Badge variant="secondary">
+                            {titleStyleBadgeLabel(card.style as TitleCandidateStyle | undefined) ||
+                              card.angle}
+                          </Badge>
+                          {card.broadSuggestion ? (
+                            <Badge variant="outline">縮小方向建議</Badge>
+                          ) : null}
+                        </div>
                         <h3 className="text-sm font-semibold leading-6 text-foreground">
                           {card.title}
                         </h3>
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                          {card.reason}
-                        </p>
                       </div>
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         className="min-h-[36px] shrink-0"
-                        onClick={() => onApplyExpansion(card.title)}
+                        onClick={() => onApplyExpansion(card)}
                       >
                         套用此題目
                       </Button>
                     </div>
-                    <div className="mt-3 grid gap-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2">
-                      {card.dataDirections?.length ? (
-                        <div>
-                          <span className="font-medium text-foreground">
-                            資料方向：
-                          </span>
-                          {card.dataDirections.slice(0, 2).join("、")}
-                        </div>
-                      ) : null}
-                      {card.suggestedQuery ? (
-                        <div>
-                          <span className="font-medium text-foreground">
-                            建議查詢：
-                          </span>
-                          {card.suggestedQuery}
-                        </div>
-                      ) : null}
-                      {card.englishKeywords?.length ? (
-                        <div>
-                          <span className="font-medium text-foreground">
-                            英文延伸：
-                          </span>
-                          {card.englishKeywords.slice(0, 4).join(" / ")}
-                        </div>
-                      ) : null}
-                      {card.excludedTerms?.length ? (
-                        <div className="sm:col-span-2">
-                          <span className="font-medium text-foreground">
-                            排除詞：
-                          </span>
-                          {card.excludedTerms.join("、")}
-                        </div>
-                      ) : null}
-                    </div>
                   </article>
                 ))}
                 {topicExpansionDiagnostics ? (
-                  <div className="rounded-md border border-dashed border-border bg-background/80 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                    <span className="font-medium text-foreground">擴寫 diagnostics：</span>{" "}
-                    {topicExpansionDiagnostics.provider}
-                    {topicExpansionDiagnostics.model
-                      ? ` / ${topicExpansionDiagnostics.model}`
-                      : ""}
-                    {typeof topicExpansionDiagnostics.temperature === "number"
-                      ? ` / temp ${topicExpansionDiagnostics.temperature}`
-                      : ""}
-                    {" · "}
-                    {topicExpansionDiagnostics.llm_status ??
-                      topicExpansionDiagnostics.provider_status}
-                    {" · cacheHit: "}
-                    {topicExpansionDiagnostics.cacheHit ? "true" : "false"}
-                    {(topicExpansionDiagnostics.fallback_used ??
-                      topicExpansionDiagnostics.fallbackUsed)
-                      ? ` · fallback: ${topicExpansionDiagnostics.fallbackReason ?? "yes"}`
-                      : ""}
-                    {topicExpansionDiagnostics.requestId ? (
-                      <>
-                        <br />
-                        <span className="font-medium text-foreground">requestId：</span>{" "}
-                        {topicExpansionDiagnostics.requestId}
-                      </>
-                    ) : null}
-                    {topicExpansionDiagnostics.generatedAt ? (
-                      <>
-                        <br />
-                        <span className="font-medium text-foreground">generatedAt：</span>{" "}
-                        {topicExpansionDiagnostics.generatedAt}
-                      </>
-                    ) : null}
-                    {topicExpansionDiagnostics.rawResponseHash ? (
-                      <>
-                        <br />
-                        <span className="font-medium text-foreground">rawResponseHash：</span>{" "}
-                        {topicExpansionDiagnostics.rawResponseHash}
-                      </>
-                    ) : null}
-                    {topicExpansionDiagnostics.validationIssues?.length ? (
-                      <>
-                        {" · "}
-                        {topicExpansionDiagnostics.validationIssues[0]}
-                      </>
-                    ) : null}
-                    {topicExpansionDiagnostics.canonicalEnglishTopic ? (
-                      <>
-                        <br />
-                        <span className="font-medium text-foreground">canonicalEnglishTopic：</span>{" "}
-                        {topicExpansionDiagnostics.canonicalEnglishTopic}
-                      </>
-                    ) : null}
-                    {topicExpansionDiagnostics.domain ? (
-                      <>
-                        <br />
-                        <span className="font-medium text-foreground">domain：</span>{" "}
-                        {topicExpansionDiagnostics.domain}
-                      </>
-                    ) : null}
-                    {topicExpansionDiagnostics.coreConcepts?.length ? (
-                      <>
-                        <br />
-                        <span className="font-medium text-foreground">coreConcepts：</span>{" "}
-                        {topicExpansionDiagnostics.coreConcepts.join(" / ")}
-                      </>
-                    ) : null}
-                    {topicExpansionDiagnostics.searchQueries?.en?.length ? (
-                      <>
-                        <br />
-                        <span className="font-medium text-foreground">englishQueries：</span>{" "}
-                        {topicExpansionDiagnostics.searchQueries.en.slice(0, 4).join(" / ")}
-                      </>
-                    ) : null}
-                    {topicExpansionDiagnostics.searchQueries?.zh?.length ? (
-                      <>
-                        <br />
-                        <span className="font-medium text-foreground">chineseQueries：</span>{" "}
-                        {topicExpansionDiagnostics.searchQueries.zh.slice(0, 4).join(" / ")}
-                      </>
-                    ) : null}
-                  </div>
+                  <Collapsible
+                    open={topicDiagnosticsOpen}
+                    onOpenChange={onTopicDiagnosticsOpenChange}
+                  >
+                    <div className="rounded-md border border-dashed border-border bg-background/80">
+                      <CollapsibleTrigger className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-medium text-foreground">
+                        <span>開發者除錯</span>
+                        {topicDiagnosticsOpen ? (
+                          <ChevronUp className="h-4 w-4" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4" />
+                        )}
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="border-t border-border px-3 py-2 text-xs leading-5 text-muted-foreground">
+                        <div>
+                          {topicExpansionDiagnostics.provider}
+                          {topicExpansionDiagnostics.model
+                            ? ` / ${topicExpansionDiagnostics.model}`
+                            : ""}
+                          {typeof topicExpansionDiagnostics.temperature === "number"
+                            ? ` / temp ${topicExpansionDiagnostics.temperature}`
+                            : ""}
+                          {" · "}
+                          {topicExpansionDiagnostics.llm_status ??
+                            topicExpansionDiagnostics.provider_status}
+                          {" · cacheHit: "}
+                          {topicExpansionDiagnostics.cacheHit ? "true" : "false"}
+                          {(topicExpansionDiagnostics.fallback_used ??
+                            topicExpansionDiagnostics.fallbackUsed)
+                            ? ` · fallback: ${topicExpansionDiagnostics.fallbackReason ?? "yes"}`
+                            : ""}
+                        </div>
+                        {topicExpansionDiagnostics.generationMode ? (
+                          <div>
+                            <span className="font-medium text-foreground">generationMode：</span>{" "}
+                            {topicExpansionDiagnostics.generationMode}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.inputKind ? (
+                          <div>
+                            <span className="font-medium text-foreground">inputKind：</span>{" "}
+                            {topicExpansionDiagnostics.inputKind}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.topicDomain ? (
+                          <div>
+                            <span className="font-medium text-foreground">topicDomain：</span>{" "}
+                            {topicExpansionDiagnostics.topicDomain}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.entityType ? (
+                          <div>
+                            <span className="font-medium text-foreground">entityType：</span>{" "}
+                            {topicExpansionDiagnostics.entityType}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.secondaryDomains?.length ? (
+                          <div>
+                            <span className="font-medium text-foreground">secondaryDomains：</span>{" "}
+                            {topicExpansionDiagnostics.secondaryDomains.join(" / ")}
+                          </div>
+                        ) : null}
+                        {typeof topicExpansionDiagnostics.llmLatencyMs === "number" ? (
+                          <div>
+                            <span className="font-medium text-foreground">llmLatencyMs：</span>{" "}
+                            {topicExpansionDiagnostics.llmLatencyMs}
+                          </div>
+                        ) : null}
+                        {typeof topicExpansionDiagnostics.candidateCount === "number" ? (
+                          <div>
+                            <span className="font-medium text-foreground">candidateCount：</span>{" "}
+                            {topicExpansionDiagnostics.candidateCount}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.selectedLensIds?.length ? (
+                          <div>
+                            <span className="font-medium text-foreground">selectedLensIds：</span>{" "}
+                            {topicExpansionDiagnostics.selectedLensIds.join(" / ")}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.rejectedLensIds?.length ? (
+                          <div>
+                            <span className="font-medium text-foreground">rejectedLensIds：</span>{" "}
+                            {topicExpansionDiagnostics.rejectedLensIds.join(" / ")}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.lensRejectReasons &&
+                        Object.keys(topicExpansionDiagnostics.lensRejectReasons).length ? (
+                          <div>
+                            <span className="font-medium text-foreground">lensRejectReasons：</span>{" "}
+                            {Object.entries(topicExpansionDiagnostics.lensRejectReasons)
+                              .map(([lensId, reason]) => `${lensId}=${reason}`)
+                              .join(" ; ")}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.requestId ? (
+                          <div>
+                            <span className="font-medium text-foreground">requestId：</span>{" "}
+                            {topicExpansionDiagnostics.requestId}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.generatedAt ? (
+                          <div>
+                            <span className="font-medium text-foreground">generatedAt：</span>{" "}
+                            {topicExpansionDiagnostics.generatedAt}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.rawResponseHash ? (
+                          <div>
+                            <span className="font-medium text-foreground">rawResponseHash：</span>{" "}
+                            {topicExpansionDiagnostics.rawResponseHash}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.validationIssues?.length ? (
+                          <div>{topicExpansionDiagnostics.validationIssues[0]}</div>
+                        ) : null}
+                        {topicExpansionDiagnostics.canonicalEnglishTopic ? (
+                          <div>
+                            <span className="font-medium text-foreground">
+                              canonicalEnglishTopic：
+                            </span>{" "}
+                            {topicExpansionDiagnostics.canonicalEnglishTopic}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.domain ? (
+                          <div>
+                            <span className="font-medium text-foreground">domain：</span>{" "}
+                            {topicExpansionDiagnostics.domain}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.coreConcepts?.length ? (
+                          <div>
+                            <span className="font-medium text-foreground">coreConcepts：</span>{" "}
+                            {topicExpansionDiagnostics.coreConcepts.join(" / ")}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.searchQueries?.en?.length ? (
+                          <div>
+                            <span className="font-medium text-foreground">englishQueries：</span>{" "}
+                            {topicExpansionDiagnostics.searchQueries.en.slice(0, 4).join(" / ")}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.searchQueries?.zh?.length ? (
+                          <div>
+                            <span className="font-medium text-foreground">chineseQueries：</span>{" "}
+                            {topicExpansionDiagnostics.searchQueries.zh.slice(0, 4).join(" / ")}
+                          </div>
+                        ) : null}
+                        {topicExpansionDiagnostics.keywordExpansion ? (
+                          <div>
+                            <span className="font-medium text-foreground">keywordExpansion：</span>{" "}
+                            {[
+                              ...topicExpansionDiagnostics.keywordExpansion.coreTermsZh.slice(0, 2),
+                              ...topicExpansionDiagnostics.keywordExpansion.coreTermsEn.slice(0, 2),
+                              ...topicExpansionDiagnostics.keywordExpansion.relatedTermsZh.slice(0, 2),
+                            ].join(" / ")}
+                          </div>
+                        ) : null}
+                        {selectedTitleSearchSeed?.hiddenResearchPlan ? (
+                          <div>
+                            <span className="font-medium text-foreground">hiddenResearchPlan：</span>{" "}
+                            {selectedTitleSearchSeed.hiddenResearchPlan.querySeedZh
+                              .slice(0, 3)
+                              .join(" / ")}
+                          </div>
+                        ) : null}
+                      </CollapsibleContent>
+                    </div>
+                  </Collapsible>
                 ) : null}
               </div>
             )}
@@ -3688,6 +3770,8 @@ export function Generator() {
     "idle" | "loading" | "done" | "error"
   >("idle");
   const [expansions, setExpansions] = useState<TopicExpansionCard[]>([]);
+  const [selectedTitleSearchSeed, setSelectedTitleSearchSeed] =
+    useState<SelectedTitleSearchSeed | null>(null);
   const [topicExpansionDiagnostics, setTopicExpansionDiagnostics] =
     useState<TopicExpansionDiagnostics | null>(null);
   const [topicExpansionMessage, setTopicExpansionMessage] = useState<string | null>(null);
@@ -3706,6 +3790,7 @@ export function Generator() {
     useState<KeywordSearchDebugState | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [developerDebugOpen, setDeveloperDebugOpen] = useState(false);
+  const [topicDiagnosticsOpen, setTopicDiagnosticsOpen] = useState(false);
   const [workspaceResume, setWorkspaceResume] =
     useState<WorkspaceResumeState | null>(null);
   const [presentation, setPresentation] = useState<ReportPresentationSettings>(
@@ -3747,6 +3832,7 @@ export function Generator() {
       if (key === "topic") {
         setSearchTopic("");
         setExpansions([]);
+        setSelectedTitleSearchSeed(null);
         setTopicExpansionDiagnostics(null);
         setTopicExpansionMessage(null);
         setTopicExpansionStatus("idle");
@@ -3820,6 +3906,9 @@ export function Generator() {
     () => (searchTopicValue ? understandTopic(searchTopicValue) : null),
     [searchTopicValue],
   );
+  const hasInvalidTopic = Boolean(
+    originalTopicValue && topicUnderstanding?.topicKind === "unknown_or_noise",
+  );
   const detectedCategory: TopicCategory | null = originalTopicValue
     ? detectTopicCategory(originalTopicValue, input.reportType, derivedPurpose)
     : null;
@@ -3891,15 +3980,30 @@ export function Generator() {
     : null;
   const sourceReviewAvailable =
     sourceSearchStatus !== "idle" || currentWorkflowSources.length > 0;
+  const shouldForceSearchView =
+    activeStep === "topic" &&
+    Boolean(searchTopicValue) &&
+    (isSearchingSources || sourceSearchStatus !== "idle");
+  const visibleStep: GeneratorWorkflowStep = shouldForceSearchView
+    ? "search"
+    : activeStep;
+  const sourceSearchUiState = deriveSourceSearchUiState({
+    activeStep: visibleStep,
+    isSearchingSources,
+    sourceCount: currentWorkflowSources.length,
+    sourceSearchStatus,
+    sourceSearchMessage,
+    backendMessage: searchRequestDebug?.backendMessage ?? "",
+  });
   const stepCompleted: Record<GeneratorWorkflowStep, boolean> = {
-    topic: hasTopic && activeStep !== "topic",
-    search: sourceReviewAvailable && activeStep !== "search",
-    manage: currentWorkflowSources.length > 0 && activeStep !== "manage",
+    topic: hasTopic && !hasInvalidTopic && visibleStep !== "topic",
+    search: sourceReviewAvailable && visibleStep !== "search",
+    manage: currentWorkflowSources.length > 0 && visibleStep !== "manage",
     generate: false,
   };
   const canEnterStep = (step: GeneratorWorkflowStep) => {
     if (step === "topic") return true;
-    if (!hasTopic) return false;
+    if (!hasTopic || hasInvalidTopic) return false;
     if (step === "search") return true;
     if (step === "manage")
       return currentWorkflowSources.length > 0 && !hasWorkspaceTopicMismatch;
@@ -4047,6 +4151,22 @@ export function Generator() {
     const activeTopic =
       (typeof refinedTopicOverride === "string" ? refinedTopicOverride.trim() : "") ||
       activeResearchTopic;
+    const selectedResearchPayload = selectedTitleSearchSeed
+      ? buildSelectedTitleSearchPayload({
+          seed: selectedTitleSearchSeed,
+          diagnostics: topicExpansionDiagnostics,
+        })
+      : null;
+    const payloadDisplayTitle = selectedResearchPayload?.displayTitle ?? activeTopic;
+    const payloadCanonicalTopicZh =
+      selectedResearchPayload?.canonicalTopicZh?.trim() || activeTopic;
+    const payloadCanonicalTopicEn =
+      selectedResearchPayload?.canonicalTopicEn?.trim() || "";
+    const payloadQuerySeedZh = selectedResearchPayload?.querySeedZh ?? [];
+    const payloadQuerySeedEn = selectedResearchPayload?.querySeedEn ?? [];
+    const searchTopicUnderstanding = activeTopic
+      ? understandTopic(activeTopic)
+      : null;
     if (!originalTopic) {
       setSourceSearchStatus("error");
       setSourceSearchMessage("請先輸入研究主題。");
@@ -4055,6 +4175,33 @@ export function Generator() {
         title: "請先輸入主題",
         description:
           "輸入研究主題後，才能搜尋 OpenAlex、Crossref 與 Semantic Scholar 來源。",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (searchTopicUnderstanding?.topicKind === "unknown_or_noise") {
+      setSourceSearchStatus("error");
+      setSourceSearchMessage("查無有效主題，請改用具體且有語意的研究主題後再搜尋來源。");
+      setSearchRequestDebug({
+        statusCode: null,
+        backendMessage: "invalid topic blocked in generator",
+        payloadOriginalTopic: originalTopic,
+        payloadActiveResearchTopic: activeTopic,
+        payloadDisplayTitle,
+        payloadCanonicalTopicZh,
+        payloadCanonicalTopicEn,
+        payloadQuerySeedZh,
+        payloadQuerySeedEn,
+      });
+      setKeywordSearchDebug(null);
+      setSources([]);
+      setSourceWorkspaceFingerprint(null);
+      setSourceWorkflowId(null);
+      setSourceQueryPlanHash(null);
+      setActiveStep("topic");
+      toast({
+        title: "主題無效",
+        description: "這個輸入不像有效研究主題，因此不會送出來源搜尋。",
         variant: "destructive",
       });
       return;
@@ -4068,6 +4215,11 @@ export function Generator() {
       backendMessage: "",
       payloadOriginalTopic: originalTopic,
       payloadActiveResearchTopic: activeTopic,
+      payloadDisplayTitle,
+      payloadCanonicalTopicZh,
+      payloadCanonicalTopicEn,
+      payloadQuerySeedZh,
+      payloadQuerySeedEn,
     });
     setKeywordSearchDebug(null);
     setSources([]);
@@ -4080,18 +4232,56 @@ export function Generator() {
     }
 
     try {
-      const payloadTopic = activeTopic;
+      if (
+        selectedTitleSearchSeed &&
+        payloadQuerySeedZh.length === 0 &&
+        payloadQuerySeedEn.length === 0
+      ) {
+        setSourceSearchStatus("error");
+        setSourceSearchMessage("研究查詢種子尚未生成，請重新生成研究方向。");
+        toast({
+          title: "缺少研究查詢種子",
+          description: "請重新生成研究方向後，再開始搜尋來源。",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const payloadTopic = payloadCanonicalTopicZh || activeTopic;
       const reportTopicForWorkflow = activeTopic;
+      const workflowIdForSearch = sourceWorkflowId ?? createClientWorkflowId();
+      console.info("[ResearchForge][search-payload]", {
+        displayTitle: payloadDisplayTitle,
+        canonicalTopicZh: payloadCanonicalTopicZh,
+        canonicalTopicEn: payloadCanonicalTopicEn,
+        querySeedZhCount: payloadQuerySeedZh.length,
+        querySeedEnCount: payloadQuerySeedEn.length,
+        subtopicsCount: selectedResearchPayload?.subtopics.length ?? 0,
+        workflowId: workflowIdForSearch,
+      });
       const result = await searchSources({
         originalTopic,
         refinedTopic:
           activeTopic && activeTopic !== originalTopic ? activeTopic : undefined,
         topic: payloadTopic,
+        displayTitle: payloadDisplayTitle,
+        canonicalTopicZh: payloadCanonicalTopicZh,
+        canonicalTopicEn: payloadCanonicalTopicEn || undefined,
+        querySeedZh: payloadQuerySeedZh,
+        querySeedEn: payloadQuerySeedEn,
+        subtopics: selectedResearchPayload?.subtopics,
+        mustIncludeTerms: selectedResearchPayload?.mustIncludeTerms,
+        excludeTerms: selectedResearchPayload?.excludeTerms,
+        domainHints: selectedResearchPayload?.domainHints,
+        selectedResearchPlanId: selectedResearchPayload?.selectedResearchPlanId,
+        workflowId: workflowIdForSearch,
         reportType: input.reportType,
         audience: input.targetAudience || input.academicLevel,
         sourceMode: input.sourceRequirement,
         language: input.outputLanguage,
       });
+      const responseHasSources =
+        Array.isArray(result.sources) && result.sources.length > 0;
       const workflowLock: SourceWorkflowLock = {
         workflowId:
           result.workflowId ??
@@ -4135,9 +4325,9 @@ export function Generator() {
       setSourceWorkspaceFingerprint(workflowLock.topicHash);
       setSourceQueryPlanHash(workflowLock.queryPlanHash);
       setKeywordSearchDebug(keywordSearchDebugFromResult(result));
+      const partialProviderFailure = hasProviderFailures(result);
+      const diagnosticStatus = sourceSearchDiagnosticStatus(result);
       if (workflowSources.length) {
-        const partialProviderFailure = hasProviderFailures(result);
-        const diagnosticStatus = sourceSearchDiagnosticStatus(result);
         const primaryCount = workflowSources.filter(
           (source) =>
             sourceDisplayGate(source) === "primary" &&
@@ -4176,13 +4366,33 @@ export function Generator() {
         });
         scheduleManageStepAfterSearch(workflowSources.length);
       } else {
-        setSourceSearchStatus("empty");
-        const emptyWarning =
-          result.warnings?.find((warning) => warning.trim().length > 0) ??
-          "已產生搜尋關鍵詞，但目前沒有找到符合此主題的來源，請換更具體的關鍵詞再試一次。";
-        setSourceSearchMessage(
-          emptyWarning,
+        const noSourceMessage =
+          diagnosticStatus === "timeout"
+            ? "來源搜尋服務逾時，尚未取得有效來源。請稍後重試或更換更具體的主題。"
+            : diagnosticStatus === "failed"
+              ? "來源搜尋暫時失敗，尚未取得有效來源。請稍後重試或更換更具體的主題。"
+              : partialProviderFailure && !responseHasSources
+                ? "部分來源提供者暫時無法使用，且本次尚未取得有效來源。請稍後重試或更換更具體的主題。"
+                : responseHasSources
+                  ? "已收到來源回應，但目前沒有可用來源通過篩選；請調整主題或重新搜尋。"
+                  : "目前沒有取得有效來源，請換更具體的關鍵詞再試一次。";
+        setSourceSearchStatus(
+          diagnosticStatus === "timeout" || diagnosticStatus === "failed"
+            ? "error"
+            : "empty",
         );
+        setSourceSearchMessage(noSourceMessage);
+        toast({
+          title:
+            diagnosticStatus === "timeout" || diagnosticStatus === "failed"
+              ? "來源搜尋暫時失敗"
+              : "尚未找到可用來源",
+          description: noSourceMessage,
+          variant:
+            diagnosticStatus === "timeout" || diagnosticStatus === "failed"
+              ? "destructive"
+              : "default",
+        });
       }
     } catch (error) {
       const apiError = error as { status?: number; data?: unknown };
@@ -4198,6 +4408,11 @@ export function Generator() {
         backendMessage,
         payloadOriginalTopic: originalTopic,
         payloadActiveResearchTopic: activeTopic,
+        payloadDisplayTitle,
+        payloadCanonicalTopicZh,
+        payloadCanonicalTopicEn,
+        payloadQuerySeedZh,
+        payloadQuerySeedEn,
       });
       setSourceSearchStatus("error");
       setSourceSearchMessage(sourceErrorMessage(error));
@@ -4399,22 +4614,37 @@ export function Generator() {
   // ── Expand topic ──────────────────────────────────────────────────────────────
 
   const handleExpand = () => {
-    if (!input.topic.trim()) {
+    const topic = input.topic.trim();
+    if (!topic) {
       toast({
         title: "請先輸入主題",
-        description: "輸入一個簡短的主題後，系統會幫你擴寫成完整的報告題目。",
+        description: "輸入一個簡短的主題後，系統會幫你優化成更適合報告使用的題目。",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (understandTopic(topic).topicKind === "unknown_or_noise") {
+      setTopicExpansionDiagnostics(null);
+      setTopicExpansionMessage("查無結果：輸入內容不像有效研究主題，請改用具體關鍵詞。");
+      setTopicExpansionStatus("error");
+      setExpansions([]);
+      toast({
+        title: "主題無效",
+        description: "請改用具體且有語意的主題後再優化題目。",
         variant: "destructive",
       });
       return;
     }
     setTopicExpansionStatus("loading");
+    setTopicDiagnosticsOpen(false);
     setTopicExpansionDiagnostics(null);
     setTopicExpansionMessage(null);
     setExpansions([]);
+    setSelectedTitleSearchSeed(null);
     void (async () => {
       try {
-        const apiResult = await fetchTopicExpansion(input.topic.trim());
-        logTopicExpansionDiagnostics(input.topic.trim(), apiResult.diagnostics);
+        const apiResult = await fetchTopicExpansion(topic);
+        logTopicExpansionDiagnostics(topic, apiResult.diagnostics);
         setTopicExpansionDiagnostics(apiResult.diagnostics ?? null);
         setTopicExpansionMessage(apiResult.message ?? null);
         setTopicExpansionStatus(
@@ -4426,7 +4656,7 @@ export function Generator() {
         );
         setExpansions(
           buildResearchDirectionCards(
-            input.topic.trim(),
+            topic,
             detectedCategory,
             apiResult,
           ),
@@ -4440,16 +4670,32 @@ export function Generator() {
     })();
   };
 
-  const applyExpansion = (title: string) => {
-    const refinedTopic = title.trim();
+  const applyExpansion = (card: TopicExpansionCard) => {
+    const refinedTopic = card.title.trim();
+    if (!refinedTopic || understandTopic(refinedTopic).topicKind === "unknown_or_noise") {
+      setTopicExpansionMessage("查無有效主題，請改用具體且可研究的題目。");
+      setTopicExpansionStatus("error");
+      setExpansions([]);
+      toast({
+        title: "無法套用此題目",
+        description: "這個標題目前無法形成有效搜尋主題，請重新優化題目或直接改寫主題。",
+        variant: "destructive",
+      });
+      return;
+    }
+    setSelectedTitleSearchSeed(
+      createSelectedTitleSearchSeed(
+        input.topic,
+        refinedTopic,
+        card.hiddenResearchPlan,
+      ),
+    );
     setSearchTopic(refinedTopic);
-    setExpansions([]);
     setActiveStep("search");
     toast({
-      title: "已套用研究題目",
-      description: "後續來源搜尋、摘要與報告生成會以這個研究方向作為主題。",
+      title: "已套用報告題目",
+      description: "下一步可開始搜尋資料來源，系統會保留原始主題與美化後標題。",
     });
-    void handleSearchSources(refinedTopic);
   };
 
   const ensureClarificationCards = () => {
@@ -4492,9 +4738,11 @@ export function Generator() {
     activeTopicFingerprintRef.current = null;
     suppressTopicResetRef.current = false;
     setExpansions([]);
+    setSelectedTitleSearchSeed(null);
     setTopicExpansionDiagnostics(null);
     setTopicExpansionMessage(null);
     setTopicExpansionStatus("idle");
+    setTopicDiagnosticsOpen(false);
     setSources([]);
     setSourceWorkspaceFingerprint(null);
     setSourceWorkflowId(null);
@@ -4514,7 +4762,8 @@ export function Generator() {
     setActiveStep("topic");
   };
 
-  const shortTopicHint = input.topic.trim() && isShortTopic(input.topic);
+  const shortTopicHint =
+    input.topic.trim() && !hasInvalidTopic && isShortTopic(input.topic);
   const autoSearchEnabled =
     input.sourceRequirement === "需要，並生成參考文獻格式";
   const generateButtonLabel = !hasTopic
@@ -4535,6 +4784,15 @@ export function Generator() {
       });
       return;
     }
+    if (hasInvalidTopic) {
+      setActiveStep("topic");
+      toast({
+        title: "主題無效",
+        description: "請先改成可辨識的研究主題後，再進入來源搜尋。",
+        variant: "destructive",
+      });
+      return;
+    }
     goToStep("search");
   };
   const goToManageStep = () => {
@@ -4546,7 +4804,7 @@ export function Generator() {
   };
   const goToGenerateStep = () => goToStep("generate");
   const currentStepLabel =
-    WORKFLOW_STEPS.find((step) => step.value === activeStep)?.label ??
+    WORKFLOW_STEPS.find((step) => step.value === visibleStep)?.label ??
     "設定主題";
 
   return (
@@ -4578,7 +4836,7 @@ export function Generator() {
             </Button>
           </div>
           <WorkflowStepper
-            currentStep={activeStep}
+            currentStep={visibleStep}
             completedSteps={stepCompleted}
             canEnterStep={canEnterStep}
             onStepClick={handleStepSelect}
@@ -4614,11 +4872,11 @@ export function Generator() {
             </div>
           )}
 
-          {shortTopicHint && activeStep === "topic" && !isStepTransitioning && (
+          {shortTopicHint && visibleStep === "topic" && !isStepTransitioning && (
             <div className="mx-auto flex max-w-3xl gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               <Lightbulb className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
-                短題也可以直接搜尋；若想先看研究切角，可使用「擴寫主題」或套用一張研究方向卡。
+                短題也可以直接搜尋；若想先把題目變得更吸引人，可先使用「優化題目」挑選一個喜歡的標題。
               </span>
             </div>
           )}
@@ -4629,42 +4887,46 @@ export function Generator() {
               description={transitionMessage.description}
               targetStep={transitionTargetStep}
             />
-          ) : activeStep === "topic" ? (
+          ) : visibleStep === "topic" ? (
             <TopicStepPanel
               input={input}
               expansions={expansions}
               topicExpansionDiagnostics={topicExpansionDiagnostics}
               topicExpansionMessage={topicExpansionMessage}
               topicExpansionStatus={topicExpansionStatus}
+              topicDiagnosticsOpen={topicDiagnosticsOpen}
               advancedOpen={advancedOpen}
               detectedCategory={detectedCategory}
               needsClarification={Boolean(topicUnderstanding?.needsClarification)}
               autoSearchEnabled={autoSearchEnabled}
+              selectedTitleSearchSeed={selectedTitleSearchSeed}
               workspaceResume={workspaceResume}
               researchDepthLabel={`${selectedDepthOption.label} / 建議 ${recommendedAcceptedSourceCount} 筆`}
+              canContinueToSearch={hasTopic && !hasInvalidTopic}
               onInputChange={updateInput}
               onExpandTopic={handleExpand}
               onApplyExpansion={applyExpansion}
+              onTopicDiagnosticsOpenChange={setTopicDiagnosticsOpen}
               onAdvancedOpenChange={setAdvancedOpen}
               onNext={goToSearchStep}
               onClearWorkspace={handleClear}
             />
-          ) : activeStep === "search" ? (
+          ) : visibleStep === "search" ? (
             <SearchStepPanel
               topic={activeResearchTopic}
               refinedTopic={hasSelectedExpansion ? originalTopicValue : ""}
               reportType={input.reportType}
               audience={input.targetAudience || input.academicLevel}
-              status={sourceSearchStatus}
+              uiState={sourceSearchUiState}
               message={sourceSearchMessage}
               sourceCount={currentWorkflowSources.length}
               isSearching={isSearchingSources}
-              hasTopic={hasTopic}
+              hasTopic={hasTopic && !hasInvalidTopic}
               sourceSearchDebug={searchRequestDebug}
               onSearch={handleSearchSources}
               onBack={() => goToStep("topic")}
             />
-          ) : activeStep === "manage" ? (
+          ) : visibleStep === "manage" ? (
           <ManageStepPanel
             sources={currentWorkflowSources}
             hasWorkspaceTopicMismatch={hasWorkspaceTopicMismatch}
