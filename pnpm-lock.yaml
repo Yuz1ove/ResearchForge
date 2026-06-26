@@ -153,6 +153,9 @@ importers:
 
   .:
     devDependencies:
+      convex:
+        specifier: latest
+        version: 1.41.0(react@19.1.0)
       prettier:
         specifier: ^3.8.3
         version: 3.8.3
@@ -526,6 +529,9 @@ importers:
       cmdk:
         specifier: ^1.1.1
         version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+      convex:
+        specifier: latest
+        version: 1.41.0(react@19.1.0)
       date-fns:
         specifier: ^3.6.0
         version: 3.6.0
@@ -1860,6 +1866,25 @@ packages:
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
 
+  convex@1.41.0:
+    resolution: {integrity: sha512-euxVf6yfpB7/VGKOobkLgjpbJidsUgW+b0ezonEyCUPqlpHFwR4/yIiI1hjjErzraiw91GxrtxpXQClMLNqU+w==}
+    engines: {node: '>=18.0.0', npm: '>=7.0.0'}
+    hasBin: true
+    peerDependencies:
+      '@auth0/auth0-react': ^2.0.1
+      '@clerk/clerk-react': ^4.12.8 || ^5.0.0
+      '@clerk/react': ^6.4.3
+      react: ^18.0.0 || ^19.0.0-0 || ^19.0.0
+    peerDependenciesMeta:
+      '@auth0/auth0-react':
+        optional: true
+      '@clerk/clerk-react':
+        optional: true
+      '@clerk/react':
+        optional: true
+      react:
+        optional: true
+
   cookie-parser@1.4.7:
     resolution: {integrity: sha512-nGUvgXnotP3BsjiLX2ypbQnWoGUPIIfHQNZkkC668ntrzGWEZVW70HDEB1qnNGMicPje6EttlIgzo51YSwNQGw==}
     engines: {node: '>= 0.8.0'}
@@ -3052,6 +3077,7 @@ packages:
   tsconfck@3.1.6:
     resolution: {integrity: sha512-ks6Vjr/jEw0P1gmOVwutM3B7fWxoWBL2KRDb1JfqGVawBmO5UsvmWOQFGHBPl5yxYz4eERr19E6L7NMv+Fej4w==}
     engines: {node: ^18 || >=20}
+    deprecated: unmaintained
     hasBin: true
     peerDependencies:
       typescript: ^5.0.0
@@ -3219,6 +3245,18 @@ packages:
 
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
+
+  ws@8.20.1:
+    resolution: {integrity: sha512-It4dO0K5v//JtTXuPkfEOaI3uUN87iYPnqo/ZzqCoG3g8uhA66QUMs/SrM0YK7/NAu+r4LMh/9dq2A7k+rHs+w==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
 
   xml-js@1.6.11:
     resolution: {integrity: sha512-7rVi2KMfwfWFl+GpPg6m80IVMWXLRjO+PxTq7V2CDhoGak0wzYzFgUY2m4XJ47OGdXd8eLE8EmwfAmdjw7lC1g==}
@@ -4623,6 +4661,17 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
+  convex@1.41.0(react@19.1.0):
+    dependencies:
+      esbuild: 0.27.3
+      prettier: 3.8.3
+      ws: 8.20.1
+    optionalDependencies:
+      react: 19.1.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
   cookie-parser@1.4.7:
     dependencies:
       cookie: 0.7.2
@@ -5836,6 +5885,8 @@ snapshots:
       use-sync-external-store: 1.6.0(react@19.1.0)
 
   wrappy@1.0.2: {}
+
+  ws@8.20.1: {}
 
   xml-js@1.6.11:
     dependencies:

@@ -1,0 +1,589 @@
+diff --git a/.gitignore b/.gitignore
+index 12bc7fa..8035a13 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -47,3 +47,5 @@ Thumbs.db
+ # Replit
+ .cache/
+ .local/
++
++.env.local
+diff --git a/artifacts/report-factory/src/components/layout/navbar.tsx b/artifacts/report-factory/src/components/layout/navbar.tsx
+index 6bc152e..5606281 100644
+--- a/artifacts/report-factory/src/components/layout/navbar.tsx
++++ b/artifacts/report-factory/src/components/layout/navbar.tsx
+@@ -1,8 +1,10 @@
+ import { Link, useLocation } from "wouter";
+-import { Menu, X, BarChart } from "lucide-react";
++import { Menu, X } from "lucide-react";
+ import { useState } from "react";
+ import { Button } from "@/components/ui/button";
+ 
++const BRAND_ORANGE = "#F26422";
++
+ export function Navbar() {
+   const [location] = useLocation();
+   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+@@ -15,23 +17,30 @@ export function Navbar() {
+   ];
+ 
+   return (
+-    <nav className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+-      <div className="container mx-auto px-4 h-16 flex items-center justify-between">
+-        <div className="flex items-center gap-2">
+-          <Link href="/" className="flex items-center gap-2" data-testid="link-logo">
+-            <div className="bg-primary text-primary-foreground p-1.5 rounded-md">
+-              <BarChart className="h-5 w-5" />
+-            </div>
+-            <span className="font-bold text-lg tracking-tight">ResearchForge</span>
+-          </Link>
+-        </div>
++    <nav className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
++      <div className="container mx-auto flex h-20 items-center justify-between px-4">
++        <Link
++          href="/"
++          className="flex items-center gap-3"
++          data-testid="link-logo"
++        >
++          <div
++            className="h-11 w-11 rounded-2xl shadow-sm"
++            style={{ backgroundColor: BRAND_ORANGE }}
++            aria-hidden="true"
++          />
++          <span className="text-[1.95rem] font-semibold tracking-[-0.04em] leading-none">
++            <span className="text-foreground">Research</span>
++            <span style={{ color: BRAND_ORANGE }}>Forge</span>
++          </span>
++        </Link>
+ 
+-        <div className="hidden md:flex items-center gap-6">
++        <div className="hidden min-[860px]:flex items-center gap-8">
+           {navLinks.map((link) => (
+             <Link
+               key={link.href}
+               href={link.href}
+-              className={`text-sm font-medium transition-colors hover:text-primary ${
++              className={`text-sm font-semibold transition-colors hover:text-foreground ${
+                 location === link.href ? "text-foreground" : "text-muted-foreground"
+               }`}
+               data-testid={`link-nav-${link.label}`}
+@@ -39,30 +48,40 @@ export function Navbar() {
+               {link.label}
+             </Link>
+           ))}
+-          <div className="flex items-center gap-4 ml-4 pl-4 border-l border-border">
++          <div className="ml-3 flex items-center border-l border-border pl-6">
+             <Link href="/generator" data-testid="link-nav-try-free">
+-              <Button>免費試用</Button>
++              <Button
++                className="min-h-[44px] px-6 text-sm font-semibold text-white"
++                style={{ backgroundColor: BRAND_ORANGE }}
++              >
++                免費試用
++              </Button>
+             </Link>
+           </div>
+         </div>
+ 
+         <button
+-          className="md:hidden p-2 text-foreground"
+-          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
++          className="min-[860px]:hidden p-2 text-foreground"
++          onClick={() => setIsMobileMenuOpen((open) => !open)}
+           data-testid="button-mobile-menu"
++          aria-label="開啟選單"
+         >
+-          {isMobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
++          {isMobileMenuOpen ? (
++            <X className="h-6 w-6" />
++          ) : (
++            <Menu className="h-6 w-6" />
++          )}
+         </button>
+       </div>
+ 
+       {isMobileMenuOpen && (
+-        <div className="md:hidden border-t border-border bg-background">
+-          <div className="container mx-auto px-4 py-4 flex flex-col gap-4">
++        <div className="min-[860px]:hidden border-t border-border bg-background">
++          <div className="container mx-auto flex flex-col gap-4 px-4 py-4">
+             {navLinks.map((link) => (
+               <Link
+                 key={link.href}
+                 href={link.href}
+-                className={`text-sm font-medium transition-colors hover:text-primary ${
++                className={`text-sm font-medium transition-colors hover:text-foreground ${
+                   location === link.href ? "text-foreground" : "text-muted-foreground"
+                 }`}
+                 onClick={() => setIsMobileMenuOpen(false)}
+@@ -71,8 +90,17 @@ export function Navbar() {
+                 {link.label}
+               </Link>
+             ))}
+-            <Link href="/generator" onClick={() => setIsMobileMenuOpen(false)} data-testid="link-mobile-nav-try-free">
+-              <Button className="w-full">免費試用</Button>
++            <Link
++              href="/generator"
++              onClick={() => setIsMobileMenuOpen(false)}
++              data-testid="link-mobile-nav-try-free"
++            >
++              <Button
++                className="w-full text-white"
++                style={{ backgroundColor: BRAND_ORANGE }}
++              >
++                免費試用
++              </Button>
+             </Link>
+           </div>
+         </div>
+diff --git a/artifacts/report-factory/src/pages/generator.tsx b/artifacts/report-factory/src/pages/generator.tsx
+index 7e8c9f2..2cfdecf 100644
+--- a/artifacts/report-factory/src/pages/generator.tsx
++++ b/artifacts/report-factory/src/pages/generator.tsx
+@@ -539,6 +539,105 @@ function SearchIntentDebugPanel({ debug }: { debug: KeywordSearchDebugState }) {
+ 
+ type SourceReviewTab = "all" | "accepted" | "pending" | "rejected";
+ 
++const GENERIC_REFINEMENT_TITLE_PATTERNS = [
++  /可以從哪些具體問題切入/,
++  /與日常生活或課程內容的關聯/,
++  /有哪些可比較的不同觀點/,
++  /可用哪些資料類型佐證/,
++  /的限制與下一步研究方向/,
++];
++
++function normalizeTopicText(value: string): string {
++  return value.replace(/[「」]/g, "").replace(/\s+/g, " ").trim();
++}
++
++function isClearlyInvalidTopic(topic: string): boolean {
++  const trimmed = topic.trim();
++  if (!trimmed) return false;
++  if (/^[^A-Za-z0-9一-鿿]+$/.test(trimmed)) return true;
++  if (
++    /^[A-Za-z0-9_-]{6,}$/.test(trimmed) &&
++    !/[aeiou]/i.test(trimmed) &&
++    !/[一-鿿]/.test(trimmed)
++  ) {
++    return true;
++  }
++  return false;
++}
++
++function buildSelectedSearchTopic(
++  baseTopic: string,
++  card: TopicExpansionCard,
++  category: TopicCategory | null,
++): string {
++  const normalizedBaseTopic = normalizeTopicText(baseTopic);
++  const normalizedTitle = normalizeTopicText(card.title);
++  const isGenericRefinement =
++    GENERIC_REFINEMENT_TITLE_PATTERNS.some((pattern) => pattern.test(normalizedTitle)) ||
++    /[？?]$/.test(normalizedTitle);
++
++  if (!isGenericRefinement && normalizedTitle) {
++    return normalizedTitle;
++  }
++
++  const angle = card.angle.trim();
++
++  const categoryAngleMap: Partial<
++    Record<TopicCategory, Partial<Record<string, string>>>
++  > = {
++    "生物／動物": {
++      "研究問題": `${normalizedBaseTopic}的生態特徵與環境影響`,
++      "生活連結": `${normalizedBaseTopic}與日常生活及海陸環境的關聯`,
++      比較: `${normalizedBaseTopic}的不同物種特徵與生存策略比較`,
++      "資料策略": `${normalizedBaseTopic}的研究證據來源與觀察資料分析`,
++      "研究限制": `${normalizedBaseTopic}的研究限制與後續保育方向`,
++    },
++    "食品／飲食文化": {
++      "研究問題": `${normalizedBaseTopic}的營養成分、加工方式與健康影響`,
++      "生活連結": `${normalizedBaseTopic}與飲食文化及日常消費的關聯`,
++      比較: `${normalizedBaseTopic}的不同製程、口感與營養比較`,
++      "資料策略": `${normalizedBaseTopic}的營養資料與食品研究證據分析`,
++      "研究限制": `${normalizedBaseTopic}的研究限制與後續飲食研究方向`,
++    },
++    "AI／網站／程式專案": {
++      "研究問題": `${normalizedBaseTopic}的應用情境、效益與限制`,
++      "生活連結": `${normalizedBaseTopic}與學習、工作及日常使用的關聯`,
++      比較: `${normalizedBaseTopic}的不同工具、方法與成效比較`,
++      "資料策略": `${normalizedBaseTopic}的技術文件與研究證據分析`,
++      "研究限制": `${normalizedBaseTopic}的限制、風險與後續優化方向`,
++    },
++    "社會議題": {
++      "研究問題": `${normalizedBaseTopic}的成因、影響與改善策略`,
++      "生活連結": `${normalizedBaseTopic}與日常生活及社會環境的關聯`,
++      比較: `${normalizedBaseTopic}的不同觀點與政策比較分析`,
++      "資料策略": `${normalizedBaseTopic}的統計資料與政策證據分析`,
++      "研究限制": `${normalizedBaseTopic}的研究限制與後續社會研究方向`,
++    },
++    "醫療／長照／社工／心理": {
++      "研究問題": `${normalizedBaseTopic}對健康、照護與心理狀態的影響`,
++      "生活連結": `${normalizedBaseTopic}與個人健康及照護情境的關聯`,
++      比較: `${normalizedBaseTopic}的不同介入方式與效果比較`,
++      "資料策略": `${normalizedBaseTopic}的醫療與照護研究證據分析`,
++      "研究限制": `${normalizedBaseTopic}的研究限制與後續照護研究方向`,
++    },
++  };
++
++  const genericAngleMap: Record<string, string> = {
++    "研究問題": `${normalizedBaseTopic}的核心特徵、形成機制與影響`,
++    "生活連結": `${normalizedBaseTopic}與日常生活的關聯與應用`,
++    比較: `${normalizedBaseTopic}的不同觀點與比較分析`,
++    "資料策略": `${normalizedBaseTopic}的證據來源與研究資料分析`,
++    "研究限制": `${normalizedBaseTopic}的研究限制與後續方向`,
++  };
++
++  return (
++    categoryAngleMap[category ?? "一般學校報告"]?.[angle] ??
++    genericAngleMap[angle] ??
++    normalizedTitle ??
++    normalizedBaseTopic
++  );
++}
++
+ const SOURCE_REVIEW_TABS: { value: SourceReviewTab; label: string }[] = [
+   { value: "all", label: "全部" },
+   { value: "accepted", label: "已接受" },
+@@ -1652,6 +1751,7 @@ function TopicStepPanel({
+   detectedCategory,
+   autoSearchEnabled,
+   workspaceResume,
++  hasInvalidTopic,
+   onInputChange,
+   onExpandTopic,
+   onApplyExpansion,
+@@ -1665,9 +1765,10 @@ function TopicStepPanel({
+   detectedCategory: TopicCategory | null;
+   autoSearchEnabled: boolean;
+   workspaceResume: WorkspaceResumeState | null;
++  hasInvalidTopic: boolean;
+   onInputChange: (key: ReportInputStringKey, value: string) => void;
+   onExpandTopic: () => void;
+-  onApplyExpansion: (title: string) => void;
++  onApplyExpansion: (card: TopicExpansionCard) => void;
+   onAdvancedOpenChange: (open: boolean) => void;
+   onNext: () => void;
+   onClearWorkspace: () => void;
+@@ -1743,7 +1844,7 @@ function TopicStepPanel({
+                         variant="outline"
+                         size="sm"
+                         className="min-h-[36px] shrink-0"
+-                        onClick={() => onApplyExpansion(card.title)}
++                        onClick={() => onApplyExpansion(card)}
+                       >
+                         套用此題目
+                       </Button>
+@@ -1923,7 +2024,7 @@ function TopicStepPanel({
+               type="button"
+               size="lg"
+               className="min-h-[46px]"
+-              disabled={!hasTopic}
++              disabled={!hasTopic || hasInvalidTopic}
+               onClick={onNext}
+             >
+               下一步：搜尋來源 <ArrowRight className="ml-2 h-4 w-4" />
+@@ -2400,6 +2501,7 @@ export function Generator() {
+     "idle" | "loading" | "done" | "error"
+   >("idle");
+   const [expansions, setExpansions] = useState<TopicExpansionCard[]>([]);
++  const [selectedSearchTopic, setSelectedSearchTopic] = useState("");
+   const [sources, setSources] = useState<SourceRecord[]>([]);
+   const [isSearchingSources, setIsSearchingSources] = useState(false);
+   const [sourceSearchStatus, setSourceSearchStatus] = useState<
+@@ -2425,6 +2527,9 @@ export function Generator() {
+   const stepDelayTimerRef = useRef<number | null>(null);
+ 
+   const updateInput = (key: ReportInputStringKey, value: string) => {
++    if (key === "topic") {
++      setSelectedSearchTopic("");
++    }
+     setInput((prev) => {
+       const next = { ...prev, [key]: value };
+       // Academic level is the single source of truth for reader + purpose.
+@@ -2473,7 +2578,9 @@ export function Generator() {
+ 
+   // Live AI domain detection (recomputed as topic / type / level change).
+   const derivedPurpose = academicToPurpose(input.academicLevel);
+-  const hasTopic = Boolean(input.topic.trim());
++  const normalizedInputTopic = input.topic.trim();
++  const hasTopic = Boolean(normalizedInputTopic);
++  const hasInvalidTopic = hasTopic && isClearlyInvalidTopic(normalizedInputTopic);
+   const preflight = useMemo(
+     () =>
+       hasTopic
+@@ -2494,14 +2601,14 @@ export function Generator() {
+   const sourceReviewAvailable =
+     sourceSearchStatus !== "idle" || sources.length > 0;
+   const stepCompleted: Record<GeneratorWorkflowStep, boolean> = {
+-    topic: hasTopic && activeStep !== "topic",
++    topic: hasTopic && !hasInvalidTopic && activeStep !== "topic",
+     search: sourceReviewAvailable && activeStep !== "search",
+     manage: sources.length > 0 && activeStep !== "manage",
+     generate: false,
+   };
+   const canEnterStep = (step: GeneratorWorkflowStep) => {
+     if (step === "topic") return true;
+-    if (!hasTopic) return false;
++    if (!hasTopic || hasInvalidTopic) return false;
+     if (step === "search") return true;
+     if (step === "manage") return sources.length > 0;
+     return true;
+@@ -2553,6 +2660,7 @@ export function Generator() {
+ 
+     setWorkspaceResume({ reportId, loaded: true });
+     setInput(workspace.input);
++    setSelectedSearchTopic(workspace.input.topic.trim());
+     setSources(workspace.acceptedSources);
+     setSourceSearchStatus("done");
+     setSourceSearchMessage("已載入報告工作區來源，可調整後重新生成。");
+@@ -2568,7 +2676,7 @@ export function Generator() {
+   // ── Source search ──────────────────────────────────────────────────────────
+ 
+   const handleSearchSources = async () => {
+-    const topic = input.topic.trim();
++    const topic = (selectedSearchTopic || input.topic).trim();
+     if (!topic) {
+       setSourceSearchStatus("error");
+       setSourceSearchMessage("請先輸入研究主題。");
+@@ -2582,6 +2690,21 @@ export function Generator() {
+       return;
+     }
+ 
++    if (isClearlyInvalidTopic(topic)) {
++      setSourceSearchStatus("error");
++      setSourceSearchMessage("請輸入有效的研究主題後再搜尋來源。");
++      setKeywordSearchDebug(null);
++      setSources([]);
++      setActiveStep("topic");
++      toast({
++        title: "主題無效",
++        description: "目前無法判定這個輸入為可研究主題，請重新輸入具體主題。",
++        variant: "destructive",
++      });
++      return;
++    }
++
++    setSelectedSearchTopic(topic);
+     setIsSearchingSources(true);
+     setSourceSearchStatus("loading");
+     setSourceSearchMessage("");
+@@ -2777,7 +2900,8 @@ export function Generator() {
+   // ── Expand topic ──────────────────────────────────────────────────────────────
+ 
+   const handleExpand = () => {
+-    if (!input.topic.trim()) {
++    const topic = input.topic.trim();
++    if (!topic) {
+       toast({
+         title: "請先輸入主題",
+         description: "輸入一個簡短的主題後，系統會幫你擴寫成完整的報告題目。",
+@@ -2785,12 +2909,42 @@ export function Generator() {
+       });
+       return;
+     }
+-    setExpansions(expandTopicCards(input.topic.trim(), detectedCategory ?? undefined));
++    if (isClearlyInvalidTopic(topic)) {
++      setExpansions([]);
++      setSelectedSearchTopic("");
++      toast({
++        title: "主題無效",
++        description: "目前無法判定這個輸入為可研究主題，請重新輸入具體主題。",
++        variant: "destructive",
++      });
++      return;
++    }
++    setExpansions(expandTopicCards(topic, detectedCategory ?? undefined));
+   };
+ 
+-  const applyExpansion = (title: string) => {
+-    updateInput("topic", title);
++  const applyExpansion = (card: TopicExpansionCard) => {
++    const nextTopic = buildSelectedSearchTopic(input.topic.trim(), card, detectedCategory).trim();
++    if (!nextTopic) return;
++
++    setSelectedSearchTopic(nextTopic);
++    setInput((prev) => ({ ...prev, topic: nextTopic }));
+     setExpansions([]);
++    setSources([]);
++    setSourceSearchStatus("idle");
++    setSourceSearchMessage("");
++    setKeywordSearchDebug(null);
++    if (stepDelayTimerRef.current !== null) {
++      window.clearTimeout(stepDelayTimerRef.current);
++      stepDelayTimerRef.current = null;
++    }
++    beginStepTransition(
++      "search",
++      {
++        title: "已套用研究題目",
++        description: "正在進入來源搜尋步驟，接下來可直接搜尋資料來源。",
++      },
++      420,
++    );
+     toast({
+       title: "已套用研究題目",
+       description: "已將研究方向填入主題欄位。",
+@@ -2802,6 +2956,7 @@ export function Generator() {
+   const handleClear = () => {
+     clearStepTransition();
+     setInput(DEFAULT_INPUT);
++    setSelectedSearchTopic("");
+     setExpansions([]);
+     setSources([]);
+     setSourceSearchStatus("idle");
+@@ -2815,7 +2970,8 @@ export function Generator() {
+     setActiveStep("topic");
+   };
+ 
+-  const shortTopicHint = input.topic.trim() && isShortTopic(input.topic);
++  const shortTopicHint =
++    normalizedInputTopic && !hasInvalidTopic && isShortTopic(input.topic);
+   const autoSearchEnabled =
+     input.sourceRequirement === "需要，並生成參考文獻格式";
+   const generateButtonLabel = !hasTopic
+@@ -2836,6 +2992,15 @@ export function Generator() {
+       });
+       return;
+     }
++    if (hasInvalidTopic) {
++      setActiveStep("topic");
++      toast({
++        title: "主題無效",
++        description: "目前無法判定這個輸入為可研究主題，請重新輸入具體主題。",
++        variant: "destructive",
++      });
++      return;
++    }
+     goToStep("search");
+   };
+   const goToManageStep = () => {
+@@ -2917,6 +3082,15 @@ export function Generator() {
+             </div>
+           </div>
+ 
++          {hasInvalidTopic && activeStep === "topic" && !isStepTransitioning && (
++            <div className="mx-auto flex max-w-3xl gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
++              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
++              <span>
++                目前無法判定這個輸入為可研究主題。請改成有明確語意的主題後再進行擴寫或搜尋來源。
++              </span>
++            </div>
++          )}
++
+           {shortTopicHint && activeStep === "topic" && !isStepTransitioning && (
+             <div className="mx-auto flex max-w-3xl gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+               <Lightbulb className="mt-0.5 h-4 w-4 shrink-0" />
+@@ -2940,6 +3114,7 @@ export function Generator() {
+               detectedCategory={detectedCategory}
+               autoSearchEnabled={autoSearchEnabled}
+               workspaceResume={workspaceResume}
++              hasInvalidTopic={hasInvalidTopic}
+               onInputChange={updateInput}
+               onExpandTopic={handleExpand}
+               onApplyExpansion={applyExpansion}
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index e457eec..5920a11 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -153,6 +153,9 @@ importers:
+ 
+   .:
+     devDependencies:
++      convex:
++        specifier: latest
++        version: 1.41.0(react@19.1.0)
+       prettier:
+         specifier: ^3.8.3
+         version: 3.8.3
+@@ -526,6 +529,9 @@ importers:
+       cmdk:
+         specifier: ^1.1.1
+         version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
++      convex:
++        specifier: latest
++        version: 1.41.0(react@19.1.0)
+       date-fns:
+         specifier: ^3.6.0
+         version: 3.6.0
+@@ -1860,6 +1866,25 @@ packages:
+   convert-source-map@2.0.0:
+     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
+ 
++  convex@1.41.0:
++    resolution: {integrity: sha512-euxVf6yfpB7/VGKOobkLgjpbJidsUgW+b0ezonEyCUPqlpHFwR4/yIiI1hjjErzraiw91GxrtxpXQClMLNqU+w==}
++    engines: {node: '>=18.0.0', npm: '>=7.0.0'}
++    hasBin: true
++    peerDependencies:
++      '@auth0/auth0-react': ^2.0.1
++      '@clerk/clerk-react': ^4.12.8 || ^5.0.0
++      '@clerk/react': ^6.4.3
++      react: ^18.0.0 || ^19.0.0-0 || ^19.0.0
++    peerDependenciesMeta:
++      '@auth0/auth0-react':
++        optional: true
++      '@clerk/clerk-react':
++        optional: true
++      '@clerk/react':
++        optional: true
++      react:
++        optional: true
++
+   cookie-parser@1.4.7:
+     resolution: {integrity: sha512-nGUvgXnotP3BsjiLX2ypbQnWoGUPIIfHQNZkkC668ntrzGWEZVW70HDEB1qnNGMicPje6EttlIgzo51YSwNQGw==}
+     engines: {node: '>= 0.8.0'}
+@@ -3052,6 +3077,7 @@ packages:
+   tsconfck@3.1.6:
+     resolution: {integrity: sha512-ks6Vjr/jEw0P1gmOVwutM3B7fWxoWBL2KRDb1JfqGVawBmO5UsvmWOQFGHBPl5yxYz4eERr19E6L7NMv+Fej4w==}
+     engines: {node: ^18 || >=20}
++    deprecated: unmaintained
+     hasBin: true
+     peerDependencies:
+       typescript: ^5.0.0
+@@ -3220,6 +3246,18 @@ packages:
+   wrappy@1.0.2:
+     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
+ 
++  ws@8.20.1:
++    resolution: {integrity: sha512-It4dO0K5v//JtTXuPkfEOaI3uUN87iYPnqo/ZzqCoG3g8uhA66QUMs/SrM0YK7/NAu+r4LMh/9dq2A7k+rHs+w==}
++    engines: {node: '>=10.0.0'}
++    peerDependencies:
++      bufferutil: ^4.0.1
++      utf-8-validate: '>=5.0.2'
++    peerDependenciesMeta:
++      bufferutil:
++        optional: true
++      utf-8-validate:
++        optional: true
++
+   xml-js@1.6.11:
+     resolution: {integrity: sha512-7rVi2KMfwfWFl+GpPg6m80IVMWXLRjO+PxTq7V2CDhoGak0wzYzFgUY2m4XJ47OGdXd8eLE8EmwfAmdjw7lC1g==}
+     hasBin: true
+@@ -4623,6 +4661,17 @@ snapshots:
+ 
+   convert-source-map@2.0.0: {}
+ 
++  convex@1.41.0(react@19.1.0):
++    dependencies:
++      esbuild: 0.27.3
++      prettier: 3.8.3
++      ws: 8.20.1
++    optionalDependencies:
++      react: 19.1.0
++    transitivePeerDependencies:
++      - bufferutil
++      - utf-8-validate
++
+   cookie-parser@1.4.7:
+     dependencies:
+       cookie: 0.7.2
+@@ -5837,6 +5886,8 @@ snapshots:
+ 
+   wrappy@1.0.2: {}
+ 
++  ws@8.20.1: {}
++
+   xml-js@1.6.11:
+     dependencies:
+       sax: 1.6.0

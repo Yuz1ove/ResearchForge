@@ -539,6 +539,105 @@ function SearchIntentDebugPanel({ debug }: { debug: KeywordSearchDebugState }) {
 
 type SourceReviewTab = "all" | "accepted" | "pending" | "rejected";
 
+const GENERIC_REFINEMENT_TITLE_PATTERNS = [
+  /可以從哪些具體問題切入/,
+  /與日常生活或課程內容的關聯/,
+  /有哪些可比較的不同觀點/,
+  /可用哪些資料類型佐證/,
+  /的限制與下一步研究方向/,
+];
+
+function normalizeTopicText(value: string): string {
+  return value.replace(/[「」]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function isClearlyInvalidTopic(topic: string): boolean {
+  const trimmed = topic.trim();
+  if (!trimmed) return false;
+  if (/^[^A-Za-z0-9一-鿿]+$/.test(trimmed)) return true;
+  if (
+    /^[A-Za-z0-9_-]{6,}$/.test(trimmed) &&
+    !/[aeiou]/i.test(trimmed) &&
+    !/[一-鿿]/.test(trimmed)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function buildSelectedSearchTopic(
+  baseTopic: string,
+  card: TopicExpansionCard,
+  category: TopicCategory | null,
+): string {
+  const normalizedBaseTopic = normalizeTopicText(baseTopic);
+  const normalizedTitle = normalizeTopicText(card.title);
+  const isGenericRefinement =
+    GENERIC_REFINEMENT_TITLE_PATTERNS.some((pattern) => pattern.test(normalizedTitle)) ||
+    /[？?]$/.test(normalizedTitle);
+
+  if (!isGenericRefinement && normalizedTitle) {
+    return normalizedTitle;
+  }
+
+  const angle = card.angle.trim();
+
+  const categoryAngleMap: Partial<
+    Record<TopicCategory, Partial<Record<string, string>>>
+  > = {
+    "生物／動物": {
+      "研究問題": `${normalizedBaseTopic}的生態特徵與環境影響`,
+      "生活連結": `${normalizedBaseTopic}與日常生活及海陸環境的關聯`,
+      比較: `${normalizedBaseTopic}的不同物種特徵與生存策略比較`,
+      "資料策略": `${normalizedBaseTopic}的研究證據來源與觀察資料分析`,
+      "研究限制": `${normalizedBaseTopic}的研究限制與後續保育方向`,
+    },
+    "食品／飲食文化": {
+      "研究問題": `${normalizedBaseTopic}的營養成分、加工方式與健康影響`,
+      "生活連結": `${normalizedBaseTopic}與飲食文化及日常消費的關聯`,
+      比較: `${normalizedBaseTopic}的不同製程、口感與營養比較`,
+      "資料策略": `${normalizedBaseTopic}的營養資料與食品研究證據分析`,
+      "研究限制": `${normalizedBaseTopic}的研究限制與後續飲食研究方向`,
+    },
+    "AI／網站／程式專案": {
+      "研究問題": `${normalizedBaseTopic}的應用情境、效益與限制`,
+      "生活連結": `${normalizedBaseTopic}與學習、工作及日常使用的關聯`,
+      比較: `${normalizedBaseTopic}的不同工具、方法與成效比較`,
+      "資料策略": `${normalizedBaseTopic}的技術文件與研究證據分析`,
+      "研究限制": `${normalizedBaseTopic}的限制、風險與後續優化方向`,
+    },
+    "社會議題": {
+      "研究問題": `${normalizedBaseTopic}的成因、影響與改善策略`,
+      "生活連結": `${normalizedBaseTopic}與日常生活及社會環境的關聯`,
+      比較: `${normalizedBaseTopic}的不同觀點與政策比較分析`,
+      "資料策略": `${normalizedBaseTopic}的統計資料與政策證據分析`,
+      "研究限制": `${normalizedBaseTopic}的研究限制與後續社會研究方向`,
+    },
+    "醫療／長照／社工／心理": {
+      "研究問題": `${normalizedBaseTopic}對健康、照護與心理狀態的影響`,
+      "生活連結": `${normalizedBaseTopic}與個人健康及照護情境的關聯`,
+      比較: `${normalizedBaseTopic}的不同介入方式與效果比較`,
+      "資料策略": `${normalizedBaseTopic}的醫療與照護研究證據分析`,
+      "研究限制": `${normalizedBaseTopic}的研究限制與後續照護研究方向`,
+    },
+  };
+
+  const genericAngleMap: Record<string, string> = {
+    "研究問題": `${normalizedBaseTopic}的核心特徵、形成機制與影響`,
+    "生活連結": `${normalizedBaseTopic}與日常生活的關聯與應用`,
+    比較: `${normalizedBaseTopic}的不同觀點與比較分析`,
+    "資料策略": `${normalizedBaseTopic}的證據來源與研究資料分析`,
+    "研究限制": `${normalizedBaseTopic}的研究限制與後續方向`,
+  };
+
+  return (
+    categoryAngleMap[category ?? "一般學校報告"]?.[angle] ??
+    genericAngleMap[angle] ??
+    normalizedTitle ??
+    normalizedBaseTopic
+  );
+}
+
 const SOURCE_REVIEW_TABS: { value: SourceReviewTab; label: string }[] = [
   { value: "all", label: "全部" },
   { value: "accepted", label: "已接受" },
@@ -1652,6 +1751,7 @@ function TopicStepPanel({
   detectedCategory,
   autoSearchEnabled,
   workspaceResume,
+  hasInvalidTopic,
   onInputChange,
   onExpandTopic,
   onApplyExpansion,
@@ -1665,9 +1765,10 @@ function TopicStepPanel({
   detectedCategory: TopicCategory | null;
   autoSearchEnabled: boolean;
   workspaceResume: WorkspaceResumeState | null;
+  hasInvalidTopic: boolean;
   onInputChange: (key: ReportInputStringKey, value: string) => void;
   onExpandTopic: () => void;
-  onApplyExpansion: (title: string) => void;
+  onApplyExpansion: (card: TopicExpansionCard) => void;
   onAdvancedOpenChange: (open: boolean) => void;
   onNext: () => void;
   onClearWorkspace: () => void;
@@ -1743,7 +1844,7 @@ function TopicStepPanel({
                         variant="outline"
                         size="sm"
                         className="min-h-[36px] shrink-0"
-                        onClick={() => onApplyExpansion(card.title)}
+                        onClick={() => onApplyExpansion(card)}
                       >
                         套用此題目
                       </Button>
@@ -1923,7 +2024,7 @@ function TopicStepPanel({
               type="button"
               size="lg"
               className="min-h-[46px]"
-              disabled={!hasTopic}
+              disabled={!hasTopic || hasInvalidTopic}
               onClick={onNext}
             >
               下一步：搜尋來源 <ArrowRight className="ml-2 h-4 w-4" />
@@ -2400,6 +2501,7 @@ export function Generator() {
     "idle" | "loading" | "done" | "error"
   >("idle");
   const [expansions, setExpansions] = useState<TopicExpansionCard[]>([]);
+  const [selectedSearchTopic, setSelectedSearchTopic] = useState("");
   const [sources, setSources] = useState<SourceRecord[]>([]);
   const [isSearchingSources, setIsSearchingSources] = useState(false);
   const [sourceSearchStatus, setSourceSearchStatus] = useState<
@@ -2425,6 +2527,9 @@ export function Generator() {
   const stepDelayTimerRef = useRef<number | null>(null);
 
   const updateInput = (key: ReportInputStringKey, value: string) => {
+    if (key === "topic") {
+      setSelectedSearchTopic("");
+    }
     setInput((prev) => {
       const next = { ...prev, [key]: value };
       // Academic level is the single source of truth for reader + purpose.
@@ -2473,7 +2578,9 @@ export function Generator() {
 
   // Live AI domain detection (recomputed as topic / type / level change).
   const derivedPurpose = academicToPurpose(input.academicLevel);
-  const hasTopic = Boolean(input.topic.trim());
+  const normalizedInputTopic = input.topic.trim();
+  const hasTopic = Boolean(normalizedInputTopic);
+  const hasInvalidTopic = hasTopic && isClearlyInvalidTopic(normalizedInputTopic);
   const preflight = useMemo(
     () =>
       hasTopic
@@ -2494,14 +2601,14 @@ export function Generator() {
   const sourceReviewAvailable =
     sourceSearchStatus !== "idle" || sources.length > 0;
   const stepCompleted: Record<GeneratorWorkflowStep, boolean> = {
-    topic: hasTopic && activeStep !== "topic",
+    topic: hasTopic && !hasInvalidTopic && activeStep !== "topic",
     search: sourceReviewAvailable && activeStep !== "search",
     manage: sources.length > 0 && activeStep !== "manage",
     generate: false,
   };
   const canEnterStep = (step: GeneratorWorkflowStep) => {
     if (step === "topic") return true;
-    if (!hasTopic) return false;
+    if (!hasTopic || hasInvalidTopic) return false;
     if (step === "search") return true;
     if (step === "manage") return sources.length > 0;
     return true;
@@ -2553,6 +2660,7 @@ export function Generator() {
 
     setWorkspaceResume({ reportId, loaded: true });
     setInput(workspace.input);
+    setSelectedSearchTopic(workspace.input.topic.trim());
     setSources(workspace.acceptedSources);
     setSourceSearchStatus("done");
     setSourceSearchMessage("已載入報告工作區來源，可調整後重新生成。");
@@ -2568,7 +2676,7 @@ export function Generator() {
   // ── Source search ──────────────────────────────────────────────────────────
 
   const handleSearchSources = async () => {
-    const topic = input.topic.trim();
+    const topic = (selectedSearchTopic || input.topic).trim();
     if (!topic) {
       setSourceSearchStatus("error");
       setSourceSearchMessage("請先輸入研究主題。");
@@ -2582,6 +2690,21 @@ export function Generator() {
       return;
     }
 
+    if (isClearlyInvalidTopic(topic)) {
+      setSourceSearchStatus("error");
+      setSourceSearchMessage("請輸入有效的研究主題後再搜尋來源。");
+      setKeywordSearchDebug(null);
+      setSources([]);
+      setActiveStep("topic");
+      toast({
+        title: "主題無效",
+        description: "目前無法判定這個輸入為可研究主題，請重新輸入具體主題。",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSelectedSearchTopic(topic);
     setIsSearchingSources(true);
     setSourceSearchStatus("loading");
     setSourceSearchMessage("");
@@ -2777,7 +2900,8 @@ export function Generator() {
   // ── Expand topic ──────────────────────────────────────────────────────────────
 
   const handleExpand = () => {
-    if (!input.topic.trim()) {
+    const topic = input.topic.trim();
+    if (!topic) {
       toast({
         title: "請先輸入主題",
         description: "輸入一個簡短的主題後，系統會幫你擴寫成完整的報告題目。",
@@ -2785,12 +2909,42 @@ export function Generator() {
       });
       return;
     }
-    setExpansions(expandTopicCards(input.topic.trim(), detectedCategory ?? undefined));
+    if (isClearlyInvalidTopic(topic)) {
+      setExpansions([]);
+      setSelectedSearchTopic("");
+      toast({
+        title: "主題無效",
+        description: "目前無法判定這個輸入為可研究主題，請重新輸入具體主題。",
+        variant: "destructive",
+      });
+      return;
+    }
+    setExpansions(expandTopicCards(topic, detectedCategory ?? undefined));
   };
 
-  const applyExpansion = (title: string) => {
-    updateInput("topic", title);
+  const applyExpansion = (card: TopicExpansionCard) => {
+    const nextTopic = buildSelectedSearchTopic(input.topic.trim(), card, detectedCategory).trim();
+    if (!nextTopic) return;
+
+    setSelectedSearchTopic(nextTopic);
+    setInput((prev) => ({ ...prev, topic: nextTopic }));
     setExpansions([]);
+    setSources([]);
+    setSourceSearchStatus("idle");
+    setSourceSearchMessage("");
+    setKeywordSearchDebug(null);
+    if (stepDelayTimerRef.current !== null) {
+      window.clearTimeout(stepDelayTimerRef.current);
+      stepDelayTimerRef.current = null;
+    }
+    beginStepTransition(
+      "search",
+      {
+        title: "已套用研究題目",
+        description: "正在進入來源搜尋步驟，接下來可直接搜尋資料來源。",
+      },
+      420,
+    );
     toast({
       title: "已套用研究題目",
       description: "已將研究方向填入主題欄位。",
@@ -2802,6 +2956,7 @@ export function Generator() {
   const handleClear = () => {
     clearStepTransition();
     setInput(DEFAULT_INPUT);
+    setSelectedSearchTopic("");
     setExpansions([]);
     setSources([]);
     setSourceSearchStatus("idle");
@@ -2815,7 +2970,8 @@ export function Generator() {
     setActiveStep("topic");
   };
 
-  const shortTopicHint = input.topic.trim() && isShortTopic(input.topic);
+  const shortTopicHint =
+    normalizedInputTopic && !hasInvalidTopic && isShortTopic(input.topic);
   const autoSearchEnabled =
     input.sourceRequirement === "需要，並生成參考文獻格式";
   const generateButtonLabel = !hasTopic
@@ -2832,6 +2988,15 @@ export function Generator() {
       toast({
         title: "請先輸入主題",
         description: "設定主題後才能進入來源搜尋。",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (hasInvalidTopic) {
+      setActiveStep("topic");
+      toast({
+        title: "主題無效",
+        description: "目前無法判定這個輸入為可研究主題，請重新輸入具體主題。",
         variant: "destructive",
       });
       return;
@@ -2917,6 +3082,15 @@ export function Generator() {
             </div>
           </div>
 
+          {hasInvalidTopic && activeStep === "topic" && !isStepTransitioning && (
+            <div className="mx-auto flex max-w-3xl gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                目前無法判定這個輸入為可研究主題。請改成有明確語意的主題後再進行擴寫或搜尋來源。
+              </span>
+            </div>
+          )}
+
           {shortTopicHint && activeStep === "topic" && !isStepTransitioning && (
             <div className="mx-auto flex max-w-3xl gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               <Lightbulb className="mt-0.5 h-4 w-4 shrink-0" />
@@ -2940,6 +3114,7 @@ export function Generator() {
               detectedCategory={detectedCategory}
               autoSearchEnabled={autoSearchEnabled}
               workspaceResume={workspaceResume}
+              hasInvalidTopic={hasInvalidTopic}
               onInputChange={updateInput}
               onExpandTopic={handleExpand}
               onApplyExpansion={applyExpansion}
