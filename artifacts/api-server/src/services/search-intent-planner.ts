@@ -681,6 +681,7 @@ function proteinMuscleQueryBuckets(): ReturnType<typeof queryBucketsForPlan> {
 }
 const DEFAULT_SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS = 3_500;
 const DEFAULT_SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS = 2_500;
+const SOURCE_SEARCH_RESPONSE_BUFFER_MS = 3_000;
 
 const searchResultCache = new Map<
   string,
@@ -9286,6 +9287,70 @@ function trustedSeedSourcesForPlan(plan: SearchIntentPlan): SourceRecord[] {
       }),
     );
   }
+  if (isDogResourceGuardingPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:pubmed-canine-resource-guarding",
+        title: "Factors associated with canine resource guarding behaviour in the presence of people",
+        authors: ["PubMed"],
+        year: 2017,
+        abstract:
+          "This indexed veterinary behavior study examines factors associated with canine resource guarding in the presence of people and reports prevention-relevant findings for resource guarding aggression.",
+        doi: null,
+        url: "https://pubmed.ncbi.nlm.nih.gov/28268035/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "PubMed",
+        containerTitle: "Applied Animal Behaviour Science",
+        accessedAt: null,
+        provider: "PubMed",
+        sourceKind: "journal",
+        sourceRole: "academic_evidence",
+        sourceQualityScore: 86,
+        scoreReasons: ["trusted indexed veterinary behavior seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:merck-dog-behavior-problems",
+        title: "Behavior Problems of Dogs",
+        authors: ["Merck Veterinary Manual"],
+        year: null,
+        abstract:
+          "Merck Veterinary Manual explains dog behavior problems and notes that aggression between dogs may involve resource guarding, fear, anxiety, arousal and impulse-control factors.",
+        doi: null,
+        url: "https://www.merckvetmanual.com/behavior/behavior-of-dogs/behavior-problems-of-dogs",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "Merck Veterinary Manual",
+        containerTitle: "Merck Veterinary Manual",
+        accessedAt: null,
+        provider: "Merck Veterinary Manual",
+        sourceKind: "web",
+        sourceRole: "professional_guidance",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted veterinary guidance seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:aspca-food-guarding",
+        title: "Food Guarding",
+        authors: ["ASPCA"],
+        year: null,
+        abstract:
+          "ASPCA explains food guarding as a form of resource guarding in dogs, describes warning behaviors and frames management around humane behavior support rather than punishment.",
+        doi: null,
+        url: "https://www.aspca.org/pet-care/dog-care/common-dog-behavior-issues/food-guarding",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "ASPCA",
+        containerTitle: "Common Dog Behavior Issues",
+        accessedAt: null,
+        provider: "ASPCA",
+        sourceKind: "web",
+        sourceRole: "background_definition",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted animal welfare background seed source"],
+      }),
+    );
+  }
   if (isColaHealthPlan(plan)) {
     seedSources.push(
       normalizeSourceRecord({
@@ -9363,6 +9428,70 @@ function trustedSeedSourcesForPlan(plan: SearchIntentPlan): SourceRecord[] {
         sourceKind: "web",
         sourceQualityScore: 80,
         scoreReasons: ["trusted health-organization seed source"],
+      }),
+    );
+  }
+  if (isUrbanHeatPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:epa-heat-islands",
+        title: "Heat Island Effect",
+        authors: ["U.S. Environmental Protection Agency"],
+        year: null,
+        abstract:
+          "EPA explains that heat islands occur when developed areas are hotter than nearby rural areas and provides impacts, cooling strategies and outreach materials for communities.",
+        doi: null,
+        url: "https://www.epa.gov/heatislands",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "U.S. Environmental Protection Agency",
+        containerTitle: "Heat Island Effect",
+        accessedAt: null,
+        provider: "EPA",
+        sourceKind: "web",
+        sourceRole: "background_definition",
+        sourceQualityScore: 86,
+        scoreReasons: ["trusted official heat-island background seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:epa-reduce-heat-islands",
+        title: "Reduce Heat Islands",
+        authors: ["U.S. Environmental Protection Agency"],
+        year: null,
+        abstract:
+          "EPA describes mitigation strategies such as trees, vegetation, green roofs and reflective surfaces that can reduce heat island effects by shading and cooling built surfaces.",
+        doi: null,
+        url: "https://www.epa.gov/green-infrastructure/reduce-heat-islands",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "U.S. Environmental Protection Agency",
+        containerTitle: "Green Infrastructure",
+        accessedAt: null,
+        provider: "EPA",
+        sourceKind: "web",
+        sourceRole: "professional_guidance",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted official mitigation guidance seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:mdpi-urban-heat-island-outdoor-thermal-comfort",
+        title: "A Review on the Impacts of Urban Heat Islands on Outdoor Thermal Comfort",
+        authors: ["Buildings"],
+        year: 2023,
+        abstract:
+          "This review discusses how urban heat islands affect outdoor thermal comfort, heat stress and mitigation considerations in built environments.",
+        doi: null,
+        url: "https://www.mdpi.com/2075-5309/13/6/1368",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "MDPI",
+        containerTitle: "Buildings",
+        accessedAt: null,
+        provider: "MDPI",
+        sourceKind: "journal",
+        sourceRole: "academic_evidence",
+        sourceQualityScore: 78,
+        scoreReasons: ["peer-reviewed urban heat island review seed source"],
       }),
     );
   }
@@ -9971,6 +10100,66 @@ function trustedSeedSourcesForPlan(plan: SearchIntentPlan): SourceRecord[] {
   if (isYellowstonePlan(plan)) {
     seedSources.push(
       normalizeSourceRecord({
+        id: "trusted:nps-yellowstone-hydrothermal-features",
+        title: "Hydrothermal Features - Yellowstone National Park",
+        authors: ["National Park Service"],
+        year: null,
+        abstract:
+          "NPS explains Yellowstone's hot springs, geysers, mudpots and fumaroles and notes that the park contains more than 10,000 hydrothermal features, including more than 500 geysers.",
+        doi: null,
+        url: "https://www.nps.gov/yell/learn/nature/hydrothermal-features.htm",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "National Park Service",
+        containerTitle: "Yellowstone National Park",
+        accessedAt: null,
+        provider: "NPS",
+        sourceKind: "web",
+        sourceRole: "background_definition",
+        sourceQualityScore: 88,
+        scoreReasons: ["trusted official hydrothermal background seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:usgs-yellowstone-active-hydrothermal-system",
+        title: "Yellowstone's Active Hydrothermal System",
+        authors: ["U.S. Geological Survey"],
+        year: null,
+        abstract:
+          "USGS describes Yellowstone thermal features as visible expressions of an active hydrothermal system connected to hot ground and magma storage beneath the park.",
+        doi: null,
+        url: "https://www.usgs.gov/volcanoes/yellowstone/science/yellowstones-active-hydrothermal-system",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "U.S. Geological Survey",
+        containerTitle: "Yellowstone Volcano Observatory",
+        accessedAt: null,
+        provider: "USGS",
+        sourceKind: "web",
+        sourceRole: "official_statistics",
+        sourceQualityScore: 88,
+        scoreReasons: ["trusted official geology seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:nps-yellowstone-hydrothermal-systems",
+        title: "Hydrothermal Systems - Yellowstone National Park",
+        authors: ["National Park Service"],
+        year: null,
+        abstract:
+          "NPS summarizes the hydrothermal system, the concentration of geysers and hot springs, and how Yellowstone's thermal areas connect to volcanic and geothermal processes.",
+        doi: null,
+        url: "https://www.nps.gov/yell/learn/nature/hydrothermal-systems.htm",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "National Park Service",
+        containerTitle: "Yellowstone National Park",
+        accessedAt: null,
+        provider: "NPS",
+        sourceKind: "web",
+        sourceRole: "professional_guidance",
+        sourceQualityScore: 86,
+        scoreReasons: ["trusted official geoscience explainer seed source"],
+      }),
+      normalizeSourceRecord({
         id: "trusted:nps-greater-yellowstone-ecosystem",
         title: "Greater Yellowstone Ecosystem",
         authors: ["National Park Service"],
@@ -10032,6 +10221,46 @@ function trustedSeedSourcesForPlan(plan: SearchIntentPlan): SourceRecord[] {
   if (isJadePendantPlan(plan)) {
     seedSources.push(
       normalizeSourceRecord({
+        id: "trusted:gia-jade-history-lore",
+        title: "Jade History and Lore",
+        authors: ["Gemological Institute of America"],
+        year: null,
+        abstract:
+          "GIA explains jade history and lore, including Chinese associations of jade with clarity of mind, purity of spirit and symbolic motifs used in jade carvings.",
+        doi: null,
+        url: "https://www.gia.edu/jade-history-lore",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "Gemological Institute of America",
+        containerTitle: "GIA Gem Encyclopedia",
+        accessedAt: null,
+        provider: "GIA",
+        sourceKind: "web",
+        sourceRole: "background_definition",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted gemological background seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:pmc-glass-imitation-jade-culture",
+        title: "Research on glass imitation jade culture in the ancient Chinese Silk Road",
+        authors: ["NCBI PubMed Central"],
+        year: 2025,
+        abstract:
+          "This open-access cultural heritage study discusses jade culture and imitation jade practices in ancient Chinese contexts, useful for distinguishing symbolic meaning from material imitation.",
+        doi: null,
+        url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC11805905/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "NCBI PubMed Central",
+        containerTitle: "PubMed Central",
+        accessedAt: null,
+        provider: "NCBI PMC",
+        sourceKind: "journal",
+        sourceRole: "academic_evidence",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted open-access cultural heritage seed source"],
+      }),
+      normalizeSourceRecord({
         id: "trusted:british-museum-chinese-jade",
         title: "Chinese jade",
         authors: ["British Museum"],
@@ -10047,6 +10276,7 @@ function trustedSeedSourcesForPlan(plan: SearchIntentPlan): SourceRecord[] {
         accessedAt: null,
         provider: "British Museum",
         sourceKind: "web",
+        sourceRole: "professional_guidance",
         sourceQualityScore: 82,
         scoreReasons: ["trusted museum material-culture seed source"],
       }),
@@ -10066,6 +10296,7 @@ function trustedSeedSourcesForPlan(plan: SearchIntentPlan): SourceRecord[] {
         accessedAt: null,
         provider: "Smithsonian",
         sourceKind: "web",
+        sourceRole: "professional_guidance",
         sourceQualityScore: 84,
         scoreReasons: ["trusted museum Chinese jade seed source"],
       }),
@@ -10085,6 +10316,7 @@ function trustedSeedSourcesForPlan(plan: SearchIntentPlan): SourceRecord[] {
         accessedAt: null,
         provider: "The Met",
         sourceKind: "web",
+        sourceRole: "data_or_dataset",
         sourceQualityScore: 82,
         scoreReasons: ["trusted museum jade pendant seed source"],
       }),
@@ -14021,23 +14253,38 @@ export async function searchIntentSources(
   options?: SearchIntentSourceSearchOptions,
 ): Promise<SearchIntentSourceSearchResult> {
   const profile = resolveSourceSearchProfile(input.searchProfile);
+  const searchRequestStartedAt = Date.now();
+  const requestedOverallSearchBudgetMs =
+    options?.runtimeBudget?.overallSearchBudgetMs ?? profile.overallTimeoutMs;
+  const absoluteSearchDeadlineMs =
+    searchRequestStartedAt + requestedOverallSearchBudgetMs;
+  const remainingOverallBudgetMs = () =>
+    Math.max(0, absoluteSearchDeadlineMs - Date.now());
+  const configuredPlannerLlmTimeoutMs =
+    options?.llm?.timeoutMs ??
+    positiveEnvNumber(
+      "SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS",
+      DEFAULT_SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS,
+    );
+  const configuredSummaryLlmTimeoutMs =
+    options?.llm?.timeoutMs ??
+    positiveEnvNumber(
+      "SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS",
+      DEFAULT_SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS,
+    );
   const plannerLlm = {
     ...(options?.llm ?? {}),
-    timeoutMs:
-      options?.llm?.timeoutMs ??
-      positiveEnvNumber(
-        "SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS",
-        DEFAULT_SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS,
+    timeoutMs: Math.max(
+      500,
+      Math.min(
+        configuredPlannerLlmTimeoutMs,
+        Math.floor(requestedOverallSearchBudgetMs * 0.25),
       ),
+    ),
   };
   const summaryLlm = {
     ...(options?.llm ?? {}),
-    timeoutMs:
-      options?.llm?.timeoutMs ??
-      positiveEnvNumber(
-        "SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS",
-        DEFAULT_SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS,
-      ),
+    timeoutMs: configuredSummaryLlmTimeoutMs,
   };
   let plan = await planSearchIntent(input, { ...options, llm: plannerLlm });
   const genericUnderstanding = await understandTopicWithFallback({
@@ -14210,7 +14457,7 @@ export async function searchIntentSources(
         sourceMixProfile,
         bucketResultCounts: bucketResultCountsForSources([]),
         timedOutProviders: [],
-        elapsedMs: 0,
+        elapsedMs: Date.now() - searchRequestStartedAt,
         diversityWarnings: [],
         original_topic: plan.originalTopic ?? topic,
         active_research_topic: plan.activeResearchTopic ?? topic,
@@ -14388,14 +14635,18 @@ export async function searchIntentSources(
     ...options,
     runtimeBudget: {
       overallSearchBudgetMs:
-        options?.runtimeBudget?.overallSearchBudgetMs ?? profile.overallTimeoutMs,
+        Math.max(500, remainingOverallBudgetMs() - SOURCE_SEARCH_RESPONSE_BUFFER_MS),
       perQueryTimeoutMs:
         options?.runtimeBudget?.perQueryTimeoutMs ?? profile.providerTimeoutMs,
       maxConcurrentProviderRequests:
         options?.runtimeBudget?.maxConcurrentProviderRequests ?? 3,
     },
   });
-  const foregroundStartedAt = Date.now();
+  runtimeBudget.deadlineMs = Math.min(
+    runtimeBudget.deadlineMs,
+    absoluteSearchDeadlineMs - SOURCE_SEARCH_RESPONSE_BUFFER_MS,
+  );
+  const foregroundStartedAt = searchRequestStartedAt;
   const plannerLlmStatus = llmStatusFromPlannerStatus(plan);
   const groups: SourceProviderSearchResult[] = [];
   const seedSources = trustedSeedSourcesForPlan(plan).map((source) => withSourceMixRole(source));
@@ -14504,22 +14755,51 @@ export async function searchIntentSources(
   );
   const rejectionReasons = rejectionReasonSummary(scoredSources);
   const sourcesForSummary = [...candidateSources, ...fallbackReviewSources];
-  let sources = await summarizeSourcesWithLlm(
-    plan.normalizedTopic,
-    sourcesForSummary.slice(
-      0,
-      profile.enrichOnlyAfterAccept
-        ? Math.min(profile.targetAcceptedSources, sourcesForSummary.length)
-        : profile.maxCandidates,
-    ),
-    {
-      llm: summaryLlm,
-      fetchImpl: options?.fetchImpl,
-      maxSources:
-        options?.sourceSummaries?.maxSources ??
-        (profile.enrichOnlyAfterAccept ? profile.targetAcceptedSources : profile.maxCandidates),
-    },
+  const summaryCandidates = sourcesForSummary.slice(
+    0,
+    profile.enrichOnlyAfterAccept
+      ? Math.min(profile.targetAcceptedSources, sourcesForSummary.length)
+      : profile.maxCandidates,
   );
+  const summaryBudgetMs = remainingOverallBudgetMs();
+  let sources =
+    summaryBudgetMs < 1_500 || Date.now() >= runtimeBudget.deadlineMs
+      ? summaryCandidates.map((source) => ({
+          ...source,
+          llmSummaryStatus: source.llmSummaryStatus ?? "skipped" as const,
+          summaryStructuredStatus:
+            source.summaryStructuredStatus ?? "unavailable" as const,
+          summaryStatus: source.summaryStatus ?? "skipped" as const,
+          summaryFallbackUsed: true,
+          summaryReason:
+            source.summaryReason ??
+            "overall_search_budget_exhausted_before_summary",
+          summaryMessage:
+            source.summaryMessage ??
+            "已先顯示搜尋結果，來源摘要改用 deterministic fallback。",
+        }))
+      : await summarizeSourcesWithLlm(
+          plan.normalizedTopic,
+          summaryCandidates,
+          {
+            llm: {
+              ...summaryLlm,
+              timeoutMs: Math.max(
+                500,
+                Math.min(summaryLlm.timeoutMs ?? configuredSummaryLlmTimeoutMs, summaryBudgetMs - 500),
+              ),
+            },
+            fetchImpl: options?.fetchImpl,
+            maxSources:
+              options?.sourceSummaries?.maxSources ??
+              (profile.enrichOnlyAfterAccept ? profile.targetAcceptedSources : profile.maxCandidates),
+          },
+        );
+  if (summaryBudgetMs < 1_500 || Date.now() >= runtimeBudget.deadlineMs) {
+    runtimeBudget.warnings.add(
+      "來源摘要 LLM enrichment 因整體 time budget 跳過，已改用 deterministic fallback。",
+    );
+  }
   const pipeline = enrichSourcesWithResearchPipeline(
     sources,
     semanticClassification,
