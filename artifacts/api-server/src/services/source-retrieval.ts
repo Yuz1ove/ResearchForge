@@ -34,7 +34,8 @@ export type SourceSearchErrorCode =
   | "api-failure"
   | "rate_limited"
   | "server_error"
-  | "schema_error";
+  | "schema_error"
+  | "low_results";
 
 export type SourceFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -857,7 +858,26 @@ async function searchCrossrefQuery(
 
 async function searchCrossref(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<ProviderNormalizedResults> {
   try {
-    return await searchCrossrefQuery(query, config, options);
+    const initial = await searchCrossrefQuery(query, config, options);
+    if (initial.results.length > 1 && initial.rawCount > 1) return initial;
+    const retryQuery = shortCrossrefRetryQuery(query);
+    if (retryQuery === query.trim()) return initial;
+    const retried = await searchCrossrefQuery(
+      retryQuery,
+      {
+        ...config,
+        timeoutMs: Math.min(config.timeoutMs, RETRY_PROVIDER_TIMEOUT_MS),
+        pageLimit: 1,
+      },
+      options,
+    );
+    return {
+      results: dedupeSourceRecords([...initial.results, ...retried.results]),
+      rawCount: initial.rawCount + retried.rawCount,
+      retryMode: "short_query",
+      retryQuery,
+      retryReason: "low_results",
+    };
   } catch (error) {
     if (!(error instanceof SourceSearchError) || error.code !== "timeout") {
       throw error;

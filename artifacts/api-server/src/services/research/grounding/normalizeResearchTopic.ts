@@ -1,12 +1,18 @@
 export interface NormalizedResearchTopic {
   originalQuery: string;
   displayTitle: string;
+  normalizedTitle?: string;
+  normalizedTopicZh?: string;
   zhAcademicQuery: string[];
   enAcademicQuery: string[];
   keywordSet: string[];
   negativeKeywords: string[];
   broaderAcademicQueries: string[];
   locale: string;
+  diagnostics?: {
+    translationUnavailable?: boolean;
+    bilingualPhraseMapper?: string[];
+  };
 }
 
 function compactWhitespace(value: string): string {
@@ -442,7 +448,9 @@ function solarSailRewrite(topic: string, locale: string): NormalizedResearchTopi
   const originalQuery = compactWhitespace(topic);
   return {
     originalQuery,
-    displayTitle: "太陽帆推進技術的物理原理、太空任務應用與限制",
+    displayTitle: originalQuery,
+    normalizedTitle: "太陽帆推進技術的物理原理、太空任務應用與限制",
+    normalizedTopicZh: "太陽帆推進技術的物理原理、太空任務應用與限制",
     zhAcademicQuery: [
       "太陽帆 輻射壓 推進 原理",
       "太陽帆 航天任務 應用 價值",
@@ -721,8 +729,10 @@ function dentalPlaqueRewrite(topic: string, locale: string): NormalizedResearchT
     displayTitle: originalQuery,
     zhAcademicQuery: [
       "牙菌斑 形成 治療",
+      "牙菌斑 產生 對應治療方式",
       "口腔生物膜 牙菌斑 治療",
       "牙周病 牙菌斑 控制",
+      "牙垢 牙菌斑 清除 預防",
       "牙菌斑 生物膜 口腔衛生 氯己定",
     ],
     enAcademicQuery: [
@@ -731,25 +741,36 @@ function dentalPlaqueRewrite(topic: string, locale: string): NormalizedResearchT
       "plaque control chlorhexidine scaling oral hygiene",
       "dental biofilm formation periodontal therapy",
       "dental plaque biofilm control oral hygiene treatment",
+      "periodontal disease dental plaque control review",
     ],
     keywordSet: [
       "牙菌斑",
+      "牙垢",
       "口腔生物膜",
       "牙周病",
+      "產生",
+      "生成",
       "形成",
+      "成因",
       "治療",
+      "對應治療",
+      "治療方式",
       "控制",
+      "清除",
+      "預防",
       "口腔衛生",
       "dental plaque",
+      "plaque control",
       "oral biofilm",
       "periodontal",
       "periodontal disease",
-      "plaque control",
       "biofilm formation",
       "chlorhexidine",
       "scaling",
       "oral hygiene",
       "treatment",
+      "therapy",
+      "management",
     ],
     negativeKeywords: ["tooth whitening product", "advertisement", "shopping", "cosmetic dentistry marketing"],
     broaderAcademicQueries: [
@@ -761,11 +782,73 @@ function dentalPlaqueRewrite(topic: string, locale: string): NormalizedResearchT
   };
 }
 
+function dogResourceGuardingRewrite(topic: string, locale: string): NormalizedResearchTopic {
+  const originalQuery = compactWhitespace(topic);
+  return {
+    originalQuery,
+    displayTitle: originalQuery,
+    zhAcademicQuery: [
+      "狗 護食 行為 教育方式",
+      "犬 護食 資源防衛 食物攻擊 行為矯正",
+      "狗 resource guarding 正向增強 訓練",
+      "犬類 食物防衛 行為治療 獸醫行為學",
+    ],
+    enAcademicQuery: [
+      "dog resource guarding food aggression behavior modification",
+      "canine resource guarding positive reinforcement training",
+      "food guarding behavior dogs veterinary behavior",
+      "canine aggression resource guarding management",
+      "resource guarding in domestic dogs behavior therapy",
+    ],
+    keywordSet: [
+      "狗",
+      "犬",
+      "護食",
+      "資源防衛",
+      "食物攻擊",
+      "行為矯正",
+      "正向增強",
+      "訓練",
+      "獸醫行為學",
+      "dog",
+      "canine",
+      "resource guarding",
+      "food aggression",
+      "behavior modification",
+      "positive reinforcement",
+      "veterinary behavior",
+      "canine aggression",
+    ],
+    negativeKeywords: [
+      "dog food product",
+      "dog food review",
+      "guard dog",
+      "police dog",
+      "military dog",
+      "shopping",
+      "obedience-only marketing",
+      "寵物食品",
+      "狗糧",
+      "警犬",
+      "軍犬",
+      "看門犬",
+    ],
+    broaderAcademicQueries: [
+      "canine aggression behavior modification",
+      "veterinary behavior resource guarding dogs",
+      "positive reinforcement dog training aggression",
+    ],
+    locale,
+  };
+}
+
 function pandaTerminologyRewrite(topic: string, locale: string): NormalizedResearchTopic {
   const originalQuery = compactWhitespace(topic);
   return {
     originalQuery,
-    displayTitle: "熊貓與貓熊名稱差異、分類學關係與中文語境中的用法",
+    displayTitle: originalQuery,
+    normalizedTitle: "熊貓與貓熊名稱差異、分類學關係與中文語境中的用法",
+    normalizedTopicZh: "熊貓與貓熊名稱差異、分類學關係與中文語境中的用法",
     zhAcademicQuery: [
       "熊貓 貓熊 名稱 差異 中文語境",
       "大熊貓 小熊貓 分類 關係",
@@ -839,8 +922,28 @@ function genericRewrite(topic: string, locale: string): NormalizedResearchTopic 
         `${words.slice(0, 4).join(" ")} 學術 影響`,
       ])
     : [];
+  const mappedEnglishQueries: string[] = [];
+  const mappedKeywords: string[] = [];
+  const mapperHits: string[] = [];
+  if (/牙菌斑|口腔生物膜|牙周病/u.test(originalQuery)) {
+    mappedEnglishQueries.push(
+      "dental plaque oral biofilm periodontal disease plaque control",
+      "oral biofilm dental plaque treatment review",
+    );
+    mappedKeywords.push("dental plaque", "oral biofilm", "periodontal disease", "plaque control");
+    mapperHits.push("dental_plaque");
+  }
+  if (/狗|犬|護食|食物攻擊|資源防衛/u.test(originalQuery)) {
+    mappedEnglishQueries.push(
+      "dog canine resource guarding food aggression behavior modification",
+      "canine resource guarding positive reinforcement veterinary behavior",
+    );
+    mappedKeywords.push("dog", "canine", "resource guarding", "food aggression", "behavior modification");
+    mapperHits.push("dog_resource_guarding");
+  }
+  const translationUnavailable = containsZh(originalQuery) && mappedEnglishQueries.length === 0;
   const enAcademicQuery = containsZh(originalQuery)
-    ? []
+    ? uniqueStrings(mappedEnglishQueries)
     : uniqueStrings([
         originalQuery,
         `${originalQuery} academic research`,
@@ -852,10 +955,14 @@ function genericRewrite(topic: string, locale: string): NormalizedResearchTopic 
     displayTitle: originalQuery,
     zhAcademicQuery,
     enAcademicQuery,
-    keywordSet: words,
+    keywordSet: uniqueStrings([...words, ...mappedKeywords]),
     negativeKeywords: ["wallpaper", "quotes", "travel", "marketing", "advertisement"],
     broaderAcademicQueries: enAcademicQuery.slice(1),
     locale,
+    diagnostics: {
+      translationUnavailable,
+      bilingualPhraseMapper: mapperHits,
+    },
   };
 }
 
@@ -952,10 +1059,18 @@ export function normalizeResearchTopic(
     return birdFeedingRewrite(normalized, locale);
   }
   if (
-    /牙菌斑|口腔生物膜|牙周病|dental plaque|oral biofilm|periodontal/i.test(normalized) &&
-    /生成|形成|治療|控制|plaque|biofilm|treatment|therapy|control/i.test(normalized)
+    /牙菌斑|牙垢|口腔生物膜|牙周病|dental plaque|oral biofilm|periodontal|plaque control/i.test(normalized) &&
+    /產生|生成|形成|成因|治療|對應治療|治療方式|控制|清除|預防|plaque|biofilm|treatment|therapy|management|control/i.test(normalized)
   ) {
     return dentalPlaqueRewrite(normalized, locale);
+  }
+  if (
+    /狗|犬|護食|資源防衛|食物攻擊|dog|canine|resource guarding|food aggression/i.test(normalized) &&
+    /行為|教育|矯正|訓練|正向增強|獸醫行為|behavior|behaviour|training|positive reinforcement|veterinary behavior|management/i.test(
+      normalized,
+    )
+  ) {
+    return dogResourceGuardingRewrite(normalized, locale);
   }
   if (/熊貓|貓熊|大熊貓|小熊貓|小貓熊|giant panda|red panda|Ailuropoda|Ailurus/i.test(normalized)) {
     return pandaTerminologyRewrite(normalized, locale);

@@ -244,7 +244,8 @@ const DOMAIN_INTENT_PATTERNS: Array<{
   domain: string;
   pattern: RegExp;
 }> = [
-  { domain: "biomedical / health", pattern: /健康|醫|睡眠|心率|氣喘|咖啡因|抗生素|抗藥性|牙菌斑|口腔生物膜|牙周病|health|medical|sleep|heart rate|asthma|caffeine|antibiotic|dental plaque|oral biofilm|periodontal/i },
+  { domain: "animal behavior / veterinary behavior", pattern: /狗|犬|護食|資源防衛|食物攻擊|犬類行為|dog|canine|resource guarding|food aggression|veterinary behavior/i },
+  { domain: "biomedical / oral health / dentistry", pattern: /健康|醫|睡眠|心率|氣喘|咖啡因|抗生素|抗藥性|牙菌斑|牙垢|口腔生物膜|牙周病|health|medical|sleep|heart rate|asthma|caffeine|antibiotic|dental plaque|oral biofilm|periodontal|plaque control/i },
   { domain: "physics / aerospace", pattern: /太陽帆|輻射壓|光壓|航天推進|深空探測|solar sail|solar sailing|radiation pressure|spacecraft propulsion|deep space/i },
   { domain: "physics / aerodynamics", pattern: /風箏|空氣動力|升力|阻力|風速|拉力|kite|aerodynamics|lift|drag|tethered flight|wind tunnel/i },
   { domain: "physics / optics", pattern: /泡泡|肥皂膜|薄膜|干涉|繞射|光學|光波長|soap bubble|soap film|thin film|interference|diffraction|optics|wavelength/i },
@@ -728,7 +729,6 @@ function sourceBucketText(source: BucketSource): string {
       source.keywords?.join(" "),
       source.venue,
       source.url,
-      source.queryUsed,
       source.sourceType,
     ]
       .filter(Boolean)
@@ -868,6 +868,180 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
     ...(queryPlan?.secondaryQueries ?? []),
     ...(queryPlan?.conceptGroups ?? []).flatMap((group) => [group.name, ...group.zhTerms, ...group.enTerms]),
   ].join(" ")).toLowerCase();
+
+  if (/牙菌斑|牙垢|口腔生物膜|牙周病|dental plaque|oral biofilm|dental biofilm|periodontal|plaque control/i.test(text)) {
+    return {
+      buckets: [
+        "oral_biofilm_formation",
+        "plaque_control_treatment",
+        "periodontal_context",
+        "official_medical_background",
+        "off_topic",
+      ],
+      definitions: [
+        {
+          bucket: "oral_biofilm_formation",
+          terms: [
+            "牙菌斑",
+            "牙垢",
+            "口腔生物膜",
+            "dental plaque",
+            "oral biofilm",
+            "dental biofilm",
+            "biofilm formation",
+            "plaque formation",
+          ],
+          strongTerms: ["dental plaque", "oral biofilm", "牙菌斑", "口腔生物膜"],
+          requiredSignals: ["dental plaque / oral biofilm formation signal"],
+        },
+        {
+          bucket: "plaque_control_treatment",
+          terms: [
+            "plaque control",
+            "chlorhexidine",
+            "scaling",
+            "dental scaling",
+            "oral hygiene",
+            "periodontal therapy",
+            "treatment",
+            "therapy",
+            "牙菌斑控制",
+            "治療",
+            "口腔衛生",
+            "洗牙",
+          ],
+          strongTerms: ["plaque control", "periodontal therapy", "chlorhexidine", "scaling"],
+        },
+        {
+          bucket: "periodontal_context",
+          terms: [
+            "periodontal disease",
+            "periodontitis",
+            "gingivitis",
+            "dental caries",
+            "牙周病",
+            "牙齦炎",
+            "齲齒",
+          ],
+          strongTerms: ["periodontal disease", "periodontitis", "牙周病"],
+        },
+        {
+          bucket: "official_medical_background",
+          terms: [
+            "WHO",
+            "CDC",
+            "NIH",
+            "dental association",
+            "official guideline",
+            "public health",
+            "oral health",
+            "university extension",
+            "government",
+          ],
+          strongTerms: ["WHO", "CDC", "NIH", "dental association", "official guideline"],
+        },
+      ],
+      offTopicPatterns: [
+        /tooth whitening/i,
+        /cosmetic dentistry marketing/i,
+        /dental clinic advertisement/i,
+        /product shopping/i,
+        /牙齒美白/u,
+        /診所廣告/u,
+        /產品購買/u,
+      ],
+      backgroundSourceNeeded: true,
+    };
+  }
+
+  if (/狗|犬|護食|資源防衛|食物攻擊|犬類行為|dog|canine|resource guarding|food aggression|veterinary behavior/i.test(text)) {
+    return {
+      buckets: [
+        "canine_resource_guarding_behavior",
+        "behavior_modification_training",
+        "veterinary_behavior_background",
+        "general_background",
+        "off_topic",
+      ],
+      definitions: [
+        {
+          bucket: "canine_resource_guarding_behavior",
+          terms: [
+            "狗",
+            "犬",
+            "dog",
+            "canine",
+            "domestic dog",
+            "resource guarding",
+            "food guarding",
+            "food aggression",
+            "possession aggression",
+            "護食",
+            "資源防衛",
+            "食物攻擊",
+          ],
+          strongTerms: ["resource guarding", "food aggression", "food guarding", "護食", "資源防衛"],
+          requiredSignals: ["dog/canine plus resource guarding/food aggression signal"],
+        },
+        {
+          bucket: "behavior_modification_training",
+          terms: [
+            "behavior modification",
+            "behavior therapy",
+            "positive reinforcement",
+            "desensitization",
+            "counterconditioning",
+            "training",
+            "management",
+            "行為矯正",
+            "正向增強",
+            "減敏",
+            "反制約",
+            "訓練",
+          ],
+          strongTerms: [
+            "positive reinforcement",
+            "behavior modification",
+            "desensitization",
+            "counterconditioning",
+          ],
+        },
+        {
+          bucket: "veterinary_behavior_background",
+          terms: [
+            "veterinary behavior",
+            "animal behavior",
+            "canine aggression",
+            "aggression in dogs",
+            "animal welfare",
+            "獸醫行為學",
+            "犬類攻擊",
+            "動物福利",
+          ],
+          strongTerms: ["veterinary behavior", "canine aggression", "animal behavior", "獸醫行為學"],
+        },
+        {
+          bucket: "general_background",
+          terms: ["animal welfare", "veterinary association", "university extension", "official", "guideline"],
+          strongTerms: ["animal welfare", "veterinary association", "university extension"],
+        },
+      ],
+      offTopicPatterns: [
+        /dog food product/i,
+        /dog food review/i,
+        /guard dog/i,
+        /police dog/i,
+        /military dog/i,
+        /product shopping/i,
+        /寵物食品/u,
+        /狗糧/u,
+        /警犬/u,
+        /軍犬/u,
+        /看門犬/u,
+      ],
+      backgroundSourceNeeded: true,
+    };
+  }
 
   if (/熊貓|貓熊|大熊貓|小熊貓|小貓熊|紅熊貓|giant panda|red panda|ailuropoda|ailurus|cat-bear|chinese terminology/i.test(text)) {
     return {
@@ -1066,7 +1240,7 @@ function assessSourceBucket(input: {
       .sort((left, right) => right[1] - left[1])[0] ?? ["general_academic", 0];
   const offTopicHit = input.topicEntityMap.offTopicPatterns.some((pattern) => pattern.test(fullText));
   const bestScore = bestEntry[1];
-  const offTopicScore = offTopicHit && bestScore < 0.42 ? 0.92 : bestScore < 0.12 ? 0.45 : 0;
+  const offTopicScore = offTopicHit && bestScore < 0.72 ? 0.92 : bestScore < 0.12 ? 0.45 : 0;
   if (offTopicScore > 0) bucketScores.off_topic = offTopicScore;
   const bucket: SourceResearchBucket =
     offTopicScore >= 0.65 ? "off_topic" : bestEntry[0];
@@ -1084,9 +1258,26 @@ function assessSourceBucket(input: {
     input.provider === "web" ||
     input.sourceType === "official" ||
     input.sourceType === "education" ||
-    /official|government|museum|zoo|nasa|noaa|who|cdc|nih|smithsonian|british museum|metropolitan museum|教育|博物館|動物園/i.test(
+    /official|government|museum|zoo|nasa|noaa|who|cdc|nih|dental association|veterinary association|animal welfare|university extension|smithsonian|british museum|metropolitan museum|教育|博物館|動物園/i.test(
       fullText,
     );
+  const scholarlyAcceptedBuckets: SourceResearchBucket[] = [
+    "taxonomy_distinction",
+    "biomedical",
+    "physics_atmospheric_optics",
+    "oral_biofilm_formation",
+    "plaque_control_treatment",
+    "periodontal_context",
+    "canine_resource_guarding_behavior",
+    "behavior_modification_training",
+  ];
+  const backgroundOnlyBuckets: SourceResearchBucket[] = [
+    "terminology_usage",
+    "naming_history",
+    "general_background",
+    "official_medical_background",
+    "veterinary_behavior_background",
+  ];
   let decision: SourceBucketDecision = "manual_review";
   let sourceUseCase: SourceUseCase = "manual_review_only";
   const decisionReasons: string[] = [];
@@ -1097,7 +1288,7 @@ function assessSourceBucket(input: {
     sourceUseCase = "rejected";
     decisionReasons.push("明顯命中 off_topic bucket，且缺少本題必要實體。");
   } else if (
-    (bucket === "taxonomy_distinction" || bucket === "biomedical" || bucket === "physics_atmospheric_optics") &&
+    scholarlyAcceptedBuckets.includes(bucket) &&
     bucketScore >= 0.52 &&
     academicTrace &&
     input.sourceQualityScore >= 0.45
@@ -1110,7 +1301,7 @@ function assessSourceBucket(input: {
     sourceUseCase = "academic_claim";
     decisionReasons.push("humanities/culture bucket strong match with traceable scholarly metadata.");
   } else if (
-    (bucket === "terminology_usage" || bucket === "naming_history" || bucket === "general_background") &&
+    backgroundOnlyBuckets.includes(bucket) &&
     bucketScore >= 0.48 &&
     (sourceLooksOfficial || !academicTrace)
   ) {
@@ -1181,6 +1372,17 @@ function evidenceFacetsForSource(source: {
     { label: "含糖飲料", pattern: /可樂|汽水|碳酸飲料|含糖飲料|cola|soda|soft drinks?|sugar[-\s]?sweetened beverages?|carbonated beverages?|sugary drinks?/i },
     { label: "糖分與咖啡因", pattern: /糖分|游離糖|添加糖|咖啡因|sugar|free sugar|added sugar|caffeine/i },
     { label: "健康風險", pattern: /肥胖|代謝|蛀牙|牙齒|糖尿病|心血管|公共衛生|obesity|metabolic|diabetes|cardiovascular|dental|caries|public health/i },
+    { label: "牙菌斑形成", pattern: /牙菌斑形成|牙菌斑|dental plaque|plaque formation|biofilm formation/i },
+    { label: "口腔生物膜", pattern: /口腔生物膜|oral biofilm|dental biofilm/i },
+    { label: "牙周治療", pattern: /牙周治療|牙周病|periodontal therapy|periodontal treatment|periodontal disease|periodontitis/i },
+    { label: "牙菌斑控制", pattern: /牙菌斑控制|plaque control|chlorhexidine|scaling|洗牙/i },
+    { label: "口腔衛生", pattern: /口腔衛生|oral hygiene|prevention|預防/i },
+    { label: "護食行為", pattern: /護食|food guarding|resource guarding/i },
+    { label: "資源防衛", pattern: /資源防衛|resource guarding|possession aggression/i },
+    { label: "食物攻擊", pattern: /食物攻擊|food aggression/i },
+    { label: "行為矯正", pattern: /行為矯正|behavior modification|behavior therapy|desensitization|counterconditioning/i },
+    { label: "正向增強訓練", pattern: /正向增強|positive reinforcement|training|訓練/i },
+    { label: "獸醫行為學", pattern: /獸醫行為學|veterinary behavior|animal behavior|canine aggression/i },
     { label: "測量或分類證據", pattern: /測量|分類|indicator|classification|structures/i },
     { label: "影響與關聯", pattern: /影響|關係|relationship|effect|impact/i },
     { label: "研究方法", pattern: /方法|method|model|analysis|reconstruction/i },
@@ -4580,6 +4782,17 @@ export function buildSourceCandidates(input: {
         bucketAssessment.highConfidenceManual &&
         passesRequiredTopicEvidence &&
         sourceClassification.recommendationBucket === "rejected"
+      ) {
+        sourceClassification = {
+          recommendationBucket: "manual_review",
+          sourceRole: "weak_or_uncertain",
+          institutionType: sourceClassification.institutionType,
+        };
+      }
+      if (
+        !relevanceAnalysis.hasCoreConceptMatch &&
+        bucketAssessment.matchedEntities.length === 0 &&
+        sourceClassification.recommendationBucket === "scholarly_recommended"
       ) {
         sourceClassification = {
           recommendationBucket: "manual_review",

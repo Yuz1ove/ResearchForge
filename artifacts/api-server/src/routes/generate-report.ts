@@ -554,6 +554,33 @@ export function createGenerateReportRouter({
       });
       return;
     }
+    if (readiness.badge === "缺少證據卡") {
+      logReportGeneration({
+        generationTraceId,
+        workflowId: normalized.workflowId,
+        topicHash: normalized.topicHash,
+        jobId: normalized.jobId,
+        reportMode: readiness.reportMode,
+        acceptedSourcesCount: readiness.acceptedSourcesCount,
+        evidenceCardsCount: readiness.evidenceCardsCount,
+        minRequiredSources: readiness.minRequiredSources,
+        requestedModel: expectedModel(),
+        actualModel: null,
+        fallbackUsed: false,
+        responseStatus: "failed",
+        errorCode: "EVIDENCE_CARDS_REQUIRED",
+        promptHash: promptHash(normalized),
+        latencyMs: Date.now() - startedAt,
+      });
+      res.status(400).json(
+        errorPayload(
+          "EVIDENCE_CARDS_REQUIRED",
+          baseDetails,
+          generationTraceId,
+        ),
+      );
+      return;
+    }
     if (!readiness.canGenerate || normalized.reportMode !== readiness.reportMode) {
       logReportGeneration({
         generationTraceId,

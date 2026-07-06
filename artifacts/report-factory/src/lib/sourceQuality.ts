@@ -4,6 +4,8 @@ import type { SourceRecord } from "./sourceRecords.ts";
 export type TopicAnchorDomain =
   | "chemistry"
   | "biology"
+  | "dentistry"
+  | "animal_behavior"
   | "medicine"
   | "physics"
   | "social_science"

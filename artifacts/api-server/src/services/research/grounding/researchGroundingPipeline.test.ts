@@ -718,7 +718,8 @@ test("normalizeResearchTopic rewrites panda terminology topic into bilingual tax
   const normalized = normalizeResearchTopic("熊貓與貓熊的關係", "zh-TW");
 
   assert.equal(normalized.originalQuery, "熊貓與貓熊的關係");
-  assert.match(normalized.displayTitle, /熊貓與貓熊名稱差異/u);
+  assert.equal(normalized.displayTitle, "熊貓與貓熊的關係");
+  assert.match(normalized.normalizedTopicZh ?? "", /熊貓與貓熊名稱差異/u);
   assert.ok(normalized.zhAcademicQuery.some((query) => /熊貓 貓熊 名稱 差異/u.test(query)));
   assert.ok(normalized.zhAcademicQuery.some((query) => /大熊貓 小熊貓 分類 關係/u.test(query)));
   assert.ok(normalized.enAcademicQuery.length >= 3);
@@ -771,16 +772,24 @@ test("normalizeResearchTopic expands common Chinese Step 2 topics into bilingual
       expectedTerms: [/avian/i, /foraging/i, /feeding ecology/i, /trophic/i],
     },
     {
-      topic: "牙菌斑的生成及對應治療方式",
-      expectedZh: /口腔生物膜 牙菌斑 治療/u,
+      topic: "牙菌斑的產生及對應治療方式",
+      expectedZh: /牙菌斑 產生 對應治療方式/u,
       expectedEn: /dental plaque formation treatment oral biofilm/i,
-      expectedTerms: [/dental plaque/i, /oral biofilm/i, /periodontal/i, /plaque control/i],
+      expectedTerms: [/牙菌斑/u, /口腔生物膜/u, /dental plaque/i, /oral biofilm/i],
+    },
+    {
+      topic: "狗的護食行為與教育方式",
+      expectedZh: /狗 護食 行為 教育方式/u,
+      expectedEn: /dog resource guarding food aggression behavior modification/i,
+      expectedTerms: [/狗/u, /犬/u, /護食/u, /resource guarding/i, /food aggression/i],
+      expectedNegative: /dog food product|guard dog|police dog/i,
     },
   ];
 
   for (const item of cases) {
     const normalized = normalizeResearchTopic(item.topic, "zh-TW");
     assert.equal(normalized.originalQuery, item.topic);
+    assert.equal(normalized.displayTitle, item.topic);
     assert.match(normalized.zhAcademicQuery.join(" "), item.expectedZh);
     assert.match(normalized.enAcademicQuery.join(" "), item.expectedEn);
     for (const expectedTerm of item.expectedTerms) {
@@ -804,6 +813,7 @@ test("runResearchGroundingPipeline preserves raw Chinese topics while routing re
     expectedZh: RegExp;
     expectedEn: RegExp;
     expectedDomain: RegExp;
+    expectedBucket?: RegExp;
   }> = [
     {
       topic: "風箏飛行原理",
@@ -831,16 +841,30 @@ test("runResearchGroundingPipeline preserves raw Chinese topics while routing re
       expectedDomain: /environmental|biology|ecology|life/i,
     },
     {
-      topic: "牙菌斑的生成及對應治療方式",
-      selectedDomain: "medicine",
+      topic: "牙菌斑的產生及對應治療方式",
+      selectedDomain: "dentistry",
       titlePrefix: "Dental Plaque Oral Biofilm",
       abstractTerms:
         "Dental plaque formation, oral biofilm, periodontal disease treatment, plaque control, chlorhexidine, scaling and oral hygiene.",
       primaryConcepts: ["dental plaque", "oral biofilm", "periodontal disease", "plaque control"],
       mustHaveTerms: ["dental plaque", "oral biofilm", "treatment"],
-      expectedZh: /牙菌斑 形成 治療/u,
+      expectedZh: /牙菌斑 產生 對應治療方式/u,
       expectedEn: /dental plaque formation treatment oral biofilm/i,
-      expectedDomain: /biomedical|health|medicine/i,
+      expectedDomain: /oral health|dentistry|biomedical/i,
+      expectedBucket: /oral_biofilm_formation|plaque_control_treatment/,
+    },
+    {
+      topic: "狗的護食行為與教育方式",
+      selectedDomain: "animal_behavior",
+      titlePrefix: "Canine Resource Guarding",
+      abstractTerms:
+        "Canine resource guarding, food aggression, positive reinforcement, behavior modification, desensitization, counterconditioning and veterinary behavior.",
+      primaryConcepts: ["dog", "canine", "resource guarding", "food aggression", "behavior modification"],
+      mustHaveTerms: ["dog", "canine", "resource guarding", "food aggression"],
+      expectedZh: /狗 護食 行為 教育方式/u,
+      expectedEn: /dog resource guarding food aggression behavior modification/i,
+      expectedDomain: /animal behavior|veterinary behavior/i,
+      expectedBucket: /canine_resource_guarding_behavior|behavior_modification_training/,
     },
   ];
 
@@ -929,8 +953,109 @@ test("runResearchGroundingPipeline preserves raw Chinese topics while routing re
       result.diagnosticTrace?.step2_normalization.detectedDomain ?? "",
       item.expectedDomain,
     );
+    const reviewableCandidates =
+      result.sourceCandidates?.filter((candidate) => candidate.reviewStatus !== "rejected") ?? [];
+    assert.ok(reviewableCandidates.length >= 3);
+    if (item.expectedBucket) {
+      assert.ok(
+        reviewableCandidates.some((candidate) =>
+          item.expectedBucket!.test(candidate.sourceBucket ?? ""),
+        ),
+        `expected a candidate bucket matching ${item.expectedBucket}`,
+      );
+    }
     assert.equal(result.diagnosticTrace?.step8_nextStepDecision.canProceedToSourceReview, true);
     assert.notEqual(result.diagnosticTrace?.step8_nextStepDecision.workflowStatus, "empty");
+  }
+});
+
+test("topic-specific source buckets reject dental and dog behavior drift despite provider scores", async () => {
+  const cases = [
+    {
+      topic: "牙菌斑的產生及對應治療方式",
+      workflowId: "wf-dental-plaque-drift",
+      source: sourceRecord({
+        id: "dental-clinic-ad",
+        title: "Tooth whitening advertisement and dental clinic marketing",
+        abstract:
+          "A cosmetic dentistry product shopping page about whitening packages, clinic coupons, marketing conversion, and appointment booking.",
+        queryUsed: "dental plaque oral biofilm periodontal disease plaque control",
+        sourceType: "OpenAlex",
+        provider: "OpenAlex",
+        relevanceScore: 96,
+        sourceQualityScore: 90,
+      }),
+      primaryConcepts: ["dental plaque", "oral biofilm", "periodontal disease", "plaque control"],
+      mustHaveTerms: ["dental plaque", "oral biofilm", "plaque control"],
+    },
+    {
+      topic: "狗的護食行為與教育方式",
+      workflowId: "wf-dog-resource-guarding-drift",
+      source: sourceRecord({
+        id: "guard-dog-food-product",
+        title: "Guard dog police training and dog food product review",
+        abstract:
+          "This article reviews guard dog patrol training, police dog equipment, dog food product ingredients, and shopping comparisons without resource guarding or behavior modification evidence.",
+        queryUsed: "dog resource guarding food aggression behavior modification",
+        sourceType: "Crossref",
+        provider: "Crossref",
+        relevanceScore: 94,
+        sourceQualityScore: 88,
+      }),
+      primaryConcepts: ["dog", "canine", "resource guarding", "food aggression", "behavior modification"],
+      mustHaveTerms: ["dog", "resource guarding", "food aggression"],
+    },
+  ];
+
+  for (const item of cases) {
+    const topicAnalysis = analyzeTopicInput({
+      topic: item.topic,
+      workflowId: item.workflowId,
+    });
+    const seedQueryPlan = buildSeedQueryPlan({ topicAnalysis });
+    const lexicalSignals = await collectLexicalSignals({ topicAnalysis });
+    const queryPlan = buildGroundingQueryPlan({
+      topicAnalysis,
+      seedQueryPlan,
+      lexicalSignals,
+    });
+    const result = buildSourceCandidates({
+      workflowId: item.workflowId,
+      topicHash: topicAnalysis.topicHash,
+      queryPlan,
+      parsedInput: parseResearchInput(item.topic),
+      searchResult: {
+        ...mockedGroundingSearchResult(
+          {
+            topic: item.topic,
+            originalTopic: item.topic,
+            workflowId: item.workflowId,
+            querySeedZh: queryPlan.bilingualQueries.zh,
+            querySeedEn: queryPlan.bilingualQueries.en,
+          },
+          [item.source],
+          {
+            primaryConcepts: item.primaryConcepts,
+            mustHaveTerms: item.mustHaveTerms,
+          },
+        ),
+        candidateSources: [item.source],
+        fallbackReviewSources: [],
+        rejectedSources: [],
+      } as any,
+    });
+
+    const candidate = result.sourceCandidates.find(
+      (source) => source.sourceId === item.source.id,
+    );
+    assert.equal(candidate?.reviewStatus, "rejected");
+    assert.equal(candidate?.recommendationBucket, "rejected");
+    assert.ok(
+      ["excluded_drift_term_match", "off_topic_bucket", "missing_core_concept", "low_topic_relevance"].includes(
+        candidate?.rejectionReason ?? "",
+      ),
+      `unexpected rejection reason ${candidate?.rejectionReason}`,
+    );
   }
 });
 

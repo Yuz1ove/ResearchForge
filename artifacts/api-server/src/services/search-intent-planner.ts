@@ -383,10 +383,22 @@ export interface SourceSearchPipelineDiagnostics {
   original_topic: string;
   active_research_topic: string;
   canonical_english_topic: string;
+  rawUserTopic?: string;
+  activeResearchTopic?: string;
+  normalizedTopic?: string;
+  canonicalEnglishTopic?: string;
   core_concepts: string[];
+  coreConcepts?: string[];
   english_queries: string[];
+  englishQueries?: string[];
   chinese_queries: string[];
+  chineseQueries?: string[];
   fallback_relaxed_queries: string[];
+  negativeTerms?: string[];
+  providerQueries?: string[];
+  implementedProviders?: string[];
+  medicalProvidersPending?: string[];
+  medicalProviderWarning?: string;
   raw_provider_count?: number;
   normalize_attempt_count?: number;
   normalized_valid_count?: number;
@@ -485,11 +497,24 @@ export interface SearchIntentSourceSearchResult {
   llm_status: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped";
   keyword_expansion: {
     normalized_topic: string;
+    rawUserTopic?: string;
+    activeResearchTopic?: string;
+    normalizedTopic?: string;
+    canonicalEnglishTopic?: string;
     domains: string[];
     search_queries: string[];
     english_queries: string[];
+    englishQueries?: string[];
     chinese_queries: string[];
+    chineseQueries?: string[];
     core_concepts?: string[];
+    coreConcepts?: string[];
+    negativeTerms?: string[];
+    triedQueries?: string[];
+    providerQueries?: string[];
+    implementedProviders?: string[];
+    medicalProvidersPending?: string[];
+    warning?: string;
     core_english_queries?: string[];
     academic_synonym_queries?: string[];
     education_queries?: string[];
@@ -1767,6 +1792,113 @@ const HIV_AIDS_DRIFT_TERMS = [
   "研究設計理論",
 ];
 
+const DENTAL_PLAQUE_PRIMARY = [
+  "牙菌斑",
+  "牙垢",
+  "口腔生物膜",
+  "dental plaque",
+  "oral biofilm",
+  "dental biofilm",
+  "plaque biofilm",
+];
+
+const DENTAL_PLAQUE_CONTEXT = [
+  "plaque control",
+  "periodontal disease",
+  "periodontitis",
+  "gingivitis",
+  "chlorhexidine",
+  "scaling",
+  "oral hygiene",
+  "periodontal therapy",
+  "biofilm formation",
+  "牙周病",
+  "牙齦炎",
+  "牙菌斑控制",
+  "洗牙",
+  "口腔衛生",
+  "治療",
+  "預防",
+];
+
+const DENTAL_PLAQUE_MUST_HAVE = [
+  "牙菌斑",
+  "口腔生物膜",
+  "dental plaque",
+  "oral biofilm",
+  "plaque control",
+  "periodontal",
+];
+
+const DENTAL_PLAQUE_DRIFT_TERMS = [
+  "tooth whitening",
+  "cosmetic dentistry marketing",
+  "dental clinic advertisement",
+  "product shopping",
+  "牙齒美白",
+  "診所廣告",
+  "產品購買",
+];
+
+const DOG_RESOURCE_GUARDING_PRIMARY = [
+  "狗",
+  "犬",
+  "護食",
+  "資源防衛",
+  "食物攻擊",
+  "dog",
+  "domestic dog",
+  "canine",
+  "resource guarding",
+  "food guarding",
+  "food aggression",
+];
+
+const DOG_RESOURCE_GUARDING_CONTEXT = [
+  "behavior modification",
+  "behavior therapy",
+  "positive reinforcement",
+  "desensitization",
+  "counterconditioning",
+  "training",
+  "management",
+  "veterinary behavior",
+  "canine aggression",
+  "animal welfare",
+  "行為矯正",
+  "正向增強",
+  "減敏",
+  "反制約",
+  "訓練",
+  "獸醫行為學",
+];
+
+const DOG_RESOURCE_GUARDING_MUST_HAVE = [
+  "dog",
+  "canine",
+  "resource guarding",
+  "food guarding",
+  "food aggression",
+  "護食",
+  "資源防衛",
+  "食物攻擊",
+];
+
+const DOG_RESOURCE_GUARDING_DRIFT_TERMS = [
+  "dog food product",
+  "dog food review",
+  "guard dog",
+  "police dog",
+  "military dog",
+  "shopping",
+  "obedience-only marketing",
+  "寵物食品",
+  "狗糧",
+  "警犬",
+  "軍犬",
+  "看門犬",
+];
+
 const DINOSAUR_PRIMARY = [
   "恐龍",
   "dinosaur",
@@ -2602,6 +2734,37 @@ function isHivAidsTopic(input: SearchIntentPlannerInput): boolean {
   ]);
 }
 
+function isDentalPlaqueTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(
+    `${input.topic} ${input.originalTopic ?? ""} ${input.displayTitle ?? ""} ${input.refinedTopic ?? ""} ${input.reportType ?? ""} ${input.audience ?? ""}`,
+  );
+  const hasDentalCue = hasAny(text, [
+    /牙菌斑|牙垢|口腔生物膜|牙周病/,
+    /dental plaque|oral biofilm|dental biofilm|periodontal|plaque control/i,
+  ]);
+  const hasFormationOrTreatmentCue = hasAny(text, [
+    /產生|生成|形成|成因|治療|對應治療|治療方式|控制|清除|預防/,
+    /formation|development|treatment|therapy|management|control|prevention/i,
+  ]);
+  return hasDentalCue && hasFormationOrTreatmentCue;
+}
+
+function isDogResourceGuardingTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(
+    `${input.topic} ${input.originalTopic ?? ""} ${input.displayTitle ?? ""} ${input.refinedTopic ?? ""} ${input.reportType ?? ""} ${input.audience ?? ""}`,
+  );
+  const hasDogCue = hasAny(text, [/狗|犬|dog|canine|domestic dog/i]);
+  const hasGuardingCue = hasAny(text, [
+    /護食|資源防衛|食物攻擊|食物防衛/,
+    /resource guarding|food guarding|food aggression|possession aggression/i,
+  ]);
+  const hasBehaviorCue = hasAny(text, [
+    /行為|教育|矯正|訓練|正向增強|獸醫行為|管理/,
+    /behavior|behaviour|training|positive reinforcement|behavior modification|veterinary behavior|management/i,
+  ]);
+  return (hasDogCue && hasGuardingCue) || (hasGuardingCue && hasBehaviorCue);
+}
+
 function isDinosaurTopic(input: SearchIntentPlannerInput): boolean {
   const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
   return hasAny(text, [
@@ -3144,6 +3307,44 @@ function deterministicAcademicQueryVariants(plan: SearchIntentPlan): {
         "solar sail spacecraft mission applications",
         "solar sailing deep space exploration limitations",
         "IKAROS LightSail NEA Scout solar sail",
+      ],
+    };
+  }
+
+  if (/牙菌斑|牙垢|口腔生物膜|牙周病|dental plaque|oral biofilm|periodontal|plaque control/.test(text)) {
+    return {
+      chinese: [
+        ...(/[\u4e00-\u9fff]/.test(plan.normalizedTopic) ? [plan.normalizedTopic] : []),
+        "牙菌斑 形成 治療",
+        "口腔生物膜 牙菌斑 控制",
+        "牙周病 牙菌斑 治療",
+        "牙菌斑 預防 口腔衛生",
+      ],
+      english: [
+        "dental plaque formation treatment oral biofilm",
+        "oral biofilm dental plaque periodontal disease treatment",
+        "plaque control chlorhexidine scaling oral hygiene",
+        "dental biofilm formation periodontal therapy",
+        "periodontal disease dental plaque control review",
+      ],
+    };
+  }
+
+  if (/狗|犬|護食|資源防衛|食物攻擊|dog|canine|resource guarding|food aggression/.test(text)) {
+    return {
+      chinese: [
+        ...(/[\u4e00-\u9fff]/.test(plan.normalizedTopic) ? [plan.normalizedTopic] : []),
+        "狗 護食 行為 教育方式",
+        "犬 資源防衛 食物攻擊 行為矯正",
+        "狗 護食 正向增強 訓練",
+        "犬類 行為問題 護食 獸醫行為學",
+      ],
+      english: [
+        "dog resource guarding food aggression behavior modification",
+        "canine resource guarding positive reinforcement training",
+        "food guarding behavior dogs veterinary behavior",
+        "canine aggression resource guarding management",
+        "resource guarding domestic dogs training behavior therapy",
       ],
     };
   }
@@ -4935,6 +5136,174 @@ export function buildRuleBasedSearchIntent(
       reasoningNotes: planReason(
         reason,
         "HIV/AIDS searches must keep HIV, AIDS, human immunodeficiency virus, or the Chinese equivalents tied to transmission, risk factors, epidemiology, public health, prevention, ART, PrEP, stigma, or treatment evidence. Generic scientific-method literature is hard drift unless it also contains HIV/AIDS anchors.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isDentalPlaqueTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "dental_plaque_oral_biofilm",
+      detectedDomain: "dentistry",
+      canonicalTopicZh: input.displayTitle?.trim() || normalizedTopic,
+      canonicalEnglishTopic: "dental plaque oral biofilm plaque control",
+      primaryConcepts: DENTAL_PLAQUE_PRIMARY,
+      contextConcepts: DENTAL_PLAQUE_CONTEXT,
+      outcomeConcepts: [
+        "biofilm formation",
+        "plaque control",
+        "periodontal treatment",
+        "oral hygiene",
+        "prevention",
+        "牙菌斑形成",
+        "牙菌斑控制",
+        "牙周治療",
+      ],
+      populationConcepts: ["patients", "oral health", "口腔健康"],
+      lowWeightTerms: ["health", "study", "treatment", "research", "健康", "研究", "治療"],
+      mustHaveTerms: DENTAL_PLAQUE_MUST_HAVE,
+      shouldHaveTerms: unique([...DENTAL_PLAQUE_CONTEXT, "biofilm formation", "oral hygiene"]),
+      penaltyTerms: DENTAL_PLAQUE_DRIFT_TERMS,
+      negativeTerms: DENTAL_PLAQUE_DRIFT_TERMS,
+      chineseQueries: [
+        "牙菌斑 形成 治療",
+        "口腔生物膜 牙菌斑 控制",
+        "牙周病 牙菌斑 治療",
+        "牙菌斑 預防 口腔衛生",
+      ],
+      englishQueries: [
+        "dental plaque formation treatment oral biofilm",
+        "oral biofilm dental plaque periodontal disease treatment",
+        "plaque control chlorhexidine scaling oral hygiene",
+        "dental biofilm formation periodontal therapy",
+        "periodontal disease dental plaque control review",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "牙菌斑與口腔生物膜的形成",
+          researchAngle: "整理牙菌斑作為口腔生物膜的形成過程、細菌附著與牙周疾病關聯。",
+          whyResearchable: "可使用牙醫學、口腔微生物、生物膜與牙周病研究文獻。",
+          suggestedSourceTypes: ["dental_review", "periodontology_paper", "oral_health_guideline"],
+          zhKeywords: ["牙菌斑", "口腔生物膜", "形成", "牙周病"],
+          enKeywords: ["dental plaque", "oral biofilm", "biofilm formation", "periodontal disease"],
+          primaryQueries: [
+            "牙菌斑 形成 治療",
+            "dental plaque formation treatment oral biofilm",
+          ],
+          secondaryQueries: [
+            "oral biofilm dental plaque periodontal disease treatment",
+            "periodontal disease dental plaque control review",
+          ],
+          excludedDriftTerms: DENTAL_PLAQUE_DRIFT_TERMS,
+        },
+        {
+          title: "牙菌斑控制與對應治療方式",
+          researchAngle: "整理口腔衛生、洗牙、氯己定、牙周治療與預防策略如何控制牙菌斑。",
+          whyResearchable: "可查系統性回顧、臨床試驗、牙周治療與官方口腔健康指引。",
+          suggestedSourceTypes: ["clinical_review", "dental_guideline", "periodontal_therapy_study"],
+          zhKeywords: ["牙菌斑控制", "治療", "口腔衛生", "洗牙"],
+          enKeywords: ["plaque control", "chlorhexidine", "scaling", "oral hygiene"],
+          primaryQueries: [
+            "牙菌斑 預防 口腔衛生",
+            "plaque control chlorhexidine scaling oral hygiene",
+          ],
+          secondaryQueries: [
+            "dental biofilm formation periodontal therapy",
+          ],
+          excludedDriftTerms: DENTAL_PLAQUE_DRIFT_TERMS,
+        },
+      ],
+      excludedDriftTerms: DENTAL_PLAQUE_DRIFT_TERMS,
+      reasoningNotes: planReason(
+        reason,
+        "Dental plaque searches must keep dental plaque/oral biofilm tied to formation, periodontal disease, plaque control, oral hygiene, or therapy. Cosmetic dentistry and product shopping are drift.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isDogResourceGuardingTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "dog_resource_guarding_veterinary_behavior",
+      detectedDomain: "animal_behavior",
+      canonicalTopicZh: input.displayTitle?.trim() || normalizedTopic,
+      canonicalEnglishTopic: "dog resource guarding food aggression behavior modification",
+      primaryConcepts: DOG_RESOURCE_GUARDING_PRIMARY,
+      contextConcepts: DOG_RESOURCE_GUARDING_CONTEXT,
+      outcomeConcepts: [
+        "resource guarding behavior",
+        "food aggression",
+        "behavior modification",
+        "positive reinforcement training",
+        "veterinary behavior",
+        "護食行為",
+        "行為矯正",
+        "正向增強訓練",
+      ],
+      populationConcepts: ["domestic dogs", "canine", "pet dogs", "家犬"],
+      lowWeightTerms: ["education", "pet", "training", "行為", "教育", "訓練"],
+      mustHaveTerms: DOG_RESOURCE_GUARDING_MUST_HAVE,
+      shouldHaveTerms: unique([...DOG_RESOURCE_GUARDING_CONTEXT, "domestic dogs"]),
+      penaltyTerms: DOG_RESOURCE_GUARDING_DRIFT_TERMS,
+      negativeTerms: DOG_RESOURCE_GUARDING_DRIFT_TERMS,
+      chineseQueries: [
+        "狗 護食 行為 教育方式",
+        "犬 資源防衛 食物攻擊 行為矯正",
+        "狗 護食 正向增強 訓練",
+        "犬類 行為問題 護食 獸醫行為學",
+      ],
+      englishQueries: [
+        "dog resource guarding food aggression behavior modification",
+        "canine resource guarding positive reinforcement training",
+        "food guarding behavior dogs veterinary behavior",
+        "canine aggression resource guarding management",
+        "resource guarding domestic dogs training behavior therapy",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "犬隻護食與資源防衛行為",
+          researchAngle: "整理家犬護食、資源防衛、食物攻擊與犬類攻擊行為的定義、風險與情境。",
+          whyResearchable: "可使用獸醫行為學、犬類行為、動物福利與攻擊行為研究。",
+          suggestedSourceTypes: ["veterinary_behavior_paper", "animal_behavior_review", "animal_welfare_guideline"],
+          zhKeywords: ["狗", "護食", "資源防衛", "食物攻擊"],
+          enKeywords: ["dog", "canine", "resource guarding", "food aggression"],
+          primaryQueries: [
+            "狗 護食 行為 教育方式",
+            "dog resource guarding food aggression behavior modification",
+          ],
+          secondaryQueries: [
+            "food guarding behavior dogs veterinary behavior",
+            "canine aggression resource guarding management",
+          ],
+          excludedDriftTerms: DOG_RESOURCE_GUARDING_DRIFT_TERMS,
+        },
+        {
+          title: "護食行為的教育與行為矯正",
+          researchAngle: "整理正向增強、減敏、反制約、管理與行為治療在犬隻護食教育中的應用。",
+          whyResearchable: "可查獸醫行為師、動物行為研究與犬隻訓練干預文獻。",
+          suggestedSourceTypes: ["behavior_modification_study", "veterinary_behavior_guideline", "training_intervention_review"],
+          zhKeywords: ["行為矯正", "正向增強", "訓練", "獸醫行為學"],
+          enKeywords: ["behavior modification", "positive reinforcement", "desensitization", "counterconditioning"],
+          primaryQueries: [
+            "犬 資源防衛 食物攻擊 行為矯正",
+            "canine resource guarding positive reinforcement training",
+          ],
+          secondaryQueries: [
+            "resource guarding domestic dogs training behavior therapy",
+          ],
+          excludedDriftTerms: DOG_RESOURCE_GUARDING_DRIFT_TERMS,
+        },
+      ],
+      excludedDriftTerms: DOG_RESOURCE_GUARDING_DRIFT_TERMS,
+      reasoningNotes: planReason(
+        reason,
+        "Dog resource-guarding searches must keep dog/canine terms tied to resource guarding, food aggression, veterinary behavior, behavior modification, positive reinforcement, or training management. Dog food, police/guard dog, and product pages are drift.",
       ),
       plannerStatus,
       fallbackUsed: true,
@@ -6910,6 +7279,8 @@ function mergeFamilyCriticalTerms(
     !isSemiconductorEtchingTopic(input) &&
     !isTelomeraseAgingTopic(input) &&
     !isSalmonellaFoodPoisoningTopic(input) &&
+    !isDentalPlaqueTopic(input) &&
+    !isDogResourceGuardingTopic(input) &&
     !isSocialMediaAddictionTopic(input) &&
     !isMarineMicroplasticsEcologyTopic(input) &&
     !isClimateMarineEcologyImpactTopic(input) &&
@@ -7658,6 +8029,97 @@ function queryBucketsForPlan(plan: SearchIntentPlan): {
       ),
     };
   }
+  if (isDentalPlaquePlan(plan)) {
+    return {
+      coreConcepts: cleanConceptList([
+        ...DENTAL_PLAQUE_PRIMARY,
+        ...DENTAL_PLAQUE_CONTEXT,
+      ]),
+      coreEnglishAcademic: cleanQueryList(
+        [
+          "dental plaque formation treatment oral biofilm",
+          "oral biofilm dental plaque periodontal disease treatment",
+          "plaque control chlorhexidine scaling oral hygiene",
+          "dental biofilm formation periodontal therapy",
+        ],
+        6,
+      ),
+      academicSynonyms: cleanQueryList(
+        [
+          "periodontal disease dental plaque control review",
+          "dental plaque oral biofilm",
+          "plaque control periodontal therapy",
+          "oral biofilm treatment review",
+          "chlorhexidine scaling oral hygiene plaque control",
+        ],
+        8,
+      ),
+      education: [],
+      chineseSupplemental: cleanQueryList(
+        [
+          "牙菌斑 形成 治療",
+          "口腔生物膜 牙菌斑 控制",
+          "牙周病 牙菌斑 治療",
+          "牙菌斑 預防 口腔衛生",
+        ],
+        6,
+      ),
+      fallbackRelaxed: cleanQueryList(
+        [
+          "dental plaque oral biofilm",
+          "plaque control periodontal therapy",
+          "oral biofilm treatment review",
+        ],
+        6,
+      ),
+    };
+  }
+  if (isDogResourceGuardingPlan(plan)) {
+    return {
+      coreConcepts: cleanConceptList([
+        ...DOG_RESOURCE_GUARDING_PRIMARY,
+        ...DOG_RESOURCE_GUARDING_CONTEXT,
+      ]),
+      coreEnglishAcademic: cleanQueryList(
+        [
+          "dog resource guarding food aggression behavior modification",
+          "canine resource guarding positive reinforcement training",
+          "food guarding behavior dogs veterinary behavior",
+          "canine aggression resource guarding management",
+        ],
+        6,
+      ),
+      academicSynonyms: cleanQueryList(
+        [
+          "resource guarding domestic dogs training behavior therapy",
+          "dog resource guarding",
+          "canine food aggression",
+          "veterinary behavior dog aggression",
+          "positive reinforcement dog training aggression",
+        ],
+        8,
+      ),
+      education: [],
+      chineseSupplemental: cleanQueryList(
+        [
+          "狗 護食 行為 教育方式",
+          "犬 資源防衛 食物攻擊 行為矯正",
+          "狗 護食 正向增強 訓練",
+          "犬類 行為問題 護食 獸醫行為學",
+        ],
+        6,
+      ),
+      fallbackRelaxed: cleanQueryList(
+        [
+          "dog resource guarding",
+          "canine food aggression",
+          "veterinary behavior dog aggression",
+          "positive reinforcement dog training aggression",
+        ],
+        6,
+      ),
+    };
+  }
   if (isHoneyCrystallizationPlan(plan)) {
     return {
       coreConcepts: cleanConceptList([
@@ -7897,6 +8359,8 @@ function queryBucketsForPlan(plan: SearchIntentPlan): {
     plan.detectedDomain === "chemistry" ||
     plan.detectedDomain === "physics" ||
     plan.detectedDomain === "medicine" ||
+    plan.detectedDomain === "dentistry" ||
+    plan.detectedDomain === "animal_behavior" ||
     plan.detectedDomain === "biology";
   const educationQueries =
     isPrecisionAcademicPlan ||
@@ -10419,6 +10883,53 @@ function isHivAidsPlan(plan: SearchIntentPlan): boolean {
   );
 }
 
+function isDentalPlaquePlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      plan.topicType ?? "",
+      plan.normalizedTopic,
+      plan.activeResearchTopic ?? "",
+      plan.originalTopic ?? "",
+      plan.displayTitle ?? "",
+      plan.canonicalTopicZh ?? "",
+      plan.canonicalEnglishTopic ?? "",
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.outcomeConcepts,
+      ...plan.englishQueries,
+      ...plan.chineseQueries,
+    ].join(" "),
+  );
+  return /dental_plaque_oral_biofilm|牙菌斑|牙垢|口腔生物膜|牙周病|dental plaque|oral biofilm|dental biofilm|periodontal|plaque control/.test(
+    concepts,
+  );
+}
+
+function isDogResourceGuardingPlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      plan.topicType ?? "",
+      plan.normalizedTopic,
+      plan.activeResearchTopic ?? "",
+      plan.originalTopic ?? "",
+      plan.displayTitle ?? "",
+      plan.canonicalTopicZh ?? "",
+      plan.canonicalEnglishTopic ?? "",
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.outcomeConcepts,
+      ...plan.englishQueries,
+      ...plan.chineseQueries,
+      ...plan.negativeTerms,
+    ].join(" "),
+  );
+  return /dog_resource_guarding|護食|資源防衛|食物攻擊|resource guarding|food guarding|food aggression|canine aggression/.test(
+    concepts,
+  );
+}
+
 function isSodiumPerchloratePlan(plan: SearchIntentPlan): boolean {
   const concepts = normalizeText(
     [
@@ -12130,8 +12641,8 @@ function resultWarnings(
   plan: SearchIntentPlan,
 ): string[] {
   const warnings: string[] = [];
-  if (isHivAidsPlan(plan) || plan.detectedDomain === "medicine") {
-    warnings.push("目前使用 OpenAlex/Crossref/Semantic Scholar；PubMed 尚未接入。");
+  if (isHivAidsPlan(plan) || isDentalPlaquePlan(plan) || plan.detectedDomain === "medicine" || plan.detectedDomain === "dentistry") {
+    warnings.push("Medical search currently uses OpenAlex/Crossref/Semantic Scholar only.");
     logger.info(
       {
         normalizedTopic: plan.normalizedTopic,
@@ -12221,6 +12732,24 @@ function domainsFromPlan(plan: SearchIntentPlan): string[] {
   ) {
     domains.push("education");
   }
+  if (
+    concepts.includes("dental plaque") ||
+    concepts.includes("oral biofilm") ||
+    concepts.includes("periodontal") ||
+    concepts.includes("牙菌斑") ||
+    concepts.includes("口腔生物膜")
+  ) {
+    domains.push("dentistry", "oral_health", "biomedical");
+  }
+  if (
+    concepts.includes("resource guarding") ||
+    concepts.includes("food aggression") ||
+    concepts.includes("veterinary behavior") ||
+    concepts.includes("護食") ||
+    concepts.includes("資源防衛")
+  ) {
+    domains.push("animal_behavior", "veterinary_behavior", "education");
+  }
   return unique(domains);
 }
 
@@ -12250,6 +12779,12 @@ function preferredSourceTypes(plan: SearchIntentPlan): string[] {
   }
   if (isUrbanHeatPlan(plan))
     types.push("urban_climate_or_built_environment_study");
+  if (isDentalPlaquePlan(plan)) {
+    types.push("dental_review", "periodontology_paper", "oral_health_guideline");
+  }
+  if (isDogResourceGuardingPlan(plan)) {
+    types.push("veterinary_behavior_paper", "animal_behavior_review", "animal_welfare_guideline");
+  }
   return unique(types);
 }
 
@@ -13714,7 +14249,14 @@ export async function searchIntentSources(
     original_topic: plan.originalTopic ?? input.topic.trim(),
     active_research_topic: plan.activeResearchTopic ?? input.topic.trim(),
     canonical_english_topic: plan.canonicalEnglishTopic ?? "",
+    rawUserTopic: plan.originalTopic ?? input.topic.trim(),
+    activeResearchTopic: plan.activeResearchTopic ?? input.topic.trim(),
+    normalizedTopic: plan.normalizedTopic,
+    canonicalEnglishTopic: plan.canonicalEnglishTopic ?? "",
     core_concepts: querySet.coreConcepts.length
+      ? querySet.coreConcepts
+      : (plan.coreConcepts ?? []),
+    coreConcepts: querySet.coreConcepts.length
       ? querySet.coreConcepts
       : (plan.coreConcepts ?? []),
     english_queries: unique([
@@ -13722,8 +14264,28 @@ export async function searchIntentSources(
       ...querySet.academicSynonyms,
       ...querySet.education,
     ]),
+    englishQueries: unique([
+      ...querySet.coreEnglishAcademic,
+      ...querySet.academicSynonyms,
+      ...querySet.education,
+      ...querySet.fallbackRelaxed,
+    ]),
     chinese_queries: querySet.chineseSupplemental,
+    chineseQueries: querySet.chineseSupplemental,
     fallback_relaxed_queries: querySet.fallbackRelaxed,
+    negativeTerms: unique([
+      ...plan.negativeTerms,
+      ...(plan.excludedDriftTerms ?? []),
+      ...plan.penaltyTerms,
+    ]),
+    providerQueries: unique(groups.map((group) => group.query)),
+    ...((isHivAidsPlan(plan) || isDentalPlaquePlan(plan) || plan.detectedDomain === "medicine" || plan.detectedDomain === "dentistry")
+      ? {
+          medicalProvidersPending: [...MEDICAL_PROVIDER_STRATEGY.pendingProviders],
+          implementedProviders: [...MEDICAL_PROVIDER_STRATEGY.implementedProviders],
+          medicalProviderWarning: "Medical search currently uses OpenAlex/Crossref/Semantic Scholar only.",
+        }
+      : {}),
     raw_provider_count: rawProviderCount,
     normalize_attempt_count: normalizeAttemptCount,
     normalized_valid_count: normalizedValidCount,
@@ -13817,6 +14379,10 @@ export async function searchIntentSources(
     llm_status: plannerLlmStatus,
     keyword_expansion: {
       normalized_topic: plan.normalizedTopic,
+      rawUserTopic: plan.originalTopic ?? input.topic.trim(),
+      activeResearchTopic: plan.activeResearchTopic ?? input.topic.trim(),
+      normalizedTopic: plan.normalizedTopic,
+      canonicalEnglishTopic: plan.canonicalEnglishTopic ?? "",
       domains: domainsFromPlan(plan),
       search_queries: queries,
       english_queries: unique([
@@ -13824,8 +14390,26 @@ export async function searchIntentSources(
         ...querySet.academicSynonyms,
         ...querySet.education,
       ]),
+      englishQueries: unique([
+        ...querySet.coreEnglishAcademic,
+        ...querySet.academicSynonyms,
+        ...querySet.education,
+        ...querySet.fallbackRelaxed,
+      ]),
       chinese_queries: querySet.chineseSupplemental,
+      chineseQueries: querySet.chineseSupplemental,
       core_concepts: diagnostics.core_concepts,
+      coreConcepts: diagnostics.core_concepts,
+      negativeTerms: diagnostics.negativeTerms,
+      triedQueries: diagnostics.tried_queries,
+      providerQueries: diagnostics.providerQueries,
+      ...((isHivAidsPlan(plan) || isDentalPlaquePlan(plan) || plan.detectedDomain === "medicine" || plan.detectedDomain === "dentistry")
+        ? {
+            medicalProvidersPending: [...MEDICAL_PROVIDER_STRATEGY.pendingProviders],
+            implementedProviders: [...MEDICAL_PROVIDER_STRATEGY.implementedProviders],
+            warning: "Medical search currently uses OpenAlex/Crossref/Semantic Scholar only.",
+          }
+        : {}),
       core_english_queries: querySet.coreEnglishAcademic,
       academic_synonym_queries: querySet.academicSynonyms,
       education_queries: querySet.education,

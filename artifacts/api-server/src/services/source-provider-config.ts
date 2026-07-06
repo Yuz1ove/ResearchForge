@@ -7,7 +7,7 @@ export const MEDICAL_PROVIDER_STRATEGY = {
   implementedProviders: SOURCE_PROVIDER_NAMES,
   pendingProviders: ["PubMed", "Europe PMC"] as const,
   fallbackLogMessage:
-    "Medical/public-health search is using OpenAlex/Crossref/Semantic Scholar; PubMed and Europe PMC are not integrated yet.",
+    "Medical search currently uses OpenAlex/Crossref/Semantic Scholar only.",
 } as const;
 
 export interface SourceProviderConfig {

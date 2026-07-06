@@ -303,12 +303,40 @@ test("report generation blocking reason is explicit below three accepted sources
     reportGenerationBlockingReason({
       topic,
       acceptedSources: threeAccepted,
-      evidenceCardCount: 2,
+      evidenceCardCount: 0,
       workflowId: `wf-${reportTopicFingerprint(topic)}`,
       topicHash: reportTopicFingerprint(topic),
     }),
-    "來源已接受，但證據卡只有 2 張，少於已接受來源 3 筆。請先補齊證據卡。",
+    "來源已接受，但尚未形成足夠證據卡，請先重新產生證據卡後再生成報告。",
   );
+  assert.equal(
+    reportGenerationBlockingReason({
+      topic,
+      acceptedSources: threeAccepted,
+      evidenceCardCount: 1,
+      workflowId: `wf-${reportTopicFingerprint(topic)}`,
+      topicHash: reportTopicFingerprint(topic),
+    }),
+    null,
+  );
+});
+
+test("generation readiness requires at least one evidence card when evidence gating is provided", () => {
+  const acceptedSources = [
+    source(1, { usableSections: ["研究背景"] }),
+    source(2, { usableSections: ["文獻探討"] }),
+    source(3, { usableSections: ["結論"] }),
+  ];
+
+  const blocked = generationReadiness(acceptedSources, "standard", []);
+  const ready = generationReadiness(acceptedSources, "standard", [{}] as any);
+
+  assert.equal(blocked.canGenerate, false);
+  assert.equal(blocked.buttonLabel, "缺少證據卡");
+  assert.match(blocked.message ?? "", /至少需 1 張證據卡/);
+  assert.equal(ready.canGenerate, true);
+  assert.equal(ready.reportMode, "short");
+  assert.equal(ready.buttonLabel, "生成短版研究報告");
 });
 
 test("report generation blocks when workflow topic hash is missing", () => {

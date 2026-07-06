@@ -1,6 +1,8 @@
 export type ResearchDomain =
   | "chemistry"
   | "biology"
+  | "dentistry"
+  | "animal_behavior"
   | "medicine"
   | "environment"
   | "physics"
@@ -461,6 +463,8 @@ export function detectResearchDomain(topic: string): ResearchDomain {
   const concept = findDomainConceptsForTopic(topic)[0];
   if (concept) return concept.domain;
   const text = normalize(topic);
+  if (/牙菌斑|牙垢|口腔生物膜|牙周病|dental plaque|oral biofilm|periodontal|plaque control/.test(text)) return "dentistry";
+  if (/狗|犬|護食|資源防衛|食物攻擊|dog|canine|resource guarding|food aggression|veterinary behavior/.test(text)) return "animal_behavior";
   if (/化學|反應|酸|鹼|酯|hydrolysis|chemistry|reaction/.test(text)) return "chemistry";
   if (/生物|細菌|食品安全|biology|salmonella|microplastic/.test(text)) return "biology";
   if (/健康|醫學|毒性|medicine|health|toxicity/.test(text)) return "medicine";

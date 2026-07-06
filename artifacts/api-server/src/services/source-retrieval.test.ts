@@ -593,6 +593,60 @@ test("Crossref timeout uses short query retry and records retry diagnostics", as
   assert.equal(result.results[0]?.doi, "10.1000/rayleigh-sunset");
 });
 
+test("Crossref low-result responses use short query retry and record low-results diagnostics", async () => {
+  const configs = getSourceProviderConfigs();
+  const providerConfigs = {
+    Crossref: {
+      ...configs.Crossref,
+      endpoint: "https://example.test/works",
+      timeoutMs: 50,
+      queryLimit: 2,
+      pageLimit: 1,
+    },
+  };
+  const seenQueries: string[] = [];
+
+  const result = await searchSourceProvider(
+    "Crossref",
+    "dental plaque oral biofilm periodontal disease plaque control",
+    {
+      providerConfigs,
+      fetchImpl: async (input) => {
+        const url = new URL(String(input));
+        const query = url.searchParams.get("query") ?? "";
+        seenQueries.push(query);
+        if (query === "dental plaque oral") {
+          return new Response(
+            JSON.stringify({
+              message: {
+                items: [
+                  {
+                    title: ["Dental plaque oral biofilm and plaque control"],
+                    DOI: "10.1000/dental-plaque-biofilm",
+                    "container-title": ["Periodontology Review"],
+                    type: "journal-article",
+                  },
+                ],
+              },
+            }),
+          );
+        }
+        return new Response(JSON.stringify({ message: { items: [] } }));
+      },
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(seenQueries, [
+    "dental plaque oral biofilm periodontal disease plaque control",
+    "dental plaque oral",
+  ]);
+  assert.equal(result.retry_mode, "short_query");
+  assert.equal(result.retry_reason, "low_results");
+  assert.equal(result.retry_query, "dental plaque oral");
+  assert.equal(result.results[0]?.doi, "10.1000/dental-plaque-biofilm");
+});
+
 test("returns deduped partial results when one provider succeeds and another fails", async () => {
   const configs = getSourceProviderConfigs();
   const sources = await searchSources("student sleep quality", {

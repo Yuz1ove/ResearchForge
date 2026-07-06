@@ -5955,7 +5955,6 @@ export function Generator() {
     RESEARCH_DEPTH_OPTIONS.find(
       (option) => option.value === input.researchDepth,
     ) ?? RESEARCH_DEPTH_OPTIONS[1]!;
-  const readiness = generationReadiness(acceptedSources, input.researchDepth);
   const recommendedAcceptedSourceCount =
     selectedDepthOption.recommendedSources;
   const activeReportTopic = activeResearchTopic;
@@ -5981,6 +5980,11 @@ export function Generator() {
         topic: activeReportTopic,
       }),
     [acceptedSources, activeReportTopic, groundingJob?.evidenceCards],
+  );
+  const readiness = generationReadiness(
+    acceptedSources,
+    input.researchDepth,
+    acceptedEvidenceCards,
   );
   const literatureReviewEvidenceCount = useMemo(
     () =>
@@ -7806,7 +7810,11 @@ export function Generator() {
         return;
       }
     }
-    const currentReadiness = generationReadiness(acceptedSources, input.researchDepth);
+    const currentReadiness = generationReadiness(
+      acceptedSources,
+      input.researchDepth,
+      acceptedEvidenceCards,
+    );
     const currentBlockingReason = academicSafetyBlocksReport(academicSafetyReview)
       ? "此主題已被標記為不可輸出操作性內容，因此不會進入一般報告生成。"
       : reportGenerationBlockingReason({
@@ -7870,6 +7878,7 @@ export function Generator() {
           const readinessForWorkspace = generationReadiness(
             acceptedSources,
             effectiveInput.researchDepth,
+            acceptedEvidenceCards,
           );
           if (!readinessForWorkspace.canGenerate) {
             setGenerateStatus("error");

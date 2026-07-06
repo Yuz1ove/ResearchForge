@@ -76,6 +76,9 @@ function sourceIsRejected(source: Record<string, unknown>): boolean {
 
 function sourceCountsAsUsable(source: Record<string, unknown>): boolean {
   if (sourceIsRejected(source)) return false;
+  if (source.canUseForReport === false) return false;
+  if (text(source.sourceUseLevel) === "rejected") return false;
+  if (text(source.extractionStatus) === "failed" && text(source.evidenceGrounding) === "insufficient") return false;
   return true;
 }
 
@@ -171,6 +174,26 @@ export function getReportReadiness(input: ReportReadinessInput): ReportReadiness
       badge: "來源不足",
       buttonLabel: "來源不足",
       message: `目前已接受 ${acceptedUsableSourcesCount} 筆可用來源，至少需 ${SHORT_REPORT_MIN_ACCEPTED_SOURCES} 筆才能生成研究報告。`,
+    };
+  }
+
+  if (input.evidenceCards && evidenceCardsCount < 1) {
+    return {
+      reportMode: "blocked",
+      claimMode: "blocked",
+      acceptedSourcesCount,
+      acceptedUsableSourcesCount,
+      scholarlySourcesCount,
+      officialBackgroundSourcesCount,
+      reliableBackgroundSourcesCount,
+      evidenceCardsCount,
+      minRequiredSources,
+      canGenerate: false,
+      canGenerateStandard: false,
+      canGenerateShort: false,
+      badge: "缺少證據卡",
+      buttonLabel: "缺少證據卡",
+      message: "已接受來源尚未形成證據卡，至少需 1 張證據卡才能生成研究報告。",
     };
   }
 

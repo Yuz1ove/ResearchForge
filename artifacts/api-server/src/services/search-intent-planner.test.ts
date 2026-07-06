@@ -43,6 +43,8 @@ const agriculturalWastePollutionTopic = "農業廢料可能造成的污染";
 const aiWorkImpactTopic = "AI發展對於工作的本質影響";
 const siliconWaferEtchingTopic = "矽晶圓雕刻的原理及其用途";
 const hivAidsTopic = "愛滋病潛在風險與造成影響";
+const dentalPlaqueTopic = "牙菌斑的產生及對應治療方式";
+const dogResourceGuardingTopic = "狗的護食行為與教育方式";
 
 function sourceRecord(
   patch: Partial<SourceRecord> & { title: string },
@@ -310,6 +312,53 @@ test("planner routes HIV/AIDS topics to medicine queries and avoids generic scie
     queries.fallbackRelaxed.every((query) => /HIV|AIDS|愛滋病|人類免疫缺乏病毒/i.test(query)),
     true,
   );
+});
+
+test("planner routes dental plaque topics to oral biofilm and plaque-control queries", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: dentalPlaqueTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = JSON.stringify(queries);
+
+  assert.equal(plan.topicType, "dental_plaque_oral_biofilm");
+  assert.equal(plan.detectedDomain, "dentistry");
+  assert.match(plan.canonicalEnglishTopic ?? "", /dental plaque oral biofilm plaque control/i);
+  assert.match(queryText, /dental plaque|oral biofilm|periodontal disease|plaque control/i);
+  assert.match(queryText, /牙菌斑|口腔生物膜|牙周病|牙菌斑控制/u);
+  assert.doesNotMatch(queryText, /scientific method|experimental design|food recipe/i);
+  assert.ok(plan.negativeTerms.some((term) => /tooth whitening|advertisement|product/i.test(term)));
+  assert.deepEqual(queries.education, []);
+});
+
+test("planner routes dog resource guarding topics to veterinary behavior queries and excludes pet-product drift", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: dogResourceGuardingTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = JSON.stringify(queries);
+
+  assert.equal(plan.topicType, "dog_resource_guarding_veterinary_behavior");
+  assert.equal(plan.detectedDomain, "animal_behavior");
+  assert.match(plan.canonicalEnglishTopic ?? "", /dog resource guarding food aggression behavior modification/i);
+  assert.match(queryText, /dog resource guarding|canine resource guarding|food aggression|behavior modification/i);
+  assert.match(queryText, /狗 護食|犬 資源防衛|食物攻擊/u);
+  assert.ok(plan.negativeTerms.some((term) => /dog food product/i.test(term)));
+  assert.ok(plan.negativeTerms.some((term) => /guard dog|police dog/i.test(term)));
+  assert.doesNotMatch(queryText, /scientific method|experimental design|dog food product review/i);
+  assert.deepEqual(queries.education, []);
 });
 
 test("HIV/AIDS relevance rejects scientific-method drift sources without HIV anchors", async () => {

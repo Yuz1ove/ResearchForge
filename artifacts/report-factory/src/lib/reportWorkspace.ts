@@ -382,9 +382,6 @@ export function reportGenerationBlockingReason(input: {
   if (evidenceCardCount < 1) {
     return "來源已接受，但尚未形成足夠證據卡，請先重新產生證據卡後再生成報告。";
   }
-  if (evidenceCardCount < input.acceptedSources.length) {
-    return `來源已接受，但證據卡只有 ${evidenceCardCount} 張，少於已接受來源 ${input.acceptedSources.length} 筆。請先補齊證據卡。`;
-  }
 
   const guardDiagnostics = reportSourceGuardDiagnostics(
     { topic: input.topic },
@@ -605,10 +602,14 @@ function diagnosticMessages(
 export function generationReadiness(
   input: number | SourceRecord[],
   depth: ReportInput["researchDepth"] = "standard",
+  evidenceCards?: EvidenceCard[] | null,
 ): GenerationReadiness {
   const sources = readinessSources(input);
   const diagnostics = readinessDiagnostics(sources);
-  const canonicalReadiness = getReportReadiness({ acceptedSources: sources });
+  const canonicalReadiness = getReportReadiness({
+    acceptedSources: sources,
+    ...(evidenceCards ? { evidenceCards } : {}),
+  });
   const preliminaryDiagnostics: string[] = [];
   if (!canonicalReadiness.canGenerate) {
     preliminaryDiagnostics.push(canonicalReadiness.message ?? "來源不足");

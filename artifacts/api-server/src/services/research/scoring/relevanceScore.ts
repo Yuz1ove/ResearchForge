@@ -176,6 +176,26 @@ export const TERM_BRIDGE: Record<string, string[]> = {
   小貓熊: ["red panda", "Ailurus fulgens", "Ailuridae"],
   名稱差異: ["terminology difference", "naming difference", "Chinese terminology"],
   命名史: ["naming history", "terminology history"],
+  牙菌斑: ["dental plaque", "plaque biofilm", "oral biofilm"],
+  牙垢: ["dental plaque", "plaque"],
+  口腔生物膜: ["oral biofilm", "dental biofilm"],
+  牙周病: ["periodontal disease", "periodontitis"],
+  形成: ["formation", "development"],
+  產生: ["formation", "development"],
+  治療: ["treatment", "therapy"],
+  控制: ["control", "plaque control"],
+  預防: ["prevention", "oral hygiene"],
+  氯己定: ["chlorhexidine"],
+  洗牙: ["scaling", "dental scaling"],
+  狗: ["dog", "domestic dog", "canine"],
+  犬: ["canine", "dog"],
+  護食: ["resource guarding", "food guarding", "food aggression"],
+  資源防衛: ["resource guarding"],
+  食物攻擊: ["food aggression"],
+  行為矯正: ["behavior modification", "behavior therapy"],
+  正向增強: ["positive reinforcement"],
+  訓練: ["training"],
+  獸醫行為學: ["veterinary behavior"],
 	 };
 
 function unique<T>(values: T[]): T[] {
@@ -496,14 +516,23 @@ export function analyzeRelevanceScore(
       multiConceptBonus +
       subjectOutcomeBonus,
   );
-  const score = Math.max(lexicalScore, conceptScore, upstreamScore ?? 0);
+  const hasCoreSignal = matchedCoreTerms.length > 0 || matchedConcepts.length > 0;
+  const score = hasCoreSignal
+    ? Math.max(lexicalScore, conceptScore, upstreamScore ?? 0)
+    : Math.max(lexicalScore, conceptScore);
   const confidenceTier =
-    score >= RELEVANCE_SCORING_CONFIG.highConfidenceThreshold ||
-    (conceptTitleScore > 0 && matchedConcepts.length >= 2 && score >= 0.28)
-      ? "high"
-      : score >= RELEVANCE_SCORING_CONFIG.fallbackThreshold
-        ? "fallback"
-        : "rejected";
+    driftHits > 0
+      ? "rejected"
+      : !hasCoreSignal
+        ? score >= RELEVANCE_SCORING_CONFIG.fallbackThreshold
+          ? "fallback"
+          : "rejected"
+        : score >= RELEVANCE_SCORING_CONFIG.highConfidenceThreshold ||
+            (conceptTitleScore > 0 && matchedConcepts.length >= 2 && score >= 0.28)
+          ? "high"
+          : score >= RELEVANCE_SCORING_CONFIG.fallbackThreshold
+            ? "fallback"
+            : "rejected";
   const acceptReason =
     confidenceTier === "high"
       ? matchedConcepts.length >= 2
@@ -516,7 +545,9 @@ export function analyzeRelevanceScore(
       : undefined;
   const rejectionReason =
     confidenceTier === "rejected"
-      ? matchedConcepts.length === 0
+      ? driftHits > 0
+        ? "excluded_drift_term_match"
+        : matchedConcepts.length === 0
         ? "missing_core_concept"
         : "low_topic_relevance"
       : undefined;
@@ -529,7 +560,7 @@ export function analyzeRelevanceScore(
     abstractMatchScore,
     domainMatchScore,
     sourceQualityScore,
-    hasCoreConceptMatch: matchedCoreTerms.length > 0 || matchedConcepts.length > 0,
+    hasCoreConceptMatch: hasCoreSignal,
     hasTitleCoreConceptMatch: matchedTitleTerms.length > 0 || conceptTitleScore > 0,
     matchedCoreTerms,
     matchedTitleTerms,
