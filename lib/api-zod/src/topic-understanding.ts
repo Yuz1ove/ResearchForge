@@ -599,6 +599,15 @@ const ENGLISH_TOPIC_HINTS: Array<{
     ],
   },
   {
+    pattern: /太陽帆|solar sail|solar sailing/i,
+    englishTerms: [
+      "solar sail",
+      "solar sail propulsion",
+      "radiation pressure",
+      "spacecraft mission applications",
+    ],
+  },
+  {
     pattern: /觸變性|thixotropy/i,
     englishTerms: ["thixotropy", "rheology", "non-Newtonian fluid behavior"],
   },
@@ -617,6 +626,65 @@ const ENGLISH_TOPIC_HINTS: Array<{
 ];
 
 const TOPIC_LEXICON: TopicLexiconEntry[] = [
+  {
+    canonicalName: "太陽帆",
+    aliases: ["光帆", "太陽光帆", "solar sail", "solar sailing"],
+    englishNames: ["solar sail", "solar sail propulsion"],
+    category: "technology",
+    domain: "technology",
+    topicKind: "known_entity",
+    matchTerms: [
+      "太陽帆",
+      "光帆",
+      "太陽光帆",
+      "solar sail",
+      "solar sailing",
+      "solar sail propulsion",
+    ],
+    excludedMeanings: [
+      "artificial intelligence",
+      "sailboat",
+      "sailing sport",
+      "solar panel only",
+      "astrology",
+      "science fiction only",
+    ],
+    researchAngles: [
+      angle(
+        "物理原理",
+        "太陽帆如何利用太陽輻射壓進行航天推進",
+        "可查太陽輻射壓、光壓、反射膜與航天器推進的物理與工程文獻。",
+        ["太陽帆 輻射壓 推進 原理", "太陽帆 光壓 航天推進 技術"],
+        [
+          "solar sail propulsion radiation pressure",
+          "solar radiation pressure spacecraft propulsion",
+        ],
+        ["航天工程論文", "物理研究", "太空任務資料"],
+      ),
+      angle(
+        "任務應用",
+        "太陽帆在太空任務與深空探測中的應用價值",
+        "可比較 IKAROS、LightSail、NEA Scout 等任務與任務設計資料。",
+        ["太陽帆 航天任務 應用 價值", "IKAROS LightSail NEA Scout 太陽帆"],
+        [
+          "solar sail spacecraft mission applications",
+          "IKAROS LightSail NEA Scout solar sail",
+        ],
+        ["太空機構資料", "任務報告", "航天工程論文"],
+      ),
+      angle(
+        "優勢與限制",
+        "太陽帆深空探測的優勢、限制與工程挑戰",
+        "限制面向可查推力大小、姿態控制、材料、任務軌道與部署風險。",
+        ["太陽帆 深空探測 優勢 限制", "太陽帆 航天推進 限制 挑戰"],
+        [
+          "solar sailing deep space exploration limitations",
+          "solar sail mission limitations spacecraft control",
+        ],
+        ["航天工程論文", "任務分析", "技術報告"],
+      ),
+    ],
+  },
   {
     canonicalName: "天竺鼠",
     aliases: ["豚鼠", "荷蘭豬"],
@@ -1645,6 +1713,76 @@ const TOPIC_LEXICON: TopicLexiconEntry[] = [
     ],
   },
   {
+    canonicalName: "過氯酸鈉",
+    aliases: ["高氯酸鈉", "過氯酸鹽", "高氯酸鹽", "NaClO4"],
+    englishNames: ["sodium perchlorate", "NaClO4", "perchlorate"],
+    category: "material",
+    domain: "materials_design",
+    topicKind: "known_entity",
+    matchTerms: [
+      "過氯酸鈉",
+      "高氯酸鈉",
+      "naclo4",
+      "過氯酸鹽",
+      "高氯酸鹽",
+      "sodium perchlorate",
+      "perchlorate",
+    ],
+    excludedMeanings: [
+      "artificial intelligence",
+      "medical governance",
+      "biodiesel cost",
+      "fuel economy",
+      "sodium channel",
+    ],
+    researchAngles: [
+      angle(
+        "化學性質與氧化特性",
+        "過氯酸鈉的化學性質、氧化劑特性與反應機制",
+        "可整理無機鹽、氧化還原、熱分解與離子特性等核心概念。",
+        ["過氯酸鈉 化學性質 氧化劑", "過氯酸鈉 反應機制 熱分解"],
+        [
+          "sodium perchlorate chemical properties oxidizer",
+          "sodium perchlorate reaction mechanism thermal decomposition",
+        ],
+        ["化學論文", "無機化學教材", "安全資料表"],
+      ),
+      angle(
+        "操作條件與安全風險",
+        "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+        "可查反應性、熱穩定性、危害標示與實驗室管理建議。",
+        ["過氯酸鈉 安全風險 儲存", "過氯酸鈉 反應性 操作條件"],
+        [
+          "sodium perchlorate safety hazard storage",
+          "sodium perchlorate reactivity handling conditions",
+        ],
+        ["安全資料表", "實驗室規範", "化學安全指引"],
+      ),
+      angle(
+        "應用與限制",
+        "過氯酸鈉在分析化學、氧化反應與材料應用中的用途與限制",
+        "可比較實驗用途、氧化應用與不同行業中的使用限制。",
+        ["過氯酸鈉 分析化學 應用", "過氯酸鈉 氧化反應 用途 限制"],
+        [
+          "sodium perchlorate analytical chemistry application",
+          "sodium perchlorate oxidizer application limitations",
+        ],
+        ["化學論文", "教材", "技術手冊"],
+      ),
+      angle(
+        "環境與健康風險",
+        "過氯酸鹽的環境污染、暴露途徑與健康風險",
+        "可延伸到環境暴露、甲狀腺風險與監測資料。",
+        ["過氯酸鹽 環境污染 暴露", "過氯酸鹽 甲狀腺 風險 監測"],
+        [
+          "perchlorate contamination exposure thyroid risk",
+          "perchlorate environmental monitoring health risk",
+        ],
+        ["環境報告", "健康風險評估", "監測資料"],
+      ),
+    ],
+  },
+  {
     canonicalName: "雞蛋",
     aliases: ["蛋", "雞蛋產品", "蛋品"],
     englishNames: ["egg", "chicken egg", "hen egg"],
@@ -1846,6 +1984,7 @@ function isUnknownOrNoise(topic: string): boolean {
   if (/^[^A-Za-z\u3400-\u9fff0-9]+$/.test(normalized)) return true;
   if (Array.from(normalized).length <= 1 && !/[A-Za-z]{2,}/.test(normalized))
     return true;
+  if (isChemicalFormulaLike(normalized)) return false;
   const normalizedAscii = normalizeAscii(normalized);
   if (
     /^(ai|dna|rna|co2|pm2\.5|5g|gpt\d*|python\d*)$/i.test(normalizedAscii)
@@ -1923,8 +2062,45 @@ function isLikelyBroadCommonNoun(topic: string): boolean {
   return shortZh || shortAscii;
 }
 
+function isChemicalFormulaLike(topic: string): boolean {
+  const compact = topic.replace(/\s+/g, "");
+  return (
+    /^(?:[A-Z][a-z]?\d{0,3}){2,}(?:[+-]\d*)?$/u.test(compact) &&
+    /[a-z]|\d/.test(compact)
+  );
+}
+
+function isChemistryLikeTopic(topic: string): boolean {
+  const text = `${topic} ${normalizeAscii(topic)}`;
+  if (isChemicalFormulaLike(topic)) return true;
+  return /過氯酸|高氯酸|硝酸|硫酸|鹽酸|醋酸|檸檬酸|氫氧化|皂化|氧化還原|氧化數|氧化劑|還原劑|鹼水解|酸鹼|陽離子|陰離子|離子化合物|酯|醇|酮|醛|胺|醚|滴定|配位|沉澱|電解質|化學反應|金屬鹽|saponification|redox|oxidation|reduction|alkaline hydrolysis|ester hydrolysis|ionic compound|electrolyte|oxidizer|reductant|titration|chemical reaction|chemistry/i.test(
+    text,
+  );
+}
+
+function chemistryCanonicalEnglishHint(topic: string): string {
+  const text = `${topic} ${normalizeAscii(topic)}`;
+  if (/過氯酸鈉|高氯酸鈉|naclo4|sodium perchlorate|perchlorate/i.test(text)) {
+    return "sodium perchlorate";
+  }
+  if (/皂化|saponification/i.test(text)) {
+    return "saponification";
+  }
+  if (/氧化還原|redox|oxidation|reduction/i.test(text)) {
+    return "redox reaction";
+  }
+  if (/鹼水解|alkaline hydrolysis/i.test(text)) {
+    return "alkaline hydrolysis";
+  }
+  if (isChemicalFormulaLike(topic)) {
+    return topic.replace(/\s+/g, "");
+  }
+  return "";
+}
+
 function patternDomain(topic: string): TopicDomain {
   const text = `${topic} ${normalizeAscii(topic)}`;
+  if (isChemistryLikeTopic(topic)) return "materials_design";
   if (/thixotropy|rheology|non-newtonian fluid/.test(text))
     return "materials_design";
   if (/exclave|enclave|territorial discontinuity|border geography/.test(text))
@@ -2026,6 +2202,8 @@ function canonicalEnglishTopicFor(input: {
   scientificNames: string[];
 }): string {
   if (input.topicKind === "unknown_or_noise") return "";
+  const chemistryHint = chemistryCanonicalEnglishHint(input.normalizedTopic);
+  if (chemistryHint) return chemistryHint;
   if (input.englishTerms.length > 0) return input.englishTerms[0]!;
   if (input.scientificNames.length > 0) return input.scientificNames[0]!;
   if (
@@ -2053,6 +2231,123 @@ function genericAngles(
   const t = normalizeTopicText(topic) || "研究主題";
   const finalize = (angles: TopicResearchAngle[]): TopicResearchAngle[] =>
     applyCanonicalEnglishTopic(angles, t, canonicalEnglishTopic);
+  if (
+    isChemistryLikeTopic(topic) ||
+    ((domain === "materials_design" || domain === "technology") &&
+      /反應|reaction|oxidation|reduction|hydrolysis|electrolyte|ion|compound/i.test(
+        `${topic} ${canonicalEnglishTopic}`,
+      ))
+  ) {
+    const chemistryAngles =
+      /皂化|saponification/u.test(topic)
+        ? [
+            angle(
+              "條件與速率",
+              `${t}中鹼濃度對反應速率與產物性質的影響`,
+              "把研究對象明確收斂到鹼濃度、反應速率與產物差異，能直接對應實驗與文獻證據。",
+              [`${t} 鹼濃度 反應速率 產物性質`, `${t} 動力學 鹼性水解`],
+              [`${t} alkali concentration reaction rate product properties`, `${t} alkaline hydrolysis kinetics`],
+              ["化學論文", "實驗研究", "教材或方法資料"],
+            ),
+            angle(
+              "油脂與機制",
+              `${t}中不同油脂來源對產物硬度、清潔力與鹼性水解機制的差異`,
+              "把油脂來源、產物性質與鹼性水解機制放進同一題，能避免只停在空泛原理介紹。",
+              [`${t} 油脂來源 產物硬度 清潔力`, `${t} 酯類 鹼性水解 機制`],
+              [`${t} oil source hardness cleansing performance`, `${t} ester alkaline hydrolysis mechanism`],
+              ["化學論文", "配方研究", "教學實驗資料"],
+            ),
+            angle(
+              "應用與風險",
+              `${t}在高中實驗、肥皂製備與油脂化學中的操作限制與安全風險`,
+              "研究-ready 題目通常還需要補上教學操作、實務用途與安全限制。",
+              [`${t} 高中實驗 操作風險`, `${t} 肥皂製備 油脂化學 限制`],
+              [`${t} classroom experiment safety`, `${t} soap making oil chemistry limitations`],
+              ["安全資料表", "應用研究", "教學資料"],
+            ),
+          ]
+        : /氧化還原|redox|oxidation|reduction/u.test(topic)
+          ? [
+              angle(
+                "電子轉移機制",
+                `${t}中電子轉移與氧化數變化的對照分析`,
+                "把核心研究對象收斂到電子轉移與氧化數，能直接連到反應機制與判讀依據。",
+                [`${t} 電子轉移 氧化數 比較`, `${t} 氧化劑 還原劑 機制`],
+                [`${t} electron transfer oxidation state comparison`, `${t} oxidant reductant mechanism`],
+                ["化學論文", "教學研究", "教材"],
+              ),
+              angle(
+                "條件與量測",
+                `${t}在不同反應條件下的電位變化、產物判讀與實驗誤差來源`,
+                "這能把氧化還原主題從定義介紹推進到可量測、可比較的研究設計。",
+                [`${t} 電位變化 產物判讀`, `${t} 實驗誤差 量測 方法`],
+                [`${t} potential change product interpretation`, `${t} experimental error measurement`],
+                ["實驗研究", "方法論文", "教學實驗資料"],
+              ),
+              angle(
+                "應用與限制",
+                `${t}在電池、腐蝕或氧化反應應用中的證據邊界與限制`,
+                "把應用情境和限制綁在一起，能避免搜尋結果漂到只有沾邊關鍵字的資料。",
+                [`${t} 電池 腐蝕 應用`, `${t} 限制 證據 比較`],
+                [`${t} battery corrosion applications`, `${t} limitations evidence comparison`],
+                ["應用研究", "工程資料", "教材"],
+              ),
+            ]
+          : /反應|reaction|hydrolysis/u.test(topic)
+        ? [
+            angle(
+              "反應機制與變因",
+              `${t}在不同反應條件下的機制、速率與產物差異`,
+              "可把研究對象收斂到反應條件、電子轉移或水解途徑等可驗證變因。",
+              [`${t} 反應機制 反應速率 產物`, `${t} 條件 比較 動力學`],
+              [`${t} reaction mechanism kinetics products`, `${t} reaction conditions comparison`],
+              ["化學論文", "實驗研究", "教材或方法資料"],
+            ),
+            angle(
+              "量測與比較",
+              `${t}的關鍵量測指標、比較角度與實驗誤差來源`,
+              "可補強只談原理時常缺少的量測方法、比較基準與誤差控制。",
+              [`${t} 量測 指標 比較`, `${t} 實驗 誤差 方法`],
+              [`${t} measurement indicators comparison`, `${t} experimental error methods`],
+              ["方法論文", "實驗教材", "工程標準"],
+            ),
+            angle(
+              "應用與限制",
+              `${t}在教學、工業或環境脈絡中的應用限制與安全風險`,
+              "研究-ready 題目通常還需要補上應用邊界、危害控制與實際限制。",
+              [`${t} 應用 限制 安全`, `${t} 工業 教學 環境風險`],
+              [`${t} application limitations safety`, `${t} industrial educational environmental risk`],
+              ["安全資料表", "應用研究", "風險評估資料"],
+            ),
+          ]
+        : [
+            angle(
+              "性質與反應性",
+              `${t}的化學組成、反應性與穩定性分析`,
+              "可先釐清物質本身的化學性質，再決定要延伸到哪種反應或應用情境。",
+              [`${t} 化學性質 反應性 穩定性`, `${t} 組成 結構 分析`],
+              [`${t} chemical properties reactivity stability`, `${t} composition structure analysis`],
+              ["化學論文", "資料庫條目", "教材"],
+            ),
+            angle(
+              "操作條件與風險",
+              `${t}在不同操作條件下的安全風險、儲存限制與量測方法`,
+              "這能把單一化合物主題轉成有變因、有情境、可查證據的研究問題。",
+              [`${t} 操作條件 安全風險 儲存`, `${t} 量測 方法 限制`],
+              [`${t} handling conditions safety storage`, `${t} measurement methods limitations`],
+              ["安全資料表", "方法論文", "實驗室規範"],
+            ),
+            angle(
+              "用途與證據邊界",
+              `${t}在分析、材料或環境脈絡中的用途、限制與證據邊界`,
+              "可比較不同應用情境中的證據強弱，避免搜尋漂到只沾到關鍵字的資料。",
+              [`${t} 分析 材料 環境 應用`, `${t} 限制 比較`],
+              [`${t} analytical material environmental applications`, `${t} limitations comparison`],
+              ["應用研究", "技術資料", "環境或風險資料"],
+            ),
+          ];
+    return finalize(chemistryAngles);
+  }
   if (domain === "automotive_business") {
     return finalize([
       angle(
@@ -2615,7 +2910,10 @@ export function understandTopic(topic: string): TopicUnderstandingResult {
       topicKind: "specific_research_topic",
       domain,
       canonicalTerms: [normalizedTopic],
-      englishTerms: englishHints,
+      englishTerms: unique([
+        chemistryCanonicalEnglishHint(normalizedTopic),
+        ...englishHints,
+      ]),
       shouldSearchNow: true,
       needsClarification: false,
       researchAngles: genericAngles(
@@ -2635,7 +2933,10 @@ export function understandTopic(topic: string): TopicUnderstandingResult {
       topicKind: "broad_common_noun",
       domain,
       canonicalTerms: [normalizedTopic],
-      englishTerms: englishHints,
+      englishTerms: unique([
+        chemistryCanonicalEnglishHint(normalizedTopic),
+        ...englishHints,
+      ]),
       shouldSearchNow: false,
       needsClarification: true,
       researchAngles: genericAngles(
@@ -2654,7 +2955,10 @@ export function understandTopic(topic: string): TopicUnderstandingResult {
     topicKind: "ambiguous",
     domain,
     canonicalTerms: [normalizedTopic],
-    englishTerms: englishHints,
+    englishTerms: unique([
+      chemistryCanonicalEnglishHint(normalizedTopic),
+      ...englishHints,
+    ]),
     shouldSearchNow: false,
     needsClarification: true,
     researchAngles: genericAngles(

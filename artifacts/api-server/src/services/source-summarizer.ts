@@ -30,13 +30,18 @@ type SourceSummaryCapableRecord = SourceRecord & {
   summaryStructuredStatus?: LlmStructuredStatus | null;
   summaryMessage?: string | null;
   readableSummaryZhTW?: string | null;
+  readableSummaryZhTw?: string | null;
   summarySourceType?: "abstract" | "snippet" | "fulltext" | "metadataFallback" | null;
   summaryConfidence?: "high" | "medium" | "low" | null;
   relevanceReasonZhTW?: string | null;
+  relevanceReasonZhTw?: string | null;
   summaryWarnings?: string[] | null;
   originalAbstract?: string | null;
+  abstractOriginal?: string | null;
+  abstractZhTw?: string | null;
   originalSnippet?: string | null;
   extractedText?: string | null;
+  mainEvidencePointZhTw?: string | null;
 };
 
 export type SourceWithLlmSummary = SourceSummaryCapableRecord;
@@ -81,6 +86,8 @@ type BatchSummaryOutcome = {
 const MAX_SUMMARY_INPUT_CHARS = 4_000;
 const MAX_COMPACT_SOURCE_CHARS = 1_200;
 const SUMMARY_BATCH_SIZE = 4;
+const ZH_TW_SUMMARY_FALLBACK_NOTICE =
+  "此來源尚未完成繁中摘要，以下顯示原文摘要。";
 const ENGLISH_STOP_WORDS = new Set([
   "about",
   "after",
@@ -653,11 +660,31 @@ function composeReadableSummaryZhTW(input: {
     });
   }
   const cleanedSummary = normalizeReaderSummary(input.baseSummary);
-  if (cleanedSummary && /[\u4e00-\u9fff]/u.test(cleanedSummary) && !containsHeavyEnglish(cleanedSummary)) {
+  if (
+    cleanedSummary &&
+    /[\u4e00-\u9fff]/u.test(cleanedSummary) &&
+    !containsHeavyEnglish(cleanedSummary)
+  ) {
     const merged = cleanedSummary.includes("與目前研究主題")
       ? cleanedSummary
       : `${cleanedSummary} 與目前研究主題的關聯在於：${relation}`;
     return truncateText(merged, 170);
+  }
+  const originalAbstract = cleanText(
+    input.source.originalAbstract ?? input.source.abstract,
+  );
+  if (
+    originalAbstract &&
+    /[A-Za-z]/.test(originalAbstract) &&
+    !/[\u4e00-\u9fff]/u.test(originalAbstract) &&
+    (!cleanedSummary ||
+      !/[\u4e00-\u9fff]/u.test(cleanedSummary) ||
+      containsHeavyEnglish(cleanedSummary))
+  ) {
+    return truncateText(
+      `${ZH_TW_SUMMARY_FALLBACK_NOTICE} 英文摘要請展開詳情查看。`,
+      170,
+    );
   }
   const focus = sourceFocusTitle(input.source.title, input.topic);
   const evidenceExcerpt = readableEvidenceExcerpt({
@@ -698,25 +725,38 @@ function buildReadableSummaryPayload(input: {
 }): Pick<
   SourceWithLlmSummary,
   | "readableSummaryZhTW"
+  | "readableSummaryZhTw"
   | "summarySourceType"
   | "summaryConfidence"
   | "relevanceReasonZhTW"
+  | "relevanceReasonZhTw"
+  | "abstractOriginal"
+  | "abstractZhTw"
+  | "mainEvidencePointZhTw"
   | "summaryWarnings"
 > {
   const summarySourceType = summarySourceTypeForTarget(input.target);
   const summaryConfidence = summaryConfidenceForType(summarySourceType);
   const relevanceReasonZhTW = relevanceReasonSummary(input.topic, input.target.source);
+  const readableSummaryZhTW = composeReadableSummaryZhTW({
+    topic: input.topic,
+    source: input.target.source,
+    baseSummary: input.summaryText,
+    summarySourceType,
+    summaryConfidence,
+  });
   return {
-    readableSummaryZhTW: composeReadableSummaryZhTW({
-      topic: input.topic,
-      source: input.target.source,
-      baseSummary: input.summaryText,
-      summarySourceType,
-      summaryConfidence,
-    }),
+    readableSummaryZhTW,
+    readableSummaryZhTw: readableSummaryZhTW,
     summarySourceType,
     summaryConfidence,
     relevanceReasonZhTW,
+    relevanceReasonZhTw: relevanceReasonZhTW,
+    abstractOriginal:
+      cleanText(input.target.source.originalAbstract ?? input.target.source.abstract) ||
+      null,
+    abstractZhTw: null,
+    mainEvidencePointZhTw: cleanText(input.summaryText) || null,
     summaryWarnings: summaryWarningsForTarget(input.target),
   };
 }
@@ -936,6 +976,7 @@ async function summarizeBatchWithLlm(
   try {
     const llmResult = await requestLlmText({
       operation: "source_summary",
+      featureName: "source_readable_summary",
       purpose: "summarizer",
       temperature: 0,
       maxTokens: 700,

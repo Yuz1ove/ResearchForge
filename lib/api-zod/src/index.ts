@@ -1,6 +1,16 @@
 export * from "./source-record";
 export * from "./research-workflow";
+export * from "./research-pipeline";
+export * from "./research-grounding";
+export type {
+  SourceContentAccessLevel,
+  SourceContentExtractionMethod,
+  SourceContentExtractionStatus,
+} from "./research-grounding";
 export * from "./research-tools";
+export * from "./evidence-governance";
+export * from "./report-readiness";
+export * from "./domain-synonyms";
 export * from "./llm-status";
 export * from "./topic-expansion";
 export * from "./topic-understanding";
@@ -35,6 +45,9 @@ export type {
   SourceSummarySourceType,
   SourceSummaryConfidence,
   SourceKind,
+  SourceRecommendationBucket,
+  SourceRole,
+  SourceRetrievalMode,
   SourceRelevanceClassification,
 } from "./source-record";
 export {
@@ -45,6 +58,9 @@ export {
   SOURCE_SUMMARY_SOURCE_TYPES,
   SOURCE_SUMMARY_CONFIDENCE_LEVELS,
   SOURCE_KINDS,
+  SOURCE_RECOMMENDATION_BUCKETS,
+  SOURCE_ROLES,
+  SOURCE_RETRIEVAL_MODES,
   SOURCE_RELEVANCE_CLASSIFICATIONS,
   sourceRecordKey,
   normalizeSourceRecord,

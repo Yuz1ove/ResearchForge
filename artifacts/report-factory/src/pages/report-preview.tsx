@@ -187,14 +187,88 @@ function llmStatusMessage(
 }
 
 function evidenceCardStatusLabel(card: ReportWorkspace["evidenceCards"][number]): string {
+  if (card.sourceAccessLevel === "full_text") return "全文片段";
+  if (card.sourceAccessLevel === "abstract_only") return "僅摘要";
+  if (card.sourceAccessLevel === "metadata_only") return "metadata only";
+  if (card.sourceAccessLevel === "failed_extraction") return "抽取失敗";
   if (card.abstractOnly) return "僅摘要";
   if (card.derivation === "metadata-derived") return "摘要不足";
   if (card.derivation === "fulltext-derived") return "片段可驗證";
   return "摘要可用";
 }
 
+function sourceReadableStatusLabel(source: ReportWorkspace["acceptedSources"][number]): string {
+  switch (source.accessLevel) {
+    case "full_text":
+      return "full text";
+    case "abstract_only":
+      return "abstract only";
+    case "metadata_only":
+      return "metadata only";
+    case "blocked_or_paywalled":
+      return "manual review required";
+    case "failed_extraction":
+      return "extraction failed";
+    default:
+      return source.abstract ? "abstract only" : "metadata only";
+  }
+}
+
+function sourceExtractionDetails(source: ReportWorkspace["acceptedSources"][number]): string[] {
+  const details: string[] = [];
+  if (source.extractionStatus) details.push(`抽取狀態：${source.extractionStatus}`);
+  if (source.extractionMode) details.push(`抽取模式：${source.extractionMode}`);
+  if (source.extractionMethod) details.push(`抽取方法：${source.extractionMethod}`);
+  if (typeof source.fullTextCharCount === "number" && source.fullTextCharCount > 0) {
+    details.push(`全文字數：${source.fullTextCharCount.toLocaleString()}`);
+  }
+  const sectionCount = source.extractedSections?.length ?? 0;
+  const chunkCount = source.extractedChunks?.length ?? 0;
+  if (sectionCount > 0 || chunkCount > 0) {
+    details.push(`usable sections：${sectionCount}；evidence chunks：${chunkCount}`);
+  }
+  if (typeof source.claimCount === "number") {
+    details.push(`claims：${source.acceptedClaimCount ?? 0}/${source.claimCount}`);
+  }
+  if (typeof source.acceptedEvidenceCardCount === "number") {
+    details.push(`evidence cards：${source.acceptedEvidenceCardCount}`);
+  }
+  return details;
+}
+
+function sourceExtractionWarnings(source: ReportWorkspace["acceptedSources"][number]): string {
+  return [
+    ...(source.extractionWarnings ?? []),
+    ...(source.claimExtractionWarnings ?? []),
+    source.userFacingMessage ?? "",
+    source.failureReason ?? "",
+  ].filter(Boolean).join("；");
+}
+
+function evidenceCoverageLabel(
+  status: ReportWorkspace["draft"]["sections"][number]["evidenceCoverageStatus"] | undefined,
+): string {
+  switch (status) {
+    case "sufficient":
+      return "sufficient";
+    case "weak":
+      return "weak";
+    case "insufficient":
+    default:
+      return "insufficient";
+  }
+}
+
+function evidenceCoverageBadgeVariant(
+  status: ReportWorkspace["draft"]["sections"][number]["evidenceCoverageStatus"] | undefined,
+): "default" | "secondary" | "outline" {
+  if (status === "sufficient") return "default";
+  if (status === "weak") return "secondary";
+  return "outline";
+}
+
 function sourceStatusLabels(source: ReportWorkspace["acceptedSources"][number]): string[] {
-  const labels = ["已接受", sourceCategoryLabel(source.sourceCategory)];
+  const labels = ["已接受", sourceCategoryLabel(source.sourceCategory), sourceReadableStatusLabel(source)];
   if (source.topicalRelevanceLabel === "high") labels.push("高相關");
   if (source.topicalRelevanceLabel === "medium") labels.push("中相關");
   if (source.topicalRelevanceLabel === "low") labels.push("低相關");
@@ -549,8 +623,18 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
 
       const llmDraft = await requestLlmReportDraft({
         reportInput: rebuiltWithSupplemental.input,
+        workflowId: rebuiltWithSupplemental.workflowId,
+        topicHash: rebuiltWithSupplemental.topicHash,
+        originalTopic:
+          rebuiltWithSupplemental.generationPayload?.originalTopic ??
+          rebuiltWithSupplemental.input.topic,
+        displayTitle:
+          rebuiltWithSupplemental.generationPayload?.displayTitle ??
+          rebuiltWithSupplemental.draft.title,
         acceptedSources: rebuiltWithSupplemental.acceptedSources,
         evidenceCards: rebuiltWithSupplemental.evidenceCards,
+        academicSafetyReview:
+          rebuiltWithSupplemental.generationPayload?.academicSafetyReview ?? null,
         generationMode: rebuiltWithSupplemental.generationMode,
       });
 
@@ -622,8 +706,16 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="mb-2 flex flex-wrap items-center gap-2">
-                <Badge variant={workspace.generationMode === "full_report" ? "default" : "secondary"}>
-                  {workspace.generationMode === "full_report" ? "完整報告" : "快速草稿"}
+                <Badge variant={workspace.generationMode === "complete_research_report" ? "default" : "secondary"}>
+                  {workspace.generationMode === "complete_research_report"
+                    ? "完整研究報告"
+                    : workspace.generationMode === "standard_research_report"
+                      ? "標準研究報告"
+                      : workspace.generationMode === "short_research_report"
+                        ? "短版研究報告"
+                        : workspace.generationMode === "single_source_review"
+                          ? "單篇文獻整理"
+                          : "初步資料整理"}
                 </Badge>
                 <Badge variant="outline">{workspace.acceptedSources.length} 筆已接受來源</Badge>
                 <Badge variant="outline">工作區 {workspace.id}</Badge>
@@ -787,12 +879,10 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
           </div>
           {workspace.supplementalSearchDiagnostics?.attempted ? (
             <div className="mt-4 rounded-md border border-border bg-background px-3 py-3 text-xs leading-5 text-muted-foreground">
-              <p className="font-medium text-foreground">補查 diagnostics</p>
+              <p className="font-medium text-foreground">補充來源檢查</p>
               <p className="mt-1">
                 已針對 {workspace.supplementalSearchDiagnostics.gaps.length} 個缺口補查，
-                共嘗試 {workspace.supplementalSearchDiagnostics.queries.length} 組 query，
-                provider 回傳 {workspace.supplementalSearchDiagnostics.rawResultCount} 筆，
-                經 relevance scoring 後保留 {workspace.supplementalSearchDiagnostics.filteredResultCount} 筆。
+                並整理出 {workspace.supplementalSearchDiagnostics.filteredResultCount} 筆可能可用的補充來源線索。
               </p>
               <p className="mt-1">
                 {workspace.supplementalSearchDiagnostics.status === "insufficient"
@@ -837,13 +927,22 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                       </div>
                       <p className="text-xs font-medium leading-5 text-foreground">{card.sourceTitle}</p>
                       <p className="mt-2 text-xs font-medium leading-5 text-foreground">主要主張</p>
-                      <p className="mt-1 text-sm leading-6 text-foreground/90">{card.mainClaim || card.summary}</p>
+                      <p className="mt-1 text-sm leading-6 text-foreground/90">{card.mainClaimZhTw || card.mainClaim || card.summary}</p>
+                      {card.supportSpans?.[0]?.text ? (
+                        <>
+                          <p className="mt-2 text-xs font-medium leading-5 text-foreground">support span</p>
+                          <p className="mt-1 text-sm leading-6 text-foreground/90">{card.supportSpans[0].text}</p>
+                        </>
+                      ) : null}
                       <p className="mt-2 text-xs font-medium leading-5 text-foreground">可用證據</p>
                       <p className="mt-1 text-sm leading-6 text-foreground/90">
                         {card.usableEvidence || card.quoteOrParaphrase || card.summary || card.evidence}
                       </p>
                       <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                        {card.citationText}・{card.pageOrLocation || "摘要整理"}
+                        {card.citationText}・{card.sourceLocation || card.pageOrLocation || "摘要整理"}
+                        {card.extractionMethod ? `・${card.extractionMethod}` : ""}
+                        {card.extractionStatus ? `・${card.extractionStatus}` : ""}
+                        {card.needsManualReview ? "・needs review" : ""}
                       </p>
                       {card.limitation ? (
                         <p className="mt-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-5 text-muted-foreground">
@@ -902,10 +1001,18 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                           <p className="mt-1 text-xs leading-5 text-muted-foreground">{section.sectionGoal}</p>
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          <Badge variant="outline">{section.evidenceCardIds.length} 張證據</Badge>
-                          <Badge variant="outline">{section.citationIds.length} 個 citation</Badge>
+                          <Badge variant={evidenceCoverageBadgeVariant(section.evidenceCoverageStatus)}>
+                            {evidenceCoverageLabel(section.evidenceCoverageStatus)}
+                          </Badge>
+                          <Badge variant="outline">{section.evidenceCardCount ?? section.evidenceCardIds.length} 張證據</Badge>
+                          <Badge variant="outline">{section.citationCount ?? section.citationMarkers.length} 個 citation</Badge>
                         </div>
                       </div>
+                      {section.evidenceCoverageStatus === "insufficient" ? (
+                        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                          目前此段來源不足，建議補充來源或改為保守敘述。
+                        </div>
+                      ) : null}
                       <Textarea
                         value={visibleReportSectionText(section)}
                         onFocus={() => setActiveSectionId(section.sectionId)}
@@ -994,6 +1101,18 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                         <p className="font-medium text-foreground">限制</p>
                         <p className="mt-1 text-muted-foreground">{sourceLimitations(source)}</p>
                       </div>
+                      {sourceExtractionDetails(source).length > 0 ? (
+                        <div>
+                          <p className="font-medium text-foreground">全文抽取</p>
+                          <p className="mt-1 text-muted-foreground">{sourceExtractionDetails(source).join("｜")}</p>
+                        </div>
+                      ) : null}
+                      {sourceExtractionWarnings(source) ? (
+                        <div>
+                          <p className="font-medium text-foreground">抽取警告</p>
+                          <p className="mt-1 text-muted-foreground">{sourceExtractionWarnings(source)}</p>
+                        </div>
+                      ) : null}
                       <p className="text-muted-foreground">
                         abstractOnly: {sourceAbstractOnly(source) ? "true" : "false"}
                       </p>

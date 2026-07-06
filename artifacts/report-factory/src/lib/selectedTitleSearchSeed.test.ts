@@ -86,3 +86,33 @@ test("selected title search payload keeps display title separate from canonical 
   ]);
   assert.equal(payload.selectedResearchPlanId, "bubble-plan");
 });
+
+test("selected title search payload prefers candidate-specific query seeds over generic hidden plan seeds", () => {
+  const seed = createSelectedTitleSearchSeed(
+    "皂化反應",
+    "皂化反應中鹼濃度對反應速率與產物性質的影響",
+    {
+      selectedTopicSeed: "皂化反應",
+      possibleDomains: ["natural_science"],
+      querySeedZh: ["皂化反應 原理", "皂化反應 應用"],
+      querySeedEn: ["saponification reaction mechanism"],
+    },
+    {
+      keywordsZh: ["鹼濃度", "反應速率"],
+      keywordsEn: ["alkali concentration", "reaction rate"],
+      querySeeds: {
+        zh: ["皂化反應 鹼濃度 反應速率"],
+        en: ["saponification alkali concentration reaction rate"],
+      },
+    },
+  );
+
+  const payload = buildSelectedTitleSearchPayload({ seed });
+
+  assert.deepEqual(payload.querySeedZh, ["皂化反應 鹼濃度 反應速率"]);
+  assert.deepEqual(payload.querySeedEn, [
+    "saponification alkali concentration reaction rate",
+  ]);
+  assert.ok(payload.mustIncludeTerms.includes("鹼濃度"));
+  assert.ok(payload.mustIncludeTerms.includes("reaction rate"));
+});

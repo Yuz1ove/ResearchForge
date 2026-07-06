@@ -9,7 +9,7 @@
 // citation integrity and must not invent unsupported claims.
 //
 // To connect a real model later: replace the body of `generateReport()` with an
-// async call to /api/generate (or the OpenAI chat completions endpoint) that
+// async call to ResearchForge's own backend API that
 // returns the same `GeneratedReport` shape. All UI renders generically from the
 // block-based model below, so no UI changes are required for the swap.
 //
@@ -28,16 +28,19 @@ import {
   understandTopic,
   type TopicClarificationCard,
 } from "@workspace/api-zod/topic-understanding";
+import type { ResearchDirection } from "./topicWorkflow.ts";
 
 // ─── Form option lists (single source of truth, imported by the UI) ──────────
 
 export const REPORT_TYPES = [
   "研究報告",
+  "摘要",
+  "總結",
+  "知識庫整理",
   "心得報告",
   "專題報告",
   "實驗報告",
-  "商業報告",
-  "商業／產品分析報告",
+  "科展報告",
   "讀書報告",
   "其他",
 ] as const;
@@ -48,19 +51,18 @@ export const TARGET_AUDIENCES = [
   "大學",
   "老師",
   "評審",
-  "客戶",
-  "公司主管",
   "一般讀者",
 ] as const;
 
 export const REPORT_PURPOSES = [
   "學校作業",
   "研究報告",
+  "摘要整理",
+  "知識庫整理",
   "科展報告",
   "專題製作",
   "讀書心得",
   "實驗報告",
-  "商業分析",
   "簡報講稿",
   "網站／AI／程式專案",
   "其他",
@@ -124,7 +126,6 @@ export const REPORT_STYLES = [
   "高中生自然報告風格",
   "90 分以上學校報告風格",
   "學術研究風格",
-  "商業顧問風格",
   "口語簡報風格",
   "深度研究報告風格",
 ] as const;
@@ -278,6 +279,15 @@ export interface TopicExpansionCard {
   reason: string;
   style?: string;
   displayOnly?: boolean;
+  researchObject?: string;
+  variableOrAngle?: string;
+  rationale?: string;
+  keywordsZh?: string[];
+  keywordsEn?: string[];
+  querySeeds?: {
+    zh: string[];
+    en: string[];
+  };
   category?: string;
   researchQuestion?: string;
   scope?: string;
@@ -296,6 +306,7 @@ export interface TopicExpansionCard {
   excludedTerms?: string[];
   broadSuggestion?: boolean;
   hiddenResearchPlan?: HiddenResearchPlan | null;
+  researchDirection?: ResearchDirection;
 }
 
 function cardFromClarification(
@@ -345,7 +356,44 @@ function chars(s: string): number {
 }
 
 function has(haystack: string, needles: string[]): boolean {
-  return needles.some((n) => haystack.includes(n));
+  const safeHaystack = typeof haystack === "string" ? haystack : "";
+  return needles.some((n) => safeHaystack.includes(n));
+}
+
+function textField(value: string | null | undefined): string {
+  return typeof value === "string" ? value : "";
+}
+
+function normalizeReportInput(input: ReportInput): ReportInput {
+  const academicLevel = textField(input.academicLevel) || "高中";
+  return {
+    ...input,
+    topic: textField(input.topic),
+    reportType: textField(input.reportType) || "研究報告",
+    academicLevel,
+    targetAudience: textField(input.targetAudience) || academicToAudience(academicLevel),
+    researchDepth: input.researchDepth ?? "standard",
+    purpose: textField(input.purpose) || academicToPurpose(academicLevel),
+    domainOverride: textField(input.domainOverride),
+    mode: textField(input.mode) || "先建立報告架構",
+    sourceRequirement:
+      textField(input.sourceRequirement) || "需要，並生成參考文獻格式",
+    citationFormat: textField(input.citationFormat) || "APA",
+    chartRequirement: textField(input.chartRequirement) || "不需要",
+    style: textField(input.style) || "高中生自然報告風格",
+    length: textField(input.length) || "一般報告",
+    wordCount: textField(input.wordCount),
+    formalTone: textField(input.formalTone),
+    conversationalTone: textField(input.conversationalTone),
+    specifiedStructure: textField(input.specifiedStructure),
+    rubric: textField(input.rubric),
+    personalStyle: textField(input.personalStyle),
+    supplementalMaterials: textField(input.supplementalMaterials),
+    outputLanguage: textField(input.outputLanguage) || "繁體中文",
+    rewriteSection: textField(input.rewriteSection),
+    additionalInfo: textField(input.additionalInfo),
+    acceptedSources: Array.isArray(input.acceptedSources) ? input.acceptedSources : [],
+  };
 }
 
 const SOURCE_NOTE = "資料來源待補；建議查詢政府網站、學術論文、期刊、出版社或可信機構資料。";
@@ -371,13 +419,13 @@ function hasUserSources(input: ReportInput): boolean {
 
 function userMaterialLines(input: ReportInput): string[] {
   const lines: string[] = [];
-  if (input.wordCount.trim()) lines.push(`字數需求：${input.wordCount.trim()}`);
-  if (input.specifiedStructure.trim()) lines.push(`指定段落架構：${input.specifiedStructure.trim()}`);
-  if (input.rubric.trim()) lines.push(`評分標準或檢核表：${input.rubric.trim()}`);
-  if (input.personalStyle.trim()) lines.push(`個人寫作風格要求：${input.personalStyle.trim()}`);
-  if (input.supplementalMaterials.trim()) lines.push(`使用者補充資料或參考來源：${input.supplementalMaterials.trim()}`);
-  if (input.rewriteSection.trim()) lines.push(`指定重寫章節：${input.rewriteSection.trim()}`);
-  if (input.additionalInfo.trim()) lines.push(`其他補充資料：${input.additionalInfo.trim()}`);
+  if (textField(input.wordCount).trim()) lines.push(`字數需求：${textField(input.wordCount).trim()}`);
+  if (textField(input.specifiedStructure).trim()) lines.push(`指定段落架構：${textField(input.specifiedStructure).trim()}`);
+  if (textField(input.rubric).trim()) lines.push(`評分標準或檢核表：${textField(input.rubric).trim()}`);
+  if (textField(input.personalStyle).trim()) lines.push(`個人寫作風格要求：${textField(input.personalStyle).trim()}`);
+  if (textField(input.supplementalMaterials).trim()) lines.push(`使用者補充資料或參考來源：${textField(input.supplementalMaterials).trim()}`);
+  if (textField(input.rewriteSection).trim()) lines.push(`指定重寫章節：${textField(input.rewriteSection).trim()}`);
+  if (textField(input.additionalInfo).trim()) lines.push(`其他補充資料：${textField(input.additionalInfo).trim()}`);
   return lines;
 }
 
@@ -494,12 +542,12 @@ export function detectTopicCategory(
     return "AI／網站／程式專案";
   }
 
-  // Business / product / industry analysis — includes well-known company names
+  // Project / product / industry analysis — includes well-known company names
   if (
-    has(pp, ["商業分析"]) ||
+    has(pp, ["專題製作"]) ||
     has(rt, ["商業", "市場"]) ||
     has(tt, [
-      "商業模式", "競品", "行銷", "品牌", "產品分析", "市場", "營收", "獲利", "創業", "電商",
+      "同類案例", "需求分析", "品牌", "產品分析", "使用情境", "原型", "創業", "電商",
       // company names & industry terms
       "台積電", "鴻海", "聯發科", "聯電", "華碩", "宏碁", "中華電信", "台灣大哥大",
       "TSMC", "tsmc", "股票", "半導體", "晶片", "晶圓", "積體電路", "投資",
@@ -1107,11 +1155,11 @@ export function expandTopicCards(topic: string, category?: TopicCategory): Topic
       ];
     case "business":
       return [
-        expansionCard(`「${t}」的目標客群與需求情境`, "市場", "可分析使用者痛點、購買動機與族群差異。"),
-        expansionCard(`「${t}」的競品比較與差異化策略`, "競爭", "適合整理功能、價格、通路與品牌定位。"),
-        expansionCard(`「${t}」的商業模式與收入來源`, "商業模式", "分析訂閱、廣告、銷售或服務費等收入來源。"),
-        expansionCard(`「${t}」的成本、風險與執行限制`, "風險", "可評估資源、人力、法規與市場不確定性。"),
-        expansionCard(`「${t}」未來擴張與永續經營方向`, "發展", "可提出產品迭代、合作與長期策略。"),
+        expansionCard(`「${t}」的使用者需求與應用情境`, "需求", "可分析使用者痛點、使用動機與族群差異。"),
+        expansionCard(`「${t}」的同類案例比較與作品特色`, "案例比較", "適合整理功能、限制、使用情境與設計定位。"),
+        expansionCard(`「${t}」的作品架構與資料流程`, "作品架構", "分析功能模組、資料輸入、輸出結果與操作流程。"),
+        expansionCard(`「${t}」的資源、風險與執行限制`, "風險", "可評估器材、人力、資料取得、法規與測試不確定性。"),
+        expansionCard(`「${t}」未來改進與延伸研究方向`, "發展", "可提出原型迭代、測試修正與後續研究。"),
       ];
     case "care":
       return [
@@ -1937,67 +1985,67 @@ function buildBookReflection(topic: string): CategoryContent {
 
 function buildBusiness(topic: string): CategoryContent {
   return {
-    summaryDirection: `本報告以商業視角分析「${topic}」，涵蓋產品背景、目標客群、競品、核心功能、商業模式、成本與風險，並提出執行建議。`,
-    summary: `本報告針對「${topic}」進行商業與產品分析，從目標客群、使用情境、競品比較到商業模式與風險，提出可執行的結論與建議。`,
-    background: `「${topic}」面對特定的市場需求與使用者痛點。本報告分析其機會與挑戰，作為決策參考。〔建議補充市場數據〕`,
-    motivation: `希望以決策導向的方式評估「${topic}」的可行性，找出差異化定位與獲利模式。`,
+    summaryDirection: `本報告以專題研究視角分析「${topic}」，涵蓋問題背景、使用情境、同類案例、核心功能、實作資源與風險，並提出作品改進建議。`,
+    summary: `本報告針對「${topic}」進行專題與產品研究，從目標使用者、使用情境、同類案例比較到實作限制與風險，提出可執行的結論與建議。`,
+    background: `「${topic}」面對特定的使用需求與問題情境。本報告分析其研究價值與挑戰，作為專題作品規劃參考。〔建議補充實際訪談或觀察資料〕`,
+    motivation: `希望以專題研究的方式評估「${topic}」的可行性，找出清楚的問題定位與作品特色。`,
     purpose: [
       `分析「${topic}」的目標客群與使用情境。`,
-      `比較競品並找出差異化優勢。`,
-      `規劃商業模式、成本與風險。`,
-      `提出可執行的發展建議。`,
+      `比較同類案例並找出作品特色。`,
+      `規劃實作資源、限制與風險。`,
+      `提出可執行的作品改進建議。`,
     ],
     questions: [
       `「${topic}」要解決誰的什麼問題？`,
-      `市場上有哪些競品？「${topic}」的差異化在哪裡？`,
-      `「${topic}」如何獲利並控制風險？`,
+      `目前有哪些同類案例？「${topic}」的特色在哪裡？`,
+      `「${topic}」需要哪些資源並如何控制風險？`,
     ],
     hypothesis: [
       `「${topic}」存在明確的目標客群與未被滿足的需求。`,
-      `透過差異化定位，「${topic}」具備可行的獲利模式。`,
+      `透過清楚的問題定位，「${topic}」具備可行的作品特色。`,
     ],
     literature: [
-      `「${topic}」所屬市場規模與趨勢（數據待補）`,
-      `主要競品的功能與定價（資料待確認）`,
-      `相關商業模式案例`,
+      `「${topic}」相關需求與使用情境研究（資料待補）`,
+      `同類作品或案例的功能與限制（資料待確認）`,
+      `相關專題作品與實作案例`,
     ],
-    method: `採用商業分析方法：以使用者輪廓、競品分析、商業模式（如商業模式圖）與 SWOT 等工具，整合質化與量化資訊。`,
-    analysis: `比較「${topic}」與競品的功能、定價與定位後，可看出其機會與威脅〔建議補充市場與競品數據〕，並據此調整策略。`,
-    discussion: `討論「${topic}」的核心優勢、潛在風險與資源需求，評估在不同情境下的可行性。`,
+    method: `採用專題分析方法：以使用者輪廓、同類案例比較、需求訪談與 SWOT 等工具，整合質化與量化資訊。`,
+    analysis: `比較「${topic}」與同類案例的功能、限制與定位後，可看出其研究機會與風險〔建議補充訪談、觀察或作品案例資料〕，並據此調整設計。`,
+    discussion: `討論「${topic}」的核心特色、潛在風險與資源需求，評估在不同使用情境下的可行性。`,
     limitations: [
-      `市場與競品數據需以實際調查為準，本報告為初步分析。`,
-      `商業環境變動快速，預估具不確定性。`,
+      `使用者需求與同類案例需以實際調查為準，本報告為初步分析。`,
+      `專題作品受時間、器材、資料取得與測試次數限制，結論仍具不確定性。`,
     ],
-    conclusion: `綜合分析，「${topic}」具備〔填入主要優勢〕，建議聚焦於〔填入策略重點〕並控管〔填入主要風險〕，以提升成功機會。`,
+    conclusion: `綜合分析，「${topic}」具備〔填入主要特色〕，建議聚焦於〔填入改進重點〕並控管〔填入主要風險〕，以提升作品完整度。`,
     futureWork: [
-      `進行使用者訪談與市場驗證（MVP 測試）。`,
-      `建立財務試算與里程碑規劃。`,
+      `進行使用者訪談與原型測試。`,
+      `建立實作里程碑與測試紀錄。`,
     ],
     customSections: [
-      { heading: "一、執行摘要", body: `用一段話說明「${topic}」的定位、目標與核心價值。` },
-      { heading: "二、產品背景", body: `說明「${topic}」要解決的問題與市場機會。` },
+      { heading: "一、作品摘要", body: `用一段話說明「${topic}」的定位、目標與核心價值。` },
+      { heading: "二、作品背景", body: `說明「${topic}」要解決的問題與研究價值。` },
       { heading: "三、目標客群", body: `描述主要使用者輪廓與需求。` },
       { heading: "四、使用情境", body: `列出使用者在何種情境下會使用「${topic}」。` },
-      { heading: "五、競品分析", body: `比較主要競品的功能、定價與優劣（資料待確認）。` },
+      { heading: "五、同類案例分析", body: `比較同類作品或案例的功能、限制與優劣（資料待確認）。` },
       { heading: "六、核心功能", body: `列出「${topic}」的主要功能與差異化重點。` },
-      { heading: "七、商業模式", body: `說明收入來源與成本結構（如訂閱、廣告、抽成等）。` },
+      { heading: "七、作品架構", body: `說明核心模組、資料流程與使用者互動方式。` },
       { heading: "八、技術需求", body: `概述實作「${topic}」所需的技術與資源。` },
-      { heading: "九、成本與資源", body: `估算所需的人力、時間與資金（數據待補）。` },
-      { heading: "十、風險分析", body: `列出市場、技術與營運風險及因應方式。` },
-      { heading: "十一、執行步驟", body: `規劃從開發到上線的階段與里程碑。` },
+      { heading: "九、資源與限制", body: `估算所需的人力、時間、器材與資料來源（資料待補）。` },
+      { heading: "十、風險分析", body: `列出技術、資料、測試與安全風險及因應方式。` },
+      { heading: "十一、執行步驟", body: `規劃從原型製作到測試修正的階段與里程碑。` },
     ],
     charts: [
       {
-        title: "競品比較表",
-        position: "競品分析後",
-        purpose: `比較「${topic}」與競品的功能與定價。`,
-        content: "以表格列出功能、價格、目標客群等欄位（資料待確認）。",
+        title: "同類案例比較表",
+        position: "同類案例分析後",
+        purpose: `比較「${topic}」與同類作品的功能與限制。`,
+        content: "以表格列出功能、使用情境、限制、資料來源與改進空間等欄位（資料待確認）。",
       },
       {
-        title: "商業模式圖（Business Model Canvas）",
-        position: "商業模式後",
-        purpose: "整體呈現價值主張、客群、通路與收入結構。",
-        content: "以九宮格呈現商業模式各要素。",
+        title: "作品架構圖",
+        position: "作品架構後",
+        purpose: "整體呈現使用者、功能模組、資料流程與輸出結果。",
+        content: "以方塊圖呈現作品架構各要素。",
       },
     ],
     images: [
@@ -2013,7 +2061,7 @@ function buildBusiness(topic: string): CategoryContent {
         title: "使用者旅程流程圖",
         position: "使用情境後",
         purpose: "呈現使用者從認識到使用的歷程。",
-        content: "認識 → 註冊 → 使用 → 付費 → 回購。",
+        content: "發現問題 → 嘗試作品 → 完成任務 → 回饋意見 → 修正設計。",
       },
     ],
   };
@@ -2324,9 +2372,6 @@ function selectStructure(category: TopicCategory, reportType: string, purpose: s
   if (has(reportType, ["讀書心得", "讀書", "心得"]) || has(purpose, ["讀書心得", "讀書", "心得"]) || category === "讀書心得") {
     return "book";
   }
-  if (has(reportType, ["商業"]) || has(purpose, ["商業分析"]) || category === "商業／產品分析") {
-    return "business";
-  }
   if (
     category === "AI／網站／程式專案" ||
     has(reportType, ["網站", "ＡＩ", "AI", "程式"]) ||
@@ -2406,36 +2451,6 @@ function buildDomainSpine(kind: StructureKind, input: ReportInput, content: Cate
         { heading: "結論", blocks: [p(content.conclusion)] },
         { heading: "誤差來源", blocks: [l(content.limitations)] },
         { heading: "改進方法", blocks: [l(content.futureWork)] },
-      ];
-      break;
-    case "business":
-      raw = [
-        { heading: "執行摘要", blocks: [p(content.summary)] },
-        { heading: "研究背景", blocks: [p(content.background)] },
-        { heading: "市場現況", blocks: [p(`說明「${t}」所處市場的範圍、規模、成長性與主要參與者。〔建議補充市場數據，${SOURCE_NOTE}〕`)] },
-        { heading: "目標客群", blocks: [p(`描述「${t}」的主要使用者、需求、使用情境與決策者。`), l(content.purpose)] },
-        { heading: "競品分析", blocks: [p(content.analysis)] },
-        {
-          heading: "產品定位",
-          blocks: [
-            p(`以 SWOT 與價值主張評估「${t}」的差異化定位：`),
-            l([
-              `優勢（Strengths）：〔填入「${t}」的內部優勢〕`,
-              "劣勢（Weaknesses）：〔填入內部不足或限制〕",
-              "機會（Opportunities）：〔填入外部市場機會〕",
-              "威脅（Threats）：〔填入外部競爭或風險〕",
-            ]),
-          ],
-        },
-        { heading: "商業模式", blocks: [p(`說明「${t}」的價值主張、收入來源、成本結構、通路與關鍵資源。`)] },
-        { heading: "成本與資源需求", blocks: [p("列出人力、時間、技術、營運與預算需求。此處需要補充資料。")] },
-        { heading: "風險分析", blocks: [l(content.limitations)] },
-        { heading: "執行步驟", blocks: [l(content.futureWork)] },
-        {
-          heading: "預期效益",
-          blocks: [p(`說明「${t}」預期帶來的效率、品質、營收、品牌或決策效益。實際效益需以後續數據驗證。`)],
-        },
-        { heading: "結論與建議", blocks: [p(content.conclusion)] },
       ];
       break;
     case "market":
@@ -2577,7 +2592,6 @@ function styleNote(style: string, audience: string): string {
     "90 分以上學校報告風格": `結構完整、含研究問題、方法、圖表與研究限制，適合正式評分。`,
     "90 分以上學校報告": `結構完整、含研究問題、方法、圖表與研究限制，適合正式評分。`,
     學術研究風格: `用詞正式、加強文獻探討與研究方法，並含限制與未來研究。`,
-    商業顧問風格: `以決策為導向，聚焦市場、成本、風險與執行，結論可支持行動。`,
     口語簡報風格: `句子簡短、重點清楚，適合口頭報告，可轉為簡報講稿。`,
     深度研究報告風格: `結構詳盡、分析深入，並需要真實資料來源補強。`,
     深度研究報告: `結構詳盡、分析深入，並需要真實資料來源補強。`,
@@ -2596,7 +2610,6 @@ function styleLead(style: string): string {
     "90 分以上學校報告風格": "（以嚴謹、完整的學術結構撰寫，強調研究問題、方法與限制。）",
     "90 分以上學校報告": "（以嚴謹、完整的學術結構撰寫，強調研究問題、方法與限制。）",
     學術研究風格: "（採正式學術語氣，加重文獻探討、研究方法與理論依據。）",
-    商業顧問風格: "（以決策導向撰寫，聚焦市場、成本、風險與可執行建議。）",
     口語簡報風格: "（以精簡、條列式重點呈現，適合口頭報告與簡報講稿。）",
     深度研究報告風格: "（以深入分析撰寫，延伸比較、數據與多元觀點。）",
     深度研究報告: "（以深入分析撰寫，延伸比較、數據與多元觀點。）",
@@ -2736,6 +2749,23 @@ function buildReferenceBlocks(input: ReportInput): ContentBlock[] {
   return blocks;
 }
 
+function sourceCountModeNotice(sourceCount: number): string | null {
+  if (sourceCount === 0) return null;
+  if (sourceCount === 1) {
+    return "目前僅基於單一來源生成，適合作為單篇文獻整理或單來源閱讀報告；不代表完整研究綜述，重要結論仍需補充更多來源交叉確認。";
+  }
+  if (sourceCount <= 3) {
+    return "目前來源數較少，本報告定位為初步資料整理；證據有限，結論會採保守寫法。";
+  }
+  if (sourceCount <= 6) {
+    return "目前來源可支撐短版研究報告；章節與推論會避免過度擴張。";
+  }
+  if (sourceCount < 10) {
+    return "目前來源可支撐標準研究報告；若要完整研究綜述，仍建議補充更多高品質來源。";
+  }
+  return "目前來源數足以支撐完整研究報告，但仍需保留引用查核與人工審閱。";
+}
+
 // ─── Data requirement rows ───────────────────────────────────────────────────
 
 function buildDataRows(topic: string, kind: StructureKind): DataRequirementRow[] {
@@ -2786,10 +2816,10 @@ function buildDataRows(topic: string, kind: StructureKind): DataRequirementRow[]
       ]);
     case "business":
       return wrap([
-        { type: "市場規模數據", need: `「${topic}」所屬市場規模與成長率`, use: "市場分析", priority: "高" },
-        { type: "競品資料", need: "主要競品功能、定價與市占", use: "競品分析與比較表", priority: "高" },
-        { type: "財務／成本數據", need: "成本結構、營收或獲利估算", use: "商業模式與風險評估", priority: "中" },
-        { type: "產業趨勢報告", need: "產業鏈與趨勢分析", use: "產業概況與未來展望", priority: "中" },
+        { type: "需求訪談資料", need: `「${topic}」目標使用者的需求、痛點與使用情境`, use: "問題定義與作品定位", priority: "高" },
+        { type: "同類案例資料", need: "相關作品或工具的功能、限制與使用情境", use: "案例分析與比較表", priority: "高" },
+        { type: "資源與限制資料", need: "器材、人力、時間、資料取得與測試條件", use: "可行性與風險評估", priority: "中" },
+        { type: "測試回饋紀錄", need: "原型測試結果、使用者回饋與修正紀錄", use: "作品改進與未來展望", priority: "中" },
       ]);
     case "market":
       return wrap([
@@ -3217,7 +3247,7 @@ const INTENT_NOTE: Record<ResearchIntent, string> = {
 export function frameworkLabel(kind: StructureKind): string {
   const m: Record<StructureKind, string> = {
     experiment: "科學實驗架構",
-    business: "商業分析架構",
+    business: "專題作品可行性架構",
     market: "市場研究架構",
     book: "讀書心得架構",
     tech: "資訊專案架構",
@@ -3354,11 +3384,12 @@ function computeMeta(input: ReportInput, category: TopicCategory, content: Categ
  * keep the GeneratedReport return shape stable so the UI needs no changes.
  */
 export function generateReport(input: ReportInput): GeneratedReport {
-  const topic = input.topic.trim();
-  const mode = normalizeMode(input.mode);
+  const normalizedInput = normalizeReportInput(input);
+  const topic = normalizedInput.topic.trim();
+  const mode = normalizeMode(normalizedInput.mode);
   const safeInput: ReportInput = isShortTopic(topic) && mode === "full"
-    ? { ...input, mode: "先建立報告架構" }
-    : input;
+    ? { ...normalizedInput, mode: "先建立報告架構" }
+    : normalizedInput;
   // V3: an explicit domain override (set in the UI) wins over AI detection.
   const override = safeInput.domainOverride?.trim();
   const category: TopicCategory =
@@ -3407,6 +3438,14 @@ export function generateReport(input: ReportInput): GeneratedReport {
     sections.push({
       heading: "報告品質檢查表",
       blocks: [{ type: "quality", checks: buildQualityChecks(safeInput, content) }],
+    });
+  }
+
+  const modeNotice = sourceCountModeNotice(safeInput.acceptedSources.length);
+  if (modeNotice) {
+    sections.push({
+      heading: "生成等級與證據限制",
+      blocks: [{ type: "note", text: modeNotice }],
     });
   }
 

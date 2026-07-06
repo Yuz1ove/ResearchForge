@@ -162,6 +162,34 @@ test("source summarizer preserves sources and marks failed fallback on empty mod
   assert.equal(result[0]?.summaryFallbackUsed, true);
 });
 
+test("source summarizer keeps zh-TW fallback summaries visible instead of notice-only text", async () => {
+  const result = await summarizeSourcesWithLlm(
+    "皂化反應",
+    [
+      source({
+        title:
+          "Study in Kinetics of Saponification Reaction of Diethyl Adipate with Sodium Hydroxide Solution under Reactive Distillation",
+        abstract:
+          "This study investigates the kinetics of saponification reaction of diethyl adipate with sodium hydroxide solution under reactive distillation.",
+      }),
+    ],
+    {
+      llm: {
+        baseUrl: "https://llm.example/v1",
+        model: "test-model",
+        apiKey: "test-key",
+      },
+      fetchImpl: async () => {
+        throw new Error("network unavailable");
+      },
+    },
+  );
+
+  assert.equal(result[0]?.summaryFallbackUsed, true);
+  assert.doesNotMatch(result[0]?.readableSummaryZhTW ?? "", /尚未完成繁中摘要/);
+  assert.match(result[0]?.readableSummaryZhTW ?? "", /主旨：|摘要重點：|皂化反應/);
+});
+
 test("source summarizer processes sources in smaller LLM batches", async () => {
   let callCount = 0;
   const sources = Array.from({ length: 5 }, (_, index) =>

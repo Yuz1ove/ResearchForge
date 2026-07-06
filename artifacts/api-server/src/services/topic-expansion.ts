@@ -27,10 +27,15 @@ import { safeJsonParse } from "./llm-adapter";
 import {
   logLlmFallback,
   messageFromStatus,
+  providerLabel,
   requestLlmText,
   statusFromLlmError,
   type LlmServiceOperation,
 } from "./llm-service";
+import {
+  understandTopicWithFallback,
+  type TopicUnderstanding as GenericTopicUnderstanding,
+} from "./topic-understanding";
 
 type FetchImpl = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -155,7 +160,7 @@ const FOOD_ENTITY_PATTERN =
 const HEALTH_ENTITY_PATTERN =
   /疾病|感染|細菌|病毒|病原體|健康|醫學|臨床|流行病學|公共衛生|沙門氏(?:桿)?菌|食物中毒|salmonella|infection|disease|clinical|epidemiology|public health/iu;
 const SCIENTIFIC_CONCEPT_PATTERN =
-  /負離子|離子|酸鹼值|ph\b|摩擦力|光合作用|溫室效應|negative ions?|air ions?|ionizer|photosynthesis|greenhouse effect|friction/iu;
+  /負離子|離子|酸鹼值|ph\b|摩擦力|光合作用|溫室效應|過氯酸鈉|高氯酸鈉|過氯酸鹽|高氯酸鹽|naclo4|perchlorate|negative ions?|air ions?|ionizer|photosynthesis|greenhouse effect|friction/iu;
 const SOCIAL_ISSUE_PATTERN =
   /手機成癮|網路成癮|校園霸凌|少子化|氣候變遷|暖化|污染|政策|治理|教育|學習|社會|成癮|climate change|pollution|policy|education|social issue|addiction/iu;
 const TECHNOLOGY_ENTITY_PATTERN =
@@ -255,12 +260,39 @@ function hasForbiddenGenericText(value: string): boolean {
   return FORBIDDEN_GENERIC_TOPICS.some((pattern) => pattern.test(normalized));
 }
 
+function isChemicalFormulaLikeInput(topic: string): boolean {
+  const compact = normalizeText(topic).replace(/\s+/g, "");
+  return (
+    /^(?:[A-Z][a-z]?\d{0,3}){2,}(?:[+-]\d*)?$/u.test(compact) &&
+    /[a-z]|\d/.test(compact)
+  );
+}
+
+function inferUnderstandingLensId(angle: {
+  label: string;
+  researchQuestion: string;
+  whyResearchable: string;
+}): string {
+  const text = `${angle.label} ${angle.researchQuestion} ${angle.whyResearchable}`;
+  if (/定義|量測|指標|觀察|判讀/u.test(text)) return "definition_measurement";
+  if (/宣稱|迷思|證據|效果/u.test(text)) return "health_claims";
+  if (/形成|機制|原理|作用|反應/u.test(text)) return "mechanism_process";
+  if (/條件|環境|變化|比較|差異|風險|限制/u.test(text)) return "condition_variation";
+  return "understanding";
+}
+
 export function classifyInputKind(
   topic: string,
   understood: ReturnType<typeof understandTopic>,
 ): TopicExpansionInputKind {
   const normalized = normalizeText(topic);
-  if (!normalized || understood.topicKind === "unknown_or_noise") {
+  if (!normalized) {
+    return "gibberish";
+  }
+  if (isChemicalFormulaLikeInput(normalized)) {
+    return "single_keyword";
+  }
+  if (understood.topicKind === "unknown_or_noise") {
     return "gibberish";
   }
 
@@ -271,7 +303,8 @@ export function classifyInputKind(
   if (
     /^[A-Za-z0-9_-]{6,}$/.test(normalized) &&
     /[A-Za-z]/.test(normalized) &&
-    /\d/.test(normalized)
+    /\d/.test(normalized) &&
+    !isChemicalFormulaLikeInput(normalized)
   ) {
     return "gibberish";
   }
@@ -515,6 +548,8 @@ const EXPANSION_ENGLISH_HINTS: Array<{ pattern: RegExp; terms: string[] }> = [
   { pattern: /烏龜|海龜|陸龜|turtle|tortoise/i, terms: ["turtle", "tortoise", "Testudines"] },
   { pattern: /獵豹|cheetah/i, terms: ["cheetah", "Acinonyx jubatus"] },
   { pattern: /負離子|negative ions?/i, terms: ["negative ions", "air ion concentration"] },
+  { pattern: /過氯酸鈉|高氯酸鈉|naclo4|sodium perchlorate/i, terms: ["sodium perchlorate", "NaClO4"] },
+  { pattern: /過氯酸鹽|高氯酸鹽|perchlorate/i, terms: ["sodium perchlorate", "perchlorate", "NaClO4"] },
   { pattern: /手機成癮|智慧型手機成癮|smartphone addiction/i, terms: ["smartphone addiction", "problematic smartphone use"] },
   { pattern: /氣候變遷|climate change/i, terms: ["climate change", "global warming"] },
   { pattern: /水餃|餃子|dumpling/i, terms: ["dumpling", "frozen dumpling"] },
@@ -970,6 +1005,56 @@ function createCandidatePlan(input: {
   };
 }
 
+function buildUnderstandingCandidates(
+  context: ExpansionPlanningContext,
+  keywordExpansion: TopicExpansionKeywordExpansion,
+): CandidateTopicPlan[] {
+  const evidence = defaultExpectedEvidence(context.topicDomain);
+  return context.understood.researchAngles
+    .filter(
+      (angle) =>
+        !hasForbiddenGenericText(angle.label) &&
+        !hasForbiddenGenericText(angle.researchQuestion) &&
+        !hasForbiddenGenericText(angle.whyResearchable),
+    )
+    .slice(0, 4)
+    .map((angle, index) => {
+      const inferredLensId = inferUnderstandingLensId(angle);
+      return createCandidatePlan({
+        id: `understanding-${index + 1}`,
+        context,
+        keywordExpansion,
+        title: angle.label,
+        angle: angle.label,
+        researchQuestion: angle.researchQuestion,
+        scope: angle.whyResearchable,
+        sourceTypes: angle.suggestedSourceTypes,
+        expectedEvidence: evidence,
+        evidenceNeed: uniqueStrings([
+          angle.label,
+          ...context.understood.coreConcepts.slice(0, 4),
+          ...angle.zhQueries.slice(0, 2),
+        ]).slice(0, 5),
+        seedKeywords: uniqueStrings([
+          context.understood.originalTopic,
+          ...angle.zhQueries,
+          ...angle.enQueries,
+        ]).slice(0, 8),
+        queryPlan: buildQueryPlan(
+          context,
+          angle.zhQueries,
+          angle.enQueries,
+          keywordExpansion,
+        ),
+        priority: 103 - index,
+        diversityKey:
+          inferredLensId === "understanding"
+            ? `understanding_${index + 1}`
+            : inferredLensId,
+      });
+    });
+}
+
 function lensRejectReason(
   context: ExpansionPlanningContext,
   lensId: string,
@@ -1007,10 +1092,16 @@ function buildCandidatePool(
   keywordExpansion: TopicExpansionKeywordExpansion,
 ): CandidatePoolDiagnostics {
   const specialized = buildSpecializedCandidates(context, keywordExpansion) ?? [];
+  const understandingDriven =
+    specialized.length === 0 ||
+    context.entityType === "scientific_concept" ||
+    context.understood.topicKind === "known_entity"
+      ? buildUnderstandingCandidates(context, keywordExpansion)
+      : [];
   const generic = buildGenericCandidates(context, keywordExpansion);
   const rejectedLensIds: string[] = [];
   const lensRejectReasons: Record<string, string> = {};
-  const candidates = [...specialized, ...generic].filter((candidate) => {
+  const candidates = [...specialized, ...understandingDriven, ...generic].filter((candidate) => {
     const reason = lensRejectReason(context, candidate.diversityKey, candidate);
     if (!reason) return true;
     rejectedLensIds.push(candidate.diversityKey);
@@ -1049,6 +1140,205 @@ function buildSpecializedCandidates(
   const evidence = defaultExpectedEvidence(context.topicDomain);
   const topic = context.understood.originalTopic;
   const english = preferredEnglishTopic(context);
+
+  if (/皂化|saponification|alkaline hydrolysis|ester hydrolysis/.test(topicText)) {
+    return [
+      createCandidatePlan({
+        id: "chem-saponification-1",
+        context,
+        keywordExpansion,
+        title: "皂化反應中鹼濃度對反應速率與產物性質的影響",
+        angle: "反應條件與產物差異",
+        researchQuestion: "提高 NaOH 或 KOH 濃度時，皂化反應速率、反應終點與產物硬度是否會出現可量測差異？",
+        scope: "聚焦鹼濃度、反應速率、產物硬度、pH 與安全操作條件。",
+        sourceTypes: ["化學反應機構研究", "實驗化學教材", "油脂化學論文"],
+        expectedEvidence: evidence,
+        evidenceNeed: ["鹼濃度", "反應速率", "產物硬度", "操作安全"],
+        seedKeywords: ["皂化反應", "鹼濃度", "saponification kinetics"],
+        queryPlan: buildQueryPlan(
+          context,
+          ["皂化反應 鹼濃度 反應速率", "皂化 NaOH KOH 產物性質", "皂化反應 硬度 pH 安全"],
+          ["saponification alkali concentration reaction rate", "NaOH KOH saponification product hardness", "saponification safety experimental conditions"],
+          keywordExpansion,
+        ),
+        priority: 100,
+        diversityKey: "kinetics",
+      }),
+      createCandidatePlan({
+        id: "chem-saponification-2",
+        context,
+        keywordExpansion,
+        title: "不同油脂來源對皂化反應產物硬度與清潔力的影響",
+        angle: "原料比較",
+        researchQuestion: "植物油、動物油或不同脂肪酸組成的油脂，是否會改變皂化產物的硬度、起泡性與清潔表現？",
+        scope: "聚焦油脂來源、脂肪酸組成、產物硬度、泡沫與清潔力比較。",
+        sourceTypes: ["油脂化學研究", "食品化學論文", "實驗教學資料"],
+        expectedEvidence: evidence,
+        evidenceNeed: ["油脂來源", "脂肪酸組成", "清潔力", "硬度比較"],
+        seedKeywords: ["油脂來源", "脂肪酸組成", "soap hardness"],
+        queryPlan: buildQueryPlan(
+          context,
+          ["不同油脂來源 皂化反應 產物硬度", "皂化 油脂 脂肪酸組成 清潔力", "肥皂 起泡性 油脂 比較"],
+          ["saponification different oils soap hardness", "fatty acid composition cleansing performance soap", "soap foaming hardness oil comparison"],
+          keywordExpansion,
+        ),
+        priority: 99,
+        diversityKey: "oil_comparison",
+      }),
+      createCandidatePlan({
+        id: "chem-saponification-3",
+        context,
+        keywordExpansion,
+        title: "皂化反應作為酯類鹼性水解模型的化學機制分析",
+        angle: "反應機制",
+        researchQuestion: "皂化反應如何呈現酯類鹼性水解、羧酸鹽生成與甘油形成的反應機制，哪些中間步驟最值得比較？",
+        scope: "聚焦酯類鹼性水解、三酸甘油酯、羧酸鹽生成與反應機制圖像。",
+        sourceTypes: ["有機化學論文", "基礎化學教材", "反應機構研究"],
+        expectedEvidence: evidence,
+        evidenceNeed: ["酯類鹼性水解", "反應中間步驟", "羧酸鹽生成", "機制比較"],
+        seedKeywords: ["酯類鹼性水解", "反應機制", "alkaline hydrolysis mechanism"],
+        queryPlan: buildQueryPlan(
+          context,
+          ["皂化反應 酯類 鹼性水解 機制", "三酸甘油酯 皂化 羧酸鹽 甘油", "皂化反應 機構 分析"],
+          ["saponification alkaline hydrolysis mechanism", "triglyceride hydrolysis fatty acid salts glycerol", "ester hydrolysis mechanism analysis"],
+          keywordExpansion,
+        ),
+        priority: 98,
+        diversityKey: "mechanism",
+      }),
+      createCandidatePlan({
+        id: "chem-saponification-4",
+        context,
+        keywordExpansion,
+        title: "高中實驗中皂化反應操作條件與安全風險探討",
+        angle: "教學實驗與風險",
+        researchQuestion: "在高中化學實驗情境中，溫度、攪拌與鹼液操作方式會如何影響皂化反應結果與安全風險？",
+        scope: "聚焦教學實驗、操作條件、安全風險與可行觀察指標。",
+        sourceTypes: ["化學教育研究", "實驗教學手冊", "安全指引"],
+        expectedEvidence: evidence,
+        evidenceNeed: ["溫度控制", "攪拌條件", "安全風險", "教學實驗設計"],
+        seedKeywords: ["高中實驗", "安全風險", "saponification lab safety"],
+        queryPlan: buildQueryPlan(
+          context,
+          ["高中 皂化反應 實驗 安全", "皂化反應 溫度 攪拌 操作條件", "化學實驗 鹼液 安全風險"],
+          ["saponification lab safety high school", "saponification temperature stirring conditions", "alkali handling chemistry experiment safety"],
+          keywordExpansion,
+        ),
+        priority: 97,
+        diversityKey: "lab_safety",
+      }),
+      createCandidatePlan({
+        id: "chem-saponification-5",
+        context,
+        keywordExpansion,
+        title: "皂化反應與酯交換反應在油脂化學中的差異比較",
+        angle: "相近反應比較",
+        researchQuestion: "皂化反應與 transesterification 在反應物、產物、用途與反應條件上有哪些關鍵差異，為何不能混為同一類證據？",
+        scope: "聚焦皂化、酯交換、反應條件、產物用途與概念邊界。",
+        sourceTypes: ["油脂化學研究", "化工教材", "比較型綜述"],
+        expectedEvidence: evidence,
+        evidenceNeed: ["皂化", "酯交換", "反應條件差異", "產物用途"],
+        seedKeywords: ["皂化", "酯交換", "transesterification comparison"],
+        queryPlan: buildQueryPlan(
+          context,
+          ["皂化反應 酯交換反應 差異", "皂化 生質柴油 不是同一反應", "油脂化學 皂化 酯交換 比較"],
+          ["saponification vs transesterification", "alkaline hydrolysis not biodiesel transesterification", "oil chemistry saponification transesterification comparison"],
+          keywordExpansion,
+        ),
+        priority: 96,
+        diversityKey: "comparison",
+      }),
+    ];
+  }
+
+  if (/氧化還原|redox|oxidation reduction|electron transfer/.test(topicText)) {
+    return [
+      createCandidatePlan({
+        id: "chem-redox-1",
+        context,
+        keywordExpansion,
+        title: "氧化還原反應中電子轉移與氧化數變化的對照分析",
+        angle: "核心機制比較",
+        researchQuestion: "以不同反應案例比較時，電子轉移與氧化數變化是否能作為判定氧化還原反應的穩定依據？",
+        scope: "聚焦電子轉移、氧化數判讀與不同反應案例比較。",
+        sourceTypes: ["化學機制研究", "化學教育論文", "基礎化學教材"],
+        expectedEvidence: evidence,
+        evidenceNeed: ["電子轉移", "氧化數", "反應案例比較", "判讀規則"],
+        seedKeywords: ["電子轉移", "氧化數", "redox mechanism"],
+        queryPlan: buildQueryPlan(
+          context,
+          ["氧化還原反應 電子轉移 氧化數", "氧化還原 判讀 規則 比較", "氧化還原反應 案例 分析"],
+          ["redox reaction electron transfer oxidation state", "redox identification comparison", "oxidation reduction reaction case analysis"],
+          keywordExpansion,
+        ),
+        priority: 100,
+        diversityKey: "electron_transfer",
+      }),
+      createCandidatePlan({
+        id: "chem-redox-2",
+        context,
+        keywordExpansion,
+        title: "金屬腐蝕、燃燒與電池反應中的氧化還原機制比較",
+        angle: "生活與應用案例",
+        researchQuestion: "金屬腐蝕、燃燒與電池反應中的氧化還原機制有何共通與差異，哪些條件會改變反應方向？",
+        scope: "聚焦腐蝕、燃燒、電池與應用情境中的機制比較。",
+        sourceTypes: ["應用化學研究", "電化學教材", "材料科學論文"],
+        expectedEvidence: evidence,
+        evidenceNeed: ["腐蝕", "燃燒", "電池", "條件差異"],
+        seedKeywords: ["腐蝕", "電池", "electrochemistry applications"],
+        queryPlan: buildQueryPlan(
+          context,
+          ["氧化還原 腐蝕 燃燒 電池 比較", "氧化還原反應 生活應用 條件差異", "電化學 氧化還原 案例"],
+          ["redox corrosion combustion battery comparison", "redox reaction application condition differences", "electrochemistry redox case study"],
+          keywordExpansion,
+        ),
+        priority: 99,
+        diversityKey: "applications",
+      }),
+      createCandidatePlan({
+        id: "chem-redox-3",
+        context,
+        keywordExpansion,
+        title: "不同氧化劑與還原劑組合對氧化還原反應速率與產物的影響",
+        angle: "變因設計",
+        researchQuestion: "改變氧化劑與還原劑的組合、濃度或反應環境時，反應速率與產物型態會如何變化？",
+        scope: "聚焦反應物組合、濃度、反應速率與產物差異。",
+        sourceTypes: ["實驗化學研究", "電化學論文", "教學實驗資料"],
+        expectedEvidence: evidence,
+        evidenceNeed: ["氧化劑", "還原劑", "反應速率", "產物差異"],
+        seedKeywords: ["氧化劑", "還原劑", "reaction rate"],
+        queryPlan: buildQueryPlan(
+          context,
+          ["氧化還原 氧化劑 還原劑 反應速率", "氧化還原 產物 變因 比較", "氧化還原反應 實驗 濃度"],
+          ["oxidizing agent reducing agent reaction rate", "redox product comparison variables", "redox experiment concentration effects"],
+          keywordExpansion,
+        ),
+        priority: 98,
+        diversityKey: "variables",
+      }),
+      createCandidatePlan({
+        id: "chem-redox-4",
+        context,
+        keywordExpansion,
+        title: "高中電化學實驗中氧化還原反應觀察指標與誤差來源分析",
+        angle: "量測與誤差",
+        researchQuestion: "在高中電化學或氧化還原實驗中，顏色變化、電位或沉積現象哪些最適合作為觀察指標，常見誤差又從哪裡來？",
+        scope: "聚焦教學實驗、觀察指標、電位變化與誤差分析。",
+        sourceTypes: ["化學教育研究", "實驗教學手冊", "量測方法資料"],
+        expectedEvidence: evidence,
+        evidenceNeed: ["觀察指標", "電位", "顏色變化", "誤差來源"],
+        seedKeywords: ["高中電化學", "誤差來源", "redox experiment error"],
+        queryPlan: buildQueryPlan(
+          context,
+          ["高中 氧化還原 實驗 觀察 指標", "電化學 實驗 誤差 來源", "氧化還原 變色 電位 量測"],
+          ["high school redox experiment observation", "electrochemistry experiment error analysis", "redox color change potential measurement"],
+          keywordExpansion,
+        ),
+        priority: 97,
+        diversityKey: "measurement",
+      }),
+    ];
+  }
 
   if (/螞蟻|ant\b|ants\b/.test(topicText)) {
     return [
@@ -2384,10 +2674,6 @@ function sanitizeTopicExpansionContent(
   };
 }
 
-function visibleTitleLength(title: string): number {
-  return Array.from(title.trim()).length;
-}
-
 function compactTopicText(topic: string): string {
   return topic.replace(/研究|探討|分析|影響$/gu, "").trim() || topic.trim();
 }
@@ -2396,37 +2682,6 @@ function trimmedTitleCandidate(title: string): string {
   const chars = Array.from(title.trim());
   if (chars.length <= 40) return title.trim();
   return `${chars.slice(0, 39).join("").trim()}…`;
-}
-
-function titleCandidateStyleLabel(
-  style: TitleCandidateStyle,
-  fallback = "report title",
-): string {
-  switch (style) {
-    case "academic":
-      return "學理與現象";
-    case "poetic_academic":
-      return "亮眼標題";
-    case "narrative":
-      return "敘事風格";
-    case "question":
-      return "問題導向";
-    case "contrast":
-      return "對照觀點";
-    case "practical":
-      return fallback;
-    default:
-      return fallback;
-  }
-}
-
-function pickFacet(
-  values: string[],
-  patterns: RegExp[],
-  fallback: string,
-): string {
-  const match = values.find((value) => patterns.some((pattern) => pattern.test(value)));
-  return match ?? fallback;
 }
 
 function toResearchFacet(value: string, topic: string): string {
@@ -2440,14 +2695,42 @@ function toResearchFacet(value: string, topic: string): string {
   return cleaned || value.trim();
 }
 
-function sanitizeTitleFacet(value: string): string {
-  return value
-    .replace(/形成機制/gu, "原理")
-    .replace(/作用機制/gu, "原理")
-    .replace(/應用限制/gu, "應用")
-    .replace(/量測方法/gu, "觀察方法")
-    .replace(/對照組與資料記錄方式/gu, "觀察方法與結果整理")
-    .trim();
+function titleStyleFromDirection(direction: TopicDirection): TitleCandidateStyle {
+  if (/比較|差異|對照/u.test(direction.title)) return "contrast";
+  if (/安全|風險|條件|操作|方法|量測|誤差/u.test(direction.title)) return "practical";
+  if (/如何|是否|哪些/u.test(direction.researchQuestion)) return "question";
+  return direction.searchPriority <= 2 ? "academic" : "practical";
+}
+
+function inferResearchObject(
+  topic: string,
+  direction: TopicDirection,
+): string {
+  const combined = `${direction.title} ${direction.researchQuestion} ${direction.scope}`;
+  if (/皂化|saponification|alkaline hydrolysis/u.test(combined)) {
+    return /油脂|triglyceride|脂肪酸/u.test(combined)
+      ? "油脂、酯類與鹼性條件下的皂化系統"
+      : "皂化反應中的酯類鹼性水解系統";
+  }
+  if (/氧化還原|redox|electron transfer|oxidation state/u.test(combined)) {
+    return /電池|電化學/u.test(combined)
+      ? "氧化還原與電化學反應系統"
+      : "氧化還原反應中的反應物與電子轉移過程";
+  }
+  return compactTopicText(topic);
+}
+
+function inferVariableOrAngle(
+  topic: string,
+  direction: TopicDirection,
+): string {
+  const fromTitle = toResearchFacet(direction.title, topic);
+  const focusedTerms = uniqueStrings([
+    fromTitle,
+    direction.category,
+    ...direction.expectedEvidence.slice(0, 2),
+  ]).filter((term) => term && term !== topic);
+  return focusedTerms.slice(0, 3).join("、") || direction.category || "研究角度";
 }
 
 function buildHiddenResearchPlan(input: {
@@ -2521,171 +2804,139 @@ function buildTitleCandidates(input: {
   topicDomain: TopicExpansionDomain;
   entityType: TopicExpansionEntityType;
   keywordExpansion?: TopicExpansionKeywordExpansion | null;
+  secondaryDomains?: readonly TopicExpansionDomain[];
   directions?: TopicDirection[];
   source: "llm" | "rule" | "hybrid";
 }): TitleCandidate[] {
   const topic = input.topic.trim();
   if (!topic) return [];
 
-  const focusTopic = compactTopicText(topic);
-  const relatedTerms = uniqueStrings([
-    ...(input.keywordExpansion?.relatedTermsZh ?? []),
-    ...(input.keywordExpansion?.dimensionTermsZh ?? []),
-    ...(input.directions?.map((direction) => toResearchFacet(direction.title, topic)) ?? []),
-  ]);
-
-  const titles: Array<{ title: string; style: TitleCandidateStyle }> = [];
-  const push = (title: string, style: TitleCandidateStyle) => {
-    const cleaned = trimmedTitleCandidate(title.replace(/\s+/g, " ").trim());
-    if (!cleaned || visibleTitleLength(cleaned) < 8) return;
-    if (hasForbiddenGenericText(cleaned)) return;
-    if (titles.some((candidate) => candidate.title === cleaned)) return;
-    titles.push({ title: cleaned, style });
+  const understood = understandTopic(topic);
+  const rebuiltContext: ExpansionPlanningContext = {
+    understood,
+    inputKind: classifyInputKind(topic, understood),
+    topicDomain: input.topicDomain,
+    entityType: input.entityType,
+    secondaryDomains: input.secondaryDomains ?? [],
+    englishTopic:
+      input.keywordExpansion?.coreTermsEn[0] ||
+      input.keywordExpansion?.relatedTermsEn[0] ||
+      understood.canonicalTerms.find((term) => /[A-Za-z]/.test(term)) ||
+      topic,
   };
+  const rebuiltKeywordExpansion =
+    input.keywordExpansion ?? buildKeywordExpansion(rebuiltContext);
+  const rawCandidatePool = buildCandidatePool(rebuiltContext, rebuiltKeywordExpansion);
+  const candidatePlans = candidateMergeAndRerank(
+    rawCandidatePool.candidates,
+    rebuiltContext,
+    rebuiltKeywordExpansion,
+  );
+  const understandingPlans = rawCandidatePool.candidates.filter((candidate) =>
+    candidate.id.startsWith("understanding-"),
+  );
+  const understandingFirstPlans =
+    understandingPlans.length >= 3
+      ? [
+          ...understandingPlans,
+          ...candidatePlans.filter((candidate) => !candidate.id.startsWith("understanding-")),
+        ]
+      : candidatePlans;
 
-  if (input.entityType === "animal" || input.topicDomain === "biology_ecology") {
-    const behavior = sanitizeTitleFacet(
-      pickFacet(
-      relatedTerms,
-      [/群體|行為|覓食|溝通|費洛蒙/u],
-      "行為模式",
+  if (understandingFirstPlans.length > 0) {
+    return understandingFirstPlans.slice(0, 5).map((candidate, index) => ({
+      id: candidate.id || `title-${index + 1}`,
+      title: trimmedTitleCandidate(candidate.title.replace(/\s+/g, " ").trim()),
+      style:
+        /比較|差異|對照/u.test(candidate.title)
+          ? "contrast"
+          : /安全|風險|條件|操作|方法|量測|誤差/u.test(candidate.title)
+            ? "practical"
+            : candidate.priority >= 98
+              ? "academic"
+              : "question",
+      displayOnly: true,
+      researchObject: inferResearchObject(
+        topic,
+        makeDirection({
+          id: candidate.id,
+          title: candidate.title,
+          category: candidate.category,
+          researchQuestion: candidate.researchQuestion,
+          scope: candidate.scope,
+          sourceTypes: candidate.sourceTypes,
+          queryZh: [
+            ...candidate.queryPlan.primaryQueriesZh,
+            ...candidate.queryPlan.secondaryQueriesZh,
+          ],
+          queryEn: [
+            ...candidate.queryPlan.primaryQueriesEn,
+            ...candidate.queryPlan.secondaryQueriesEn,
+          ],
+          excludeTerms: candidate.excludeTerms,
+          expectedEvidence: candidate.expectedEvidence,
+          evidenceNeed: candidate.evidenceNeed,
+          searchPriority: index + 1,
+          broadSuggestion: candidate.broadSuggestion,
+        }),
       ),
-    );
-    const ecology = sanitizeTitleFacet(
-      pickFacet(
-      relatedTerms,
-      [/生態|土壤|棲地|食物鏈|保育|環境/u],
-      "生態角色",
-      ),
-    );
-    const interaction = sanitizeTitleFacet(
-      pickFacet(
-      relatedTerms,
-      [/入侵|人類|保育|風險|影響/u],
-      "人類互動與環境影響",
-      ),
-    );
-    if (/群體|社會|分工/u.test(behavior)) {
-      push(`微小社會的巨大秩序：${topic}${behavior}與${ecology}`, "poetic_academic");
-    } else {
-      push(`${topic}的祕密生活：${behavior}與${ecology}`, "poetic_academic");
-    }
-    if (/土壤/u.test(ecology)) {
-      push(`地表下的工程師：${topic}如何改變${ecology}`, "narrative");
-    } else {
-      push(`從棲地到食物鏈：${topic}的${ecology}`, "academic");
-    }
-    if (/費洛蒙|覓食|溝通/u.test(behavior)) {
-      push(`費洛蒙鋪成的道路：${topic}${behavior}`, "narrative");
-    }
-    push(`${topic}不只是小生物：${interaction}`, "contrast");
-  } else if (input.entityType === "food") {
-    const nutrition = sanitizeTitleFacet(
-      pickFacet(
-      relatedTerms,
-      [/營養|糖|鈉|咖啡因|成分|添加/u],
-      "營養與飲食選擇",
-      ),
-    );
-    const safety = sanitizeTitleFacet(
-      pickFacet(
-      relatedTerms,
-      [/標示|食品安全|保存|加工|冷凍/u],
-      "食品標示與保存",
-      ),
-    );
-    const culture = sanitizeTitleFacet(
-      pickFacet(
-      relatedTerms,
-      [/文化|早餐|台灣|日常|消費/u],
-      "日常飲食文化",
-      ),
-    );
-    push(`餐桌上的${topic}：${nutrition}、${safety}與${culture}`, "poetic_academic");
-    push(`一口${topic}裡的學問：${safety}與${nutrition}`, "narrative");
-    push(`從日常飲食到消費選擇：${topic}的${culture}`, "practical");
-    push(`${topic}不只是方便食物：${nutrition}與${safety}`, "contrast");
-  } else if (
-    input.topicDomain === "experiment_design" ||
-    input.topicDomain === "natural_science" ||
-    input.topicDomain === "concept_feature" ||
-    input.entityType === "scientific_concept"
-  ) {
-    const mechanism = sanitizeTitleFacet(
-      pickFacet(
-      relatedTerms,
-      [/原理|機制|反應|變化|表面張力|干涉|電子|量測/u],
-      "原理與現象",
-      ),
-    );
-    const application = sanitizeTitleFacet(
-      pickFacet(
-      relatedTerms,
-      [/應用|量測|實驗|變因|結果|觀察/u],
-      "實驗觀察與應用",
-      ),
-    );
-    if (/實驗/u.test(topic)) {
-      push(`一場${topic}裡的學問：從${mechanism}到${application}`, "narrative");
-      push(`看見現象背後的原理：${topic}中的${application}`, "academic");
-      push(`${focusTopic}中的科學：${mechanism}與${application}`, "poetic_academic");
-    } else {
-      push(`看不見的變化：${topic}的${mechanism}`, "poetic_academic");
-      push(`從生活現象到科學解釋：${topic}與${application}`, "academic");
-      push(`${topic}不只是課本名詞：${mechanism}與${application}`, "contrast");
-    }
-  } else if (
-    input.topicDomain === "education_psychology" ||
-    input.topicDomain === "social_policy" ||
-    input.entityType === "social_issue"
-  ) {
-    const impact = sanitizeTitleFacet(
-      pickFacet(
-      relatedTerms,
-      [/睡眠|注意力|健康|極端天氣|影響|風險|學習/u],
-      "影響與風險",
-      ),
-    );
-    const response = sanitizeTitleFacet(
-      pickFacet(
-      relatedTerms,
-      [/對策|政策|介入|治理|台灣|調適|回應/u],
-      "社會回應",
-      ),
-    );
-    push(`看見${topic}背後的問題：${impact}與${response}`, "academic");
-    push(`${topic}不只是表面現象：${impact}如何影響日常生活`, "contrast");
-    push(`從原因到回應：${topic}的${response}`, "practical");
-  } else {
-    const firstFacet = sanitizeTitleFacet(relatedTerms[0] ?? "主要觀察面向");
-    const secondFacet = sanitizeTitleFacet(relatedTerms[1] ?? "延伸應用");
-    push(`${topic}的另一種看法：${firstFacet}與${secondFacet}`, "academic");
-    push(`從${topic}出發：重新理解${firstFacet}`, "narrative");
-    push(`${topic}不只是表面概念：${secondFacet}`, "contrast");
+      variableOrAngle: candidate.angle || candidate.category,
+      rationale: `${candidate.researchQuestion} ${candidate.scope}`.trim(),
+      keywordsZh: uniqueStrings([
+        ...candidate.queryPlan.primaryQueriesZh,
+        ...candidate.queryPlan.secondaryQueriesZh,
+        ...candidate.expectedEvidence,
+        ...candidate.evidenceNeed,
+      ]).slice(0, 8),
+      keywordsEn: uniqueStrings([
+        ...candidate.queryPlan.primaryQueriesEn,
+        ...candidate.queryPlan.secondaryQueriesEn,
+      ]).slice(0, 8),
+      querySeeds: {
+        zh: uniqueStrings([
+          ...candidate.queryPlan.primaryQueriesZh,
+          ...candidate.queryPlan.secondaryQueriesZh,
+        ]).slice(0, 4),
+        en: uniqueStrings([
+          ...candidate.queryPlan.primaryQueriesEn,
+          ...candidate.queryPlan.secondaryQueriesEn,
+        ]).slice(0, 4),
+      },
+      source: input.source,
+    }));
   }
 
-  for (const direction of input.directions ?? []) {
-    if (
-      hasForbiddenGenericText(direction.title) ||
-      hasForbiddenGenericText(direction.researchQuestion) ||
-      hasForbiddenGenericText(direction.scope)
-    ) {
-      continue;
-    }
-    const style: TitleCandidateStyle =
-      direction.searchPriority === 1 ? "academic" : "practical";
-    const title = direction.title.includes("：")
-      ? direction.title
-      : `${titleCandidateStyleLabel(style, "研究題目")}：${direction.title}`;
-    push(title, style);
-    if (titles.length >= 5) break;
-  }
+  const uniqueDirections = Array.from(
+    new Map(
+      (input.directions ?? [])
+        .filter(
+          (direction) =>
+            !hasForbiddenGenericText(direction.title) &&
+            !hasForbiddenGenericText(direction.researchQuestion) &&
+            !hasForbiddenGenericText(direction.scope),
+        )
+        .map((direction) => [normalizeText(direction.title).toLowerCase(), direction] as const),
+    ).values(),
+  ).slice(0, 5);
 
-  return titles.slice(0, 5).map((candidate, index) => ({
-    id: `title-${index + 1}`,
-    title: candidate.title,
-    style: candidate.style,
+  return uniqueDirections.map((direction, index) => ({
+    id: direction.id || `title-${index + 1}`,
+    title: trimmedTitleCandidate(direction.title.replace(/\s+/g, " ").trim()),
+    style: titleStyleFromDirection(direction),
     displayOnly: true,
+    researchObject: inferResearchObject(topic, direction),
+    variableOrAngle: inferVariableOrAngle(topic, direction),
+    rationale: `${direction.researchQuestion} ${direction.scope}`.trim(),
+    keywordsZh: uniqueStrings([
+      ...direction.queryZh,
+      ...direction.expectedEvidence,
+      ...direction.evidenceNeed,
+    ]).slice(0, 8),
+    keywordsEn: uniqueStrings(direction.queryEn).slice(0, 8),
+    querySeeds: {
+      zh: uniqueStrings(direction.queryZh).slice(0, 4),
+      en: uniqueStrings(direction.queryEn).slice(0, 4),
+    },
     source: input.source,
   }));
 }
@@ -2747,6 +2998,8 @@ function buildTopicExpansionResponse(input: {
           topicDomain: input.topicDomain ?? input.diagnostics.topicDomain ?? "unknown",
           entityType: input.entityType ?? input.diagnostics.entityType ?? "unknown",
           keywordExpansion: input.keywordExpansion ?? input.diagnostics.keywordExpansion,
+          secondaryDomains:
+            input.secondaryDomains ?? input.diagnostics.secondaryDomains ?? [],
           directions: input.directions,
           source:
             input.generationMode === "llm_polished"
@@ -2988,6 +3241,7 @@ function sample(text: string): string {
 
 function defaultTopicModel(): string {
   return (
+    process.env.SCHOOL_LLM_MODEL?.trim() ||
     process.env.LLM_MODEL?.trim() ||
     process.env.OLLAMA_MODEL?.trim() ||
     "qwen3:4b"
@@ -3058,6 +3312,99 @@ function understandingDiagnostics(
       zh: understood.searchQueries.zh.slice(0, 8),
       en: understood.searchQueries.en.slice(0, 8),
     },
+  };
+}
+
+function mergeTopicExpansionUnderstanding(
+  understood: ReturnType<typeof understandTopic>,
+  fallback: GenericTopicUnderstanding | null,
+): ReturnType<typeof understandTopic> {
+  const topicText = understood.originalTopic;
+  const fallbackEnglishTopic =
+    fallback?.canonicalEnglishTopic ||
+    (/過氯酸鈉|高氯酸鈉|過氯酸鹽|高氯酸鹽|naclo4/i.test(topicText)
+      ? "sodium perchlorate"
+      : "");
+  if (!fallback) {
+    return fallbackEnglishTopic
+      ? {
+          ...understood,
+          canonicalEnglishTopic:
+            fallbackEnglishTopic || understood.canonicalEnglishTopic,
+          englishTerms: uniqueStrings([
+            ...understood.englishTerms,
+            fallbackEnglishTopic,
+          ]).slice(0, 12),
+        }
+      : understood;
+  }
+
+  const fallbackZhQueries = fallback.researchAngles
+    .flatMap((angle) => angle.searchQueries)
+    .filter((query) => /[\u3400-\u9fff]/u.test(query));
+  const fallbackEnQueries = fallback.researchAngles
+    .flatMap((angle) => angle.searchQueries)
+    .filter((query) => /[A-Za-z]/.test(query));
+  const fallbackResearchAngles = fallback.researchAngles
+    .map((angle) => ({
+      label: angle.title.trim() || angle.angle.trim(),
+      researchQuestion: angle.angle.trim(),
+      whyResearchable: angle.reason.trim(),
+      zhQueries: angle.searchQueries.filter((query) => /[\u3400-\u9fff]/u.test(query)).slice(0, 4),
+      enQueries: angle.searchQueries.filter((query) => /[A-Za-z]/.test(query)).slice(0, 4),
+      suggestedSourceTypes: ["學術論文", "官方或機構資料", "方法或教材資料"],
+    }))
+    .filter(
+      (angle) =>
+        angle.label &&
+        angle.researchQuestion &&
+        angle.whyResearchable &&
+        (angle.zhQueries.length > 0 || angle.enQueries.length > 0),
+    );
+
+  return {
+    ...understood,
+    canonicalEnglishTopic:
+      fallbackEnglishTopic || understood.canonicalEnglishTopic,
+    coreConcepts: uniqueStrings([
+      ...understood.coreConcepts,
+      ...fallback.coreConcepts,
+      ...fallback.entities,
+    ]).slice(0, 12),
+    englishTerms: uniqueStrings([
+      ...understood.englishTerms,
+      fallbackEnglishTopic,
+      ...fallback.entities.filter((entity) => /[A-Za-z]/.test(entity)),
+      ...fallback.coreConcepts.filter((concept) => /[A-Za-z]/.test(concept)),
+    ]).slice(0, 12),
+    aliases: uniqueStrings([
+      ...understood.aliases,
+      ...fallback.entities.filter((entity) => /[\u3400-\u9fff]/u.test(entity)),
+    ]).slice(0, 12),
+    excludedDriftTerms: uniqueStrings([
+      ...understood.excludedDriftTerms,
+      ...fallback.excludedDriftTerms,
+    ]).slice(0, 12),
+    searchQueries: {
+      zh: uniqueStrings([
+        ...understood.searchQueries.zh,
+        ...fallbackZhQueries,
+      ]).slice(0, 10),
+      en: uniqueStrings([
+        ...understood.searchQueries.en,
+        ...fallbackEnQueries,
+      ]).slice(0, 10),
+    },
+    researchAngles: [
+      ...fallbackResearchAngles,
+      ...understood.researchAngles,
+    ].filter(
+      (angle, index, angles) =>
+        angles.findIndex(
+          (candidate) =>
+            candidate.researchQuestion.trim() === angle.researchQuestion.trim(),
+        ) === index,
+    ).slice(0, 6),
   };
 }
 
@@ -3169,10 +3516,6 @@ async function validateTopicMeaningfulness(
       maxTokens: 90,
       responseFormat: "json_object",
       llm: {
-        baseUrl:
-          process.env.OLLAMA_BASE_URL?.trim()?.endsWith("/v1")
-            ? process.env.OLLAMA_BASE_URL.trim()
-            : `${(process.env.OLLAMA_BASE_URL?.trim() || "http://127.0.0.1:11434").replace(/\/+$/, "")}/v1`,
         model: defaultTopicModel(),
         timeoutMs:
           Number.isFinite(configuredValidityTimeout) &&
@@ -3220,7 +3563,12 @@ async function tryOllamaExpansion(
   const understood = understandTopic(input.topic);
   const diagnostics: TopicExpansionDiagnostics = {
     llm_status: "success",
-    provider: "ollama",
+    provider: providerLabel(
+      process.env.SCHOOL_LLM_BASE_URL?.trim() ||
+        process.env.LLM_BASE_URL?.trim() ||
+        process.env.OLLAMA_BASE_URL?.trim() ||
+        "http://127.0.0.1:11434/v1",
+    ),
     model,
     temperature: TOPIC_EXPANSION_TEMPERATURE,
     cacheHit: false,
@@ -3274,10 +3622,6 @@ async function tryOllamaExpansion(
       temperature: TOPIC_EXPANSION_TEMPERATURE,
       maxTokens: 600,
       llm: {
-        baseUrl:
-          process.env.OLLAMA_BASE_URL?.trim()?.endsWith("/v1")
-            ? process.env.OLLAMA_BASE_URL.trim()
-            : `${(process.env.OLLAMA_BASE_URL?.trim() || "http://127.0.0.1:11434").replace(/\/+$/, "")}/v1`,
         model,
         timeoutMs,
       },
@@ -3387,7 +3731,20 @@ export async function expandTopicWithOllama(
   const fetchImpl = options.fetchImpl ?? fetch;
   const requestId = randomUUID();
   const generatedAt = new Date().toISOString();
-  const understood = understandTopic(input.topic);
+  const taxonomyUnderstanding = understandTopic(input.topic);
+  const genericUnderstanding = await understandTopicWithFallback(
+    {
+      topic: input.topic,
+      reportType: input.reportType,
+      audience: input.audience,
+      language: "zh-TW",
+    },
+    { fetchImpl },
+  ).catch(() => null);
+  const understood = mergeTopicExpansionUnderstanding(
+    taxonomyUnderstanding,
+    genericUnderstanding,
+  );
   const rulePlan = buildRuleBasedExpansion(input.topic, understood);
   const ruleContent = contentFromDirections(rulePlan);
   const ruleCoreConcepts =
@@ -3401,8 +3758,13 @@ export async function expandTopicWithOllama(
     logLlmFallback({
       operation: "topic_expansion",
       status: "invalid_input",
-      provider: process.env.LLM_PROVIDER?.trim() || "ollama",
-      model: process.env.OLLAMA_MODEL?.trim() || "gemma4:e2b",
+      provider: providerLabel(
+        process.env.SCHOOL_LLM_BASE_URL?.trim() ||
+          process.env.LLM_BASE_URL?.trim() ||
+          process.env.OLLAMA_BASE_URL?.trim() ||
+          "http://127.0.0.1:11434/v1",
+      ),
+      model: defaultTopicModel(),
       endpoint: null,
       reason: "GIBBERISH_INPUT",
       route: "/api/expand-topic",
@@ -3429,7 +3791,12 @@ export async function expandTopicWithOllama(
       coreConcepts: ruleCoreConcepts,
       diagnostics: {
         llm_status: "invalid_input",
-        provider: "ollama",
+        provider: providerLabel(
+          process.env.SCHOOL_LLM_BASE_URL?.trim() ||
+            process.env.LLM_BASE_URL?.trim() ||
+            process.env.OLLAMA_BASE_URL?.trim() ||
+            "http://127.0.0.1:11434/v1",
+        ),
         model: defaultTopicModel(),
         temperature: TOPIC_EXPANSION_TEMPERATURE,
         cacheHit: false,
@@ -3475,7 +3842,12 @@ export async function expandTopicWithOllama(
       coreConcepts: ruleCoreConcepts,
       diagnostics: {
         llm_status: "success",
-        provider: "ollama",
+        provider: providerLabel(
+          process.env.SCHOOL_LLM_BASE_URL?.trim() ||
+            process.env.LLM_BASE_URL?.trim() ||
+            process.env.OLLAMA_BASE_URL?.trim() ||
+            "http://127.0.0.1:11434/v1",
+        ),
         model: defaultTopicModel(),
         temperature: TOPIC_EXPANSION_TEMPERATURE,
         cacheHit: false,
@@ -3565,10 +3937,7 @@ export async function expandTopicWithOllama(
           : primary.diagnostics.fallbackReason ?? "LOCAL_LLM_UNAVAILABLE";
   return buildTopicExpansionResponse({
     status: "success",
-    message:
-      primary.diagnostics.provider_status === "timeout"
-        ? "本機 LLM 題目優化逾時，已快速回傳標題候選。"
-        : "本機 LLM 暫不可用，已改用規則式標題候選。",
+    message: "AI 服務暫時不可用，已使用本地規則 fallback。",
     originalTopic: rulePlan.originalTopic,
     inputKind: rulePlan.inputKind,
     topicDomain: rulePlan.topicDomain,

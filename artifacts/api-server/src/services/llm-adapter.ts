@@ -1,4 +1,15 @@
 import { logger } from "../lib/logger";
+import { resolvePrivateLlmProviderConfig } from "../config/llm-provider-config";
+import {
+  checkSchoolRateLimit,
+  estimateMessageTokens,
+  estimateTokens,
+  missingSchoolConfigReason,
+  recordSchoolUsage,
+  redactKnownSecrets,
+  resolveSchoolLlmConfig,
+  schoolTimeoutMs,
+} from "./llm/schoolProvider";
 
 export type LlmRequestPurpose =
   | "planner"
@@ -8,6 +19,7 @@ export type LlmRequestPurpose =
 
 export type LlmAdapterErrorCode =
   | "provider-unconfigured"
+  | "model-missing"
   | "provider-quota"
   | "provider-timeout"
   | "provider-failure"
@@ -31,10 +43,14 @@ export interface ResolvedLlmConfig {
   model: string;
   timeoutMs: number;
   disabled: boolean;
+  providerKind?: "school" | "openai" | "generic";
+  providerName?: string;
+  configError?: string;
 }
 
 export interface ChatCompletionRequest {
   purpose: LlmRequestPurpose;
+  featureName?: string;
   messages: OpenAICompatibleMessage[];
   temperature?: number;
   maxTokens?: number;
@@ -57,6 +73,15 @@ export class LlmAdapterError extends Error {
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1";
 const DEFAULT_MODEL = "qwen3:4b";
+export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+export const DEFAULT_OPENAI_MODEL = "gpt-5.4";
+const OPENAI_MODEL_ALIASES = new Map<string, string>([
+  ["chatgpt5.4", DEFAULT_OPENAI_MODEL],
+  ["chatgpt-5.4", DEFAULT_OPENAI_MODEL],
+  ["chatgpt 5.4", DEFAULT_OPENAI_MODEL],
+  ["gpt5.4", DEFAULT_OPENAI_MODEL],
+  ["gpt-5.4", DEFAULT_OPENAI_MODEL],
+]);
 const PURPOSE_TIMEOUT_MS = {
   planner: 60_000,
   summarizer: 60_000,
@@ -73,6 +98,79 @@ const PURPOSE_TIMEOUT_ENV_KEYS = {
 function envValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
   const value = env[key]?.trim();
   return value || undefined;
+}
+
+export function resolveOpenAiModelAlias(model: string | undefined | null): string {
+  const value = model?.trim();
+  if (!value) return DEFAULT_OPENAI_MODEL;
+  const key = value.toLowerCase();
+  return OPENAI_MODEL_ALIASES.get(key) ?? value;
+}
+
+function providerRequested(env: NodeJS.ProcessEnv, provider: string): boolean {
+  const requested = envValue(env, "LLM_PROVIDER")?.toLowerCase();
+  if (provider === "school_llm") {
+    return requested === "school_llm" || requested === "school";
+  }
+  return requested === provider;
+}
+
+function openAiEnvPresent(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(
+    providerRequested(env, "openai") ||
+      envValue(env, "OPENAI_API_KEY") ||
+      envValue(env, "OPENAI_MODEL") ||
+      envValue(env, "OPENAI_BASE_URL"),
+  );
+}
+
+function isOfficialOpenAiBaseUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return /(^|\.)openai\.com$/i.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function resolveOpenAiConfig(
+  purpose: LlmRequestPurpose,
+  overrides: Partial<OpenAICompatibleLlmConfig>,
+  env: NodeJS.ProcessEnv,
+): ResolvedLlmConfig | null {
+  if (overrides.baseUrl && !isOfficialOpenAiBaseUrl(overrides.baseUrl) && !providerRequested(env, "openai")) {
+    return null;
+  }
+  if (!openAiEnvPresent(env) && !isOfficialOpenAiBaseUrl(overrides.baseUrl ?? "")) {
+    return null;
+  }
+
+  const apiKey = overrides.apiKey ?? envValue(env, "OPENAI_API_KEY");
+  const model = resolveOpenAiModelAlias(
+    overrides.model ??
+      envValue(env, "OPENAI_MODEL") ??
+      envValue(env, "LLM_MODEL") ??
+      DEFAULT_OPENAI_MODEL,
+  );
+  const baseUrl =
+    overrides.baseUrl ??
+    envValue(env, "OPENAI_BASE_URL") ??
+    DEFAULT_OPENAI_BASE_URL;
+  const timeoutMs =
+    overrides.timeoutMs ??
+    envNumber(env, [...PURPOSE_TIMEOUT_ENV_KEYS[purpose], "OPENAI_TIMEOUT_MS", "LLM_TIMEOUT_MS"]) ??
+    PURPOSE_TIMEOUT_MS[purpose];
+
+  return {
+    baseUrl: baseUrl.trim().replace(/\/+$/, ""),
+    apiKey,
+    model,
+    timeoutMs,
+    disabled: !apiKey?.trim(),
+    providerKind: "openai",
+    providerName: "openai",
+    configError: apiKey?.trim() ? undefined : "OPENAI_API_KEY 未設定",
+  };
 }
 
 function envNumber(env: NodeJS.ProcessEnv, keys: string[]): number | undefined {
@@ -112,6 +210,58 @@ export function resolveLlmConfig(
   const explicitlyDisabled =
     Object.prototype.hasOwnProperty.call(overrides, "apiKey") &&
     !overrides.apiKey?.trim();
+  const providerOverride = providerRequested(env, "openai")
+    ? "openai"
+    : providerRequested(env, "school_llm")
+      ? "school_llm"
+      : "auto";
+  const hasProviderEnv =
+    Boolean(envValue(env, "SCHOOL_LLM_API_KEY") || envValue(env, "SCHOOL_LLM_BASE_URL")) ||
+    Boolean(envValue(env, "OPENAI_API_KEY") || envValue(env, "OPENAI_BASE_URL")) ||
+    providerOverride !== "auto" ||
+    Boolean(overrides.apiKey?.trim());
+
+  if (!explicitlyDisabled && hasProviderEnv) {
+    const providerConfig = resolvePrivateLlmProviderConfig({
+      env,
+      provider: providerOverride,
+      apiKey: overrides.apiKey,
+      baseURL: overrides.baseUrl,
+      model: overrides.model,
+    });
+    if (providerConfig.provider !== "unconfigured") {
+      const providerKind = providerConfig.provider === "school_llm" ? "school" : "openai";
+      const timeoutMs =
+        overrides.timeoutMs ??
+        envNumber(env, [
+          ...PURPOSE_TIMEOUT_ENV_KEYS[purpose],
+          providerKind === "openai" ? "OPENAI_TIMEOUT_MS" : "SCHOOL_LLM_TIMEOUT_MS",
+          "LLM_TIMEOUT_MS",
+        ]) ??
+        (providerKind === "school" ? schoolTimeoutMs(purpose, env) : undefined) ??
+        PURPOSE_TIMEOUT_MS[purpose];
+      const providerName =
+        providerKind === "school"
+          ? envValue(env, "SCHOOL_LLM_PROVIDER") ?? "school_llm"
+          : "openai";
+      const model = providerConfig.model ?? "";
+      return {
+        baseUrl: normalizeOllamaBaseUrl(providerConfig.baseURL ?? DEFAULT_BASE_URL),
+        apiKey: providerConfig.apiKey ?? undefined,
+        model,
+        timeoutMs,
+        disabled: !providerConfig.available || !providerConfig.modelConfigured,
+        providerKind,
+        providerName,
+        configError: !providerConfig.available
+          ? `Missing LLM environment variable(s): ${providerConfig.missing.join(", ")}.`
+          : !providerConfig.modelConfigured
+            ? "MODEL_MISSING: LLM provider is configured, but no model is set. Set SCHOOL_LLM_MODEL or OPENAI_MODEL."
+            : undefined,
+      };
+    }
+  }
+
   const baseUrl =
     overrides.baseUrl ??
     envValue(env, "LLM_BASE_URL") ??
@@ -126,7 +276,6 @@ export function resolveLlmConfig(
     envValue(env, "OLLAMA_MODEL") ??
     envValue(env, "SEARCH_INTENT_LLM_MODEL") ??
     envValue(env, "KEYWORD_LLM_MODEL") ??
-    envValue(env, "OPENAI_MODEL") ??
     DEFAULT_MODEL;
   const timeoutMs =
     overrides.timeoutMs ??
@@ -148,12 +297,18 @@ export function resolveLlmConfig(
     model,
     timeoutMs,
     disabled: explicitlyDisabled,
+    providerKind: "generic",
   };
 }
 
 function chatCompletionsUrl(baseUrl: string): URL {
   const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
   return new URL("chat/completions", normalizedBase);
+}
+
+function responsesUrl(baseUrl: string): URL {
+  const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  return new URL("responses", normalizedBase);
 }
 
 function shouldDisableReasoning(config: ResolvedLlmConfig): boolean {
@@ -293,6 +448,62 @@ function firstJsonObjectFromReasoning(...values: unknown[]): string {
   return "";
 }
 
+function responsesInputFromMessages(messages: OpenAICompatibleMessage[]): Array<{ role: string; content: string }> {
+  return messages.map((message) => ({
+    role: message.role === "assistant" ? "assistant" : message.role,
+    content: message.content,
+  }));
+}
+
+async function requestOpenAiResponsesText(input: {
+  config: ResolvedLlmConfig;
+  messages: OpenAICompatibleMessage[];
+  maxTokens: number;
+  fetchImpl: (input: string | URL, init?: RequestInit) => Promise<Response>;
+  signal: AbortSignal;
+  responseFormat?: "json_object";
+}): Promise<string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (input.config.apiKey?.trim()) {
+    headers.Authorization = `Bearer ${input.config.apiKey}`;
+  }
+  const response = await input.fetchImpl(responsesUrl(input.config.baseUrl).toString(), {
+    method: "POST",
+    signal: input.signal,
+    headers,
+    body: JSON.stringify({
+      model: input.config.model,
+      input: responsesInputFromMessages(input.messages),
+      max_output_tokens: input.maxTokens,
+      ...(input.responseFormat === "json_object"
+        ? { text: { format: { type: "json_object" } } }
+        : {}),
+    }),
+  });
+  const body = await response.text();
+
+  if (!response.ok) {
+    throw new LlmAdapterError(
+      isQuotaOrAuthFailure(response.status)
+        ? "provider-quota"
+        : "provider-failure",
+      `LLM provider returned HTTP ${response.status}.`,
+    );
+  }
+
+  const payload = safeJsonParse(body);
+  const content = extractModelText(payload);
+  if (!content) {
+    throw new LlmAdapterError(
+      "invalid-json",
+      "LLM response did not include message content.",
+    );
+  }
+  return content;
+}
+
 export function extractModelText(raw: unknown): string {
   if (typeof raw === "string") return raw.trim();
   if (!raw || typeof raw !== "object") return "";
@@ -356,8 +567,17 @@ function errorCode(error: unknown): string {
   return "unknown";
 }
 
+function schoolUsageStatusFromError(error: unknown): "failed" | "fallback" | "rate_limited" | "unconfigured" {
+  if (error instanceof LlmAdapterError) {
+    if (error.code === "provider-unconfigured") return "unconfigured";
+    if (error.code === "provider-quota") return "rate_limited";
+  }
+  return "fallback";
+}
+
 export async function requestOpenAICompatibleChatCompletion({
   purpose,
+  featureName = purpose,
   messages,
   temperature = 0,
   maxTokens = 1_200,
@@ -368,18 +588,81 @@ export async function requestOpenAICompatibleChatCompletion({
 }: ChatCompletionRequest): Promise<string> {
   const config = resolveLlmConfig(purpose, llm, env);
   if (config.disabled) {
+    if (config.providerKind === "school") {
+      recordSchoolUsage({
+        featureName,
+        model: config.model,
+        status: "unconfigured",
+        latencyMs: 0,
+        estimatedInputTokens: estimateMessageTokens(messages),
+        estimatedOutputTokens: 0,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    const disabledCode: LlmAdapterErrorCode =
+      config.configError?.startsWith("MODEL_MISSING")
+        ? "model-missing"
+        : "provider-unconfigured";
     throw new LlmAdapterError(
-      "provider-unconfigured",
-      "LLM request was explicitly disabled.",
+      disabledCode,
+      redactKnownSecrets(
+        config.configError ??
+          "LLM request was explicitly disabled. AI 服務暫時不可用，已使用本地規則 fallback。",
+        env,
+      ),
     );
   }
 
   const startedAt = Date.now();
+  const estimatedInputTokens = estimateMessageTokens(messages);
+  if (config.providerKind === "school") {
+    const rateLimit = checkSchoolRateLimit(featureName, env);
+    if (!rateLimit.allowed) {
+      recordSchoolUsage({
+        featureName,
+        model: config.model,
+        status: "rate_limited",
+        latencyMs: 0,
+        estimatedInputTokens,
+        estimatedOutputTokens: 0,
+        createdAt: new Date().toISOString(),
+      });
+      throw new LlmAdapterError(
+        "provider-quota",
+        `School LLM rate limit exceeded. Retry after ${Math.ceil(rateLimit.retryAfterMs / 1000)} seconds.`,
+      );
+    }
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
   const endpoint = chatCompletionsUrl(config.baseUrl).toString();
 
   try {
+    if (config.providerKind === "openai") {
+      const content = await requestOpenAiResponsesText({
+        config,
+        messages,
+        maxTokens,
+        fetchImpl,
+        signal: controller.signal,
+        responseFormat,
+      });
+      logger.info(
+        {
+          purpose,
+          featureName,
+          model: config.model,
+          providerKind: config.providerKind,
+          endpointConfigured: true,
+          durationMs: Date.now() - startedAt,
+          timeoutMs: config.timeoutMs,
+        },
+        "LLM request completed",
+      );
+      return content;
+    }
+
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
@@ -425,14 +708,26 @@ export async function requestOpenAICompatibleChatCompletion({
     logger.info(
       {
         purpose,
+        featureName,
         model: config.model,
-        baseUrl: config.baseUrl,
-        endpoint,
+        providerKind: config.providerKind,
+        endpointConfigured: Boolean(endpoint),
         durationMs: Date.now() - startedAt,
         timeoutMs: config.timeoutMs,
       },
       "LLM request completed",
     );
+    if (config.providerKind === "school") {
+      recordSchoolUsage({
+        featureName,
+        model: config.model,
+        status: "success",
+        latencyMs: Date.now() - startedAt,
+        estimatedInputTokens,
+        estimatedOutputTokens: estimateTokens(content),
+        createdAt: new Date().toISOString(),
+      });
+    }
     return content;
   } catch (error) {
     const adapterError =
@@ -444,15 +739,27 @@ export async function requestOpenAICompatibleChatCompletion({
     logger.warn(
       {
         purpose,
+        featureName,
         model: config.model,
-        baseUrl: config.baseUrl,
-        endpoint,
+        providerKind: config.providerKind,
+        endpointConfigured: Boolean(endpoint),
         durationMs: Date.now() - startedAt,
         timeoutMs: config.timeoutMs,
         fallbackReason: errorCode(adapterError),
       },
       "LLM request fell back",
     );
+    if (config.providerKind === "school") {
+      recordSchoolUsage({
+        featureName,
+        model: config.model,
+        status: schoolUsageStatusFromError(adapterError),
+        latencyMs: Date.now() - startedAt,
+        estimatedInputTokens,
+        estimatedOutputTokens: 0,
+        createdAt: new Date().toISOString(),
+      });
+    }
     throw adapterError;
   } finally {
     clearTimeout(timeout);

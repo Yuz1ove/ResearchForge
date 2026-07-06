@@ -28,6 +28,11 @@ node_modules
 !.vscode/extensions.json
 
 # misc
+/.env
+/.env.local
+/.env.*.local
+/artifacts/api-server/.env.local
+/artifacts/api-server/.env.*.local
 /.sass-cache
 /connect.lock
 /coverage
@@ -47,3 +52,11 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+artifacts/api-server/.env
+artifacts/api-server/.env.*
+!artifacts/api-server/.env.example

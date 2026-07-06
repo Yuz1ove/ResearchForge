@@ -5,6 +5,7 @@ import {
   extractFirstJsonObject,
   extractModelText,
   requestOpenAICompatibleChatCompletion,
+  resolveOpenAiModelAlias,
   resolveLlmConfig,
   safeJsonParse,
 } from "./llm-adapter";
@@ -27,6 +28,14 @@ test("resolveLlmConfig prefers LLM env over OLLAMA env and normalizes local Olla
   assert.equal(config.disabled, false);
 });
 
+test("resolveOpenAiModelAlias normalizes GPT-5.4 aliases", () => {
+  assert.equal(resolveOpenAiModelAlias("chatgpt5.4"), "gpt-5.4");
+  assert.equal(resolveOpenAiModelAlias("chatgpt-5.4"), "gpt-5.4");
+  assert.equal(resolveOpenAiModelAlias("GPT-5.4"), "gpt-5.4");
+  assert.equal(resolveOpenAiModelAlias("gpt5.4"), "gpt-5.4");
+  assert.equal(resolveOpenAiModelAlias(""), "gpt-5.4");
+});
+
 test("resolveLlmConfig falls back to OLLAMA env and supports explicit disable", () => {
   const config = resolveLlmConfig(
     "report_writer",
@@ -42,6 +51,49 @@ test("resolveLlmConfig falls back to OLLAMA env and supports explicit disable", 
   assert.equal(config.model, "qwen3:4b");
   assert.equal(config.timeoutMs, 60_000);
   assert.equal(config.disabled, true);
+});
+
+test("resolveLlmConfig prefers complete school LLM env on the backend", () => {
+  const config = resolveLlmConfig(
+    "planner",
+    {},
+    {
+      SCHOOL_LLM_PROVIDER: "campus",
+      SCHOOL_LLM_BASE_URL: "https://school.example/v1",
+      SCHOOL_LLM_API_KEY: "school-test-token",
+      SCHOOL_LLM_MODEL: "school-model",
+      LLM_BASE_URL: "http://127.0.0.1:11434",
+      LLM_MODEL: "qwen3:4b",
+    },
+  );
+
+  assert.equal(config.baseUrl, "https://school.example/v1");
+  assert.equal(config.apiKey, "school-test-token");
+  assert.equal(config.model, "school-model");
+  assert.equal(config.providerKind, "school");
+  assert.equal(config.disabled, false);
+});
+
+test("school LLM config without API key is disabled without exposing a secret", async () => {
+  await assert.rejects(
+    requestOpenAICompatibleChatCompletion({
+      purpose: "planner",
+      messages: [{ role: "user", content: "{\"topic\":\"AI\"}" }],
+      env: {
+        SCHOOL_LLM_PROVIDER: "campus",
+        SCHOOL_LLM_BASE_URL: "https://school.example/v1",
+        SCHOOL_LLM_MODEL: "school-model",
+      },
+      fetchImpl: async () => {
+        throw new Error("fetch should not be called");
+      },
+    }),
+    (error) =>
+      error instanceof LlmAdapterError &&
+      error.code === "provider-unconfigured" &&
+      /SCHOOL_LLM_API_KEY/.test(error.message) &&
+      !/school-test-token/.test(error.message),
+  );
 });
 
 test("safeJsonParse accepts fenced JSON and extracts JSON objects from model chatter", () => {
@@ -231,4 +283,76 @@ test("requestOpenAICompatibleChatCompletion keeps JSON mode for non-local OpenAI
   assert.ok(requestBody);
   assert.deepEqual(requestBody.response_format, { type: "json_object" });
   assert.equal("think" in requestBody, false);
+});
+
+test("requestOpenAICompatibleChatCompletion sends school key only in Authorization header", async () => {
+  let capturedAuthorization: string | null = null;
+  let capturedBody = "";
+
+  await requestOpenAICompatibleChatCompletion({
+    purpose: "summarizer",
+    featureName: "source_readable_summary",
+    messages: [{ role: "user", content: "{\"topic\":\"水餃\"}" }],
+    responseFormat: "json_object",
+    env: {
+      SCHOOL_LLM_PROVIDER: "campus",
+      SCHOOL_LLM_BASE_URL: "https://school.example/v1",
+      SCHOOL_LLM_API_KEY: "school-secret-token",
+      SCHOOL_LLM_MODEL: "school-model",
+    },
+    fetchImpl: async (_input, init) => {
+      capturedAuthorization = new Headers(init?.headers).get("Authorization");
+      capturedBody = String(init?.body ?? "");
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "{\"ok\":true}" } }],
+        }),
+      );
+    },
+  });
+
+  assert.equal(capturedAuthorization, "Bearer school-secret-token");
+  assert.equal(capturedBody.includes("school-secret-token"), false);
+});
+
+test("school LLM rate limit fails before provider fetch", async () => {
+  let fetchCount = 0;
+  const env = {
+    SCHOOL_LLM_PROVIDER: "campus",
+    SCHOOL_LLM_BASE_URL: "https://school.example/v1",
+    SCHOOL_LLM_API_KEY: "school-secret-token",
+    SCHOOL_LLM_MODEL: "school-model",
+    SCHOOL_LLM_RATE_LIMIT_MAX: "1",
+    SCHOOL_LLM_RATE_LIMIT_WINDOW_MS: "60000",
+  };
+
+  await requestOpenAICompatibleChatCompletion({
+    purpose: "planner",
+    featureName: "rate-limit-test",
+    messages: [{ role: "user", content: "{\"topic\":\"AI\"}" }],
+    env,
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "{\"ok\":true}" } }],
+        }),
+      );
+    },
+  });
+
+  await assert.rejects(
+    requestOpenAICompatibleChatCompletion({
+      purpose: "planner",
+      featureName: "rate-limit-test",
+      messages: [{ role: "user", content: "{\"topic\":\"AI\"}" }],
+      env,
+      fetchImpl: async () => {
+        fetchCount += 1;
+        return new Response("{}");
+      },
+    }),
+    (error) => error instanceof LlmAdapterError && error.code === "provider-quota",
+  );
+  assert.equal(fetchCount, 1);
 });

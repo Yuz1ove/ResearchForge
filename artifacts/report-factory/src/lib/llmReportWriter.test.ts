@@ -11,9 +11,14 @@ import {
   requestLlmReportDraft,
 } from "./llmReportWriter.ts";
 
+const TEST_TOPIC = "水餃";
+const TEST_WORKFLOW_ID = "wf-llm-report-test";
+const TEST_TOPIC_HASH = "topic-dumpling-test";
+const TEST_QUERY_PLAN_HASH = "qp-llm-report-test";
+
 function reportInput(overrides: Partial<ReportInput> = {}): ReportInput {
   return {
-    topic: "水餃",
+    topic: TEST_TOPIC,
     reportType: "研究報告",
     academicLevel: "高中",
     targetAudience: "高中",
@@ -59,11 +64,16 @@ function source(index: number, overrides: Partial<SourceRecord> = {}): SourceRec
     relevanceLevel: index === 1 ? "primary" : "secondary",
     evidenceGrounding: "abstract_grounded",
     usableSections: ["研究背景", "文獻探討"],
+    workflowId: TEST_WORKFLOW_ID,
+    topic: TEST_TOPIC,
+    normalizedTopic: TEST_TOPIC,
+    topicHash: TEST_TOPIC_HASH,
+    queryPlanHash: TEST_QUERY_PLAN_HASH,
     ...overrides,
   };
 }
 
-test("requestLlmReportDraft posts accepted sources and maps quick draft to preliminary mode", async () => {
+test("requestLlmReportDraft posts accepted sources and maps quick draft to academic claim mode", async () => {
   const originalFetch = globalThis.fetch;
   let capturedBody: Record<string, unknown> | null = null;
   globalThis.fetch = (async (_input, init) => {
@@ -92,18 +102,23 @@ test("requestLlmReportDraft posts accepted sources and maps quick draft to preli
     const workspace = createReportWorkspace(
       reportInput(),
       [source(1), source(2), source(3)],
-      "quick_draft",
+      "initial_brief",
       "rf-request-evidence",
     );
     const result = await requestLlmReportDraft({
       reportInput: reportInput(),
+      workflowId: TEST_WORKFLOW_ID,
+      topicHash: TEST_TOPIC_HASH,
+      originalTopic: TEST_TOPIC,
+      displayTitle: TEST_TOPIC,
       acceptedSources: [source(1), source(2), source(3)],
       evidenceCards: workspace.evidenceCards,
-      generationMode: "quick_draft",
+      generationMode: "initial_brief",
+      timeoutMs: 5,
     });
 
     assert.equal(capturedBody?.topic, "水餃");
-    assert.equal(capturedBody?.generationMode, "preliminary");
+    assert.equal(capturedBody?.generationMode, "academic_claim_mode");
     assert.equal((capturedBody?.acceptedSources as SourceRecord[]).length, 3);
     assert.equal((capturedBody?.evidenceCards as unknown[]).length > 0, true);
     assert.equal(result.ok, true);
@@ -113,11 +128,52 @@ test("requestLlmReportDraft posts accepted sources and maps quick draft to preli
   }
 });
 
+test("requestLlmReportDraft falls back when the LLM request times out", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input, init) => {
+    const signal = init?.signal as AbortSignal | undefined;
+    await new Promise((_, reject) => {
+      signal?.addEventListener("abort", () => {
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      });
+    });
+    throw new Error("unreachable");
+  }) as typeof fetch;
+
+  try {
+    const workspace = createReportWorkspace(
+      reportInput(),
+      [source(1), source(2), source(3)],
+      "initial_brief",
+      "rf-request-timeout",
+    );
+    const result = await requestLlmReportDraft({
+      reportInput: reportInput(),
+      workflowId: TEST_WORKFLOW_ID,
+      topicHash: TEST_TOPIC_HASH,
+      originalTopic: TEST_TOPIC,
+      displayTitle: TEST_TOPIC,
+      acceptedSources: [source(1), source(2), source(3)],
+      evidenceCards: workspace.evidenceCards,
+      generationMode: "initial_brief",
+      timeoutMs: 5,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "unavailable");
+    assert.equal(result.llm_status, "timeout");
+    assert.equal(result.fallbackUsed, false);
+    assert.match(result.message ?? "", /逾時|未產生替代報告/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("mergeLlmReportDraft replaces matching draft section prose for preview", () => {
   const workspace: ReportWorkspace = createReportWorkspace(
     reportInput(),
     [source(1), source(2), source(3), source(4), source(5)],
-    "quick_draft",
+    "initial_brief",
     "rf-llm-merge",
   );
   const targetSection = workspace.draft.sections[0];
@@ -148,6 +204,10 @@ test("mergeLlmReportDraft replaces matching draft section prose for preview", ()
   });
 
   assert.match(merged.draft.sections[0]?.body ?? "", /正式中文報告段落/);
+  assert.match(
+    merged.draft.sections[0]?.synthesizedProseZhTw ?? "",
+    /正式中文報告段落/,
+  );
   assert.deepEqual(
     merged.draft.sections[0]?.evidenceCardIds,
     workspace.evidenceCards.slice(0, 2).map((card) => card.id),
@@ -164,7 +224,7 @@ test("mergeLlmReportDraft keeps references limited to accepted evidence cards", 
   const workspace: ReportWorkspace = createReportWorkspace(
     reportInput(),
     [source(1), source(2), source(3)],
-    "full_report",
+    "complete_research_report",
     "rf-accepted-only",
   );
   const targetSection = workspace.draft.sections[0];
@@ -189,7 +249,7 @@ test("mergeLlmReportDraft keeps references limited to accepted evidence cards", 
         sectionId: targetSection.sectionId,
         title: "摘要",
         prose:
-          "這段正式報告正文只使用已接受證據卡，並保留可追溯的 citation marker。（來源 1）",
+          "這段正式報告正文只使用已接受證據卡，並保留可追溯的 citation marker[S1]。",
         evidenceCardIds: [acceptedEvidenceId, "evidence:unaccepted-source:0"],
         citationIds: ["source-1", "unaccepted-source"],
       },
@@ -199,18 +259,59 @@ test("mergeLlmReportDraft keeps references limited to accepted evidence cards", 
   const mergedSection = merged.draft.sections[0];
   assert.deepEqual(mergedSection?.evidenceCardIds, [acceptedEvidenceId]);
   assert.deepEqual(mergedSection?.citationIds, ["source-1"]);
-  assert.deepEqual(mergedSection?.citationMarkers, ["（來源 1）"]);
+  assert.deepEqual(mergedSection?.citationMarkers, ["[S1]"]);
   assert.equal(
     merged.report.meta.researchDraft.sections[0]?.citationIds.includes("unaccepted-source"),
     false,
   );
 });
 
+test("mergeLlmReportDraft does not backfill citation badges without actual markers", () => {
+  const workspace: ReportWorkspace = createReportWorkspace(
+    reportInput(),
+    [source(1), source(2), source(3)],
+    "complete_research_report",
+    "rf-no-marker-backfill",
+  );
+  const targetSection = workspace.draft.sections.find((section) => section.citationCount > 0);
+  assert.ok(targetSection);
+
+  const merged = mergeLlmReportDraft(workspace, {
+    ok: true,
+    status: "success",
+    llm_status: "success",
+    fallback_used: false,
+    message: null,
+    warning: null,
+    reportGenerationProvider: "ollama",
+    reportGenerationModel: "test-model",
+    reportGenerationStatus: "success",
+    fallbackUsed: false,
+    fallbackReason: null,
+    sections: [
+      {
+        sectionId: targetSection.sectionId,
+        title: targetSection.title,
+        prose: "本節暫不提出正式主張，只保留來源不足提醒。",
+        evidenceCardIds: [],
+        citationIds: [],
+      },
+    ],
+  });
+
+  const mergedSection = merged.draft.sections.find(
+    (section) => section.sectionId === targetSection.sectionId,
+  );
+  assert.deepEqual(mergedSection?.citationMarkers, []);
+  assert.deepEqual(mergedSection?.citationIds, []);
+  assert.equal(mergedSection?.citationCount, 0);
+});
+
 test("mergeLlmReportDraft keeps the existing draft when the LLM call fails", () => {
   const workspace: ReportWorkspace = createReportWorkspace(
     reportInput(),
     [source(1), source(2), source(3)],
-    "full_report",
+    "complete_research_report",
     "rf-keep-draft",
   );
 
@@ -219,7 +320,7 @@ test("mergeLlmReportDraft keeps the existing draft when the LLM call fails", () 
     status: "unavailable",
     llm_status: "failed",
     fallback_used: true,
-    message: "LLM report service unavailable.",
+    message: "AI 服務暫時不可用，已使用本地規則 fallback。",
     warning: "provider timeout",
     reportGenerationProvider: "ollama",
     reportGenerationModel: "test-model",
@@ -242,7 +343,7 @@ test("mergeLlmReportDraft still applies constrained fallback sections when secti
   const workspace: ReportWorkspace = createReportWorkspace(
     reportInput(),
     [source(1), source(2), source(3)],
-    "full_report",
+    "complete_research_report",
     "rf-constrained-fallback",
   );
   const targetSection = workspace.draft.sections[0];
@@ -253,7 +354,7 @@ test("mergeLlmReportDraft still applies constrained fallback sections when secti
     status: "error",
     llm_status: "failed",
     fallback_used: true,
-    message: "LLM report service unavailable.",
+    message: "AI 服務暫時不可用，已使用本地規則 fallback。",
     warning: "provider timeout",
     reportGenerationProvider: "ollama",
     reportGenerationModel: "test-model",
@@ -265,7 +366,7 @@ test("mergeLlmReportDraft still applies constrained fallback sections when secti
         sectionId: targetSection.sectionId,
         title: "摘要",
         prose:
-          "本稿僅依已接受來源形成受限草稿，正文集中整理水餃的營養與飲食文化證據，並保留未補證部分。（來源 1）（來源 2）",
+          "本稿僅依已接受來源形成受限草稿，正文集中整理水餃的營養與飲食文化證據，並保留未補證部分[S1][S2]。",
         evidenceCardIds: workspace.evidenceCards.slice(0, 2).map((card) => card.id),
         citationIds: ["source-1", "source-2"],
         warnings: ["段落受限於摘要證據，尚未讀取全文。"],
@@ -279,9 +380,9 @@ test("mergeLlmReportDraft still applies constrained fallback sections when secti
     workspace.evidenceCards.slice(0, 2).map((card) => card.id),
   );
   assert.deepEqual(merged.draft.sections[0]?.citationIds, ["source-1", "source-2"]);
-  assert.deepEqual(
-    merged.draft.sections[0]?.warnings,
-    ["段落受限於摘要證據，尚未讀取全文。"],
+  assert.equal(
+    merged.draft.sections[0]?.warnings.includes("段落受限於摘要證據，尚未讀取全文。"),
+    true,
   );
   assert.equal(merged.llmDiagnostics?.reportGenerationStatus, "failed");
 });

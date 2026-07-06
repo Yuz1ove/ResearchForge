@@ -14,6 +14,10 @@ import {
 } from "@workspace/api-zod/research-tools";
 import { logger } from "../lib/logger";
 import { buildResearchEvidenceCards } from "../services/research/evidence/evidenceCardBuilder";
+import {
+  enhanceEvidenceCardsWithSchoolLlm,
+  polishResearchParagraphsWithSchoolLlm,
+} from "../services/research/llm/researchLlmEnhancer";
 import { sourceRecordToNormalizedSource } from "../services/research/normalizers/normalizeSource";
 import { parseWithGrobid } from "../services/research/parsers/grobidClient";
 import { parseWithMarker } from "../services/research/parsers/markerWorker";
@@ -313,20 +317,29 @@ router.post("/research/build-evidence-cards", async (req, res) => {
     return;
   }
 
-  const evidenceCards = buildResearchEvidenceCards({
+  const baseEvidenceCards = buildResearchEvidenceCards({
     queryPlan: parsed.data.queryPlan,
     acceptedSources: parsed.data.acceptedSources,
     parsedDocuments: parsed.data.parsedDocuments,
   });
+  const enhanced = await enhanceEvidenceCardsWithSchoolLlm({
+    topic: parsed.data.topic,
+    queryPlan: parsed.data.queryPlan,
+    evidenceCards: baseEvidenceCards,
+  });
+  const evidenceCards = enhanced.evidenceCards;
   writeWorkflowSnapshot(parsed.data.queryPlan.workflowId, { evidenceCards });
   res.json(
     ResearchBuildEvidenceCardsResponseSchema.parse({
       ok: true,
       workflowId: parsed.data.queryPlan.workflowId,
       evidenceCards,
-      warnings: evidenceCards.some((card) => card.evidenceBasis === "metadata-only")
-        ? ["部分 evidence cards 僅根據 metadata 建立，請補全文或摘要。"]
-        : [],
+      warnings: [
+        ...(evidenceCards.some((card) => card.evidenceBasis === "metadata-only")
+          ? ["部分 evidence cards 僅根據 metadata 建立，請補全文或摘要。"]
+          : []),
+        ...enhanced.warnings,
+      ],
     }),
   );
 });
@@ -339,10 +352,24 @@ router.post("/research/synthesize-report", async (req, res) => {
   }
 
   const result = await synthesizeResearchReport(parsed.data);
-  writeWorkflowSnapshot(parsed.data.queryPlan.workflowId, {
-    reportParagraphs: result.paragraphs,
+  const polished = await polishResearchParagraphsWithSchoolLlm({
+    topic: parsed.data.topic,
+    queryPlan: parsed.data.queryPlan,
+    paragraphs: result.paragraphs,
   });
-  res.json(ResearchSynthesizeReportResponseSchema.parse(result));
+  const finalResult = {
+    ...result,
+    paragraphs: polished.paragraphs,
+    warnings: [...result.warnings, ...polished.warnings],
+    llmStatus:
+      polished.llmStatus === "success"
+        ? "success"
+        : result.llmStatus,
+  };
+  writeWorkflowSnapshot(parsed.data.queryPlan.workflowId, {
+    reportParagraphs: finalResult.paragraphs,
+  });
+  res.json(ResearchSynthesizeReportResponseSchema.parse(finalResult));
 });
 
 export default router;

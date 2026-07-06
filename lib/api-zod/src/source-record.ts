@@ -1,3 +1,15 @@
+import type {
+  ReadableExtraction,
+  RelevanceScore,
+  SourceFact,
+  SourceSummary,
+  SourceValidation,
+} from "./research-pipeline";
+import type {
+  EvidenceRecommendationBucket,
+  EvidenceUserDecision,
+} from "./evidence-governance";
+
 export const SOURCE_PROVIDERS = [
   "OpenAlex",
   "Semantic Scholar",
@@ -36,6 +48,127 @@ export type SourceSummaryConfidence = (typeof SOURCE_SUMMARY_CONFIDENCE_LEVELS)[
 export const SOURCE_KINDS = ["journal", "conference", "book", "dataset", "web", "unknown"] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
+export const SOURCE_RECOMMENDATION_BUCKETS = [
+  "scholarly_recommended",
+  "official_background",
+  "manual_review",
+  "rejected",
+] as const;
+export type SourceRecommendationBucket = EvidenceRecommendationBucket;
+
+export const SOURCE_ROLES = [
+  "core_scholarly_evidence",
+  "official_background_explanation",
+  "definition_or_concept",
+  "statistics_or_dataset",
+  "teaching_or_public_explainer",
+  "weak_or_uncertain",
+  "rejected",
+] as const;
+export type SourceRole = (typeof SOURCE_ROLES)[number];
+
+export const SOURCE_RETRIEVAL_MODES = [
+  "live_provider",
+  "stale_cache",
+  "trusted_seed",
+  "user_import",
+  "manual_url",
+  "supplemental_fulltext_or_repository",
+] as const;
+export type SourceRetrievalMode = (typeof SOURCE_RETRIEVAL_MODES)[number];
+
+export const SOURCE_CONTENT_ACCESS_LEVELS = [
+  "full_text",
+  "abstract_only",
+  "metadata_only",
+  "blocked_or_paywalled",
+  "failed_extraction",
+] as const;
+export type SourceContentAccessLevel = (typeof SOURCE_CONTENT_ACCESS_LEVELS)[number];
+
+export const SOURCE_CONTENT_EXTRACTION_STATUSES = [
+  "success",
+  "partial",
+  "failed",
+  "skipped",
+  "text_extracted",
+  "grobid_extracted",
+  "ocr_extracted",
+  "metadata_only",
+  "extraction_failed",
+  "extraction_skipped_license",
+  "extraction_skipped_no_full_text",
+  "extraction_unavailable_no_parser",
+] as const;
+export type SourceContentExtractionStatus = (typeof SOURCE_CONTENT_EXTRACTION_STATUSES)[number];
+
+export const SOURCE_CONTENT_EXTRACTION_METHODS = [
+  "html_readability",
+  "pdf_parser",
+  "grobid",
+  "abstract_only",
+  "metadata_only",
+  "pdf_text",
+  "ocr",
+  "html",
+  "abstract",
+  "failed",
+] as const;
+export type SourceContentExtractionMethod = (typeof SOURCE_CONTENT_EXTRACTION_METHODS)[number];
+
+export const SOURCE_EXTRACTION_MODES = [
+  "pdf_text",
+  "grobid",
+  "ocr",
+  "html",
+  "abstract",
+  "metadata_only",
+  "failed",
+] as const;
+export type SourceExtractionMode = (typeof SOURCE_EXTRACTION_MODES)[number];
+
+export const SOURCE_CLAIM_EXTRACTION_STATUSES = [
+  "enabled",
+  "fallback",
+  "unavailable",
+  "failed",
+  "skipped",
+] as const;
+export type SourceClaimExtractionStatus = (typeof SOURCE_CLAIM_EXTRACTION_STATUSES)[number];
+
+export const SOURCE_CLAIM_EXTRACTION_MODES = [
+  "llm",
+  "rule_fallback",
+  "metadata_only",
+] as const;
+export type SourceClaimExtractionMode = (typeof SOURCE_CLAIM_EXTRACTION_MODES)[number];
+
+export const SOURCE_USE_LEVELS = [
+  "citable_full_text",
+  "citable_abstract",
+  "metadata_context_only",
+  "manual_review_required",
+  "rejected",
+] as const;
+export type SourceUseLevel = (typeof SOURCE_USE_LEVELS)[number];
+
+export interface ExtractedSourceSection {
+  heading: string;
+  text: string;
+  page?: number;
+  confidence: number;
+}
+
+export interface ExtractedSourceChunk {
+  chunk_id: string;
+  text: string;
+  source_location: string;
+  section_heading?: string;
+  page?: number;
+  char_start?: number;
+  char_end?: number;
+}
+
 export const SOURCE_RELEVANCE_CLASSIFICATIONS = [
   "primary",
   "review",
@@ -46,6 +179,28 @@ export const SOURCE_RELEVANCE_CLASSIFICATIONS = [
   "stale_workflow",
 ] as const;
 export type SourceRelevanceClassification = (typeof SOURCE_RELEVANCE_CLASSIFICATIONS)[number];
+
+export const SOURCE_ACCESS_STATUSES = [
+  "ok",
+  "redirected",
+  "metadata_only",
+  "blocked",
+  "not_found",
+  "unknown",
+] as const;
+export type SourceAccessStatus = (typeof SOURCE_ACCESS_STATUSES)[number];
+
+export interface SourceLinkInfo {
+  originalUrl?: string | null;
+  canonicalUrl?: string | null;
+  resolvedUrl?: string | null;
+  doi?: string | null;
+  doiUrl?: string | null;
+  metadataUrl?: string | null;
+  apiSourceUrl?: string | null;
+  accessStatus: SourceAccessStatus;
+  linkWarnings: string[];
+}
 
 export interface SourceRecord {
   id: string;
@@ -58,6 +213,7 @@ export interface SourceRecord {
   abstractMissing?: boolean | null;
   doi: string | null;
   url: string | null;
+  sourceLinkInfo?: SourceLinkInfo | null;
   sourceType: SourceProvider;
   reviewState: SourceReviewState;
   publisher: string | null;
@@ -70,6 +226,30 @@ export interface SourceRecord {
   sourceKind?: SourceKind | null;
   citationCount?: number | null;
   isOpenAccess?: boolean | null;
+  accessLevel?: SourceContentAccessLevel | null;
+  fullTextUrl?: string | null;
+  readableUrl?: string | null;
+  extractionStatus?: SourceContentExtractionStatus | null;
+  extractionMethod?: SourceContentExtractionMethod | null;
+  extractionMode?: SourceExtractionMode | null;
+  pageCount?: number | null;
+  extractedPageCount?: number | null;
+  isScanned?: boolean | null;
+  failureReason?: string | null;
+  userFacingMessage?: string | null;
+  canUseForClaims?: boolean | null;
+  canUseForReport?: boolean | null;
+  toolVersions?: Record<string, string> | null;
+  processingStartedAt?: string | null;
+  processingEndedAt?: string | null;
+  qualityFlags?: string[] | null;
+  fullTextCharCount?: number | null;
+  extractedAbstract?: string | null;
+  extractedSections?: ExtractedSourceSection[] | null;
+  extractedChunks?: ExtractedSourceChunk[] | null;
+  extractionWarnings?: string[] | null;
+  contentHash?: string | null;
+  sourceUseLevel?: SourceUseLevel | null;
   isPeerReviewed?: boolean | null;
   sourceQualityScore?: number | null;
   scoreReasons?: string[] | null;
@@ -81,16 +261,27 @@ export interface SourceRecord {
   matchedFacets?: string[] | null;
   missingRequiredFacets?: string[] | null;
   evidenceGrounding?: SourceEvidenceGroundingStatus | null;
+  claimExtractionStatus?: SourceClaimExtractionStatus | null;
+  claimExtractionMode?: SourceClaimExtractionMode | null;
+  claimCount?: number | null;
+  acceptedClaimCount?: number | null;
+  acceptedEvidenceCardCount?: number | null;
+  claimExtractionWarnings?: string[] | null;
   sourceRelevanceReasonZhTw?: string | null;
   llmSummaryZhTw?: string | null;
   readableSummaryZhTW?: string | null;
+  readableSummaryZhTw?: string | null;
   summarySourceType?: SourceSummarySourceType | null;
   summaryConfidence?: SourceSummaryConfidence | null;
   relevanceReasonZhTW?: string | null;
+  relevanceReasonZhTw?: string | null;
   summaryWarnings?: string[] | null;
   originalAbstract?: string | null;
+  abstractOriginal?: string | null;
+  abstractZhTw?: string | null;
   originalSnippet?: string | null;
   extractedText?: string | null;
+  mainEvidencePointZhTw?: string | null;
   llmSummaryStatus?: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped" | "metadata-only" | "fetch-failed" | "llm-failed" | "fallback" | null;
   summaryStructuredStatus?: "success" | "unavailable" | "invalid_input" | "insufficient_sources" | "error" | null;
   summaryProvider?: string | null;
@@ -99,6 +290,10 @@ export interface SourceRecord {
   summaryFallbackUsed?: boolean | null;
   summaryReason?: string | null;
   summaryMessage?: string | null;
+  sourceCategory?: string | null;
+  usableSections?: string[] | null;
+  confidence?: string | null;
+  reviewNotes?: string | null;
   shouldShowInMainList?: boolean | null;
   shouldRecommendAccept?: boolean | null;
   workflowId?: string | null;
@@ -125,6 +320,22 @@ export interface SourceRecord {
   isPrimaryEvidence?: boolean | null;
   rejectionReason?: string | null;
   recommendation?: string | null;
+  recommendationBucket?: SourceRecommendationBucket | null;
+  sourceRole?: SourceRole | null;
+  retrievalMode?: SourceRetrievalMode | null;
+  institutionType?: string | null;
+  evidencePoints?: string[] | null;
+  providerHealthSnapshot?: unknown | null;
+  acceptedByUser?: boolean | null;
+  userDecision?: EvidenceUserDecision | string | null;
+  acceptedAs?: string | null;
+  lowConfidence?: boolean | null;
+  needsReview?: boolean | null;
+  sourceValidation?: SourceValidation | null;
+  readableExtraction?: ReadableExtraction | null;
+  sourceFacts?: SourceFact[] | null;
+  researchRelevanceScore?: RelevanceScore | null;
+  sourceSummary?: SourceSummary | null;
 }
 
 export type SourceRecordInput = Partial<SourceRecord> & {
@@ -146,6 +357,91 @@ function normalizeDoiValue(value: string | null | undefined): string | null {
   const text = cleanText(value);
   if (!text) return null;
   return text.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "").trim().toLowerCase() || null;
+}
+
+function normalizeUrlValue(value: string | null | undefined): string | null {
+  const text = cleanText(value);
+  if (!text) return null;
+  return text.replace(/\s+/g, "");
+}
+
+function doiUrl(doi: string | null): string | null {
+  return doi ? `https://doi.org/${doi}` : null;
+}
+
+function metadataUrlForSource(source: {
+  sourceType: SourceProvider;
+  doi: string | null;
+  url: string | null;
+}): string | null {
+  if (source.doi) {
+    if (source.sourceType === "Crossref") {
+      return `https://api.crossref.org/works/${encodeURIComponent(source.doi)}`;
+    }
+    if (source.sourceType === "OpenAlex") {
+      return `https://api.openalex.org/works/doi:${encodeURIComponent(source.doi)}`;
+    }
+    if (source.sourceType === "Semantic Scholar") {
+      return `https://api.semanticscholar.org/graph/v1/paper/DOI:${encodeURIComponent(source.doi)}`;
+    }
+  }
+  return source.url ?? null;
+}
+
+function sourceAccessStatus(source: {
+  sourceType: SourceProvider;
+  doi: string | null;
+  url: string | null;
+  abstract: string | null;
+  abstractMissing?: boolean | null;
+}): SourceAccessStatus {
+  if (source.doi) return source.url && source.url !== doiUrl(source.doi) ? "redirected" : "ok";
+  if (!source.url) return "metadata_only";
+  if (source.abstractMissing && !source.abstract?.trim()) return "metadata_only";
+  return "unknown";
+}
+
+function normalizeSourceLinkInfo(
+  source: {
+    sourceLinkInfo?: SourceLinkInfo | null;
+    sourceType: SourceProvider;
+    doi: string | null;
+    url: string | null;
+    abstract: string | null;
+    abstractMissing?: boolean | null;
+  },
+): SourceLinkInfo {
+  const doi = normalizeDoiValue(source.sourceLinkInfo?.doi) ?? source.doi;
+  const canonicalUrl =
+    normalizeUrlValue(source.sourceLinkInfo?.canonicalUrl) ??
+    (doi ? doiUrl(doi) : normalizeUrlValue(source.url));
+  const originalUrl =
+    normalizeUrlValue(source.sourceLinkInfo?.originalUrl) ??
+    (source.url && source.url !== canonicalUrl ? normalizeUrlValue(source.url) : null);
+  const metadataUrl =
+    normalizeUrlValue(source.sourceLinkInfo?.metadataUrl) ??
+    metadataUrlForSource({ sourceType: source.sourceType, doi, url: source.url });
+  const accessStatus =
+    SOURCE_ACCESS_STATUSES.includes(source.sourceLinkInfo?.accessStatus as SourceAccessStatus)
+      ? source.sourceLinkInfo!.accessStatus
+      : sourceAccessStatus({ ...source, doi });
+  const warnings = uniqueStrings([
+    ...(source.sourceLinkInfo?.linkWarnings ?? []),
+    accessStatus === "metadata_only" ? "metadata_only_source" : "",
+    !canonicalUrl && !metadataUrl ? "missing_resolvable_link" : "",
+  ]);
+
+  return {
+    originalUrl,
+    canonicalUrl,
+    resolvedUrl: normalizeUrlValue(source.sourceLinkInfo?.resolvedUrl) ?? canonicalUrl,
+    doi,
+    doiUrl: doiUrl(doi),
+    metadataUrl,
+    apiSourceUrl: normalizeUrlValue(source.sourceLinkInfo?.apiSourceUrl) ?? metadataUrl,
+    accessStatus,
+    linkWarnings: warnings,
+  };
 }
 
 function normalizeYearValue(value: number | null | undefined): number | null {
@@ -299,6 +595,161 @@ function normalizeStructuredStatus(
     : null;
 }
 
+function normalizeRecommendationBucket(
+  value: SourceRecordInput["recommendationBucket"],
+): SourceRecord["recommendationBucket"] {
+  if ((SOURCE_RECOMMENDATION_BUCKETS as readonly unknown[]).includes(value)) {
+    return value as SourceRecommendationBucket;
+  }
+  return null;
+}
+
+function normalizeSourceRole(value: SourceRecordInput["sourceRole"]): SourceRecord["sourceRole"] {
+  if ((SOURCE_ROLES as readonly unknown[]).includes(value)) {
+    return value as SourceRole;
+  }
+  return null;
+}
+
+function normalizeRetrievalMode(
+  value: SourceRecordInput["retrievalMode"],
+): SourceRecord["retrievalMode"] {
+  if ((SOURCE_RETRIEVAL_MODES as readonly unknown[]).includes(value)) {
+    return value as SourceRetrievalMode;
+  }
+  return null;
+}
+
+function normalizeContentAccessLevel(
+  value: SourceRecordInput["accessLevel"],
+): SourceRecord["accessLevel"] {
+  if ((SOURCE_CONTENT_ACCESS_LEVELS as readonly unknown[]).includes(value)) {
+    return value as SourceContentAccessLevel;
+  }
+  return null;
+}
+
+function normalizeExtractionStatus(
+  value: SourceRecordInput["extractionStatus"],
+): SourceRecord["extractionStatus"] {
+  if ((SOURCE_CONTENT_EXTRACTION_STATUSES as readonly unknown[]).includes(value)) {
+    return value as SourceContentExtractionStatus;
+  }
+  return null;
+}
+
+function normalizeExtractionMethod(
+  value: SourceRecordInput["extractionMethod"],
+): SourceRecord["extractionMethod"] {
+  if ((SOURCE_CONTENT_EXTRACTION_METHODS as readonly unknown[]).includes(value)) {
+    return value as SourceContentExtractionMethod;
+  }
+  return null;
+}
+
+function normalizeExtractionMode(
+  value: SourceRecordInput["extractionMode"],
+): SourceRecord["extractionMode"] {
+  if ((SOURCE_EXTRACTION_MODES as readonly unknown[]).includes(value)) {
+    return value as SourceExtractionMode;
+  }
+  return null;
+}
+
+function normalizeClaimExtractionStatus(
+  value: SourceRecordInput["claimExtractionStatus"],
+): SourceRecord["claimExtractionStatus"] {
+  if ((SOURCE_CLAIM_EXTRACTION_STATUSES as readonly unknown[]).includes(value)) {
+    return value as SourceClaimExtractionStatus;
+  }
+  return null;
+}
+
+function normalizeClaimExtractionMode(
+  value: SourceRecordInput["claimExtractionMode"],
+): SourceRecord["claimExtractionMode"] {
+  if ((SOURCE_CLAIM_EXTRACTION_MODES as readonly unknown[]).includes(value)) {
+    return value as SourceClaimExtractionMode;
+  }
+  return null;
+}
+
+function normalizeSourceUseLevel(
+  value: SourceRecordInput["sourceUseLevel"],
+): SourceRecord["sourceUseLevel"] {
+  if ((SOURCE_USE_LEVELS as readonly unknown[]).includes(value)) {
+    return value as SourceUseLevel;
+  }
+  return null;
+}
+
+function normalizeExtractedSections(
+  value: SourceRecordInput["extractedSections"],
+): SourceRecord["extractedSections"] {
+  if (!Array.isArray(value)) return null;
+  const sections = value
+    .map((section) => {
+      if (!section || typeof section !== "object") return null;
+      const heading = cleanText(section.heading);
+      const text = cleanText(section.text);
+      if (!heading || !text) return null;
+      return {
+        heading,
+        text,
+        ...(typeof section.page === "number" && Number.isFinite(section.page)
+          ? { page: Math.trunc(section.page) }
+          : {}),
+        confidence:
+          typeof section.confidence === "number" && Number.isFinite(section.confidence)
+            ? Math.max(0, Math.min(1, section.confidence))
+            : 0.5,
+      };
+    })
+    .filter((section): section is ExtractedSourceSection => Boolean(section));
+  return sections.length ? sections : null;
+}
+
+function normalizeExtractedChunks(
+  value: SourceRecordInput["extractedChunks"],
+): SourceRecord["extractedChunks"] {
+  if (!Array.isArray(value)) return null;
+  const chunks = value
+    .map((chunk) => {
+      if (!chunk || typeof chunk !== "object") return null;
+      const chunkId = cleanText(chunk.chunk_id);
+      const text = cleanText(chunk.text);
+      const sourceLocation = cleanText(chunk.source_location);
+      if (!chunkId || !text || !sourceLocation) return null;
+      return {
+        chunk_id: chunkId,
+        text,
+        source_location: sourceLocation,
+        ...(cleanText(chunk.section_heading)
+          ? { section_heading: cleanText(chunk.section_heading) }
+          : {}),
+        ...(typeof chunk.page === "number" && Number.isFinite(chunk.page)
+          ? { page: Math.trunc(chunk.page) }
+          : {}),
+        ...(typeof chunk.char_start === "number" && Number.isFinite(chunk.char_start)
+          ? { char_start: Math.max(0, Math.trunc(chunk.char_start)) }
+          : {}),
+        ...(typeof chunk.char_end === "number" && Number.isFinite(chunk.char_end)
+          ? { char_end: Math.max(0, Math.trunc(chunk.char_end)) }
+          : {}),
+      };
+    })
+    .filter((chunk): chunk is ExtractedSourceChunk => Boolean(chunk));
+  return chunks.length ? chunks : null;
+}
+
+function normalizeUserDecision(
+  value: SourceRecordInput["userDecision"],
+): SourceRecord["userDecision"] {
+  if (typeof value !== "string") return null;
+  const trimmed = cleanText(value);
+  return trimmed ?? null;
+}
+
 function normalizeClassification(
   value: SourceRecordInput["classification"],
 ): SourceRecord["classification"] {
@@ -443,6 +894,30 @@ function metadataFields(source: Pick<
   | "sourceKind"
   | "citationCount"
   | "isOpenAccess"
+  | "accessLevel"
+  | "fullTextUrl"
+  | "readableUrl"
+  | "extractionStatus"
+  | "extractionMethod"
+  | "extractionMode"
+  | "pageCount"
+  | "extractedPageCount"
+  | "isScanned"
+  | "failureReason"
+  | "userFacingMessage"
+  | "canUseForClaims"
+  | "canUseForReport"
+  | "toolVersions"
+  | "processingStartedAt"
+  | "processingEndedAt"
+  | "qualityFlags"
+  | "fullTextCharCount"
+  | "extractedAbstract"
+  | "extractedSections"
+  | "extractedChunks"
+  | "extractionWarnings"
+  | "contentHash"
+  | "sourceUseLevel"
   | "isPeerReviewed"
   | "sourceQualityScore"
   | "scoreReasons"
@@ -454,6 +929,12 @@ function metadataFields(source: Pick<
   | "matchedFacets"
   | "missingRequiredFacets"
   | "evidenceGrounding"
+  | "claimExtractionStatus"
+  | "claimExtractionMode"
+  | "claimCount"
+  | "acceptedClaimCount"
+  | "acceptedEvidenceCardCount"
+  | "claimExtractionWarnings"
   | "sourceRelevanceReasonZhTw"
   | "llmSummaryZhTw"
   | "readableSummaryZhTW"
@@ -472,6 +953,10 @@ function metadataFields(source: Pick<
   | "summaryFallbackUsed"
   | "summaryReason"
   | "summaryMessage"
+  | "sourceCategory"
+  | "usableSections"
+  | "confidence"
+  | "reviewNotes"
   | "shouldShowInMainList"
   | "shouldRecommendAccept"
   | "workflowId"
@@ -498,8 +983,31 @@ function metadataFields(source: Pick<
   | "isPrimaryEvidence"
   | "rejectionReason"
   | "recommendation"
+  | "recommendationBucket"
+  | "sourceRole"
+  | "retrievalMode"
+  | "institutionType"
+  | "evidencePoints"
+  | "providerHealthSnapshot"
+  | "acceptedByUser"
+  | "userDecision"
+  | "acceptedAs"
+  | "lowConfidence"
+  | "needsReview"
+  | "sourceLinkInfo"
+  | "sourceValidation"
+  | "readableExtraction"
+  | "sourceFacts"
+  | "researchRelevanceScore"
+  | "sourceSummary"
 >): Partial<SourceRecord> {
   return {
+    ...(source.sourceLinkInfo != null ? { sourceLinkInfo: source.sourceLinkInfo } : {}),
+    ...(source.sourceValidation != null ? { sourceValidation: source.sourceValidation } : {}),
+    ...(source.readableExtraction != null ? { readableExtraction: source.readableExtraction } : {}),
+    ...(source.sourceFacts != null ? { sourceFacts: source.sourceFacts } : {}),
+    ...(source.researchRelevanceScore != null ? { researchRelevanceScore: source.researchRelevanceScore } : {}),
+    ...(source.sourceSummary != null ? { sourceSummary: source.sourceSummary } : {}),
     ...(source.provider != null ? { provider: source.provider } : {}),
     ...(source.queryUsed != null ? { queryUsed: source.queryUsed } : {}),
     ...(source.retrievedAt != null ? { retrievedAt: source.retrievedAt } : {}),
@@ -507,6 +1015,42 @@ function metadataFields(source: Pick<
     ...(source.sourceKind != null ? { sourceKind: source.sourceKind } : {}),
     ...(source.citationCount != null ? { citationCount: source.citationCount } : {}),
     ...(source.isOpenAccess != null ? { isOpenAccess: source.isOpenAccess } : {}),
+    ...(source.accessLevel != null ? { accessLevel: source.accessLevel } : {}),
+    ...(source.fullTextUrl != null ? { fullTextUrl: source.fullTextUrl } : {}),
+    ...(source.readableUrl != null ? { readableUrl: source.readableUrl } : {}),
+    ...(source.extractionStatus != null ? { extractionStatus: source.extractionStatus } : {}),
+    ...(source.extractionMethod != null ? { extractionMethod: source.extractionMethod } : {}),
+    ...(source.extractionMode != null ? { extractionMode: source.extractionMode } : {}),
+    ...(source.pageCount != null ? { pageCount: source.pageCount } : {}),
+    ...(source.extractedPageCount != null
+      ? { extractedPageCount: source.extractedPageCount }
+      : {}),
+    ...(source.isScanned != null ? { isScanned: source.isScanned } : {}),
+    ...(source.failureReason != null ? { failureReason: source.failureReason } : {}),
+    ...(source.userFacingMessage != null
+      ? { userFacingMessage: source.userFacingMessage }
+      : {}),
+    ...(source.canUseForClaims != null ? { canUseForClaims: source.canUseForClaims } : {}),
+    ...(source.canUseForReport != null ? { canUseForReport: source.canUseForReport } : {}),
+    ...(source.toolVersions != null ? { toolVersions: source.toolVersions } : {}),
+    ...(source.processingStartedAt != null
+      ? { processingStartedAt: source.processingStartedAt }
+      : {}),
+    ...(source.processingEndedAt != null
+      ? { processingEndedAt: source.processingEndedAt }
+      : {}),
+    ...(source.qualityFlags != null ? { qualityFlags: source.qualityFlags } : {}),
+    ...(source.fullTextCharCount != null
+      ? { fullTextCharCount: source.fullTextCharCount }
+      : {}),
+    ...(source.extractedAbstract != null ? { extractedAbstract: source.extractedAbstract } : {}),
+    ...(source.extractedSections != null ? { extractedSections: source.extractedSections } : {}),
+    ...(source.extractedChunks != null ? { extractedChunks: source.extractedChunks } : {}),
+    ...(source.extractionWarnings != null
+      ? { extractionWarnings: source.extractionWarnings }
+      : {}),
+    ...(source.contentHash != null ? { contentHash: source.contentHash } : {}),
+    ...(source.sourceUseLevel != null ? { sourceUseLevel: source.sourceUseLevel } : {}),
     ...(source.isPeerReviewed != null ? { isPeerReviewed: source.isPeerReviewed } : {}),
     ...(source.sourceQualityScore != null
       ? { sourceQualityScore: source.sourceQualityScore }
@@ -522,6 +1066,22 @@ function metadataFields(source: Pick<
       ? { missingRequiredFacets: source.missingRequiredFacets }
       : {}),
     ...(source.evidenceGrounding != null ? { evidenceGrounding: source.evidenceGrounding } : {}),
+    ...(source.claimExtractionStatus != null
+      ? { claimExtractionStatus: source.claimExtractionStatus }
+      : {}),
+    ...(source.claimExtractionMode != null
+      ? { claimExtractionMode: source.claimExtractionMode }
+      : {}),
+    ...(source.claimCount != null ? { claimCount: source.claimCount } : {}),
+    ...(source.acceptedClaimCount != null
+      ? { acceptedClaimCount: source.acceptedClaimCount }
+      : {}),
+    ...(source.acceptedEvidenceCardCount != null
+      ? { acceptedEvidenceCardCount: source.acceptedEvidenceCardCount }
+      : {}),
+    ...(source.claimExtractionWarnings != null
+      ? { claimExtractionWarnings: source.claimExtractionWarnings }
+      : {}),
     ...(source.sourceRelevanceReasonZhTw != null
       ? { sourceRelevanceReasonZhTw: source.sourceRelevanceReasonZhTw }
       : {}),
@@ -548,6 +1108,10 @@ function metadataFields(source: Pick<
       : {}),
     ...(source.summaryReason != null ? { summaryReason: source.summaryReason } : {}),
     ...(source.summaryMessage != null ? { summaryMessage: source.summaryMessage } : {}),
+    ...(source.sourceCategory != null ? { sourceCategory: source.sourceCategory } : {}),
+    ...(source.usableSections != null ? { usableSections: source.usableSections } : {}),
+    ...(source.confidence != null ? { confidence: source.confidence } : {}),
+    ...(source.reviewNotes != null ? { reviewNotes: source.reviewNotes } : {}),
     ...(source.shouldShowInMainList != null
       ? { shouldShowInMainList: source.shouldShowInMainList }
       : {}),
@@ -586,6 +1150,21 @@ function metadataFields(source: Pick<
       : {}),
     ...(source.rejectionReason != null ? { rejectionReason: source.rejectionReason } : {}),
     ...(source.recommendation != null ? { recommendation: source.recommendation } : {}),
+    ...(source.recommendationBucket != null
+      ? { recommendationBucket: source.recommendationBucket }
+      : {}),
+    ...(source.sourceRole != null ? { sourceRole: source.sourceRole } : {}),
+    ...(source.retrievalMode != null ? { retrievalMode: source.retrievalMode } : {}),
+    ...(source.institutionType != null ? { institutionType: source.institutionType } : {}),
+    ...(source.evidencePoints != null ? { evidencePoints: source.evidencePoints } : {}),
+    ...(source.providerHealthSnapshot != null
+      ? { providerHealthSnapshot: source.providerHealthSnapshot }
+      : {}),
+    ...(source.acceptedByUser != null ? { acceptedByUser: source.acceptedByUser } : {}),
+    ...(source.userDecision != null ? { userDecision: source.userDecision } : {}),
+    ...(source.acceptedAs != null ? { acceptedAs: source.acceptedAs } : {}),
+    ...(source.lowConfidence != null ? { lowConfidence: source.lowConfidence } : {}),
+    ...(source.needsReview != null ? { needsReview: source.needsReview } : {}),
   };
 }
 
@@ -619,6 +1198,22 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
       incoming.missingRequiredFacets,
     ),
     evidenceGrounding: existing.evidenceGrounding ?? incoming.evidenceGrounding ?? null,
+    claimExtractionStatus:
+      existing.claimExtractionStatus ?? incoming.claimExtractionStatus ?? null,
+    claimExtractionMode: existing.claimExtractionMode ?? incoming.claimExtractionMode ?? null,
+    claimCount: mergeOptionalScore(existing.claimCount, incoming.claimCount),
+    acceptedClaimCount: mergeOptionalScore(
+      existing.acceptedClaimCount,
+      incoming.acceptedClaimCount,
+    ),
+    acceptedEvidenceCardCount: mergeOptionalScore(
+      existing.acceptedEvidenceCardCount,
+      incoming.acceptedEvidenceCardCount,
+    ),
+    claimExtractionWarnings: mergeOptionalStringLists(
+      existing.claimExtractionWarnings,
+      incoming.claimExtractionWarnings,
+    ),
     sourceRelevanceReasonZhTw:
       existing.sourceRelevanceReasonZhTw ?? incoming.sourceRelevanceReasonZhTw ?? null,
     llmSummaryZhTw: existing.llmSummaryZhTw ?? incoming.llmSummaryZhTw ?? null,
@@ -647,6 +1242,10 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
         : null,
     summaryReason: existing.summaryReason ?? incoming.summaryReason ?? null,
     summaryMessage: existing.summaryMessage ?? incoming.summaryMessage ?? null,
+    sourceCategory: existing.sourceCategory ?? incoming.sourceCategory ?? null,
+    usableSections: mergeOptionalStringLists(existing.usableSections, incoming.usableSections),
+    confidence: existing.confidence ?? incoming.confidence ?? null,
+    reviewNotes: existing.reviewNotes ?? incoming.reviewNotes ?? null,
     shouldShowInMainList:
       existing.shouldShowInMainList ?? incoming.shouldShowInMainList ?? null,
     shouldRecommendAccept:
@@ -690,6 +1289,34 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
         : null,
     rejectionReason: existing.rejectionReason ?? incoming.rejectionReason ?? null,
     recommendation: existing.recommendation ?? incoming.recommendation ?? null,
+    recommendationBucket:
+      existing.recommendationBucket ?? incoming.recommendationBucket ?? null,
+    sourceRole: existing.sourceRole ?? incoming.sourceRole ?? null,
+    retrievalMode: existing.retrievalMode ?? incoming.retrievalMode ?? null,
+    institutionType: existing.institutionType ?? incoming.institutionType ?? null,
+    evidencePoints: mergeOptionalStringLists(existing.evidencePoints, incoming.evidencePoints),
+    providerHealthSnapshot:
+      existing.providerHealthSnapshot ?? incoming.providerHealthSnapshot ?? null,
+    acceptedByUser:
+      typeof existing.acceptedByUser === "boolean" || typeof incoming.acceptedByUser === "boolean"
+        ? Boolean(existing.acceptedByUser ?? incoming.acceptedByUser)
+        : null,
+    userDecision: existing.userDecision ?? incoming.userDecision ?? null,
+    acceptedAs: existing.acceptedAs ?? incoming.acceptedAs ?? null,
+    sourceLinkInfo: normalizeSourceLinkInfo({
+      ...existing,
+      sourceLinkInfo: {
+        ...normalizeSourceLinkInfo(existing),
+        ...normalizeSourceLinkInfo(incoming),
+        originalUrl:
+          normalizeSourceLinkInfo(existing).originalUrl ??
+          normalizeSourceLinkInfo(incoming).originalUrl,
+        linkWarnings: uniqueStrings([
+          ...normalizeSourceLinkInfo(existing).linkWarnings,
+          ...normalizeSourceLinkInfo(incoming).linkWarnings,
+        ]),
+      },
+    }),
     provider: uniqueStrings([
       existing.provider ?? existing.sourceType,
       incoming.provider ?? incoming.sourceType,
@@ -703,6 +1330,52 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
       typeof existing.isOpenAccess === "boolean" || typeof incoming.isOpenAccess === "boolean"
         ? Boolean(existing.isOpenAccess || incoming.isOpenAccess)
         : null,
+    accessLevel: existing.accessLevel ?? incoming.accessLevel ?? null,
+    fullTextUrl: existing.fullTextUrl ?? incoming.fullTextUrl ?? null,
+    readableUrl: existing.readableUrl ?? incoming.readableUrl ?? null,
+    extractionStatus: existing.extractionStatus ?? incoming.extractionStatus ?? null,
+    extractionMethod: existing.extractionMethod ?? incoming.extractionMethod ?? null,
+    extractionMode: existing.extractionMode ?? incoming.extractionMode ?? null,
+    pageCount: mergeOptionalScore(existing.pageCount, incoming.pageCount),
+    extractedPageCount: mergeOptionalScore(
+      existing.extractedPageCount,
+      incoming.extractedPageCount,
+    ),
+    isScanned:
+      typeof existing.isScanned === "boolean" || typeof incoming.isScanned === "boolean"
+        ? Boolean(existing.isScanned || incoming.isScanned)
+        : null,
+    failureReason: existing.failureReason ?? incoming.failureReason ?? null,
+    userFacingMessage: existing.userFacingMessage ?? incoming.userFacingMessage ?? null,
+    canUseForClaims:
+      typeof existing.canUseForClaims === "boolean" ||
+      typeof incoming.canUseForClaims === "boolean"
+        ? Boolean(existing.canUseForClaims || incoming.canUseForClaims)
+        : null,
+    canUseForReport:
+      typeof existing.canUseForReport === "boolean" ||
+      typeof incoming.canUseForReport === "boolean"
+        ? Boolean(existing.canUseForReport || incoming.canUseForReport)
+        : null,
+    toolVersions: existing.toolVersions ?? incoming.toolVersions ?? null,
+    processingStartedAt:
+      existing.processingStartedAt ?? incoming.processingStartedAt ?? null,
+    processingEndedAt: existing.processingEndedAt ?? incoming.processingEndedAt ?? null,
+    qualityFlags: mergeOptionalStringLists(existing.qualityFlags, incoming.qualityFlags),
+    fullTextCharCount: mergeOptionalScore(
+      existing.fullTextCharCount,
+      incoming.fullTextCharCount,
+    ),
+    extractedAbstract: existing.extractedAbstract ?? incoming.extractedAbstract ?? null,
+    extractedSections:
+      existing.extractedSections ?? incoming.extractedSections ?? null,
+    extractedChunks: existing.extractedChunks ?? incoming.extractedChunks ?? null,
+    extractionWarnings: mergeOptionalStringLists(
+      existing.extractionWarnings,
+      incoming.extractionWarnings,
+    ),
+    contentHash: existing.contentHash ?? incoming.contentHash ?? null,
+    sourceUseLevel: existing.sourceUseLevel ?? incoming.sourceUseLevel ?? null,
     isPeerReviewed:
       typeof existing.isPeerReviewed === "boolean" || typeof incoming.isPeerReviewed === "boolean"
         ? Boolean(existing.isPeerReviewed || incoming.isPeerReviewed)
@@ -724,6 +1397,12 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
     abstract,
     doi,
     url: doiUrl ?? existing.url ?? incoming.url,
+    sourceLinkInfo: normalizeSourceLinkInfo({
+      ...existing,
+      doi,
+      url: doiUrl ?? existing.url ?? incoming.url,
+      sourceLinkInfo: metadata.sourceLinkInfo ?? null,
+    }),
     sourceType,
     reviewState:
       existing.reviewState === "accepted" || incoming.reviewState === "accepted"
@@ -762,6 +1441,14 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     .filter((author): author is string => Boolean(author));
   const doi = normalizeDoiValue(source.doi);
   const url = cleanText(source.url);
+  const sourceLinkInfo = normalizeSourceLinkInfo({
+    sourceLinkInfo: source.sourceLinkInfo ?? null,
+    sourceType: source.sourceType,
+    doi,
+    url,
+    abstract: cleanText(source.abstract),
+    abstractMissing: source.abstractMissing,
+  });
   const record: SourceRecord = {
     id: cleanText(source.id) ?? "",
     title,
@@ -776,6 +1463,7 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
         : !cleanText(source.abstract),
     doi,
     url,
+    sourceLinkInfo,
     sourceType: source.sourceType,
     reviewState: source.reviewState ?? "pending",
     publisher: cleanText(source.publisher),
@@ -803,6 +1491,32 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     sourceKind: quality.sourceKind,
     citationCount,
     isOpenAccess,
+    accessLevel: normalizeContentAccessLevel(source.accessLevel),
+    fullTextUrl: cleanText(source.fullTextUrl),
+    readableUrl: cleanText(source.readableUrl),
+    extractionStatus: normalizeExtractionStatus(source.extractionStatus),
+    extractionMethod: normalizeExtractionMethod(source.extractionMethod),
+    extractionMode: normalizeExtractionMode(source.extractionMode),
+    pageCount: nonNegativeInteger(source.pageCount),
+    extractedPageCount: nonNegativeInteger(source.extractedPageCount),
+    isScanned: typeof source.isScanned === "boolean" ? source.isScanned : null,
+    failureReason: cleanText(source.failureReason),
+    userFacingMessage: cleanText(source.userFacingMessage),
+    canUseForClaims:
+      typeof source.canUseForClaims === "boolean" ? source.canUseForClaims : null,
+    canUseForReport:
+      typeof source.canUseForReport === "boolean" ? source.canUseForReport : null,
+    toolVersions: source.toolVersions ?? null,
+    processingStartedAt: cleanText(source.processingStartedAt),
+    processingEndedAt: cleanText(source.processingEndedAt),
+    qualityFlags: cleanStringList(source.qualityFlags),
+    fullTextCharCount: nonNegativeInteger(source.fullTextCharCount),
+    extractedAbstract: cleanText(source.extractedAbstract),
+    extractedSections: normalizeExtractedSections(source.extractedSections),
+    extractedChunks: normalizeExtractedChunks(source.extractedChunks),
+    extractionWarnings: cleanStringList(source.extractionWarnings),
+    contentHash: cleanText(source.contentHash),
+    sourceUseLevel: normalizeSourceUseLevel(source.sourceUseLevel),
     isPeerReviewed,
     sourceQualityScore: finiteScore(source.sourceQualityScore) ?? quality.sourceQualityScore,
     scoreReasons: uniqueStrings([
@@ -820,6 +1534,12 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     matchedFacets: cleanStringList(source.matchedFacets),
     missingRequiredFacets: cleanStringList(source.missingRequiredFacets),
     evidenceGrounding: normalizeEvidenceGrounding(source.evidenceGrounding),
+    claimExtractionStatus: normalizeClaimExtractionStatus(source.claimExtractionStatus),
+    claimExtractionMode: normalizeClaimExtractionMode(source.claimExtractionMode),
+    claimCount: nonNegativeInteger(source.claimCount),
+    acceptedClaimCount: nonNegativeInteger(source.acceptedClaimCount),
+    acceptedEvidenceCardCount: nonNegativeInteger(source.acceptedEvidenceCardCount),
+    claimExtractionWarnings: cleanStringList(source.claimExtractionWarnings),
     sourceRelevanceReasonZhTw: cleanText(source.sourceRelevanceReasonZhTw),
     llmSummaryZhTw: cleanText(source.llmSummaryZhTw),
     readableSummaryZhTW: cleanText(source.readableSummaryZhTW),
@@ -839,6 +1559,10 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
       typeof source.summaryFallbackUsed === "boolean" ? source.summaryFallbackUsed : null,
     summaryReason: cleanText(source.summaryReason),
     summaryMessage: cleanText(source.summaryMessage),
+    sourceCategory: cleanText(source.sourceCategory),
+    usableSections: cleanStringList(source.usableSections),
+    confidence: cleanText(source.confidence),
+    reviewNotes: cleanText(source.reviewNotes),
     shouldShowInMainList:
       typeof source.shouldShowInMainList === "boolean"
         ? source.shouldShowInMainList
@@ -873,6 +1597,25 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
       typeof source.isPrimaryEvidence === "boolean" ? source.isPrimaryEvidence : null,
     rejectionReason: cleanText(source.rejectionReason),
     recommendation: cleanText(source.recommendation),
+    recommendationBucket: normalizeRecommendationBucket(source.recommendationBucket),
+    sourceRole: normalizeSourceRole(source.sourceRole),
+    retrievalMode: normalizeRetrievalMode(source.retrievalMode),
+    institutionType: cleanText(source.institutionType),
+    evidencePoints: cleanStringList(source.evidencePoints),
+    providerHealthSnapshot: source.providerHealthSnapshot ?? null,
+    acceptedByUser:
+      typeof source.acceptedByUser === "boolean" ? source.acceptedByUser : null,
+    userDecision: normalizeUserDecision(source.userDecision),
+    acceptedAs: cleanText(source.acceptedAs),
+    lowConfidence:
+      typeof source.lowConfidence === "boolean" ? source.lowConfidence : null,
+    needsReview:
+      typeof source.needsReview === "boolean" ? source.needsReview : null,
+    sourceValidation: source.sourceValidation ?? null,
+    readableExtraction: source.readableExtraction ?? null,
+    sourceFacts: Array.isArray(source.sourceFacts) ? source.sourceFacts : null,
+    researchRelevanceScore: source.researchRelevanceScore ?? null,
+    sourceSummary: source.sourceSummary ?? null,
   });
 
   return {

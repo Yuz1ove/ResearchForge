@@ -180,6 +180,10 @@ test("search source topic-style route response includes search intent fields", a
         },
         results: [source],
         sources: [source],
+        scoredSources: [source],
+        candidateSources: [source],
+        rejectedSources: [],
+        fallbackReviewSources: [],
         provider_status: [
           {
             ok: false,
@@ -371,6 +375,10 @@ test("search source topic-style route sends active research topic to planner whe
         },
         results: [],
         sources: [],
+        scoredSources: [],
+        candidateSources: [],
+        rejectedSources: [],
+        fallbackReviewSources: [],
         provider_status: [],
         warnings: [],
         planner: {

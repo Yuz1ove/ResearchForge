@@ -122,6 +122,17 @@ export const TitleCandidateSchema = z.object({
   title: z.string().trim().min(1),
   style: TitleCandidateStyleSchema,
   displayOnly: z.boolean(),
+  researchObject: z.string().trim().min(1).optional(),
+  variableOrAngle: z.string().trim().min(1).optional(),
+  rationale: z.string().trim().min(1).optional(),
+  keywordsZh: z.array(z.string().trim().min(1)).optional(),
+  keywordsEn: z.array(z.string().trim().min(1)).optional(),
+  querySeeds: z
+    .object({
+      zh: z.array(z.string().trim().min(1)),
+      en: z.array(z.string().trim().min(1)),
+    })
+    .optional(),
   source: z.enum(["llm", "rule", "hybrid"]).optional(),
 });
 

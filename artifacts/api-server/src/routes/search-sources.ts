@@ -137,6 +137,11 @@ export function normalizeSearchSourcesRequest(body: unknown): NormalizedSearchSo
   const domainHints = extractStringArray(body, "domainHints");
   const selectedResearchPlanId = extractString(body, "selectedResearchPlanId");
   const workflowId = extractString(body, "workflowId");
+  const searchProfileRaw = extractString(body, "searchProfile");
+  const searchProfile =
+    searchProfileRaw === "quick" || searchProfileRaw === "standard" || searchProfileRaw === "deep"
+      ? searchProfileRaw
+      : undefined;
   const selectedTopic =
     canonicalTopicZh ??
     activeResearchTopic ??
@@ -176,6 +181,7 @@ export function normalizeSearchSourcesRequest(body: unknown): NormalizedSearchSo
         ...(domainHints?.length ? { domainHints } : {}),
         ...(selectedResearchPlanId ? { selectedResearchPlanId } : {}),
         ...(workflowId ? { workflowId } : {}),
+        ...(searchProfile ? { searchProfile } : {}),
       },
     };
   }

@@ -19,8 +19,167 @@ export type SourceSummaryConfidence = "high" | "medium" | "low";
 export type TopicalRelevanceLabel = "high" | "medium" | "low" | "irrelevant";
 export type EvidenceSufficiency = "strong" | "moderate" | "weak" | "insufficient";
 export type SourceUsageRecommendation = "primary" | "secondary" | "reference" | "exclude";
+export type SourceRecommendationBucket =
+  | "scholarly_recommended"
+  | "official_background"
+  | "manual_review"
+  | "rejected";
+export type SourceRole =
+  | "core_scholarly_evidence"
+  | "official_background_explanation"
+  | "definition_or_concept"
+  | "statistics_or_dataset"
+  | "teaching_or_public_explainer"
+  | "weak_or_uncertain"
+  | "rejected";
+export type SourceRetrievalMode =
+  | "live_provider"
+  | "stale_cache"
+  | "trusted_seed"
+  | "user_import"
+  | "manual_url"
+  | "supplemental_fulltext_or_repository";
+
+export type SourceContentAccessLevel =
+  | "full_text"
+  | "abstract_only"
+  | "metadata_only"
+  | "blocked_or_paywalled"
+  | "failed_extraction";
+export type SourceContentExtractionStatus =
+  | "success"
+  | "partial"
+  | "failed"
+  | "skipped"
+  | "text_extracted"
+  | "grobid_extracted"
+  | "ocr_extracted"
+  | "metadata_only"
+  | "extraction_failed"
+  | "extraction_skipped_license"
+  | "extraction_skipped_no_full_text"
+  | "extraction_unavailable_no_parser";
+export type SourceContentExtractionMethod =
+  | "html_readability"
+  | "pdf_parser"
+  | "grobid"
+  | "abstract_only"
+  | "metadata_only"
+  | "pdf_text"
+  | "ocr"
+  | "html"
+  | "abstract"
+  | "failed";
+export type SourceExtractionMode =
+  | "pdf_text"
+  | "grobid"
+  | "ocr"
+  | "html"
+  | "abstract"
+  | "metadata_only"
+  | "failed";
+export type SourceClaimExtractionStatus =
+  | "enabled"
+  | "fallback"
+  | "unavailable"
+  | "failed"
+  | "skipped";
+export type SourceClaimExtractionMode = "llm" | "rule_fallback" | "metadata_only";
+export type SourceUseLevel =
+  | "citable_full_text"
+  | "citable_abstract"
+  | "metadata_context_only"
+  | "manual_review_required"
+  | "rejected";
+
+export interface ExtractedSourceSection {
+  heading: string;
+  text: string;
+  page?: number;
+  confidence: number;
+}
+
+export interface ExtractedSourceChunk {
+  chunk_id: string;
+  text: string;
+  source_location: string;
+  section_heading?: string;
+  page?: number;
+  char_start?: number;
+  char_end?: number;
+}
 
 export type SourceKind = "journal" | "conference" | "book" | "dataset" | "web" | "unknown";
+export type SourceAccessStatus =
+  | "ok"
+  | "redirected"
+  | "metadata_only"
+  | "blocked"
+  | "not_found"
+  | "unknown";
+
+export interface SourceLinkInfo {
+  originalUrl?: string | null;
+  canonicalUrl?: string | null;
+  resolvedUrl?: string | null;
+  doi?: string | null;
+  doiUrl?: string | null;
+  metadataUrl?: string | null;
+  apiSourceUrl?: string | null;
+  accessStatus: SourceAccessStatus;
+  linkWarnings: string[];
+}
+
+export interface SourceValidationMetadata {
+  sourceId: string;
+  urlReachable: boolean;
+  canonicalUrl?: string;
+  doi?: string;
+  publisher?: string;
+  year?: number;
+  sourceType: string;
+  reliabilityScore: number;
+  warnings: string[];
+}
+
+export interface ReadableExtractionMetadata {
+  sourceId: string;
+  title: string;
+  abstract?: string;
+  extractedText?: string;
+  extractionStatus: "success" | "partial" | "failed" | string;
+  language: "zh-TW" | "en" | "unknown" | string;
+  extractionWarnings: string[];
+}
+
+export interface SourceFactMetadata {
+  sourceId: string;
+  fact: string;
+  category: string;
+  relevanceToTopic: number;
+  supportedByText: string;
+}
+
+export interface ResearchRelevanceScoreMetadata {
+  sourceId: string;
+  topicMatch: number;
+  semanticMatch: number;
+  queryMatch: number;
+  evidenceUsefulness: number;
+  reliabilityScore: number;
+  finalScore: number;
+  label: "high" | "medium" | "low" | string;
+  reason: string;
+}
+
+export interface PipelineSourceSummaryMetadata {
+  sourceId: string;
+  summary: string;
+  basedOn: string;
+  language: "zh-TW" | string;
+  confidence: number;
+  warnings: string[];
+}
 
 export type SourceRelevanceClassification =
   | "primary"
@@ -84,6 +243,36 @@ export interface SourceRecordMetadata {
   sourceKind?: SourceKind | string | null;
   citationCount?: number | null;
   isOpenAccess?: boolean | null;
+  accessLevel?: SourceContentAccessLevel | null;
+  fullTextUrl?: string | null;
+  readableUrl?: string | null;
+  extractionStatus?: SourceContentExtractionStatus | null;
+  extractionMethod?: SourceContentExtractionMethod | null;
+  extractionMode?: SourceExtractionMode | null;
+  pageCount?: number | null;
+  extractedPageCount?: number | null;
+  isScanned?: boolean | null;
+  failureReason?: string | null;
+  userFacingMessage?: string | null;
+  canUseForClaims?: boolean | null;
+  canUseForReport?: boolean | null;
+  toolVersions?: Record<string, string> | null;
+  processingStartedAt?: string | null;
+  processingEndedAt?: string | null;
+  qualityFlags?: string[] | null;
+  fullTextCharCount?: number | null;
+  extractedAbstract?: string | null;
+  extractedSections?: ExtractedSourceSection[] | null;
+  extractedChunks?: ExtractedSourceChunk[] | null;
+  extractionWarnings?: string[] | null;
+  claimExtractionStatus?: SourceClaimExtractionStatus | null;
+  claimExtractionMode?: SourceClaimExtractionMode | null;
+  claimCount?: number | null;
+  acceptedClaimCount?: number | null;
+  acceptedEvidenceCardCount?: number | null;
+  claimExtractionWarnings?: string[] | null;
+  contentHash?: string | null;
+  sourceUseLevel?: SourceUseLevel | null;
   isPeerReviewed?: boolean | null;
   sourceQualityScore?: number | null;
   scoreReasons?: string[] | null;
@@ -115,11 +304,15 @@ export interface SourceRecordMetadata {
   shouldShowInMainList?: boolean | null;
   shouldRecommendAccept?: boolean | null;
   readableSummaryZhTW?: string | null;
+  readableSummaryZhTw?: string | null;
   summarySourceType?: SourceSummarySourceType | null;
   summaryConfidence?: SourceSummaryConfidence | null;
   relevanceReasonZhTW?: string | null;
+  relevanceReasonZhTw?: string | null;
   summaryWarnings?: string[] | null;
   originalAbstract?: string | null;
+  abstractOriginal?: string | null;
+  abstractZhTw?: string | null;
   originalSnippet?: string | null;
   extractedText?: string | null;
   authorityLevel?: "high" | "medium" | "check" | "insufficient_summary" | "low_relevance" | null;
@@ -129,6 +322,7 @@ export interface SourceRecordMetadata {
   sourceLanguageLabel?: string | null;
   mainEvidenceFacet?: string | null;
   evidenceSummaryZhTw?: string | null;
+  mainEvidencePointZhTw?: string | null;
   llmSummaryZhTw?: string | null;
   llmSummaryStatus?: "success" | "timeout" | "quota_exceeded" | "failed" | "skipped" | "metadata-only" | "fetch-failed" | "llm-failed" | "fallback" | null;
   summaryStructuredStatus?: "success" | "unavailable" | "invalid_input" | "insufficient_sources" | "error" | null;
@@ -163,6 +357,31 @@ export interface SourceRecordMetadata {
   isPrimaryEvidence?: boolean | null;
   rejectionReason?: string | null;
   recommendation?: string | null;
+  recommendationBucket?: SourceRecommendationBucket | null;
+  sourceRole?: SourceRole | null;
+  retrievalMode?: SourceRetrievalMode | null;
+  institutionType?: string | null;
+  evidencePoints?: string[] | null;
+  providerHealthSnapshot?: unknown | null;
+  acceptedByUser?: boolean | null;
+  userDecision?:
+    | "accepted"
+    | "accepted_as_background"
+    | "accepted_as_scholarly_evidence"
+    | "accepted_as_manual_review"
+    | "rejected"
+    | "pending"
+    | string
+    | null;
+  acceptedAs?: string | null;
+  lowConfidence?: boolean | null;
+  needsReview?: boolean | null;
+  sourceLinkInfo?: SourceLinkInfo | null;
+  sourceValidation?: SourceValidationMetadata | null;
+  readableExtraction?: ReadableExtractionMetadata | null;
+  sourceFacts?: SourceFactMetadata[] | null;
+  researchRelevanceScore?: ResearchRelevanceScoreMetadata | null;
+  sourceSummary?: PipelineSourceSummaryMetadata | null;
 }
 
 export type SourceRecord = ApiSourceRecord & SourceRecordMetadata;
@@ -359,6 +578,52 @@ function normalizeSourceClassification(value: unknown): SourceRecordMetadata["cl
   return null;
 }
 
+function normalizeSourceAccessStatus(value: unknown): SourceAccessStatus {
+  if (
+    value === "ok" ||
+    value === "redirected" ||
+    value === "metadata_only" ||
+    value === "blocked" ||
+    value === "not_found" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+  return "unknown";
+}
+
+function normalizeSourceLinkInfoValue(
+  value: unknown,
+  source: Pick<SourceRecord, "doi" | "url" | "abstract" | "summarySourceType" | "isMetadataOnly">,
+): SourceLinkInfo {
+  const data = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const doi = normalizeDoi(cleanUnknownText(data.doi) ?? source.doi);
+  const doiUrl = doi ? `https://doi.org/${doi}` : null;
+  const canonicalUrl = cleanUnknownText(data.canonicalUrl) ?? doiUrl ?? cleanText(source.url);
+  const metadataUrl = cleanUnknownText(data.metadataUrl) ?? cleanUnknownText(data.apiSourceUrl);
+  const accessStatus = normalizeSourceAccessStatus(data.accessStatus);
+  const inferredStatus =
+    accessStatus !== "unknown"
+      ? accessStatus
+      : source.isMetadataOnly || source.summarySourceType === "metadataFallback"
+        ? "metadata_only"
+        : canonicalUrl
+          ? "unknown"
+          : "metadata_only";
+
+  return {
+    originalUrl: cleanUnknownText(data.originalUrl) ?? (source.url && source.url !== canonicalUrl ? source.url : null),
+    canonicalUrl,
+    resolvedUrl: cleanUnknownText(data.resolvedUrl) ?? canonicalUrl,
+    doi,
+    doiUrl,
+    metadataUrl: metadataUrl ?? canonicalUrl,
+    apiSourceUrl: cleanUnknownText(data.apiSourceUrl) ?? metadataUrl ?? canonicalUrl,
+    accessStatus: inferredStatus,
+    linkWarnings: normalizeStringList(data.linkWarnings) ?? (inferredStatus === "metadata_only" ? ["metadata_only_source"] : []),
+  };
+}
+
 function normalizeOptionalScore(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -415,6 +680,200 @@ function normalizeUsageRecommendation(
     return value;
   }
   return null;
+}
+
+function normalizeRecommendationBucket(
+  value: unknown,
+): SourceRecommendationBucket | null {
+  if (
+    value === "scholarly_recommended" ||
+    value === "official_background" ||
+    value === "manual_review" ||
+    value === "rejected"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeSourceRole(value: unknown): SourceRole | null {
+  if (
+    value === "core_scholarly_evidence" ||
+    value === "official_background_explanation" ||
+    value === "definition_or_concept" ||
+    value === "statistics_or_dataset" ||
+    value === "teaching_or_public_explainer" ||
+    value === "weak_or_uncertain" ||
+    value === "rejected"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeRetrievalMode(value: unknown): SourceRetrievalMode | null {
+  if (
+    value === "live_provider" ||
+    value === "stale_cache" ||
+    value === "trusted_seed" ||
+    value === "user_import" ||
+    value === "manual_url" ||
+    value === "supplemental_fulltext_or_repository"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeContentAccessLevel(value: unknown): SourceContentAccessLevel | null {
+  if (
+    value === "full_text" ||
+    value === "abstract_only" ||
+    value === "metadata_only" ||
+    value === "blocked_or_paywalled" ||
+    value === "failed_extraction"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeExtractionStatus(value: unknown): SourceContentExtractionStatus | null {
+  if (
+    value === "success" ||
+    value === "partial" ||
+    value === "failed" ||
+    value === "skipped" ||
+    value === "text_extracted" ||
+    value === "grobid_extracted" ||
+    value === "ocr_extracted" ||
+    value === "metadata_only" ||
+    value === "extraction_failed" ||
+    value === "extraction_skipped_license" ||
+    value === "extraction_skipped_no_full_text" ||
+    value === "extraction_unavailable_no_parser"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeExtractionMethod(value: unknown): SourceContentExtractionMethod | null {
+  if (
+    value === "html_readability" ||
+    value === "pdf_parser" ||
+    value === "grobid" ||
+    value === "abstract_only" ||
+    value === "metadata_only" ||
+    value === "pdf_text" ||
+    value === "ocr" ||
+    value === "html" ||
+    value === "abstract" ||
+    value === "failed"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeExtractionMode(value: unknown): SourceExtractionMode | null {
+  if (
+    value === "pdf_text" ||
+    value === "grobid" ||
+    value === "ocr" ||
+    value === "html" ||
+    value === "abstract" ||
+    value === "metadata_only" ||
+    value === "failed"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeClaimExtractionStatus(value: unknown): SourceClaimExtractionStatus | null {
+  if (
+    value === "enabled" ||
+    value === "fallback" ||
+    value === "unavailable" ||
+    value === "failed" ||
+    value === "skipped"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeClaimExtractionMode(value: unknown): SourceClaimExtractionMode | null {
+  if (value === "llm" || value === "rule_fallback" || value === "metadata_only") {
+    return value;
+  }
+  return null;
+}
+
+function normalizeSourceUseLevel(value: unknown): SourceUseLevel | null {
+  if (
+    value === "citable_full_text" ||
+    value === "citable_abstract" ||
+    value === "metadata_context_only" ||
+    value === "manual_review_required" ||
+    value === "rejected"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeExtractedSections(value: unknown): ExtractedSourceSection[] | null {
+  if (!Array.isArray(value)) return null;
+  const sections = value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const data = item as Record<string, unknown>;
+      const heading = cleanUnknownText(data.heading);
+      const text = cleanUnknownText(data.text);
+      if (!heading || !text) return null;
+      const page = normalizeNonNegativeInteger(data.page);
+      return {
+        heading,
+        text,
+        ...(page !== null ? { page } : {}),
+        confidence:
+          typeof data.confidence === "number" && Number.isFinite(data.confidence)
+            ? Math.max(0, Math.min(1, data.confidence))
+            : 0.5,
+      };
+    })
+    .filter((item): item is ExtractedSourceSection => Boolean(item));
+  return sections.length ? sections : null;
+}
+
+function normalizeExtractedChunks(value: unknown): ExtractedSourceChunk[] | null {
+  if (!Array.isArray(value)) return null;
+  const chunks = value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const data = item as Record<string, unknown>;
+      const chunkId = cleanUnknownText(data.chunk_id);
+      const text = cleanUnknownText(data.text);
+      const sourceLocation = cleanUnknownText(data.source_location);
+      if (!chunkId || !text || !sourceLocation) return null;
+      const sectionHeading = cleanUnknownText(data.section_heading);
+      const page = normalizeNonNegativeInteger(data.page);
+      const charStart = normalizeNonNegativeInteger(data.char_start);
+      const charEnd = normalizeNonNegativeInteger(data.char_end);
+      return {
+        chunk_id: chunkId,
+        text,
+        source_location: sourceLocation,
+        ...(sectionHeading ? { section_heading: sectionHeading } : {}),
+        ...(page !== null ? { page } : {}),
+        ...(charStart !== null ? { char_start: charStart } : {}),
+        ...(charEnd !== null ? { char_end: charEnd } : {}),
+      };
+    })
+    .filter((item): item is ExtractedSourceChunk => Boolean(item));
+  return chunks.length ? chunks : null;
 }
 
 function decodeHtmlEntities(value: string): string {
@@ -721,6 +1180,38 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     sourceKind: normalizeSourceKind(source.sourceKind),
     citationCount: normalizeNonNegativeInteger(source.citationCount),
     isOpenAccess: typeof source.isOpenAccess === "boolean" ? source.isOpenAccess : null,
+    accessLevel: normalizeContentAccessLevel(source.accessLevel),
+    fullTextUrl: cleanText(source.fullTextUrl),
+    readableUrl: cleanText(source.readableUrl),
+    extractionStatus: normalizeExtractionStatus(source.extractionStatus),
+    extractionMethod: normalizeExtractionMethod(source.extractionMethod),
+    extractionMode: normalizeExtractionMode(source.extractionMode),
+    pageCount: normalizeNonNegativeInteger(source.pageCount),
+    extractedPageCount: normalizeNonNegativeInteger(source.extractedPageCount),
+    isScanned: typeof source.isScanned === "boolean" ? source.isScanned : null,
+    failureReason: cleanText(source.failureReason),
+    userFacingMessage: sanitizeReviewText(source.userFacingMessage),
+    canUseForClaims:
+      typeof source.canUseForClaims === "boolean" ? source.canUseForClaims : null,
+    canUseForReport:
+      typeof source.canUseForReport === "boolean" ? source.canUseForReport : null,
+    toolVersions: source.toolVersions ?? null,
+    processingStartedAt: cleanText(source.processingStartedAt),
+    processingEndedAt: cleanText(source.processingEndedAt),
+    qualityFlags: normalizeStringList(source.qualityFlags),
+    fullTextCharCount: normalizeNonNegativeInteger(source.fullTextCharCount),
+    extractedAbstract: sanitizeReviewText(source.extractedAbstract),
+    extractedSections: normalizeExtractedSections(source.extractedSections),
+    extractedChunks: normalizeExtractedChunks(source.extractedChunks),
+    extractionWarnings: normalizeStringList(source.extractionWarnings),
+    claimExtractionStatus: normalizeClaimExtractionStatus(source.claimExtractionStatus),
+    claimExtractionMode: normalizeClaimExtractionMode(source.claimExtractionMode),
+    claimCount: normalizeNonNegativeInteger(source.claimCount),
+    acceptedClaimCount: normalizeNonNegativeInteger(source.acceptedClaimCount),
+    acceptedEvidenceCardCount: normalizeNonNegativeInteger(source.acceptedEvidenceCardCount),
+    claimExtractionWarnings: normalizeStringList(source.claimExtractionWarnings),
+    contentHash: cleanText(source.contentHash),
+    sourceUseLevel: normalizeSourceUseLevel(source.sourceUseLevel),
     isPeerReviewed: typeof source.isPeerReviewed === "boolean" ? source.isPeerReviewed : null,
     sourceQualityScore: normalizeOptionalScore(source.sourceQualityScore),
     scoreReasons: normalizeStringList(source.scoreReasons),
@@ -763,12 +1254,16 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     sourceRelevanceReasonZhTw: cleanText(source.sourceRelevanceReasonZhTw),
     shouldShowInMainList: typeof source.shouldShowInMainList === "boolean" ? source.shouldShowInMainList : null,
     shouldRecommendAccept: typeof source.shouldRecommendAccept === "boolean" ? source.shouldRecommendAccept : null,
-    readableSummaryZhTW: sanitizeReviewText(source.readableSummaryZhTW),
+    readableSummaryZhTW: sanitizeReviewText(source.readableSummaryZhTW ?? source.readableSummaryZhTw),
+    readableSummaryZhTw: sanitizeReviewText(source.readableSummaryZhTw ?? source.readableSummaryZhTW),
     summarySourceType: normalizeSummarySourceType(source.summarySourceType),
     summaryConfidence: normalizeSummaryConfidence(source.summaryConfidence),
-    relevanceReasonZhTW: sanitizeReviewText(source.relevanceReasonZhTW),
+    relevanceReasonZhTW: sanitizeReviewText(source.relevanceReasonZhTW ?? source.relevanceReasonZhTw),
+    relevanceReasonZhTw: sanitizeReviewText(source.relevanceReasonZhTw ?? source.relevanceReasonZhTW),
     summaryWarnings: normalizeStringList(source.summaryWarnings),
-    originalAbstract: sanitizeReviewText(source.originalAbstract),
+    originalAbstract: sanitizeReviewText(source.originalAbstract ?? source.abstractOriginal),
+    abstractOriginal: sanitizeReviewText(source.abstractOriginal ?? source.originalAbstract),
+    abstractZhTw: sanitizeReviewText(source.abstractZhTw),
     originalSnippet: sanitizeReviewText(source.originalSnippet),
     extractedText: sanitizeReviewText(source.extractedText),
     authorityLevel: normalizeAuthorityLevel(source.authorityLevel),
@@ -780,6 +1275,7 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     sourceLanguageLabel: cleanText(source.sourceLanguageLabel),
     mainEvidenceFacet: cleanText(source.mainEvidenceFacet),
     evidenceSummaryZhTw: cleanText(source.evidenceSummaryZhTw),
+    mainEvidencePointZhTw: cleanText(source.mainEvidencePointZhTw ?? source.evidenceSummaryZhTw),
     llmSummaryZhTw: cleanText(source.llmSummaryZhTw),
     llmSummaryStatus: normalizeLlmSummaryStatus(source.llmSummaryStatus),
     summaryStructuredStatus: normalizeStructuredSummaryStatus(
@@ -816,6 +1312,23 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     isPrimaryEvidence: typeof source.isPrimaryEvidence === "boolean" ? source.isPrimaryEvidence : null,
     rejectionReason: cleanText(source.rejectionReason),
     recommendation: cleanText(source.recommendation),
+    recommendationBucket: normalizeRecommendationBucket(source.recommendationBucket),
+    sourceRole: normalizeSourceRole(source.sourceRole),
+    retrievalMode: normalizeRetrievalMode(source.retrievalMode),
+    institutionType: cleanText(source.institutionType),
+    evidencePoints: normalizeStringList(source.evidencePoints),
+    providerHealthSnapshot: source.providerHealthSnapshot ?? null,
+    acceptedByUser: typeof source.acceptedByUser === "boolean" ? source.acceptedByUser : null,
+    userDecision: cleanText(source.userDecision),
+    acceptedAs: cleanText(source.acceptedAs),
+    lowConfidence: typeof source.lowConfidence === "boolean" ? source.lowConfidence : null,
+    needsReview: typeof source.needsReview === "boolean" ? source.needsReview : null,
+    sourceLinkInfo: normalizeSourceLinkInfoValue(source.sourceLinkInfo, source),
+    sourceValidation: source.sourceValidation ?? null,
+    readableExtraction: source.readableExtraction ?? null,
+    sourceFacts: Array.isArray(source.sourceFacts) ? source.sourceFacts : null,
+    researchRelevanceScore: source.researchRelevanceScore ?? null,
+    sourceSummary: source.sourceSummary ?? null,
   };
   return {
     ...normalized,
@@ -867,11 +1380,71 @@ export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
           typeof existing.isOpenAccess === "boolean" || typeof normalized.isOpenAccess === "boolean"
             ? Boolean(existing.isOpenAccess || normalized.isOpenAccess)
             : null,
+        accessLevel: existing.accessLevel ?? normalized.accessLevel,
+        fullTextUrl: existing.fullTextUrl ?? normalized.fullTextUrl,
+        readableUrl: existing.readableUrl ?? normalized.readableUrl,
+        extractionStatus: existing.extractionStatus ?? normalized.extractionStatus,
+        extractionMethod: existing.extractionMethod ?? normalized.extractionMethod,
+        extractionMode: existing.extractionMode ?? normalized.extractionMode,
+        pageCount: mergeScore(existing.pageCount, normalized.pageCount),
+        extractedPageCount: mergeScore(existing.extractedPageCount, normalized.extractedPageCount),
+        isScanned:
+          typeof existing.isScanned === "boolean" || typeof normalized.isScanned === "boolean"
+            ? Boolean(existing.isScanned || normalized.isScanned)
+            : null,
+        failureReason: existing.failureReason ?? normalized.failureReason,
+        userFacingMessage: existing.userFacingMessage ?? normalized.userFacingMessage,
+        canUseForClaims:
+          typeof existing.canUseForClaims === "boolean" ||
+          typeof normalized.canUseForClaims === "boolean"
+            ? Boolean(existing.canUseForClaims || normalized.canUseForClaims)
+            : null,
+        canUseForReport:
+          typeof existing.canUseForReport === "boolean" ||
+          typeof normalized.canUseForReport === "boolean"
+            ? Boolean(existing.canUseForReport || normalized.canUseForReport)
+            : null,
+        toolVersions: existing.toolVersions ?? normalized.toolVersions,
+        processingStartedAt: existing.processingStartedAt ?? normalized.processingStartedAt,
+        processingEndedAt: existing.processingEndedAt ?? normalized.processingEndedAt,
+        qualityFlags: mergeStringList(existing.qualityFlags, normalized.qualityFlags),
+        fullTextCharCount: mergeScore(existing.fullTextCharCount, normalized.fullTextCharCount),
+        extractedAbstract: existing.extractedAbstract ?? normalized.extractedAbstract,
+        extractedSections: existing.extractedSections ?? normalized.extractedSections,
+        extractedChunks: existing.extractedChunks ?? normalized.extractedChunks,
+        extractionWarnings: mergeStringList(existing.extractionWarnings, normalized.extractionWarnings),
+        claimExtractionStatus:
+          existing.claimExtractionStatus ?? normalized.claimExtractionStatus,
+        claimExtractionMode: existing.claimExtractionMode ?? normalized.claimExtractionMode,
+        claimCount: mergeScore(existing.claimCount, normalized.claimCount),
+        acceptedClaimCount: mergeScore(existing.acceptedClaimCount, normalized.acceptedClaimCount),
+        acceptedEvidenceCardCount: mergeScore(
+          existing.acceptedEvidenceCardCount,
+          normalized.acceptedEvidenceCardCount,
+        ),
+        claimExtractionWarnings: mergeStringList(
+          existing.claimExtractionWarnings,
+          normalized.claimExtractionWarnings,
+        ),
+        contentHash: existing.contentHash ?? normalized.contentHash,
+        sourceUseLevel: existing.sourceUseLevel ?? normalized.sourceUseLevel,
         isPeerReviewed:
           typeof existing.isPeerReviewed === "boolean" || typeof normalized.isPeerReviewed === "boolean"
             ? Boolean(existing.isPeerReviewed || normalized.isPeerReviewed)
             : null,
         sourceQualityScore: mergeScore(existing.sourceQualityScore, normalized.sourceQualityScore),
+        recommendationBucket: existing.recommendationBucket ?? normalized.recommendationBucket,
+        sourceRole: existing.sourceRole ?? normalized.sourceRole,
+        retrievalMode: existing.retrievalMode ?? normalized.retrievalMode,
+        institutionType: existing.institutionType ?? normalized.institutionType,
+        evidencePoints: mergeStringList(existing.evidencePoints, normalized.evidencePoints),
+        providerHealthSnapshot: existing.providerHealthSnapshot ?? normalized.providerHealthSnapshot,
+        acceptedByUser:
+          typeof existing.acceptedByUser === "boolean" || typeof normalized.acceptedByUser === "boolean"
+            ? Boolean(existing.acceptedByUser ?? normalized.acceptedByUser)
+            : null,
+        userDecision: existing.userDecision ?? normalized.userDecision,
+        acceptedAs: existing.acceptedAs ?? normalized.acceptedAs,
         scoreReasons: mergeStringList(
           existing.scoreReasons,
           existing.sourceType === normalized.sourceType
@@ -930,8 +1503,57 @@ export function updateSourceReviewState(
   return sources.map((source) => {
     const key = source.id || sourceRecordKey(source);
     if (key !== sourceId) return source;
-    return normalizeSourceForReview({ ...source, id: key, reviewState });
+    return normalizeSourceForReview({
+      ...source,
+      id: key,
+      reviewState,
+      acceptedByUser: reviewState === "accepted" ? true : false,
+      userDecision:
+        reviewState === "accepted"
+          ? source.recommendationBucket === "official_background"
+            ? "accepted_as_background"
+            : source.recommendationBucket === "manual_review"
+              ? "accepted_as_manual_review"
+              : "accepted"
+          : reviewState === "rejected"
+            ? "rejected"
+            : "pending",
+      acceptedAs:
+        reviewState === "accepted"
+          ? source.recommendationBucket === "official_background"
+            ? "background"
+            : source.recommendationBucket === "manual_review"
+              ? "manual_review"
+              : "source"
+          : null,
+    });
   });
+}
+
+function sourceShouldAutoAccept(source: SourceRecord): boolean {
+  if (sourceReviewState(source) !== "pending") return false;
+  if (
+    source.classification === "off_topic" ||
+    source.classification === "trusted_but_off_topic" ||
+    source.classification === "stale_topic" ||
+    source.classification === "stale_workflow"
+  ) {
+    return false;
+  }
+  if (source.relevanceLevel !== "primary") return false;
+  if (source.classification !== "primary") return false;
+  if (source.shouldRecommendAccept === false) return false;
+  if (source.shouldShowInMainList === false) return false;
+  if (source.isMetadataOnly || source.evidenceGrounding === "metadata_only") return false;
+  return true;
+}
+
+export function autoAcceptPrimarySources(sources: SourceRecord[]): SourceRecord[] {
+  return sources.map((source) =>
+    sourceShouldAutoAccept(source)
+      ? normalizeSourceForReview({ ...source, reviewState: "accepted" })
+      : normalizeSourceForReview(source),
+  );
 }
 
 export function sourceMetadataIssues(source: SourceRecord): string[] {

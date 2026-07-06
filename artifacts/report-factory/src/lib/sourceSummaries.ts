@@ -26,6 +26,19 @@ import { buildTopicFacets } from "./topicFacets.ts";
 
 const FALLBACK_SUMMARY =
   "本來源目前缺少可用摘要，可先作為背景線索或資料缺口說明；若要作為主要證據，仍需補充可驗證摘要或原文片段。";
+export const ZH_TW_SUMMARY_FALLBACK_NOTICE =
+  "此來源尚未完成繁中摘要，以下顯示原文摘要。";
+
+function shouldUseZhTwFallbackNotice(source: SourceRecord): boolean {
+  const status = source.summaryStatus ?? source.llmSummaryStatus ?? null;
+  return Boolean(
+    source.summaryFallbackUsed ||
+      status === "fallback" ||
+      status === "llm-failed" ||
+      status === "fetch-failed" ||
+      status === "metadata-only",
+  );
+}
 
 const ENGLISH_NOISE_WORDS = new Set([
   "about",
@@ -499,6 +512,15 @@ export function sourceSummaryText(source: SourceRecord): string {
   if (cleanText(source.readableSummaryZhTW)) {
     return truncateText(cleanText(source.readableSummaryZhTW), 170);
   }
+  if (
+    shouldUseZhTwFallbackNotice(source) &&
+    !cleanText(source.readableSummaryZhTW) &&
+    !cleanText(source.llmSummaryZhTw) &&
+    /[A-Za-z]/.test(cleanText(source.originalAbstract ?? source.abstract)) &&
+    !/[\u4e00-\u9fff]/u.test(cleanText(source.originalAbstract ?? source.abstract))
+  ) {
+    return ZH_TW_SUMMARY_FALLBACK_NOTICE;
+  }
   if (cleanText(source.llmSummaryZhTw) && !source.summaryFallbackUsed) {
     return normalizedUserFacingLlmSummary(source.llmSummaryZhTw, 220);
   }
@@ -516,6 +538,15 @@ export function sourceParagraphSummary(
 ): string {
   if (cleanText(source.readableSummaryZhTW)) {
     return truncateText(cleanText(source.readableSummaryZhTW), 260);
+  }
+  if (
+    shouldUseZhTwFallbackNotice(source) &&
+    !cleanText(source.readableSummaryZhTW) &&
+    !cleanText(source.llmSummaryZhTw) &&
+    /[A-Za-z]/.test(cleanText(source.originalAbstract ?? source.abstract)) &&
+    !/[\u4e00-\u9fff]/u.test(cleanText(source.originalAbstract ?? source.abstract))
+  ) {
+    return ZH_TW_SUMMARY_FALLBACK_NOTICE;
   }
   if (cleanText(source.llmSummaryZhTw) && !source.summaryFallbackUsed) {
     return normalizedUserFacingLlmSummary(source.llmSummaryZhTw, 260);
@@ -809,6 +840,32 @@ function recommendationFromAssessment(
   return "supporting";
 }
 
+function shouldSuppressStaleOffTopicWarning(source: SourceRecord): boolean {
+  if (source.reviewState === "rejected") return false;
+  if (source.classification === "off_topic" || source.relevanceLevel === "off_topic") {
+    return false;
+  }
+  return (
+    source.shouldShowInMainList !== false &&
+    (source.relevanceLevel === "primary" ||
+      source.relevanceLevel === "secondary" ||
+      source.relevanceLevel === "clue" ||
+      source.classification === "review" ||
+      source.usageRecommendation === "primary" ||
+      source.usageRecommendation === "secondary")
+  );
+}
+
+function sourceSummaryWarningsForUser(
+  source: SourceRecord,
+  warnings: string[],
+): string[] {
+  if (!shouldSuppressStaleOffTopicWarning(source)) return warnings;
+  return warnings.filter(
+    (warning) => !/不相關|關聯不足|建議排除/.test(warning),
+  );
+}
+
 function recommendationReason(
   recommendation: SourceSummaryForUser["recommendation"],
   assessment: SourceRelevanceAssessment,
@@ -938,6 +995,7 @@ export function sourceSummaryForUser(
       ...quality.summary.qualityWarnings,
     ]),
   );
+  const userSummaryWarnings = sourceSummaryWarningsForUser(source, summaryWarnings);
   const summaryQuality =
     topicalLabel === "irrelevant"
       ? {
@@ -994,7 +1052,7 @@ export function sourceSummaryForUser(
     summaryQualityReason: summaryQuality.reason,
     summarySourceType,
     summaryConfidence,
-    summaryWarnings,
+    summaryWarnings: userSummaryWarnings,
     relevanceReasonZhTW:
       topicRelation,
     evidenceSnippets: evidenceProfile.evidenceSnippets,

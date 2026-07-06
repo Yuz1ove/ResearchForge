@@ -50,6 +50,22 @@ test("sourceSummaryText prefers backend readableSummaryZhTW when available", () 
   assert.doesNotMatch(summary, /主旨：|摘要重點/);
 });
 
+test("sourceSummaryText falls back to an honest zh-TW notice when only English abstract exists", () => {
+  const summary = sourceSummaryText(
+    source({
+      readableSummaryZhTW: null,
+      llmSummaryZhTw: null,
+      summaryFallbackUsed: true,
+      abstract:
+        "The alkaline hydrolysis of carboxylate esters was evaluated under controlled temperature conditions.",
+      originalAbstract:
+        "The alkaline hydrolysis of carboxylate esters was evaluated under controlled temperature conditions.",
+    }),
+  );
+
+  assert.equal(summary, "此來源尚未完成繁中摘要，以下顯示原文摘要。");
+});
+
 test("sourceSummaryText does not invent conclusions when abstract is missing", () => {
   const summary = sourceSummaryText(
     source({ abstract: null, title: "A title only source" }),
@@ -191,6 +207,26 @@ test("sourceSummaryForUser respects backend source classification for non-climat
   assert.notEqual(summary.recommendation, "not_recommended");
   assert.match(summary.topicRelation, /可支撐研究問題|營養成分|食品標示/);
   assert.doesNotMatch(summary.summaryQualityReason, /明顯不符|離題/);
+});
+
+test("sourceSummaryForUser suppresses stale off-topic warnings for review candidates", () => {
+  const summary = sourceSummaryForUser(
+    source({
+      title: "Paleoenvironment, algal structures, and fossil algae",
+      abstract:
+        "This source discusses fossil algae, paleoenvironment, sedimentary environment, and fossil preservation.",
+      relevanceLevel: "primary",
+      classification: "review",
+      usageRecommendation: "secondary",
+      qualityWarnings: ["此來源已被判定為不相關。"],
+      sourceRelevanceReasonZhTw:
+        "此來源與主題相關，但仍建議人工確認是否納入正式報告。",
+    }),
+    "化石與藻類的關係",
+  );
+
+  assert.doesNotMatch(summary.summaryWarnings.join(" "), /不相關|建議排除/);
+  assert.match(summary.topicRelation, /主題相關|人工確認/);
 });
 
 test("sourceSummaryForUser writes a complete zh-TW paragraph for spider habitat abstracts", () => {

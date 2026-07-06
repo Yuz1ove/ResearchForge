@@ -1,4 +1,5 @@
 import type { SourceRecord } from "./sourceRecords.ts";
+import { conceptTermsForTopic } from "@workspace/api-zod/domain-synonyms";
 import {
   buildSourceEvidenceProfile,
   type EvidenceGrounding,
@@ -87,6 +88,10 @@ function textForSource(source: SourceRecord): string {
 function textContains(text: string, term: string): boolean {
   const cleaned = cleanText(term);
   if (!cleaned) return false;
+  if (/^[a-z0-9][a-z0-9\s-]*$/i.test(cleaned)) {
+    const pattern = cleaned.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+    return new RegExp(`(^|[^a-z0-9])${pattern}($|[^a-z0-9])`, "i").test(text);
+  }
   return text.includes(cleaned);
 }
 
@@ -244,6 +249,8 @@ function inferFacetLevel(input: {
 }): SourceFacetRelevanceLevel {
   if (!input.hasCore && input.requiredHits === 0) return "off_topic";
   if (input.downgradeHits > 0 && input.requiredHits === 0) return "low";
+  if (input.hasCore && input.requiredHits >= 2 && input.hasEvidence)
+    return "primary";
   if (input.hasCore && input.requiredHits > 0 && input.hasDowngradingSecondary)
     return "secondary";
   if (input.hasCore && input.requiredHits > 0 && input.hasEvidence)
@@ -488,11 +495,18 @@ export function applySourceRelevanceAssessments(
   const topicFacets = buildTopicFacets(topic);
   const useFacetAssessment = topicFacets.requiredFacets.length > 0;
   const anchorProfile = buildTopicAnchorProfile(topic);
+  const conceptProfile =
+    conceptTermsForTopic(topic).concepts.length > 0
+      ? buildSourceIntentProfile(topic)
+      : null;
 
   return sources
     .map((source) => {
       const quality = evaluateSourceQuality(source, topic);
       const assessment = (() => {
+        if (conceptProfile) {
+          return legacyProfileAssessment(source, conceptProfile);
+        }
         if (useFacetAssessment) {
           const facetAssessment = buildSourceFacetAssessment(source, topicFacets);
           const sourceText = textForSource(source);
@@ -558,32 +572,68 @@ export function applySourceRelevanceAssessments(
       })();
 
       const evidenceProfile = buildSourceEvidenceProfile(source, topicFacets);
+      const conceptOverrideHasGrounding =
+        Boolean(conceptProfile) &&
+        (assessment.relevanceLevel === "primary" ||
+          assessment.relevanceLevel === "secondary") &&
+        sourceHasAbstract(source);
+      const facetOverrideHasGrounding =
+        useFacetAssessment &&
+        (assessment.relevanceLevel === "primary" ||
+          assessment.relevanceLevel === "secondary") &&
+        sourceHasAbstract(source);
+      const assessmentOverrideHasGrounding =
+        conceptOverrideHasGrounding || facetOverrideHasGrounding;
       const mergedWarnings = unique([
         ...(source.summaryWarnings ?? []),
         ...quality.summary.qualityWarnings,
         quality.sufficiency.sufficiencyReasonZhTW,
       ]);
       const shouldShowInMainList =
-        (assessment.relevanceLevel === "primary" ||
+        assessmentOverrideHasGrounding ||
+        ((assessment.relevanceLevel === "primary" ||
           assessment.relevanceLevel === "secondary" ||
           assessment.relevanceLevel === "clue") &&
-        quality.sufficiency.summaryMode !== "metadataFallback" &&
-        quality.sufficiency.summaryMode !== "reject";
+          quality.sufficiency.summaryMode !== "metadataFallback" &&
+          quality.sufficiency.summaryMode !== "reject");
 
       const usableAsPrimaryEvidence =
-        quality.sufficiency.usableAsPrimaryEvidence &&
-        quality.topical.topicalRelevanceLabel === "high";
+        (quality.sufficiency.usableAsPrimaryEvidence || assessmentOverrideHasGrounding) &&
+        (quality.topical.topicalRelevanceLabel === "high" ||
+          assessment.relevanceLevel === "primary");
       const usableAsSecondaryEvidence =
-        quality.sufficiency.usableAsSecondaryEvidence &&
-        quality.topical.topicalRelevanceLabel !== "irrelevant";
+        (quality.sufficiency.usableAsSecondaryEvidence || assessmentOverrideHasGrounding) &&
+        (quality.topical.topicalRelevanceLabel !== "irrelevant" ||
+          assessment.relevanceLevel === "secondary" ||
+          assessment.relevanceLevel === "clue");
+      const topicalRelevanceScore = Math.max(
+        quality.topical.topicalRelevanceScore,
+        assessment.relevanceScore,
+      );
+      const topicalRelevanceLabel =
+        assessment.relevanceLevel === "primary"
+          ? "high"
+          : assessment.relevanceLevel === "secondary" ||
+              assessment.relevanceLevel === "clue"
+            ? "medium"
+            : quality.topical.topicalRelevanceLabel;
+      const usageRecommendation: SourceRecord["usageRecommendation"] =
+        assessment.relevanceLevel === "primary" && sourceHasAbstract(source)
+          ? "primary"
+          : assessment.relevanceLevel === "secondary" ||
+              assessment.relevanceLevel === "clue"
+            ? "secondary"
+            : assessment.relevanceLevel === "low"
+              ? "reference"
+              : "exclude";
 
       return {
         ...source,
         relevanceLevel: assessment.relevanceLevel,
         relevanceScore: assessment.relevanceScore,
         relevanceReasons: assessment.reasons,
-        topicalRelevanceScore: quality.topical.topicalRelevanceScore,
-        topicalRelevanceLabel: quality.topical.topicalRelevanceLabel,
+        topicalRelevanceScore,
+        topicalRelevanceLabel,
         matchedAnchorConcepts: quality.topical.matchedAnchorConcepts,
         matchedApplicationConcepts: quality.topical.matchedApplicationConcepts,
         negativeSignals: quality.topical.negativeSignals,
@@ -591,7 +641,7 @@ export function applySourceRelevanceAssessments(
         evidenceSufficiency: quality.sufficiency.evidenceSufficiency,
         usableAsPrimaryEvidence,
         usableAsSecondaryEvidence,
-        usageRecommendation: quality.usageRecommendation,
+        usageRecommendation,
         qualityWarnings: mergedWarnings,
         matchedCoreConcepts: assessment.matchedCoreConcepts,
         missingCoreConcepts: assessment.missingCoreConcepts,
@@ -599,23 +649,45 @@ export function applySourceRelevanceAssessments(
         matchedFacets: assessment.matchedFacets,
         missingRequiredFacets: assessment.missingRequiredFacets,
         sourceRelevanceReasonZhTw: quality.topical.relevanceReasonZhTW,
-        relevanceReasonZhTW: quality.topical.relevanceReasonZhTW,
-        readableSummaryZhTW: quality.summary.readableSummaryZhTW,
+        relevanceReasonZhTW:
+          assessmentOverrideHasGrounding
+            ? assessment.reasonZhTw
+            : quality.topical.relevanceReasonZhTW,
+        relevanceReasonZhTw:
+          assessmentOverrideHasGrounding
+            ? assessment.reasonZhTw
+            : quality.topical.relevanceReasonZhTW,
+        readableSummaryZhTW:
+          cleanText(source.readableSummaryZhTW) ||
+          cleanText(source.readableSummaryZhTw) ||
+          quality.summary.readableSummaryZhTW,
+        readableSummaryZhTw:
+          cleanText(source.readableSummaryZhTw) ||
+          cleanText(source.readableSummaryZhTW) ||
+          quality.summary.readableSummaryZhTW,
         summarySourceType:
+          assessmentOverrideHasGrounding
+            ? "abstract"
+            :
           quality.summary.summarySourceType === "reject"
             ? "metadataFallback"
             : quality.summary.summarySourceType,
-        summaryConfidence: quality.summary.summaryConfidence,
+        summaryConfidence: assessmentOverrideHasGrounding
+          ? "medium"
+          : quality.summary.summaryConfidence,
         summaryWarnings: mergedWarnings,
         shouldShowInMainList,
         shouldRecommendAccept:
-          quality.usageRecommendation === "primary" ||
-          quality.usageRecommendation === "secondary",
+          usageRecommendation === "primary" ||
+          (usageRecommendation === "secondary" && sourceHasAbstract(source)),
         isMetadataOnly:
           quality.sufficiency.summaryMode === "metadataFallback",
         isPrimaryEvidence: usableAsPrimaryEvidence,
         mainEvidenceFacet: evidenceProfile.mainEvidenceFacet ?? null,
         evidenceSummaryZhTw: evidenceProfile.summaryZhTw ?? null,
+        mainEvidencePointZhTw: evidenceProfile.summaryZhTw ?? null,
+        abstractOriginal: source.originalAbstract ?? source.abstract ?? null,
+        abstractZhTw: source.abstractZhTw ?? null,
         evidenceSnippets: evidenceProfile.evidenceSnippets ?? null,
         evidenceChain: evidenceProfile.evidenceChain ?? null,
       };
@@ -640,6 +712,44 @@ export function applySourceRelevanceAssessments(
 
 export function buildSourceIntentProfile(topic: string): SourceIntentProfile {
   const normalized = cleanText(topic);
+  const conceptTerms = conceptTermsForTopic(topic);
+
+  if (conceptTerms.concepts.length > 0) {
+    return {
+      coreConcepts: [
+        ...conceptTerms.enCoreTerms,
+        ...conceptTerms.zhCoreTerms,
+        ...conceptTerms.enSynonyms,
+        ...conceptTerms.zhSynonyms,
+      ],
+      researchVariables: [
+        ...conceptTerms.mechanismTerms,
+        ...conceptTerms.applicationTerms,
+        ...conceptTerms.limitationTerms,
+      ],
+      requiredConceptGroups: [
+        [...conceptTerms.enCoreTerms, ...conceptTerms.zhCoreTerms],
+        [
+          ...conceptTerms.enSynonyms,
+          ...conceptTerms.zhSynonyms,
+          ...conceptTerms.mechanismTerms,
+        ],
+      ].filter((group) => group.length > 0),
+      usefulContextTerms: [
+        ...conceptTerms.applicationTerms,
+        ...conceptTerms.limitationTerms,
+        "review",
+        "mechanism",
+        "experiment",
+        "application",
+        "綜述",
+        "機制",
+        "實驗",
+        "應用",
+      ],
+      excludeTerms: conceptTerms.exclusionTerms,
+    };
+  }
 
   if (/蜘蛛|蛛形綱|蛛網|spider|spiders|arachnid|araneae/.test(normalized)) {
     return {

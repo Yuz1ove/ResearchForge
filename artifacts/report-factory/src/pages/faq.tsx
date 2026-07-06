@@ -10,36 +10,36 @@ import {
 export function FAQ() {
   const faqs = [
     {
-      q: "ResearchForge 如何生成報告內容？",
-      a: "我們使用針對商業與財務文件微調的大型語言模型。當您提交參考資料與設定後，模型會將您的數據整合至所選結構中，同時維持您要求的語氣與讀者設定。"
+      q: "ResearchForge 可以整理哪些內容？",
+      a: "可以協助整理研究報告、總結、摘要、知識庫條目、資料需求表、簡報大綱與其他結構化內容草稿。"
     },
     {
-      q: "我的資料安全嗎？",
-      a: "是的。對於專業版與企業版用戶，我們提供嚴格的零數據留存政策。您的資料僅在記憶體中處理以生成報告，處理完畢後立即清除，絕不用於模型訓練。"
+      q: "它會直接替我完成最終內容嗎？",
+      a: "不會。ResearchForge 產生的是可修改的草稿、整理架構與檢查清單；最後判讀、取捨與結論仍需要由使用者確認。"
     },
     {
       q: "可以生成哪些類型的報告？",
-      a: "目前支援執行摘要、市場分析、風險評估、競爭分析、財務報告及專案狀態更新。我們會根據用戶反饋定期新增範本類型。"
+      a: "目前支援研究報告、專題報告、實驗報告、摘要、總結、知識庫整理、資料需求表、圖表建議與簡報大綱。"
     },
     {
       q: "生成後可以編輯報告嗎？",
-      a: "可以。所有報告均可匯出為 DOCX 格式（專業版方案），或複製為 Markdown，方便貼入 Word、Google Docs、Notion 或任何其他編輯器進行最後修改。"
+      a: "可以。草稿內容可複製或匯出，方便貼入 Word、Google Docs、Notion 或作品說明書中繼續修正。"
     },
     {
       q: "圖表建議的準確度如何？",
-      a: "圖表建議引擎會分析您參考資料中的量化數據，推薦最能呈現敘事的標準視覺化類型（例如：比較用長條圖、趨勢用折線圖）。實際圖表仍需在您慣用的工具（Excel、Tableau 等）中建立。"
+      a: "圖表建議會依主題與資料型態推薦適合的視覺化方式，例如比較表、折線圖、長條圖、散佈圖或時間軸。實際圖表仍需使用真實資料製作。"
     },
     {
-      q: "你們有提供公司客製化範本嗎？",
-      a: "有，企業版方案提供客製化範本開發服務。我們的團隊將與您合作，將公司特定的格式規範、品牌識別與結構要求整合至引擎中。"
+      q: "可以處理還很模糊的題目嗎？",
+      a: "可以。若題目太短或太廣，系統會先產生可整理方向與搜尋關鍵詞，協助把想法收斂成可閱讀、可查證的內容架構。"
     },
     {
-      q: "參考資料最多可以貼入多少文字？",
-      a: "免費版用戶最多可貼入 5,000 字的背景資料；專業版用戶最多可提供 25,000 字（約 50 頁文字）；企業版用戶則有客製化上限。"
+      q: "參考資料應該怎麼提供？",
+      a: "建議貼入和主題直接相關的摘要、筆記、課本段落、觀察紀錄或可信來源重點。資料越聚焦，產生的內容架構越容易檢查。"
     },
     {
-      q: "可以隨時取消訂閱嗎？",
-      a: "可以，您可以隨時在帳戶設定中管理或取消訂閱。取消後，您仍可繼續使用專業版功能至當前計費週期結束。"
+      q: "可以用在學校作業、研究或知識庫嗎？",
+      a: "可以。它適合先建立草稿與資料脈絡，再依老師、團隊或平台格式調整內容。"
     }
   ];
 
@@ -52,7 +52,7 @@ export function FAQ() {
           <div className="container mx-auto px-4 max-w-3xl">
             <div className="text-center mb-12">
               <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">常見問題</h1>
-              <p className="text-xl text-muted-foreground">關於 ResearchForge，您需要知道的一切。</p>
+              <p className="text-xl text-muted-foreground">關於知識整理與內容生成，您需要知道的重點。</p>
             </div>
 
             <Accordion type="single" collapsible className="w-full">
@@ -70,10 +70,7 @@ export function FAQ() {
 
             <div className="mt-16 text-center p-8 bg-muted/50 rounded-xl border border-border">
               <h3 className="text-xl font-semibold mb-2">還有其他問題？</h3>
-              <p className="text-muted-foreground mb-6">我們的支援團隊隨時準備為您解答任何疑問。</p>
-              <a href="mailto:support@example.com" className="text-primary font-medium hover:underline">
-                聯絡客服支援 &rarr;
-              </a>
+              <p className="text-muted-foreground">建議先從一個清楚主題開始，逐步補上資料來源、重點與待查問題。</p>
             </div>
           </div>
         </section>

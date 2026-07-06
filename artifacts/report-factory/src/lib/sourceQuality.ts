@@ -1,3 +1,4 @@
+import { conceptTermsForTopic } from "@workspace/api-zod/domain-synonyms";
 import type { SourceRecord } from "./sourceRecords.ts";
 
 export type TopicAnchorDomain =
@@ -553,6 +554,31 @@ function dumplingProfile(topic: string): TopicAnchorProfile {
 
 export function buildTopicAnchorProfile(topic: string): TopicAnchorProfile {
   const normalized = lowerText(topic);
+  const conceptTerms = conceptTermsForTopic(topic);
+  if (conceptTerms.concepts.length > 0) {
+    const domain = conceptTerms.concepts[0]?.domain;
+    return {
+      topic,
+      domain:
+        domain === "environment"
+          ? "general"
+          : domain === "unknown" || domain == null
+            ? "general"
+            : domain,
+      anchorConcepts: unique([
+        ...conceptTerms.zhCoreTerms,
+        ...conceptTerms.enCoreTerms,
+        ...conceptTerms.zhSynonyms,
+        ...conceptTerms.enSynonyms,
+        ...conceptTerms.mechanismTerms,
+      ]),
+      applicationConcepts: unique([
+        ...conceptTerms.applicationTerms,
+        ...conceptTerms.limitationTerms,
+      ]),
+      exclusionTerms: conceptTerms.exclusionTerms,
+    };
+  }
   if (
     /氧化還原|redox|oxidation|reduction|electrochem/.test(normalized)
   ) {
@@ -640,6 +666,7 @@ export function evaluateTopicalRelevance(
     combined,
     input.applicationConcepts ?? [],
   );
+  const titleNegativeSignals = matchedTerms(title, input.exclusionTerms ?? []);
   const negativeSignals = matchedTerms(combined, input.exclusionTerms ?? []);
   const lexicalEvidenceCount =
     titleAnchors.length + abstractAnchors.length + snippetAnchors.length + keywordAnchors.length;
@@ -661,7 +688,10 @@ export function evaluateTopicalRelevance(
   let topicalRelevanceLabel: TopicalRelevanceLabel = "low";
   let shouldRejectImmediately = false;
 
-  if (matchedAnchorConcepts.length === 0 && negativeSignals.length > 0) {
+  if (titleNegativeSignals.length > 0 && titleAnchors.length === 0) {
+    topicalRelevanceLabel = "irrelevant";
+    shouldRejectImmediately = true;
+  } else if (matchedAnchorConcepts.length === 0 && negativeSignals.length > 0) {
     topicalRelevanceLabel = "irrelevant";
     shouldRejectImmediately = true;
   } else if (matchedAnchorConcepts.length === 0 && matchedApplicationConcepts.length === 0) {

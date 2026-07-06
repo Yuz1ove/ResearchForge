@@ -371,7 +371,7 @@ test("known topics fall back to domain-aware expansion when LLM is unavailable",
     assert.equal(result.status, "success");
     assert.equal(result.diagnostics.fallbackUsed, true);
     assert.equal(result.generationMode, "title_fallback");
-    assert.match(result.message ?? "", /快速回傳標題候選|規則式標題候選/i);
+    assert.match(result.message ?? "", /AI 服務暫時不可用，已使用本地規則 fallback/);
     assert.match(combined, /機翼|機身|民航|飛航安全|材料|製造|組裝/);
   });
 });
@@ -390,7 +390,7 @@ test("spinning top fallback stays domain-specific instead of returning generic t
     assert.equal(result.diagnostics.domain, "technology");
     assert.ok(result.diagnostics.searchQueries?.en.some((query) => /gyroscope|spinning top/i.test(query)));
     assert.equal(result.generationMode, "title_fallback");
-    assert.match(result.message ?? "", /快速回傳標題候選|規則式標題候選/i);
+    assert.match(result.message ?? "", /AI 服務暫時不可用，已使用本地規則 fallback/);
     assert.match(combined, /角動量|進動|陀螺儀|MEMS|民俗遊戲|spinning top|gyroscope/i);
     assert.doesNotMatch(combined, /核心概念、範圍界線與可驗證資料|可用哪些指標、案例或資料集交叉驗證/);
   });
@@ -588,27 +588,31 @@ test("entityType lens guard keeps animal and food topics away from scientific de
   });
 });
 
-test("title enhancement fallback returns 3-5 visible title candidates without legacy template text", async () => {
+test("title enhancement fallback returns structured research-ready chemistry candidates instead of fixed templates", async () => {
   await withEnv(baseEnv(), async () => {
-    const ant = await expandTopicWithOllama(
-      { topic: "螞蟻", reportType: "研究報告", audience: "高中" },
+    const saponification = await expandTopicWithOllama(
+      { topic: "皂化反應", reportType: "研究報告", audience: "高中" },
       { fetchImpl: createUnavailableOllamaFetch() },
     );
-    assert.equal(ant.generationMode, "title_fallback");
-    assert.ok((ant.titleCandidates?.length ?? 0) >= 3);
-    assert.ok((ant.titleCandidates?.length ?? 0) <= 5);
-    assert.match(ant.titleCandidates?.[0]?.title ?? "", /螞蟻|秩序|生態/);
-    assert.ok(ant.hiddenResearchPlan);
-    assert.ok((ant.hiddenResearchPlan?.querySeedZh.length ?? 0) >= 1);
-
-    const bubble = await expandTopicWithOllama(
-      { topic: "泡泡實驗", reportType: "研究報告", audience: "高中" },
-      { fetchImpl: createUnavailableOllamaFetch() },
-    );
-    assert.ok((bubble.titleCandidates?.length ?? 0) >= 3);
+    assert.equal(saponification.generationMode, "title_fallback");
+    assert.ok((saponification.titleCandidates?.length ?? 0) >= 3);
+    assert.ok(saponification.hiddenResearchPlan);
+    assert.ok((saponification.hiddenResearchPlan?.querySeedZh.length ?? 0) >= 1);
     assert.match(
-      JSON.stringify(bubble.titleCandidates ?? []),
-      /泡泡實驗|泡泡|原理|觀察|科學/,
+      JSON.stringify(saponification.titleCandidates ?? []),
+      /鹼濃度|油脂來源|酯交換|安全風險|鹼性水解/,
+    );
+    assert.ok(
+      (saponification.titleCandidates ?? []).every((candidate) =>
+        Boolean(
+          candidate.researchObject &&
+            candidate.variableOrAngle &&
+            candidate.rationale &&
+            candidate.keywordsZh?.length &&
+            candidate.keywordsEn?.length &&
+            candidate.querySeeds?.zh?.length,
+        ),
+      ),
     );
 
     const redox = await expandTopicWithOllama(
@@ -616,19 +620,68 @@ test("title enhancement fallback returns 3-5 visible title candidates without le
       { fetchImpl: createUnavailableOllamaFetch() },
     );
     assert.ok((redox.titleCandidates?.length ?? 0) >= 3);
-    assert.match(
-      JSON.stringify(redox.titleCandidates ?? []),
-      /氧化還原反應|原理|應用|科學解釋/,
+    assert.match(JSON.stringify(redox.titleCandidates ?? []), /電子轉移|氧化數|電池|氧化劑|還原劑|誤差來源/);
+
+    const skeleton = (title: string, topic: string) =>
+      title
+        .replaceAll(topic, "<topic>")
+        .replace(/\d+/g, "#")
+        .replace(/\s+/g, "")
+        .trim();
+    const saponificationSkeletons = new Set(
+      (saponification.titleCandidates ?? []).map((candidate) =>
+        skeleton(candidate.title, "皂化反應"),
+      ),
+    );
+    const redoxSkeletons = new Set(
+      (redox.titleCandidates ?? []).map((candidate) =>
+        skeleton(candidate.title, "氧化還原反應"),
+      ),
+    );
+    assert.equal(
+      Array.from(redoxSkeletons).some((value) =>
+        saponificationSkeletons.has(value),
+      ),
+      false,
     );
 
     const visibleTitles = JSON.stringify([
-      ...(ant.titleCandidates ?? []).map((candidate) => candidate.title),
-      ...(bubble.titleCandidates ?? []).map((candidate) => candidate.title),
+      ...(saponification.titleCandidates ?? []).map((candidate) => candidate.title),
       ...(redox.titleCandidates ?? []).map((candidate) => candidate.title),
     ]);
     assert.doesNotMatch(
       visibleTitles,
-      /科學定義與量測方法|形成機制、應用場景與限制條件|背景脈絡、主要類型與核心特徵|爭議、限制與後續發展趨勢/,
+      /看不見的變化：|從生活現象到科學解釋：|不只是課本名詞：|科學定義與量測方法|形成機制、應用場景與限制條件|背景脈絡、主要類型與核心特徵|爭議、限制與後續發展趨勢/,
+    );
+
+    const perchlorate = await expandTopicWithOllama(
+      { topic: "過氯酸鈉", reportType: "研究報告", audience: "高中" },
+      { fetchImpl: createUnavailableOllamaFetch() },
+    );
+    assert.equal(perchlorate.generationMode, "title_fallback");
+    assert.match(perchlorate.diagnostics.canonicalEnglishTopic ?? "", /sodium perchlorate/i);
+    assert.ok((perchlorate.titleCandidates?.length ?? 0) >= 3);
+    assert.match(
+      JSON.stringify(perchlorate.titleCandidates ?? []),
+      /氧化劑|熱分解|安全風險|環境污染|操作條件|sodium perchlorate|perchlorate/i,
+    );
+    assert.ok(
+      (perchlorate.titleCandidates ?? []).some((candidate) =>
+        (candidate.querySeeds?.en ?? []).some((query) =>
+          /sodium perchlorate|perchlorate|NaClO4/i.test(query),
+        ),
+      ),
+    );
+
+    const formulaTopic = await expandTopicWithOllama(
+      { topic: "NaClO4", reportType: "研究報告", audience: "高中" },
+      { fetchImpl: createUnavailableOllamaFetch() },
+    );
+    assert.equal(formulaTopic.generationMode, "title_fallback");
+    assert.ok((formulaTopic.titleCandidates?.length ?? 0) >= 3);
+    assert.match(
+      JSON.stringify(formulaTopic.titleCandidates ?? []),
+      /化學性質|反應性|穩定性|操作條件|安全風險|sodium perchlorate|NaClO4/i,
     );
   });
 });

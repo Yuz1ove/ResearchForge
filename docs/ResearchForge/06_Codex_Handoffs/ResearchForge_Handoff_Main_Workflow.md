@@ -178,6 +178,6 @@ Smoke 覆蓋：
 
 ## 2026-06-21 接續索引
 
-- 已完成 Topic Understanding / Planner / Source Display Gate 收尾，詳細內容記錄在 `HANDOFF_RESEARCHFORGE_SOURCE_QUALITY.md` 的 `2026-06-21 Topic Understanding / Planner / Source Display Gate 收尾`。
+- 已完成 Topic Understanding / Planner / Source Display Gate 收尾，詳細內容記錄在 `ResearchForge_Handoff_Source_Quality.md` 的 `2026-06-21 Topic Understanding / Planner / Source Display Gate 收尾`。
 - 核心結果：`search-intent-planner.ts` 真正使用 `TopicUnderstandingResult`；`needsClarification=true` 不呼叫 provider；套用 research angle 後才進入來源搜尋；`generator.tsx` 一般使用者畫面不再顯示 raw / deduped / low relevance / rejected 漏斗數。
 - 驗證：API 69 passed、Report Factory 100 passed、`pnpm typecheck` passed、`CI=true pnpm run build` passed；Browser smoke 使用 `http://127.0.0.1:22068/generator` 驗證 `BMW` 裸題需先套用研究方向。

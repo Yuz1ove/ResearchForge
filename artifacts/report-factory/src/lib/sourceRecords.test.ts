@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   acceptedSourceRecords,
+  autoAcceptPrimarySources,
   buildBibliography,
   buildExportReadinessWarnings,
   calculateSourceConfidence,
@@ -182,6 +183,22 @@ test("counts source review tabs from filtered records", () => {
   });
 });
 
+test("accepted source count stays aligned with review-state driven card state", () => {
+  const sources = [
+    source({ id: "accepted-1", reviewState: "accepted" }),
+    source({ id: "accepted-2", reviewState: "accepted", status: "accepted" } as Partial<SourceRecord>),
+    source({ id: "pending-1", reviewState: "pending" }),
+  ];
+
+  const acceptedIds = acceptedSourceRecords(sources).map((item) => item.id);
+  const acceptedCardCount = sources.filter(
+    (item) => sourceReviewState(item) === "accepted",
+  ).length;
+
+  assert.equal(acceptedIds.length, acceptedCardCount);
+  assert.deepEqual(sourceReviewCounts(sources).accepted, acceptedCardCount);
+});
+
 test("reads accepted review aliases before rendering source lists", () => {
   const acceptedByStatus = source({
     id: "status-accepted",
@@ -220,6 +237,47 @@ test("updates source review state without duplicating source records", () => {
   assert.equal(undone.length, 2);
   assert.equal(undone[0]?.reviewState, "pending");
   assert.deepEqual(undone.map((item) => item.id), ["first", "second"]);
+});
+
+test("auto accepts directly relevant primary sources into the same accepted-source state", () => {
+  const autoAccepted = autoAcceptPrimarySources([
+    source({
+      id: "primary",
+      doi: "10.1000/primary",
+      classification: "primary",
+      relevanceLevel: "primary",
+      shouldRecommendAccept: true,
+      shouldShowInMainList: true,
+      evidenceGrounding: "abstract_grounded",
+    }),
+    source({
+      id: "secondary",
+      doi: "10.1000/secondary",
+      classification: "review",
+      relevanceLevel: "secondary",
+      shouldRecommendAccept: true,
+      shouldShowInMainList: true,
+      evidenceGrounding: "abstract_grounded",
+    }),
+    source({
+      id: "metadata-only",
+      doi: "10.1000/metadata-only",
+      classification: "primary",
+      relevanceLevel: "primary",
+      shouldRecommendAccept: true,
+      shouldShowInMainList: true,
+      evidenceGrounding: "metadata_only",
+      isMetadataOnly: true,
+    }),
+  ]);
+
+  assert.equal(sourceReviewState(autoAccepted[0]!), "accepted");
+  assert.equal(sourceReviewState(autoAccepted[1]!), "pending");
+  assert.equal(sourceReviewState(autoAccepted[2]!), "pending");
+  assert.deepEqual(
+    acceptedSourceRecords(autoAccepted).map((item) => item.id),
+    ["primary"],
+  );
 });
 
 test("formats accepted sources as APA-style bibliography entries", () => {

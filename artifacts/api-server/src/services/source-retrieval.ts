@@ -3,6 +3,7 @@ import {
   normalizeSourceRecord,
   type SourceRecord,
 } from "@workspace/api-zod";
+import type { ProviderHealth } from "@workspace/api-zod/research-grounding";
 import {
   getSourceProviderConfigs,
   SOURCE_PROVIDER_NAMES,
@@ -11,6 +12,14 @@ import {
 } from "./source-provider-config";
 
 const MAX_RESULTS = 120;
+const PROVIDER_RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const MAX_PROVIDER_RETRIES = 1;
+const PROVIDER_RETRY_BASE_DELAY_MS = 250;
+const PROVIDER_RETRY_MAX_DELAY_MS = 1200;
+const PROVIDER_CACHE_TTL_MS = 20 * 60 * 1000;
+const DEGRADED_PROVIDER_TIMEOUT_MS = 2500;
+const RETRY_PROVIDER_TIMEOUT_MS = 2000;
+const PROVIDER_DOWN_COOLDOWN_MS = 5 * 60 * 1000;
 const FALLBACK_PROVIDER_NAMES = [
   "Official Source",
   "Institutional Source",
@@ -20,7 +29,12 @@ const FALLBACK_PROVIDER_NAMES = [
 export type AcademicSourceProvider = SourceProviderName;
 export type FallbackSourceProvider = (typeof FALLBACK_PROVIDER_NAMES)[number];
 export type SourceProvider = AcademicSourceProvider | FallbackSourceProvider;
-export type SourceSearchErrorCode = "timeout" | "api-failure";
+export type SourceSearchErrorCode =
+  | "timeout"
+  | "api-failure"
+  | "rate_limited"
+  | "server_error"
+  | "schema_error";
 
 export type SourceFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -35,8 +49,18 @@ export interface SourceProviderSearchResult {
   provider: SourceProvider;
   query: string;
   results: SourceRecord[];
+  raw_count?: number;
+  normalize_attempt_count?: number;
+  normalized_valid_count?: number;
+  normalized_invalid_count?: number;
   error_type: SourceSearchErrorCode | null;
   error_message: string | null;
+  latency_ms?: number;
+  request_url?: string;
+  provider_health?: ProviderHealth;
+  retry_mode?: "short_query";
+  retry_query?: string;
+  retry_reason?: SourceSearchErrorCode;
 }
 
 export class SourceSearchError extends Error {
@@ -49,6 +73,241 @@ export class SourceSearchError extends Error {
     super(message);
     this.name = "SourceSearchError";
   }
+}
+
+type ProviderCacheEntry = {
+  expiresAt: number;
+  result: SourceProviderSearchResult;
+};
+
+const providerSearchCache = new Map<string, ProviderCacheEntry>();
+
+function providerHealthKey(provider: SourceProvider): ProviderHealth["provider"] | null {
+  if (provider === "OpenAlex") return "openalex";
+  if (provider === "Crossref") return "crossref";
+  if (provider === "Semantic Scholar") return "semantic_scholar";
+  return null;
+}
+
+function percentile(values: number[], quantile: number): number | undefined {
+  if (values.length === 0) return undefined;
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.min(
+    sorted.length - 1,
+    Math.max(0, Math.round((sorted.length - 1) * quantile)),
+  );
+  return sorted[index];
+}
+
+function baseProviderHealth(provider: ProviderHealth["provider"]): ProviderHealth {
+  return {
+    provider,
+    status: "healthy",
+    recentFailureCount: 0,
+    recentTimeoutCount: 0,
+  };
+}
+
+export interface ProviderHealthEvent {
+  errorType?: SourceSearchErrorCode | null;
+  latencyMs?: number;
+  occurredAt?: Date;
+}
+
+export interface ProviderHealthStore {
+  get(provider: SourceProvider): Promise<ProviderHealth>;
+  recordSuccess(provider: SourceProvider, event?: ProviderHealthEvent): Promise<void>;
+  recordFailure(provider: SourceProvider, event: ProviderHealthEvent): Promise<void>;
+  markDown(provider: SourceProvider, cooldownUntil: Date, reason?: string): Promise<void>;
+  reset?(provider: SourceProvider): Promise<void>;
+}
+
+export class InMemoryProviderHealthStore implements ProviderHealthStore {
+  private readonly state = new Map<ProviderHealth["provider"], ProviderHealth>();
+  private readonly latencySamples = new Map<ProviderHealth["provider"], number[]>();
+  private readonly successStreak = new Map<ProviderHealth["provider"], number>();
+
+  getSync(provider: SourceProvider): ProviderHealth {
+    const key = providerHealthKey(provider);
+    if (!key) return baseProviderHealth("core");
+    const current = this.state.get(key) ?? baseProviderHealth(key);
+    if (current.status === "down" && current.cooldownUntil) {
+      const cooldownMs = Date.parse(current.cooldownUntil);
+      if (Number.isFinite(cooldownMs) && cooldownMs <= Date.now()) {
+        const recovered: ProviderHealth = {
+          ...current,
+          status: "degraded",
+          cooldownUntil: undefined,
+        };
+        this.state.set(key, recovered);
+        this.successStreak.set(key, 0);
+        return recovered;
+      }
+    }
+    return current;
+  }
+
+  async get(provider: SourceProvider): Promise<ProviderHealth> {
+    return this.getSync(provider);
+  }
+
+  async recordSuccess(provider: SourceProvider, event: ProviderHealthEvent = {}): Promise<void> {
+    const key = providerHealthKey(provider);
+    if (!key) return;
+    const current = this.getSync(provider);
+    const latencyMs = event.latencyMs ?? 0;
+    const samples = [...(this.latencySamples.get(key) ?? []), latencyMs].slice(-20);
+    this.latencySamples.set(key, samples);
+    const nextStreak = (this.successStreak.get(key) ?? 0) + 1;
+    this.successStreak.set(key, nextStreak);
+    const status: ProviderHealth["status"] =
+      current.status === "degraded" && nextStreak < 2 ? "degraded" : "healthy";
+    const next: ProviderHealth = {
+      provider: key,
+      status,
+      lastSuccessAt: (event.occurredAt ?? new Date()).toISOString(),
+      recentFailureCount: status === "healthy" ? 0 : current.recentFailureCount,
+      recentTimeoutCount: status === "healthy" ? 0 : current.recentTimeoutCount,
+      ...(status === "degraded" && current.lastFailureAt
+        ? { lastFailureAt: current.lastFailureAt }
+        : {}),
+      ...(typeof percentile(samples, 0.5) === "number"
+        ? { rollingLatencyP50: percentile(samples, 0.5) }
+        : {}),
+      ...(typeof percentile(samples, 0.95) === "number"
+        ? { rollingLatencyP95: percentile(samples, 0.95) }
+        : {}),
+      ...(status === "degraded" && current.lastErrorCode
+        ? { lastErrorCode: current.lastErrorCode }
+        : {}),
+    };
+    this.state.set(key, next);
+  }
+
+  async recordFailure(provider: SourceProvider, event: ProviderHealthEvent): Promise<void> {
+    const key = providerHealthKey(provider);
+    if (!key) return;
+    const current = this.getSync(provider);
+    const failureCount = current.recentFailureCount + 1;
+    const timeoutCount =
+      event.errorType === "timeout"
+        ? current.recentTimeoutCount + 1
+        : current.recentTimeoutCount;
+    const latencyMs = event.latencyMs ?? 0;
+    const samples = [...(this.latencySamples.get(key) ?? []), latencyMs].slice(-20);
+    this.latencySamples.set(key, samples);
+    this.successStreak.set(key, 0);
+    const retryableFailure =
+      event.errorType === "timeout" || event.errorType === "server_error";
+    const status: ProviderHealth["status"] =
+      retryableFailure && failureCount >= 6
+        ? "down"
+        : retryableFailure && (failureCount >= 3 || timeoutCount >= 3)
+          ? "degraded"
+          : current.status === "down"
+            ? "down"
+            : current.status;
+    const next: ProviderHealth = {
+      provider: key,
+      status,
+      lastSuccessAt: current.lastSuccessAt,
+      lastFailureAt: (event.occurredAt ?? new Date()).toISOString(),
+      recentFailureCount: failureCount,
+      recentTimeoutCount: timeoutCount,
+      ...(typeof percentile(samples, 0.5) === "number"
+        ? { rollingLatencyP50: percentile(samples, 0.5) }
+        : {}),
+      ...(typeof percentile(samples, 0.95) === "number"
+        ? { rollingLatencyP95: percentile(samples, 0.95) }
+        : {}),
+      ...(status === "down"
+        ? { cooldownUntil: new Date(Date.now() + PROVIDER_DOWN_COOLDOWN_MS).toISOString() }
+        : {}),
+      ...(event.errorType ? { lastErrorCode: event.errorType } : {}),
+    };
+    this.state.set(key, next);
+  }
+
+  async markDown(provider: SourceProvider, cooldownUntil: Date, reason?: string): Promise<void> {
+    const key = providerHealthKey(provider);
+    if (!key) return;
+    const current = this.getSync(provider);
+    this.state.set(key, {
+      ...current,
+      status: "down",
+      cooldownUntil: cooldownUntil.toISOString(),
+      lastFailureAt: new Date().toISOString(),
+      ...(reason ? { lastErrorCode: reason } : {}),
+    });
+    this.successStreak.set(key, 0);
+  }
+
+  async reset(provider: SourceProvider): Promise<void> {
+    const key = providerHealthKey(provider);
+    if (!key) return;
+    this.state.delete(key);
+    this.latencySamples.delete(key);
+    this.successStreak.delete(key);
+  }
+
+  resetAll(): void {
+    this.state.clear();
+    this.latencySamples.clear();
+    this.successStreak.clear();
+  }
+}
+
+let providerHealthStore = new InMemoryProviderHealthStore();
+
+export function setProviderHealthStoreForTesting(store: InMemoryProviderHealthStore): void {
+  providerHealthStore = store;
+}
+
+export function resetProviderHealthStoreForTesting(): void {
+  providerHealthStore = new InMemoryProviderHealthStore();
+  providerSearchCache.clear();
+}
+
+export function providerHealthSnapshot(
+  provider: AcademicSourceProvider,
+): ProviderHealth {
+  return providerHealthStore.getSync(provider);
+}
+
+export function allProviderHealthSnapshots(): ProviderHealth[] {
+  return SOURCE_PROVIDER_NAMES.map((provider) => providerHealthSnapshot(provider));
+}
+
+function providerConfigForHealth(
+  provider: AcademicSourceProvider,
+  config: SourceProviderConfig,
+): SourceProviderConfig {
+  const health = providerHealthSnapshot(provider);
+  if (health.status !== "degraded") return config;
+  return {
+    ...config,
+    timeoutMs: Math.min(config.timeoutMs, DEGRADED_PROVIDER_TIMEOUT_MS),
+  };
+}
+
+function normalizedProviderCacheKey(
+  provider: SourceProvider,
+  query: string,
+  config?: Pick<SourceProviderConfig, "endpoint" | "queryLimit" | "pageLimit">,
+): string {
+  const dateBucket = Math.floor(Date.now() / PROVIDER_CACHE_TTL_MS);
+  const normalizedQuery = query.trim().toLowerCase().replace(/\s+/g, " ");
+  const endpoint = config?.endpoint.trim().toLowerCase() ?? "";
+  const queryLimit = config?.queryLimit ?? "";
+  const pageLimit = config?.pageLimit ?? "";
+  return `${provider}:${endpoint}:${queryLimit}:${pageLimit}:${normalizedQuery}:${dateBucket}`;
+}
+
+function cloneProviderResult(result: SourceProviderSearchResult): SourceProviderSearchResult {
+  return {
+    ...result,
+    results: result.results.map((source) => ({ ...source })),
+  };
 }
 
 type CrossrefAuthor = {
@@ -162,8 +421,39 @@ type OpenAlexResponse = {
   results?: OpenAlexWork[];
 };
 
+interface ProviderNormalizedResults {
+  results: SourceRecord[];
+  rawCount: number;
+  retryMode?: "short_query";
+  retryQuery?: string;
+  retryReason?: SourceSearchErrorCode;
+}
+
 function pageCount(config: SourceProviderConfig): number {
   return Math.max(1, Math.min(5, Math.trunc(config.pageLimit || 1)));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function retryAfterDelayMs(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(PROVIDER_RETRY_MAX_DELAY_MS, Math.round(seconds * 1000));
+  }
+  const dateMs = Date.parse(value);
+  if (!Number.isFinite(dateMs)) return null;
+  const delta = dateMs - Date.now();
+  if (delta <= 0) return 0;
+  return Math.min(PROVIDER_RETRY_MAX_DELAY_MS, delta);
+}
+
+function retryDelayMs(attempt: number, retryAfterMs?: number | null): number {
+  if (typeof retryAfterMs === "number") return retryAfterMs;
+  const exponentialDelay = PROVIDER_RETRY_BASE_DELAY_MS * 2 ** attempt;
+  return Math.min(PROVIDER_RETRY_MAX_DELAY_MS, exponentialDelay);
 }
 
 function firstText(value: unknown): string | null {
@@ -401,9 +691,10 @@ function sourceProviderConfigs(options?: SourceSearchOptions): Record<AcademicSo
   };
 }
 
-async function searchOpenAlex(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<SourceRecord[]> {
+async function searchOpenAlex(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<ProviderNormalizedResults> {
   const pages = Array.from({ length: pageCount(config) }, (_, index) => index + 1);
   const results: SourceRecord[] = [];
+  let rawCount = 0;
 
   for (const page of pages) {
     const url = new URL(config.endpoint);
@@ -415,14 +706,16 @@ async function searchOpenAlex(query: string, config: SourceProviderConfig, optio
     if (config.mailto) url.searchParams.set("mailto", config.mailto);
 
     const data = await fetchJson<OpenAlexResponse>("OpenAlex", url, config, options?.fetchImpl);
-    const pageResults = (data.results ?? [])
+    const rawItems = data.results ?? [];
+    rawCount += rawItems.length;
+    const pageResults = rawItems
       .map((work) => normalizeOpenAlexWork(work, query))
       .filter((source): source is SourceRecord => Boolean(source));
     results.push(...pageResults);
-    if (pageResults.length < config.queryLimit) break;
+    if (rawItems.length < config.queryLimit) break;
   }
 
-  return results;
+  return { results, rawCount };
 }
 
 async function fetchJson<T>(
@@ -431,38 +724,115 @@ async function fetchJson<T>(
   config: SourceProviderConfig,
   fetchImpl: SourceFetch = fetch,
 ): Promise<T> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  let lastError: unknown;
 
-  try {
-    const response = await fetchImpl(url, {
-      signal: controller.signal,
-      headers: config.headers,
-    });
+  for (let attempt = 0; attempt <= MAX_PROVIDER_RETRIES; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutMs =
+      attempt > 0
+        ? Math.min(config.timeoutMs, RETRY_PROVIDER_TIMEOUT_MS)
+        : config.timeoutMs;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-    if (!response.ok) {
+    try {
+      const response = await fetchImpl(url, {
+        signal: controller.signal,
+        headers: config.headers,
+      });
+
+      if (!response.ok) {
+        if (
+          PROVIDER_RETRYABLE_STATUS_CODES.has(response.status) &&
+          attempt < MAX_PROVIDER_RETRIES
+        ) {
+          await sleep(
+            provider === "OpenAlex" && response.status === 503
+              ? 250
+              : retryDelayMs(
+                  attempt,
+                  retryAfterDelayMs(response.headers.get("retry-after")),
+                ),
+          );
+          continue;
+        }
+        throw new SourceSearchError(
+          response.status === 429
+            ? "rate_limited"
+            : response.status >= 500 && response.status <= 599
+              ? "server_error"
+              : "api-failure",
+          provider,
+          `${provider} returned HTTP ${response.status}`,
+        );
+      }
+
+      try {
+        return (await response.json()) as T;
+      } catch (error) {
+        throw new SourceSearchError(
+          "schema_error",
+          provider,
+          `${provider} response could not be parsed as JSON`,
+          error,
+        );
+      }
+    } catch (error) {
+      lastError = error;
+      if (error instanceof SourceSearchError) {
+        throw error;
+      }
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new SourceSearchError(
+          "timeout",
+          provider,
+          `${provider} request timed out`,
+          error,
+        );
+      }
+      if (attempt < MAX_PROVIDER_RETRIES) {
+        await sleep(retryDelayMs(attempt));
+        continue;
+      }
       throw new SourceSearchError(
         "api-failure",
         provider,
-        `${provider} returned HTTP ${response.status}`,
+        `${provider} request failed`,
+        error,
       );
+    } finally {
+      clearTimeout(timeout);
     }
-
-    return (await response.json()) as T;
-  } catch (error) {
-    if (error instanceof SourceSearchError) throw error;
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new SourceSearchError("timeout", provider, `${provider} request timed out`, error);
-    }
-    throw new SourceSearchError("api-failure", provider, `${provider} request failed`, error);
-  } finally {
-    clearTimeout(timeout);
   }
+
+  if (lastError instanceof SourceSearchError) throw lastError;
+  throw new SourceSearchError(
+    "api-failure",
+    provider,
+    `${provider} request failed`,
+    lastError,
+  );
 }
 
-async function searchCrossref(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<SourceRecord[]> {
+function shortCrossrefRetryQuery(query: string): string {
+  const normalized = query.trim().replace(/\s+/g, " ");
+  if (/rayleigh/i.test(normalized) && /sunset|twilight/i.test(normalized)) {
+    return "Rayleigh scattering sunset";
+  }
+  const terms = normalized
+    .split(/\s+/)
+    .filter((term) => !/^(and|or|of|the|a|an|relationship|effect|impact|study|research)$/i.test(term))
+    .slice(0, 3);
+  return terms.length >= 2 ? terms.join(" ") : normalized;
+}
+
+async function searchCrossrefQuery(
+  query: string,
+  config: SourceProviderConfig,
+  options?: SourceSearchOptions,
+): Promise<ProviderNormalizedResults> {
   const pages = Array.from({ length: pageCount(config) }, (_, index) => index);
   const results: SourceRecord[] = [];
+  let rawCount = 0;
 
   for (const page of pages) {
     const url = new URL(config.endpoint);
@@ -473,18 +843,48 @@ async function searchCrossref(query: string, config: SourceProviderConfig, optio
     if (config.mailto) url.searchParams.set("mailto", config.mailto);
 
     const data = await fetchJson<CrossrefResponse>("Crossref", url, config, options?.fetchImpl);
-    const pageResults = (data.message?.items ?? [])
+    const rawItems = data.message?.items ?? [];
+    rawCount += rawItems.length;
+    const pageResults = rawItems
       .map((work) => normalizeCrossrefWork(work, query))
       .filter((source): source is SourceRecord => Boolean(source));
     results.push(...pageResults);
-    if (pageResults.length < config.queryLimit) break;
+    if (rawItems.length < config.queryLimit) break;
   }
 
-  return results;
+  return { results, rawCount };
 }
 
-async function searchSemanticScholar(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<SourceRecord[]> {
+async function searchCrossref(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<ProviderNormalizedResults> {
+  try {
+    return await searchCrossrefQuery(query, config, options);
+  } catch (error) {
+    if (!(error instanceof SourceSearchError) || error.code !== "timeout") {
+      throw error;
+    }
+    const retryQuery = shortCrossrefRetryQuery(query);
+    if (retryQuery === query.trim()) throw error;
+    const retried = await searchCrossrefQuery(
+      retryQuery,
+      {
+        ...config,
+        timeoutMs: Math.min(config.timeoutMs, RETRY_PROVIDER_TIMEOUT_MS),
+        pageLimit: 1,
+      },
+      options,
+    );
+    return {
+      ...retried,
+      retryMode: "short_query",
+      retryQuery,
+      retryReason: "timeout",
+    };
+  }
+}
+
+async function searchSemanticScholar(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<ProviderNormalizedResults> {
   const results: SourceRecord[] = [];
+  let rawCount = 0;
   let nextOffset: number | null = 0;
 
   for (let page = 0; page < pageCount(config) && nextOffset !== null; page += 1) {
@@ -495,17 +895,19 @@ async function searchSemanticScholar(query: string, config: SourceProviderConfig
     url.searchParams.set("fields", "title,authors,year,abstract,tldr,externalIds,url,venue,fieldsOfStudy,citationCount,publicationTypes,isOpenAccess");
 
     const data = await fetchJson<SemanticScholarResponse>("Semantic Scholar", url, config, options?.fetchImpl);
-    const pageResults = (data.data ?? [])
+    const rawItems = data.data ?? [];
+    rawCount += rawItems.length;
+    const pageResults = rawItems
       .map((paper) => normalizeSemanticScholarPaper(paper, query))
       .filter((source): source is SourceRecord => Boolean(source));
     results.push(...pageResults);
     nextOffset =
-      typeof data.next === "number" && pageResults.length >= config.queryLimit
+      typeof data.next === "number" && rawItems.length >= config.queryLimit
         ? data.next
         : null;
   }
 
-  return results;
+  return { results, rawCount };
 }
 
 export function dedupeSources(sources: SourceRecord[]): SourceRecord[] {
@@ -517,7 +919,7 @@ async function searchProviderOrThrow(
   query: string,
   config: SourceProviderConfig,
   options?: SourceSearchOptions,
-): Promise<SourceRecord[]> {
+): Promise<ProviderNormalizedResults> {
   if (provider === "OpenAlex") return searchOpenAlex(query, config, options);
   if (provider === "Crossref") return searchCrossref(query, config, options);
   return searchSemanticScholar(query, config, options);
@@ -527,6 +929,7 @@ function providerErrorResult(
   provider: SourceProvider,
   query: string,
   error: unknown,
+  latencyMs?: number,
 ): SourceProviderSearchResult {
   if (error instanceof SourceSearchError) {
     return {
@@ -536,6 +939,7 @@ function providerErrorResult(
       results: [],
       error_type: error.code,
       error_message: error.message,
+      latency_ms: latencyMs,
     };
   }
 
@@ -547,6 +951,7 @@ function providerErrorResult(
     results: [],
     error_type: "api-failure",
     error_message: message,
+    latency_ms: latencyMs,
   };
 }
 
@@ -556,30 +961,91 @@ export async function searchSourceProvider(
   options?: SourceSearchOptions,
 ): Promise<SourceProviderSearchResult> {
   const trimmedQuery = query.trim();
+  const startedAt = Date.now();
   const config = sourceProviderConfigs(options)[provider];
+  const cacheKey = normalizedProviderCacheKey(provider, trimmedQuery, config);
+  const cached = providerSearchCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cloneProviderResult(cached.result);
+  }
   if (!trimmedQuery) {
     return {
       ok: true,
       provider,
       query: trimmedQuery,
       results: [],
+      raw_count: 0,
+      normalize_attempt_count: 0,
+      normalized_valid_count: 0,
+      normalized_invalid_count: 0,
       error_type: null,
       error_message: null,
+      latency_ms: 0,
+      provider_health: providerHealthSnapshot(provider),
+    };
+  }
+
+  const health = await providerHealthStore.get(provider);
+  if (health.status === "down") {
+    return {
+      ok: false,
+      provider,
+      query: trimmedQuery,
+      results: [],
+      raw_count: 0,
+      normalize_attempt_count: 0,
+      normalized_valid_count: 0,
+      normalized_invalid_count: 0,
+      error_type: "api-failure",
+      error_message: `${provider} provider is cooling down after repeated failures`,
+      latency_ms: Date.now() - startedAt,
+      provider_health: health,
     };
   }
 
   try {
-    const results = await searchProviderOrThrow(provider, trimmedQuery, config, options);
-    return {
+    const effectiveConfig = providerConfigForHealth(provider, config);
+    const { results, rawCount, retryMode, retryQuery, retryReason } = await searchProviderOrThrow(provider, trimmedQuery, effectiveConfig, options);
+    const latencyMs = Date.now() - startedAt;
+    await providerHealthStore.recordSuccess(provider, { latencyMs });
+    const providerHealth = await providerHealthStore.get(provider);
+    const result: SourceProviderSearchResult = {
       ok: true,
       provider,
       query: trimmedQuery,
       results,
+      raw_count: rawCount,
+      normalize_attempt_count: rawCount,
+      normalized_valid_count: results.length,
+      normalized_invalid_count: Math.max(0, rawCount - results.length),
       error_type: null,
       error_message: null,
+      latency_ms: latencyMs,
+      provider_health: providerHealth,
+      ...(retryMode ? { retry_mode: retryMode } : {}),
+      ...(retryQuery ? { retry_query: retryQuery } : {}),
+      ...(retryReason ? { retry_reason: retryReason } : {}),
     };
+    providerSearchCache.set(cacheKey, {
+      expiresAt: Date.now() + PROVIDER_CACHE_TTL_MS,
+      result: cloneProviderResult(result),
+    });
+    return result;
   } catch (error) {
-    return providerErrorResult(provider, trimmedQuery, error);
+    const latencyMs = Date.now() - startedAt;
+    const result = providerErrorResult(provider, trimmedQuery, error, latencyMs);
+    await providerHealthStore.recordFailure(provider, {
+      errorType: result.error_type,
+      latencyMs,
+    });
+    result.provider_health = await providerHealthStore.get(provider);
+    if (result.error_type === "rate_limited" || result.error_type === "timeout") {
+      providerSearchCache.set(cacheKey, {
+        expiresAt: Date.now() + PROVIDER_CACHE_TTL_MS,
+        result: cloneProviderResult(result),
+      });
+    }
+    return result;
   }
 }
 

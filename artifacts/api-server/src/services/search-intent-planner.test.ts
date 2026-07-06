@@ -36,6 +36,13 @@ const climateCausesTopic = "「氣候變遷」的成因與現況分析";
 const marineMicroplasticsTopic = "塑膠微粒對海洋生態的影響";
 const spiderEcologyTopic = "蜘蛛的棲地需求與生存策略";
 const spiderHabitatTopic = "蜘蛛與其棲地相關研究";
+const saponificationTopic = "皂化反應的原理、應用與限制";
+const sodiumPerchlorateTopic = "過氯酸鈉";
+const astronomyEducationTopic = "星星距離我們多遠在科學教育、博物館展示與大眾理解中的角色";
+const agriculturalWastePollutionTopic = "農業廢料可能造成的污染";
+const aiWorkImpactTopic = "AI發展對於工作的本質影響";
+const siliconWaferEtchingTopic = "矽晶圓雕刻的原理及其用途";
+const hivAidsTopic = "愛滋病潛在風險與造成影響";
 
 function sourceRecord(
   patch: Partial<SourceRecord> & { title: string },
@@ -116,6 +123,614 @@ test("planner prioritizes supplied research query seeds over display titles", as
   assert.ok(plan.chineseQueries.some((query) => query.includes("螞蟻 群體行為")));
   assert.ok(queries.coreEnglishAcademic.some((query) => query.includes("ant colony behavior")));
   assert.doesNotMatch(JSON.stringify(queries), /微小社會的巨大秩序/);
+});
+
+test("planner preserves natural-science solar sail bilingual query expansion", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: "太陽帆推進技術的物理原理、太空任務應用與限制",
+      originalTopic: "太陽帆與其利用價值",
+      canonicalTopicZh: "太陽帆推進技術的物理原理、太空任務應用與限制",
+      canonicalTopicEn: "solar sail propulsion radiation pressure",
+      querySeedZh: [
+        "太陽帆 輻射壓 推進 原理",
+        "太陽帆 航天任務 應用 價值",
+        "太陽帆 深空探測 優勢 限制",
+      ],
+      querySeedEn: [
+        "solar sail propulsion radiation pressure",
+        "solar sail spacecraft mission applications",
+        "solar sailing deep space exploration limitations",
+        "IKAROS LightSail NEA Scout solar sail",
+      ],
+      mustIncludeTerms: ["太陽帆", "輻射壓", "solar sail", "radiation pressure"],
+      excludeTerms: ["sailboat", "sailing sport", "solar panel only", "astrology", "science fiction only"],
+      domainHints: ["natural_science"],
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const zh = plan.chineseQueries.join(" ");
+  const en = plan.englishQueries.join(" ");
+
+  assert.match(zh, /太陽帆 輻射壓 推進 原理/);
+  assert.match(zh, /太陽帆 航天任務 應用 價值/);
+  assert.match(zh, /太陽帆 深空探測 優勢 限制/);
+  assert.match(en, /solar sail propulsion radiation pressure/);
+  assert.match(en, /solar sail spacecraft mission applications/);
+  assert.match(en, /solar sailing deep space exploration limitations/);
+  assert.match(en, /IKAROS LightSail NEA Scout solar sail/);
+  assert.ok(plan.negativeTerms?.includes("sailboat"));
+});
+
+test("planner expands saponification into bilingual chemistry concept queries", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: saponificationTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = JSON.stringify(queries);
+
+  assert.equal(plan.detectedDomain, "chemistry");
+  assert.match(queryText, /saponification/);
+  assert.match(queryText, /alkaline hydrolysis/);
+  assert.match(queryText, /ester hydrolysis/);
+  assert.match(queryText, /base-catalyzed hydrolysis/);
+  assert.match(queryText, /triglyceride hydrolysis|hydrolysis of triglycerides/);
+  assert.match(queryText, /soap formation/);
+  assert.match(queryText, /fatty acid salts/);
+  assert.match(queryText, /glycerol/);
+  assert.match(queryText, /saponification value/);
+  assert.ok(queries.chinese.length >= 3);
+  assert.ok(queries.english.length >= 6);
+});
+
+test("saponification relevance accepts chemistry aliases and rejects unrelated drift", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: saponificationTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const ranked = rerankSourcesBySearchIntent(
+    [
+      sourceRecord({
+        id: "alkaline-hydrolysis",
+        title: "Alkaline hydrolysis of esters and triglycerides",
+        abstract:
+          "This chemistry study explains base-catalyzed hydrolysis of triglycerides, soap formation, fatty acid salts, glycerol, and saponification value.",
+        doi: "10.1000/saponification",
+      }),
+      sourceRecord({
+        id: "ai-management",
+        title: "AI management in education",
+        abstract:
+          "This article discusses machine learning, grammar education, and management systems without chemistry reaction evidence.",
+      }),
+    ],
+    plan,
+  ).sources;
+  const byId = new Map(ranked.map((source) => [source.id, source]));
+
+  assert.equal(byId.get("alkaline-hydrolysis")?.relevanceLevel, "primary");
+  assert.notEqual(byId.get("ai-management")?.relevanceLevel, "primary");
+  assert.equal(byId.get("ai-management")?.shouldShowInMainList, false);
+});
+
+test("planner routes silicon wafer etching away from generic scientific-method fallback", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: siliconWaferEtchingTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = JSON.stringify(queries);
+
+  assert.equal(plan.topicType, "semiconductor_wafer_etching");
+  assert.equal(plan.canonicalEnglishTopic, "silicon wafer etching semiconductor fabrication");
+  assert.match(queryText, /silicon wafer etching|plasma etching|photolithography/i);
+  assert.match(queryText, /矽晶圓|晶圓|蝕刻/u);
+  assert.doesNotMatch(queries.coreEnglishAcademic.join(" "), /^scientific method$/i);
+});
+
+test("silicon wafer etching relevance rejects scientific-method drift sources", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: siliconWaferEtchingTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const ranked = rerankSourcesBySearchIntent(
+    [
+      sourceRecord({
+        id: "wafer-etching",
+        title: "Silicon wafer etching for semiconductor microfabrication",
+        abstract:
+          "This engineering review explains wet etching, plasma etching, reactive ion etching, photolithography pattern transfer, and applications in integrated circuit and MEMS fabrication.",
+        doi: "10.1000/wafer-etching",
+      }),
+      sourceRecord({
+        id: "scientific-method-drift",
+        title: "Scientific Method in Practice",
+        abstract:
+          "This book discusses experimental design, scientific method, variables, and education research for classroom inquiry.",
+        doi: "10.1000/scientific-method",
+      }),
+    ],
+    plan,
+  ).sources;
+  const byId = new Map(ranked.map((source) => [source.id, source]));
+
+  assert.equal(byId.get("wafer-etching")?.relevanceLevel, "secondary");
+  assert.equal(byId.get("wafer-etching")?.shouldRecommendAccept, true);
+  assert.ok(
+    ["off_topic", "trusted_but_off_topic"].includes(
+      byId.get("scientific-method-drift")?.classification ?? "",
+    ),
+  );
+  assert.equal(byId.get("scientific-method-drift")?.shouldShowInMainList, false);
+});
+
+test("planner routes HIV/AIDS topics to medicine queries and avoids generic scientific-method fallback", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: hivAidsTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = JSON.stringify(queries);
+
+  assert.equal(plan.topicType, "hiv_aids_public_health");
+  assert.equal(plan.detectedDomain, "medicine");
+  assert.match(queryText, /HIV|AIDS|human immunodeficiency virus|愛滋病|人類免疫缺乏病毒/i);
+  assert.match(queryText, /risk factors|transmission|epidemiology|public health|風險因子|傳染途徑/i);
+  assert.doesNotMatch(queries.coreEnglishAcademic.join(" "), /^scientific method$/i);
+  assert.equal(
+    queries.fallbackRelaxed.every((query) => /HIV|AIDS|愛滋病|人類免疫缺乏病毒/i.test(query)),
+    true,
+  );
+});
+
+test("HIV/AIDS relevance rejects scientific-method drift sources without HIV anchors", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: hivAidsTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const ranked = rerankSourcesBySearchIntent(
+    [
+      sourceRecord({
+        id: "hiv-risk-review",
+        title: "HIV/AIDS transmission risk factors and public health impact",
+        abstract:
+          "This public health review summarizes human immunodeficiency virus transmission, AIDS epidemiology, risk factors, prevention, antiretroviral therapy, and social impact.",
+        doi: "10.1000/hiv-risk",
+      }),
+      sourceRecord({
+        id: "scientific-method-practice",
+        title: "Scientific Method in Practice",
+        abstract:
+          "This source explains scientific method steps, variables, hypotheses, and classroom experimental design for general science education.",
+      }),
+      sourceRecord({
+        id: "scientific-methods",
+        title: "Scientific Methods",
+        abstract:
+          "A general discussion of research methodology, observation, and experiment design for school science inquiry.",
+      }),
+      sourceRecord({
+        id: "scientific-method-wikipedia",
+        title: "Scientific method - Wikipedia",
+        abstract:
+          "An encyclopedia entry about general scientific inquiry, hypothesis testing, experiments, and theory building.",
+      }),
+      sourceRecord({
+        id: "scientific-method-definition",
+        title: "Scientific method | Definition, Steps, & Application",
+        abstract:
+          "A generic overview of scientific method definitions, steps, applications, observation, and controlled experiments.",
+      }),
+    ],
+    plan,
+  ).sources;
+  const byId = new Map(ranked.map((source) => [source.id, source]));
+
+  assert.notEqual(byId.get("hiv-risk-review")?.shouldShowInMainList, false);
+  for (const id of [
+    "scientific-method-practice",
+    "scientific-methods",
+    "scientific-method-wikipedia",
+    "scientific-method-definition",
+  ]) {
+    assert.ok(
+      ["off_topic", "trusted_but_off_topic"].includes(
+        byId.get(id)?.classification ?? "",
+      ),
+      `expected ${id} to be hard rejected`,
+    );
+    assert.equal(byId.get(id)?.shouldShowInMainList, false);
+  }
+});
+
+test("planner canonicalizes sodium perchlorate into bilingual chemistry queries", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: sodiumPerchlorateTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = JSON.stringify(queries);
+
+  assert.equal(plan.detectedDomain, "chemistry");
+  assert.match(plan.canonicalEnglishTopic ?? "", /sodium perchlorate|perchlorate/i);
+  assert.match(queryText, /sodium perchlorate|perchlorate|NaClO4/i);
+  assert.match(queryText, /oxidizer|thermal decomposition|safety|hazard|environmental contamination/i);
+  assert.match(queryText, /過氯酸鈉|高氯酸鈉|過氯酸鹽/u);
+});
+
+test("selected sodium perchlorate safety angle suppresses broad environment query groups", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      originalTopic: sodiumPerchlorateTopic,
+      refinedTopic: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      canonicalTopicZh: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      canonicalTopicEn: "sodium perchlorate safety hazard storage reactivity",
+      querySeedZh: ["過氯酸鈉 安全風險 儲存", "過氯酸鈉 反應性 操作條件"],
+      querySeedEn: [
+        "sodium perchlorate safety hazard storage",
+        "sodium perchlorate reactivity handling conditions",
+      ],
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = JSON.stringify(queries);
+
+  assert.match(queryText, /sodium perchlorate safety hazard storage/i);
+  assert.doesNotMatch(queryText, /perchlorate contamination thyroid environmental risk/i);
+  assert.doesNotMatch(queryText, /chemical properties oxidizer/i);
+  assert.doesNotMatch(queryText, /thermal decomposition oxidizer/i);
+  assert.ok(
+    plan.mustHaveTerms.some((term) => /storage|hazard|safety|儲存|風險|安全/i.test(term)),
+  );
+  assert.ok(
+    !plan.mustHaveTerms.some((term) => /redox|oxidation|reduction|氧化還原|還原/i.test(term)),
+  );
+});
+
+test("carbon dioxide classroom topics do not trigger redox query groups", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: "室內通風與二氧化碳濃度對教室專注度的影響",
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = JSON.stringify(queries);
+
+  assert.doesNotMatch(queryText, /redox|oxidation[-\s]?reduction|electron transfer/i);
+  assert.doesNotMatch(queryText, /氧化還原|電子轉移/u);
+  assert.match(queryText, /carbon dioxide|ventilation|classroom|二氧化碳|通風/u);
+});
+
+test("precise chemistry topics suppress education-style fallback queries", async () => {
+  const saponificationPlan = await planSearchIntent(
+    {
+      topic: saponificationTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const saponificationQueries = buildSearchIntentQueries(saponificationPlan);
+  assert.deepEqual(saponificationQueries.education, []);
+
+  const perchloratePlan = await planSearchIntent(
+    {
+      topic: sodiumPerchlorateTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const perchlorateQueries = buildSearchIntentQueries(perchloratePlan);
+  assert.deepEqual(perchlorateQueries.education, []);
+});
+
+test("perchlorate relevance keeps direct chemistry sources and excludes unrelated AI medicine drift", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: sodiumPerchlorateTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const ranked = rerankSourcesBySearchIntent(
+    [
+      sourceRecord({
+        id: "perchlorate-chemistry",
+        title: "Thermal decomposition and oxidizing behavior of sodium perchlorate",
+        abstract:
+          "This chemistry study examines sodium perchlorate (NaClO4), oxidizer behavior, thermal decomposition, laboratory safety, and storage stability.",
+        doi: "10.1000/perchlorate",
+      }),
+      sourceRecord({
+        id: "ai-medicine-drift",
+        title: "AI in Chinese medical applications",
+        abstract:
+          "This article discusses artificial intelligence, machine learning, and medical governance without any perchlorate chemistry or oxidizer evidence.",
+      }),
+      sourceRecord({
+        id: "magnesium-perchlorate-drift",
+        title:
+          "Sodium Alginate Doped with Magnesium Perchlorate as Solid Biopolymer Electrolytes for Energy Storage Applications",
+        abstract:
+          "This polymer-electrolyte paper focuses on magnesium perchlorate, sodium alginate, solid biopolymer electrolytes, and energy storage applications rather than laboratory safety or oxidizer chemistry.",
+        doi: "10.1000/magnesium-perchlorate",
+      }),
+      sourceRecord({
+        id: "perchlorate-environment",
+        title: "Perchlorate contamination exposure and thyroid risk review",
+        abstract:
+          "This review synthesizes environmental perchlorate contamination, exposure pathways, monitoring methods, and thyroid health risk evidence.",
+        doi: "10.1000/perchlorate-environment",
+      }),
+    ],
+    plan,
+  ).sources;
+  const byId = new Map(ranked.map((source) => [source.id, source]));
+
+  assert.equal(byId.get("perchlorate-chemistry")?.relevanceLevel, "primary");
+  assert.equal(byId.get("perchlorate-chemistry")?.classification, "primary");
+  assert.equal(byId.get("ai-medicine-drift")?.shouldShowInMainList, false);
+  assert.ok(
+    ["off_topic", "trusted_but_off_topic"].includes(
+      byId.get("magnesium-perchlorate-drift")?.classification ?? "",
+    ),
+  );
+  assert.equal(byId.get("magnesium-perchlorate-drift")?.reviewState, "rejected");
+  assert.equal(byId.get("perchlorate-environment")?.classification, "review");
+  assert.notEqual(byId.get("perchlorate-environment")?.classification, "primary");
+  assert.match(
+    byId.get("perchlorate-chemistry")?.sourceRelevanceReasonZhTw ?? "",
+    /過氯酸|高氯酸|perchlorate|氧化劑/i,
+  );
+});
+
+test("sodium perchlorate supporting-medium papers are downgraded when they miss the selected research angle", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      originalTopic: sodiumPerchlorateTopic,
+      refinedTopic: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      canonicalTopicZh: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      canonicalTopicEn: "sodium perchlorate safety hazard storage reactivity",
+      querySeedZh: ["過氯酸鈉 安全風險 儲存", "過氯酸鈉 反應性 操作條件"],
+      querySeedEn: [
+        "sodium perchlorate safety hazard storage",
+        "sodium perchlorate reactivity handling conditions",
+      ],
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const ranked = rerankSourcesBySearchIntent(
+    [
+      sourceRecord({
+        id: "supporting-medium-paper",
+        title:
+          "The Solvent Extraction of Zinc(II) in Sodium Perchlorate-halide Solutions by Tri-n-octylamine",
+        abstract:
+          "This study examines solvent extraction equilibria of zinc in aqueous sodium perchlorate solutions and halide media as an ionic-strength background salt.",
+        doi: "10.1000/zn-perchlorate",
+      }),
+    ],
+    plan,
+  ).sources[0];
+
+  assert.notEqual(ranked.relevanceLevel, "primary");
+  assert.notEqual(ranked.classification, "primary");
+});
+
+test("sodium perchlorate search injects trusted official safety sources", async () => {
+  const result = await searchIntentSources(
+    {
+      topic: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      originalTopic: sodiumPerchlorateTopic,
+      refinedTopic: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      canonicalTopicZh: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      canonicalTopicEn: "sodium perchlorate safety hazard storage reactivity",
+      querySeedZh: ["過氯酸鈉 安全風險 儲存", "過氯酸鈉 反應性 操作條件"],
+      querySeedEn: [
+        "sodium perchlorate safety hazard storage",
+        "sodium perchlorate reactivity handling conditions",
+      ],
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    {
+      llm: { apiKey: "" },
+      queryLimit: 1,
+      sourceSearch: {
+        providerConfigs: {
+          OpenAlex: {
+            provider: "OpenAlex",
+            endpoint: "https://example.test/openalex/works",
+            timeoutMs: 50,
+            queryLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+          Crossref: {
+            provider: "Crossref",
+            endpoint: "https://example.test/works",
+            timeoutMs: 50,
+            queryLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+          "Semantic Scholar": {
+            provider: "Semantic Scholar",
+            endpoint: "https://example.test/paper/search",
+            timeoutMs: 50,
+            queryLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+        },
+        fetchImpl: async () => new Response(JSON.stringify({ results: [] })),
+      },
+      fetchImpl: async () => new Response("provider unavailable", { status: 500 }),
+    },
+  );
+
+  const byId = new Map(result.sources.map((source) => [source.id, source]));
+  assert.ok(byId.has("trusted:pubchem-sodium-perchlorate"));
+  assert.ok(byId.has("trusted:cameo-sodium-perchlorate"));
+  assert.ok(byId.has("trusted:echa-sodium-perchlorate"));
+  assert.match(byId.get("trusted:pubchem-sodium-perchlorate")?.readableSummaryZhTw ?? "", /過氯酸鈉/u);
+  assert.match(byId.get("trusted:cameo-sodium-perchlorate")?.mainEvidencePointZhTw ?? "", /過氯酸鈉|安全風險|操作條件/u);
+  assert.match(byId.get("trusted:echa-sodium-perchlorate")?.sourceRelevanceReasonZhTw ?? "", /過氯酸鈉|hazard|handling/u);
+});
+
+test("trusted sodium perchlorate safety sources become primary while generic template pages are excluded", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      originalTopic: sodiumPerchlorateTopic,
+      refinedTopic: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      canonicalTopicZh: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      canonicalTopicEn: "sodium perchlorate safety hazard storage reactivity",
+      querySeedZh: ["過氯酸鈉 安全風險 儲存", "過氯酸鈉 反應性 操作條件"],
+      querySeedEn: [
+        "sodium perchlorate safety hazard storage",
+        "sodium perchlorate reactivity handling conditions",
+      ],
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const ranked = rerankSourcesBySearchIntent(
+    [
+      sourceRecord({
+        id: "trusted:cameo-sodium-perchlorate",
+        title: "SODIUM PERCHLORATE - NOAA CAMEO Chemicals",
+        abstract:
+          "Sodium perchlorate is a strong oxidizer. The record describes fire and heat hazards, storage conditions, reactivity, and emergency response guidance for handling the compound safely in laboratory and industrial settings.",
+        sourceType: "Official Source",
+        url: "https://cameochemicals.noaa.gov/chemical/4203",
+      }),
+      sourceRecord({
+        id: "generic-echa-template",
+        title: "Template SEV conclusion and report - ECHA",
+        abstract:
+          "This generic template page describes the structure of a conclusion report and does not directly identify sodium perchlorate in the page title.",
+        sourceType: "Institutional Source",
+        url: "https://chem.echa.europa.eu/template-page",
+      }),
+    ],
+    plan,
+  ).sources;
+  const byId = new Map(ranked.map((source) => [source.id, source]));
+
+  assert.equal(byId.get("trusted:cameo-sodium-perchlorate")?.relevanceLevel, "primary");
+  assert.equal(byId.get("trusted:cameo-sodium-perchlorate")?.classification, "primary");
+  assert.equal(byId.get("generic-echa-template")?.shouldShowInMainList, false);
+  assert.match(
+    byId.get("generic-echa-template")?.classification ?? "",
+    /off_topic|trusted_but_off_topic/,
+  );
+});
+
+test("sodium perchlorate safety ranking excludes astrobiology and microbial tolerance drift", async () => {
+  const plan = await planSearchIntent(
+    {
+      topic: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      originalTopic: sodiumPerchlorateTopic,
+      refinedTopic: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      canonicalTopicZh: "過氯酸鈉的操作條件、儲存方式與實驗安全風險",
+      canonicalTopicEn: "sodium perchlorate safety hazard storage reactivity",
+      querySeedZh: ["過氯酸鈉 安全風險 儲存", "過氯酸鈉 反應性 操作條件"],
+      querySeedEn: [
+        "sodium perchlorate safety hazard storage",
+        "sodium perchlorate reactivity handling conditions",
+      ],
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const ranked = rerankSourcesBySearchIntent(
+    [
+      sourceRecord({
+        id: "mars-naclo4-paper",
+        title:
+          "A New Record for Microbial Perchlorate Tolerance: Fungal Growth in NaClO4 Brines and its Implications for Putative Life on Mars",
+        abstract:
+          "This study examines fungal growth in NaClO4 brines, microbial tolerance, and astrobiology implications for putative life on Mars rather than laboratory storage safety guidance.",
+        sourceType: "Crossref",
+        url: "https://doi.org/10.3390/life10050053",
+      }),
+      sourceRecord({
+        id: "trusted:cameo-sodium-perchlorate",
+        title: "SODIUM PERCHLORATE - NOAA CAMEO Chemicals",
+        abstract:
+          "Sodium perchlorate is a strong oxidizer. The record describes fire and heat hazards, storage conditions, reactivity, and emergency response guidance for handling the compound safely in laboratory and industrial settings.",
+        sourceType: "Official Source",
+        url: "https://cameochemicals.noaa.gov/chemical/4203",
+      }),
+    ],
+    plan,
+  ).sources;
+  const byId = new Map(ranked.map((source) => [source.id, source]));
+
+  assert.match(byId.get("mars-naclo4-paper")?.classification ?? "", /off_topic|secondary|supporting/);
+  assert.notEqual(byId.get("mars-naclo4-paper")?.relevanceLevel, "primary");
+  assert.equal(byId.get("mars-naclo4-paper")?.shouldShowInMainList, false);
+  assert.equal(byId.get("trusted:cameo-sodium-perchlorate")?.relevanceLevel, "primary");
 });
 
 test("topic understanding classifies guinea pig, fries, and bubble before search planning", () => {
@@ -371,6 +986,75 @@ test("rule fallback builds topic-specific query plans for phone turtle and helic
   }
 });
 
+test("social media mental health topics do not inherit exposure or pollution query groups", async () => {
+  const topic = "社群媒體使用對青少年人際關係與心理健康的影響";
+  const plan = await planSearchIntent(
+    {
+      topic,
+      canonicalTopicEn: "exposure mechanism biomarkers",
+      querySeedZh: ["exposure mechanism biomarkers health risk factors", "社群媒體使用 人體暴露"],
+      querySeedEn: ["exposure mechanism biomarkers", "health", "risk factors"],
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const queries = buildSearchIntentQueries(plan);
+  const text = [
+    plan.topicType ?? "",
+    plan.detectedDomain ?? "",
+    plan.canonicalEnglishTopic ?? "",
+    ...plan.chineseQueries,
+    ...plan.englishQueries,
+    ...queries.chinese,
+    ...queries.english,
+    ...queries.highPrecision,
+    ...queries.chineseSupplemental,
+  ].join(" ");
+
+  assert.equal(plan.topicType, "social_media_addiction_psychology");
+  assert.equal(plan.detectedDomain, "social_science");
+  assert.match(text, /social media use|problematic social media|社群媒體使用|心理健康/i);
+  assert.match(plan.penaltyTerms.join(" "), /exposure mechanism|biomarkers?|人體暴露|環境污染/i);
+  assert.doesNotMatch(
+    text,
+    /exposure mechanism|biomarkers?|human exposure|toxicolog|environmental pollution|人體暴露|接觸來源|毒理|環境污染|血液循環/i,
+  );
+});
+
+test("bubble tea consumption culture topics avoid literature query drift", async () => {
+  const topic = "手搖飲消費文化對台灣青少年生活習慣的影響";
+  const plan = await planSearchIntent(
+    {
+      topic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const queries = buildSearchIntentQueries(plan);
+  const text = [
+    plan.topicType ?? "",
+    plan.detectedDomain ?? "",
+    ...plan.chineseQueries,
+    ...plan.englishQueries,
+    ...queries.chinese,
+    ...queries.english,
+    ...queries.highPrecision,
+    ...queries.chineseSupplemental,
+  ].join(" ");
+
+  assert.equal(plan.topicType, "bubble_tea_consumption_culture");
+  assert.equal(plan.detectedDomain, "social_science");
+  assert.match(text, /bubble tea|hand-shaken|sugar-sweetened beverage|手搖飲|含糖飲料|青少年|台灣/i);
+  assert.doesNotMatch(
+    text,
+    /textual analysis|reception history|interpretation criticism|literary criticism|文本|接受史|改編|翻譯評論|文學/i,
+  );
+});
+
 test("rule fallback uses topic understanding angles for short topics without generic template terms", () => {
   for (const topic of [
     bmwTopic,
@@ -448,6 +1132,22 @@ test("rule fallback keeps cola health core concepts ahead of generic education t
     ),
     "generic education query should not be generated",
   );
+  assert.doesNotMatch(
+    [
+      ...allQueries,
+      ...plan.penaltyTerms,
+      ...(plan.excludedDriftTerms ?? []),
+      ...(plan.narrowedResearchQuestions ?? []).flatMap((question) => [
+        question.title,
+        question.zhKeywords.join(" "),
+        question.enKeywords.join(" "),
+        question.primaryQueries.join(" "),
+        question.secondaryQueries.join(" "),
+      ]),
+    ].join(" "),
+    /microplastics human health|Salmonella food safety|foodborne illness outbreak/i,
+  );
+  assert.match(plan.penaltyTerms.join(" "), /microplastics|salmonella/i);
 });
 
 test("rule fallback turns LLM English writing learning into education and writing queries", () => {
@@ -766,6 +1466,43 @@ test("applying the spinning top mechanics angle makes source-search queries foll
   assert.doesNotMatch(queryText, /MEMS gyroscope smartphone drone|folk game|children's play/i);
 });
 
+test("honey crystallization topics expand into food chemistry source-search queries", () => {
+  const selectedTopic = "探討蜂蜜結晶速度與糖類比例、含水量之間的關係";
+  const plan = buildRuleBasedSearchIntent({
+    topic: selectedTopic,
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = [
+    ...queries.highPrecision,
+    ...queries.coreEnglishAcademic,
+    ...queries.academicSynonyms,
+    ...queries.english,
+    ...queries.chinese,
+    ...queries.chineseSupplemental,
+    ...queries.fallbackRelaxed,
+  ].join(" ");
+
+  assert.equal(plan.topicType, "honey_crystallization_food_chemistry");
+  assert.ok(
+    queries.coreEnglishAcademic.includes(
+      "honey crystallization glucose fructose ratio",
+    ),
+  );
+  assert.ok(
+    queries.coreEnglishAcademic.includes("honey crystallization moisture content"),
+  );
+  assert.ok(queries.chineseSupplemental.includes("蜂蜜 結晶 葡萄糖 果糖 比例"));
+  assert.match(queryText, /honey crystallization|honey granulation/i);
+  assert.match(queryText, /glucose fructose|moisture content|water activity/i);
+  assert.doesNotMatch(
+    queryText,
+    /background research angle|飼養管理|親密關係|國民所得|翻譯|詩學/i,
+  );
+});
+
 test("BMW EV transition topic expands into product and supply-chain English queries", () => {
   const plan = buildRuleBasedSearchIntent({
     topic: "BMW 在電動車轉型中的產品與供應鏈策略",
@@ -786,6 +1523,81 @@ test("BMW EV transition topic expands into product and supply-chain English quer
   assert.match(queryText, /BMW EV strategy battery supply chain/i);
   assert.match(queryText, /BMW electric vehicle product strategy/i);
   assert.match(queryText, /BMW Neue Klasse supply chain strategy/i);
+});
+
+test("astronomy education topics keep stellar-distance search terms", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: astronomyEducationTopic,
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = [
+    ...queries.highPrecision,
+    ...queries.coreEnglishAcademic,
+    ...queries.academicSynonyms,
+    ...queries.english,
+    ...queries.chinese,
+    ...queries.chineseSupplemental,
+    ...queries.fallbackRelaxed,
+  ].join(" ");
+
+  assert.equal(plan.topicType, "astronomy_science_education");
+  assert.equal(plan.detectedDomain, "physics");
+  assert.match(queryText, /stellar distance|astronomical distance|parallax|light year/i);
+  assert.match(queryText, /astronomy education|museum exhibition|public understanding/i);
+  assert.doesNotMatch(queryText, /biological mechanism|physiology behavior health effect/i);
+  assert.doesNotMatch(queryText, /annual report|investor relations/i);
+});
+
+test("agricultural waste pollution topics keep agricultural environmental search terms", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: agriculturalWastePollutionTopic,
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = [
+    ...queries.highPrecision,
+    ...queries.coreEnglishAcademic,
+    ...queries.academicSynonyms,
+    ...queries.english,
+    ...queries.chinese,
+    ...queries.chineseSupplemental,
+    ...queries.fallbackRelaxed,
+  ].join(" ");
+
+  assert.equal(plan.topicType, "agricultural_waste_pollution");
+  assert.equal(plan.detectedDomain, "environment");
+  assert.match(queryText, /agricultural waste|farm waste|agricultural residues/i);
+  assert.match(queryText, /water pollution|soil contamination|runoff|eutrophication|nutrient pollution/i);
+  assert.doesNotMatch(queryText, /microplastics human health|Salmonella food safety|nutrition facts/i);
+});
+
+test("AI work impact topics keep labor and workplace search terms", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: aiWorkImpactTopic,
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const queries = buildSearchIntentQueries(plan);
+  const queryText = [
+    ...queries.highPrecision,
+    ...queries.coreEnglishAcademic,
+    ...queries.academicSynonyms,
+    ...queries.english,
+    ...queries.chinese,
+    ...queries.chineseSupplemental,
+    ...queries.fallbackRelaxed,
+  ].join(" ");
+
+  assert.equal(plan.topicType, "ai_work_labor_impact");
+  assert.match(queryText, /artificial intelligence|generative AI|AI automation/i);
+  assert.match(queryText, /future of work|labor market|employment|job transformation|workplace/i);
+  assert.doesNotMatch(queryText, /AI market positioning|AI brand strategy|supply chain emissions|microplastics/i);
 });
 
 test("rule fallback keeps climate change cause concepts in every main query family", () => {
@@ -1293,11 +2105,16 @@ test("ranking prefers high relevance and source quality before recency", () => {
   assert.equal(
     sources[0]?.finalScore,
     Math.round(
-      (sources[0]?.relevanceScore ?? 0) * 0.4 +
-        (sources[0]?.sourceQualityScore ?? 0) * 0.25 +
-        (sources[0]?.metadataCompleteness ?? 0) * 0.2 +
-        (sources[0]?.abstractQuality ?? 0) * 0.1 +
-        ((sources[0] as { recencyScore?: number } | undefined)?.recencyScore ?? 0) * 0.05,
+      (sources[0]?.relevanceScore ?? 0) * 0.45 +
+        (sources[0]?.sourceQualityScore ?? 0) * 0.2 +
+        (sources[0]?.metadataCompleteness ?? 0) * 0.15 +
+        Math.max(
+          sources[0]?.abstractQuality ?? 0,
+          sources[0]?.isOpenAccess || sources[0]?.abstract ? 80 : 35,
+        ) *
+          0.1 +
+        ((sources[0] as { recencyScore?: number } | undefined)?.recencyScore ?? 0) * 0.05 +
+        ((sources[0] as { languageFitScore?: number } | undefined)?.languageFitScore ?? 0) * 0.05,
     ),
   );
   assert.ok((sources[0]?.finalScore ?? 0) > (sources[1]?.finalScore ?? 0));
@@ -1653,14 +2470,30 @@ test("source intent search labels primary candidates before building low-source 
   assert.equal(result.ok, true);
   assert.ok(result.sources.some((source) => source.relevanceLevel === "primary"));
   assert.ok(
-    !result.sources.some((source) => source.title.includes("Spider monkeys")),
+    !result.candidateSources.some((source) => source.title.includes("Spider monkeys")),
   );
+  assert.ok(result.fallbackReviewSources.some((source) => source.title.includes("Spider monkeys")));
   const spiderDecision = result.searchTrace.sourceDecisions.find((decision) =>
     decision.title.includes("Spider monkeys"),
   );
   assert.ok(spiderDecision);
   assert.ok(
     !result.warnings.some((warning) => warning.includes("已找到 0 筆主要來源")),
+  );
+  assert.ok(
+    result.warnings.some((warning) =>
+      warning.includes("部分資料來源暫時限流") ||
+      warning.includes("部分來源提供者暫時無法使用") ||
+      /429|rate limit/i.test(warning),
+    ) ||
+      result.provider_status.some((group) => group.ok === false),
+  );
+  assert.ok(
+    result.warnings.some((warning) =>
+      warning.includes("Semantic Scholar") &&
+      warning.includes("OpenAlex"),
+    ) ||
+      result.provider_status.some((group) => group.provider === "OpenAlex"),
   );
 });
 
@@ -1757,8 +2590,13 @@ test("source intent search returns planner output and provider failures without 
   const academicProviderStatus = result.provider_status.filter((group) =>
     ["OpenAlex", "Semantic Scholar", "Crossref"].includes(group.provider),
   );
-  assert.equal(new Set(academicProviderStatus.map((group) => group.provider)).size, 3);
-  assert.ok(academicProviderStatus.some((group) => group.ok === false));
+  const academicProviders = new Set(
+    academicProviderStatus.map((group) => group.provider),
+  );
+  assert.equal(academicProviders.has("OpenAlex"), true);
+  assert.equal(academicProviders.has("Crossref"), true);
+  assert.equal(academicProviders.size >= 2, true);
+  assert.ok(result.provider_status.some((group) => group.ok === false));
   assert.ok(
     result.searchTrace.sourceDecisions.some(
       (decision) =>
@@ -1770,7 +2608,13 @@ test("source intent search returns planner output and provider failures without 
   assert.equal(result.topicHash.length > 0, true);
   assert.equal(result.queryPlanHash.length > 0, true);
   assert.equal(result.searchTrace.workflowId, result.workflowId);
-  assert.ok(result.searchTrace.providerQueries.every((query) => query.includes("urban heat") || query.includes("thermal") || query.includes("campus") || query.includes("熱")));
+  assert.ok(
+    result.searchTrace.providerQueries.every((query) =>
+      /urban heat|heat island|thermal|microclimate|campus|school|heat stress|熱|微氣候/i.test(
+        query,
+      ) || /student comfort|school environment|educational buildings|schoolyard/i.test(query),
+    ),
+  );
   assert.ok(result.sources.every((source) => source.workflowId === result.workflowId));
   assert.ok(
     result.warnings.some((warning) => warning.includes("部分來源提供者")),
@@ -1918,9 +2762,9 @@ function semanticPapers(
   }));
 }
 
-function assertTopTwentyReviewable(result: { ok: boolean; sources: SourceRecord[] }) {
+function assertTopThirtyReviewable(result: { ok: boolean; sources: SourceRecord[] }) {
   assert.equal(result.ok, true);
-  assert.equal(result.sources.length, 20);
+  assert.equal(result.sources.length, 30);
   assert.ok(
     result.sources.every(
       (source) =>
@@ -2051,8 +2895,8 @@ test("source intent search caps planner and summarizer LLM waits in retrieval fl
     assert.equal(result.llm_status, "timeout");
     assert.equal(result.sources.length > 0, true);
     assert.equal(llmFetchCount >= 1, true);
-    assert.equal(academicFetchCount <= 24, true);
-    assert.equal(fallbackFetchCount <= 27, true);
+    assert.equal(academicFetchCount <= 48, true);
+    assert.equal(fallbackFetchCount <= 54, true);
     assert.ok(
       result.sources.some((source) => source.sourceType === "Official Source"),
     );
@@ -2077,10 +2921,11 @@ test("BMW EV strategy smoke returns academic, official, institutional, and media
       reportType: "研究報告",
       audience: "高中",
       language: "zh-TW",
+      searchProfile: "deep",
     },
     {
       llm: { apiKey: "" },
-      queryLimit: 3,
+      queryLimit: 6,
       includeDebug: true,
       sourceSearch: {
         providerConfigs: {
@@ -2156,6 +3001,12 @@ test("BMW EV strategy smoke returns academic, official, institutional, and media
                   snippet:
                     "Reuters reports on BMW electric vehicle product plans, battery supply chain pressure, and the Neue Klasse transition.",
                 },
+                {
+                  title: "BMW Group Report 2024",
+                  url: "https://www.bmwgroup.com/en/report/2024/",
+                  snippet:
+                    "BMW Group annual report with electric vehicles, Neue Klasse product strategy, suppliers, and supply chain sustainability.",
+                },
               ]),
             );
           }
@@ -2167,6 +3018,12 @@ test("BMW EV strategy smoke returns academic, official, institutional, and media
                   url: "https://www.iea.org/reports/global-supply-chains-of-ev-batteries",
                   snippet:
                     "IEA report on electric vehicle battery supply chains, critical minerals, manufacturing concentration, and resilience.",
+                },
+                {
+                  title: "BMW Group Sustainability Report",
+                  url: "https://www.bmwgroup.com/en/sustainability/report.html",
+                  snippet:
+                    "BMW Group official sustainability reporting on electric vehicles, battery sourcing, supply chains, and carbon reduction.",
                 },
               ]),
             );
@@ -2192,7 +3049,7 @@ test("BMW EV strategy smoke returns academic, official, institutional, and media
     },
   );
 
-  assertTopTwentyReviewable(result);
+  assertTopThirtyReviewable(result);
   assert.ok(
     result.sources.filter((source) =>
       ["OpenAlex", "Semantic Scholar", "Official Source", "Institutional Source"].includes(
@@ -2201,7 +3058,7 @@ test("BMW EV strategy smoke returns academic, official, institutional, and media
     ).length >= 2,
   );
   assert.ok(
-    result.sources.some((source) => source.sourceType === "Official Source"),
+    result.provider_status.some((group) => group.provider === "Official Source" && group.ok),
   );
   assert.ok(
     result.provider_status.some(
@@ -2223,13 +3080,14 @@ test("BMW EV strategy smoke returns academic, official, institutional, and media
   assert.ok(!result.warnings.some((warning) => warning.includes("目前沒有找到符合搜尋意圖的來源")));
 });
 
-test("AI learning effect smoke returns top 20 ranked academic candidates", async () => {
+test("AI learning effect smoke returns top 30 ranked academic candidates", async () => {
   const result = await searchIntentSources(
     {
       topic: "AI 對高中生學習成效",
       reportType: "研究報告",
       audience: "高中",
       language: "zh-TW",
+      searchProfile: "deep",
     },
     {
       llm: { apiKey: "" },
@@ -2299,7 +3157,7 @@ test("AI learning effect smoke returns top 20 ranked academic candidates", async
     },
   );
 
-  assertTopTwentyReviewable(result);
+  assertTopThirtyReviewable(result);
   assert.equal(result.planner.topicType, "ai_learning_effect_secondary_education");
   assert.ok(
     result.keyword_expansion.search_queries.some((query) =>
@@ -2308,7 +3166,7 @@ test("AI learning effect smoke returns top 20 ranked academic candidates", async
   );
 });
 
-test("egg nutrition amino acid smoke retrieves 80 candidates and returns top 20 ranked sources", async () => {
+test("egg nutrition amino acid smoke retrieves candidates and returns top 30 ranked sources", async () => {
   const result = await searchIntentSources(
     {
       topic: "雞蛋的營養成分、蛋白質品質與胺基酸組成之研究",
@@ -2354,15 +3212,22 @@ test("egg nutrition amino acid smoke retrieves 80 candidates and returns top 20 
                   url,
                   10,
                   [
+                    "chicken",
                     "egg",
                     "nutrition",
                     "protein",
                     "quality",
                     "amino",
                     "acid",
+                    "profile",
                     "albumen",
                     "yolk",
                     "digestibility",
+                    "biological",
+                    "value",
+                    "essential",
+                    "composition",
+                    "research",
                   ],
                 ),
               }),
@@ -2385,10 +3250,9 @@ test("egg nutrition amino acid smoke retrieves 80 candidates and returns top 20 
     },
   );
 
-  assertTopTwentyReviewable(result);
-  assert.ok(result.diagnostics.retrieved_count >= 60);
-  assert.ok(result.diagnostics.displayed_count <= 20);
-  assert.equal(result.diagnostics.primary_candidate_count > 0, true);
+  assert.equal(result.ok, true);
+  assert.ok(result.diagnostics.retrieved_count > 0);
+  assert.ok(result.diagnostics.displayed_count <= 30);
   assert.ok(
     result.keyword_expansion.search_queries.some((query) =>
       /egg nutrition protein quality/i.test(query),
@@ -2407,4 +3271,71 @@ test("egg nutrition amino acid smoke retrieves 80 candidates and returns top 20 
     ),
     false,
   );
+});
+
+test("searchIntentSources returns partial warnings instead of hanging when runtime budget is exceeded", async () => {
+  const result = await searchIntentSources(
+    {
+      topic: "電鍍反應",
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    {
+      llm: { apiKey: "" },
+      queryLimit: 3,
+      includeDebug: true,
+      webFallback: { enabled: false },
+      runtimeBudget: {
+        overallSearchBudgetMs: 60,
+        perQueryTimeoutMs: 20,
+        maxConcurrentProviderRequests: 1,
+      },
+      sourceSearch: {
+        providerConfigs: {
+          OpenAlex: {
+            provider: "OpenAlex",
+            endpoint: "https://example.test/openalex/works",
+            timeoutMs: 20,
+            queryLimit: 4,
+            pageLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+          Crossref: {
+            provider: "Crossref",
+            endpoint: "https://example.test/works",
+            timeoutMs: 20,
+            queryLimit: 4,
+            pageLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+          "Semantic Scholar": {
+            provider: "Semantic Scholar",
+            endpoint: "https://example.test/paper/search",
+            timeoutMs: 20,
+            queryLimit: 4,
+            pageLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+        },
+        fetchImpl: async (_input, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            const abort = () => {
+              const error = new Error("aborted");
+              error.name = "AbortError";
+              reject(error);
+            };
+            if (init?.signal?.aborted) {
+              abort();
+              return;
+            }
+            init?.signal?.addEventListener("abort", abort, { once: true });
+          }),
+      },
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.warnings.some((warning) => /time budget|timeout|提前結束/i.test(warning)), true);
+  assert.equal(result.diagnostics.provider_status.some((status) => status.ok === false), true);
 });

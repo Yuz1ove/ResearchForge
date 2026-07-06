@@ -68,6 +68,78 @@ test("cola health relevance removes admissions and engineering-management noise 
   }
 });
 
+test("saponification relevance treats alkaline and ester hydrolysis as high topic aliases", () => {
+  const topic = "皂化反應的原理、應用與限制";
+  const assessed = applySourceRelevanceAssessments(
+    [
+      source({
+        id: "saponification",
+        title: "Alkaline hydrolysis of esters and triglycerides",
+        abstract:
+          "This chemistry study explains base-catalyzed hydrolysis of triglycerides, soap formation, fatty acid salts, glycerol, and saponification value.",
+        doi: "10.1000/saponification",
+      }),
+      source({
+        id: "biodiesel-drift",
+        title: "Biodiesel transesterification cost and fuel economy analysis",
+        abstract:
+          "This study compares biodiesel transesterification cost, fuel economy, and process efficiency without discussing alkaline hydrolysis or soap formation.",
+        doi: "10.1000/biodiesel-cost",
+      }),
+      source({
+        id: "ai-management",
+        title: "AI management and grammar education",
+        abstract:
+          "This article discusses machine learning, grammar education, and management without chemistry reaction evidence.",
+        doi: null,
+      }),
+    ],
+    topic,
+  );
+  const byId = new Map(assessed.map((item) => [item.id, item]));
+
+  assert.equal(byId.get("saponification")?.relevanceLevel, "primary");
+  assert.equal(byId.get("saponification")?.topicalRelevanceLabel, "high");
+  assert.notEqual(byId.get("biodiesel-drift")?.relevanceLevel, "primary");
+  assert.equal(byId.get("biodiesel-drift")?.shouldShowInMainList, false);
+  assert.equal(byId.get("biodiesel-drift")?.usageRecommendation, "exclude");
+  assert.match(
+    byId.get("saponification")?.relevanceReasonZhTw ??
+      byId.get("saponification")?.sourceRelevanceReasonZhTw ??
+      "",
+    /皂化|鹼水解|alkaline hydrolysis/i,
+  );
+  assert.notEqual(byId.get("ai-management")?.relevanceLevel, "primary");
+  assert.equal(byId.get("ai-management")?.shouldShowInMainList, false);
+});
+
+test("applySourceRelevanceAssessments preserves backend zh-TW summaries for grounded chemistry sources", () => {
+  const assessed = applySourceRelevanceAssessments(
+    [
+      source({
+        id: "saponification-summary",
+        title: "Alkaline hydrolysis of esters and triglycerides",
+        abstract:
+          "This chemistry study explains base-catalyzed hydrolysis of triglycerides, soap formation, fatty acid salts, glycerol, and saponification value.",
+        readableSummaryZhTW:
+          "這份研究整理酯類與三酸甘油酯的鹼性水解機制，並說明皂化反應中脂肪酸鹽與甘油形成的條件。",
+        summaryFallbackUsed: true,
+        doi: "10.1000/saponification-summary",
+      }),
+    ],
+    "皂化反應的原理、應用與限制",
+  );
+
+  assert.match(
+    assessed[0]?.readableSummaryZhTW ?? "",
+    /酯類與三酸甘油酯的鹼性水解機制|皂化反應/,
+  );
+  assert.doesNotMatch(
+    assessed[0]?.readableSummaryZhTW ?? "",
+    /尚未完成繁中摘要/,
+  );
+});
+
 test("spider ecology relevance keeps habitat sources and rejects generic strategy drift", () => {
   const topic = "蜘蛛與其棲地相關研究";
   const assessed = applySourceRelevanceAssessments(
@@ -328,6 +400,41 @@ test("climate source relevance separates primary causes and current-status sourc
         item.relevanceLevel !== "low" && item.relevanceLevel !== "off_topic",
     ),
   );
+});
+
+test("paleontology algae topic promotes fossil paleoenvironment evidence but not generic extinction articles", () => {
+  const topic = "恐龍化石與藻類的關係";
+  const assessed = applySourceRelevanceAssessments(
+    [
+      source({
+        id: "algae-fossil",
+        title:
+          "Dinosaur fossils, algal microfossils, and paleoenvironment reconstruction",
+        abstract:
+          "This paleontology study compares dinosaur fossil preservation, stratigraphy, algal microfossils, cyanobacteria biomarkers, and sedimentary paleoenvironment evidence.",
+        doi: "10.1000/dinosaur-algae",
+        sourceCategory: "journal_article",
+      }),
+      source({
+        id: "asteroid-only",
+        title:
+          "Asteroid impact, not volcanism, caused the end-Cretaceous dinosaur extinction",
+        abstract:
+          "This study tests end-Cretaceous extinction scenarios and dinosaur habitat loss using climate and ecological models.",
+        doi: "10.1000/asteroid-only",
+        sourceCategory: "journal_article",
+      }),
+    ],
+    topic,
+  );
+
+  const algae = assessed.find((item) => item.id === "algae-fossil");
+  const asteroid = assessed.find((item) => item.id === "asteroid-only");
+
+  assert.equal(algae?.relevanceLevel, "primary");
+  assert.equal(algae?.usageRecommendation, "primary");
+  assert.equal(algae?.shouldShowInMainList, true);
+  assert.notEqual(asteroid?.relevanceLevel, "primary");
 });
 
 test("metadata-only climate source is not recommended as primary evidence", () => {

@@ -123,4 +123,6 @@ export interface SourceRecord {
   isPrimaryEvidence?: boolean | null;
   rejectionReason?: string | null;
   recommendation?: string | null;
+  lowConfidence?: boolean | null;
+  needsReview?: boolean | null;
 }

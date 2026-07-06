@@ -80,8 +80,8 @@ test("draft generator includes section headings, source markers, and reference l
   });
 
   assert.match(draft.text, /研究背景與動機/);
-  assert.match(draft.text, /（來源 1）/);
-  assert.match(draft.text, /資料缺口/);
+  assert.match(draft.text, /\[S1\]/);
+  assert.match(draft.text, /資料缺口|來源尚不足|補充來源/u);
   assert.equal(draft.sectionEvidenceMap.length > 0, true);
   assert.equal(draft.paragraphPlans.length > 0, true);
   assert.equal(draft.debug.reportDraftGeneratedFromPlans, true);
@@ -89,8 +89,19 @@ test("draft generator includes section headings, source markers, and reference l
   assert.doesNotMatch(draft.sections.find((section) => section.sectionId === "abstract")?.body ?? "", /來源 1[：:]/);
   assert.match(draft.text, /參考資料/);
   assert.equal(draft.referenceList.length, 1);
+  assert.equal(draft.references.length, 1);
   assert.match(draft.referenceList[0]!, /Screen time and sleep/);
   assert.equal(draft.qualityReport.acceptedSourceCount, 1);
+  assert.ok(
+    draft.sections.every((section) => typeof section.synthesizedProseZhTw === "string"),
+  );
+  assert.ok(
+    draft.sections.some((section) =>
+      section.sectionId === "abstract"
+        ? section.synthesizedProseZhTw.length > 0
+        : true,
+    ),
+  );
 });
 
 test("draft generator flags accepted sources with insufficient abstracts", () => {
@@ -120,7 +131,7 @@ test("draft generator flags accepted sources with insufficient abstracts", () =>
     citationFormat: "APA",
   });
 
-  assert.match(draft.text, /摘要不足|保守草稿|保守證據/);
+  assert.match(draft.text, /摘要或 metadata|來源尚不足|不能宣稱已完成全文分析/u);
   assert.doesNotMatch(draft.text, /建議開啟原文|請開啟原文|回查原文/);
 });
 
@@ -164,7 +175,7 @@ test("draft synthesis organizes evidence by section intent instead of source-car
 
   assert.match(literature, /文獻|整合來源/u);
   assert.doesNotMatch(literature, /來源 1 可支持|來源 2 可支持/);
-  assert.match(evidence, /可整理出的重點包括/u);
+  assert.match(evidence, /來源尚不足|初步方向|較可成立/u);
   assert.doesNotMatch(evidence, /來源 1[：:].*來源 2[：:]/s);
   assert.match(discussion, /限制|可追溯的解讀/u);
 });
@@ -262,6 +273,6 @@ test("draft writer never leaks instruction or scaffold text into report body", (
     assert.doesNotMatch(draft.text, pattern);
   }
   assert.match(draft.text, /可樂成分與青少年健康影響/);
-  assert.match(draft.text, /（來源 1）|（來源 2）|（來源 3）/);
-  assert.match(draft.text, /來源審查與證據卡整理方式/u);
+  assert.match(draft.text, /\[S1\]|\[S2\]|\[S3\]/);
+  assert.match(draft.text, /資料檢索|證據卡整理方式/u);
 });

@@ -10,6 +10,15 @@ export type SelectedTitleSearchSeed = {
   originalTopic: string;
   selectedTitle: string;
   hiddenResearchPlan: HiddenResearchPlan | null;
+  researchObject?: string;
+  variableOrAngle?: string;
+  rationale?: string;
+  keywordsZh?: string[];
+  keywordsEn?: string[];
+  querySeeds?: {
+    zh: string[];
+    en: string[];
+  };
 };
 
 export type SelectedTitleSearchPayload = {
@@ -103,7 +112,18 @@ export function topicExpansionToTitleCards(
       angle: titleStyleBadgeLabel(candidate.style),
       style: candidate.style,
       displayOnly: candidate.displayOnly,
-      reason: "",
+      reason: candidate.rationale ?? "",
+      researchObject: candidate.researchObject,
+      variableOrAngle: candidate.variableOrAngle,
+      rationale: candidate.rationale,
+      keywordsZh: candidate.keywordsZh ?? [],
+      keywordsEn: candidate.keywordsEn ?? [],
+      querySeeds: candidate.querySeeds
+        ? {
+            zh: candidate.querySeeds.zh ?? [],
+            en: candidate.querySeeds.en ?? [],
+          }
+        : undefined,
       hiddenResearchPlan: result.hiddenResearchPlan ?? null,
     }));
   }
@@ -129,11 +149,33 @@ export function createSelectedTitleSearchSeed(
   originalTopic: string,
   selectedTitle: string,
   hiddenResearchPlan: HiddenResearchPlan | null | undefined,
+  candidate?: {
+    researchObject?: string;
+    variableOrAngle?: string;
+    rationale?: string;
+    keywordsZh?: string[];
+    keywordsEn?: string[];
+    querySeeds?: {
+      zh: string[];
+      en: string[];
+    };
+  } | null,
 ): SelectedTitleSearchSeed {
   return {
     originalTopic: originalTopic.trim(),
     selectedTitle: selectedTitle.trim(),
     hiddenResearchPlan: hiddenResearchPlan ?? null,
+    researchObject: candidate?.researchObject?.trim() || undefined,
+    variableOrAngle: candidate?.variableOrAngle?.trim() || undefined,
+    rationale: candidate?.rationale?.trim() || undefined,
+    keywordsZh: uniqueStrings(candidate?.keywordsZh ?? []).slice(0, 8),
+    keywordsEn: uniqueStrings(candidate?.keywordsEn ?? []).slice(0, 8),
+    querySeeds: candidate?.querySeeds
+      ? {
+          zh: uniqueStrings(candidate.querySeeds.zh ?? []).slice(0, 6),
+          en: uniqueStrings(candidate.querySeeds.en ?? []).slice(0, 6),
+        }
+      : undefined,
   };
 }
 
@@ -143,8 +185,12 @@ export function buildSelectedTitleSearchPayload(input: {
 }): SelectedTitleSearchPayload {
   const { seed, diagnostics } = input;
   const hidden = seed.hiddenResearchPlan;
-  const querySeedZh = hidden?.querySeedZh ?? [];
-  const querySeedEn = hidden?.querySeedEn ?? [];
+  const querySeedZh = seed.querySeeds?.zh?.length
+    ? seed.querySeeds.zh
+    : hidden?.querySeedZh ?? [];
+  const querySeedEn = seed.querySeeds?.en?.length
+    ? seed.querySeeds.en
+    : hidden?.querySeedEn ?? [];
   const canonicalTopicZh =
     hidden?.canonicalTopicZh?.trim() || seed.selectedTitle || seed.originalTopic;
   const canonicalTopicEn =
@@ -153,6 +199,8 @@ export function buildSelectedTitleSearchPayload(input: {
     querySeedEn.find((query) => /[A-Za-z]/.test(query)) ||
     "";
   const mustIncludeTerms = uniqueStrings([
+    ...(seed.keywordsZh ?? []),
+    ...(seed.keywordsEn ?? []),
     ...(hidden?.mustIncludeTerms ?? []),
     ...fallbackMustIncludeTerms({
       selectedTitle: canonicalTopicZh,

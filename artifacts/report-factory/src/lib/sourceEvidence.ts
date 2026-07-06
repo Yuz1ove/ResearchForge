@@ -69,6 +69,12 @@ function matchedTerms(text: string, terms: string[]): string[] {
   return unique(terms.filter((term) => containsTerm(text, term)));
 }
 
+function isPaleontologyAlgaeFacets(facets: TopicFacets): boolean {
+  return facets.topicCore.some((term) =>
+    /藻類|微化石|古環境|algal|algae|microfossil|paleoenvironment/i.test(term),
+  );
+}
+
 function facetTerms(facets: TopicFacets): string[] {
   return unique([
     ...facets.topicCore,
@@ -131,35 +137,45 @@ function translateEvidenceSnippet(
 ): string {
   const text = lower(sentence);
   const pieces: string[] = [];
+  const paleontologyAlgae = isPaleontologyAlgaeFacets(facets);
 
-  if (/greenhouse gas|greenhouse gases|溫室氣體/.test(text))
+  if (!paleontologyAlgae && /greenhouse gas|greenhouse gases|溫室氣體/.test(text))
     pieces.push("溫室氣體");
-  if (/fossil fuel|fossil fuels|combustion|化石燃料/.test(text))
+  if (!paleontologyAlgae && /fossil fuel|fossil fuels|combustion|化石燃料/.test(text))
     pieces.push("化石燃料燃燒");
-  if (/carbon dioxide|co2|二氧化碳/.test(text)) pieces.push("二氧化碳");
-  if (/methane|甲烷/.test(text)) pieces.push("甲烷");
-  if (/emission|排放/.test(text)) pieces.push("排放趨勢");
-  if (/anthropogenic|human activities|人為/.test(text)) pieces.push("人為活動");
-  if (/land use|deforestation|土地利用|森林砍伐/.test(text))
+  if (!paleontologyAlgae && /carbon dioxide|co2|二氧化碳/.test(text)) pieces.push("二氧化碳");
+  if (!paleontologyAlgae && /methane|甲烷/.test(text)) pieces.push("甲烷");
+  if (!paleontologyAlgae && /emission|排放/.test(text)) pieces.push("排放趨勢");
+  if (!paleontologyAlgae && /anthropogenic|human activities|人為/.test(text)) pieces.push("人為活動");
+  if (!paleontologyAlgae && /land use|deforestation|土地利用|森林砍伐/.test(text))
     pieces.push("土地利用變遷");
-  if (/observed warming|temperature|global warming|全球升溫|溫度/.test(text))
+  if (!paleontologyAlgae && /observed warming|temperature|global warming|全球升溫|溫度/.test(text))
     pieces.push("觀測到的升溫");
-  if (/co2 concentration|concentration|濃度/.test(text))
+  if (!paleontologyAlgae && /co2 concentration|concentration|濃度/.test(text))
     pieces.push("溫室氣體濃度");
-  if (/sea level|海平面/.test(text)) pieces.push("海平面變化");
-  if (/ipcc|wmo|nasa|noaa/.test(text)) pieces.push("權威氣候評估或官方資料");
-  if (/spider|spiders|arachnid|araneae|蜘蛛|蛛形綱/.test(text))
+  if (!paleontologyAlgae && /sea level|海平面/.test(text)) pieces.push("海平面變化");
+  if (!paleontologyAlgae && /ipcc|wmo|nasa|noaa/.test(text)) pieces.push("權威氣候評估或官方資料");
+  if (!paleontologyAlgae && /spider|spiders|arachnid|araneae|蜘蛛|蛛形綱/.test(text))
     pieces.push("蜘蛛主體");
-  if (/habitat|microhabitat|棲地|微棲地/.test(text)) pieces.push("棲地需求");
-  if (/predation|prey capture|foraging|捕食|獵食|覓食/.test(text))
+  if (!paleontologyAlgae && /habitat|microhabitat|棲地|微棲地/.test(text)) pieces.push("棲地需求");
+  if (!paleontologyAlgae && /predation|prey capture|foraging|捕食|獵食|覓食/.test(text))
     pieces.push("捕食策略");
-  if (/anti-predator|anti predator|camouflage|避敵|偽裝/.test(text))
+  if (!paleontologyAlgae && /anti-predator|anti predator|camouflage|避敵|偽裝/.test(text))
     pieces.push("避敵行為");
-  if (/web building|web-building|web|築網|蛛網/.test(text))
+  if (!paleontologyAlgae && /web building|web-building|web|築網|蛛網/.test(text))
     pieces.push("築網行為");
-  if (/survival|adaptation|behavior|behaviour|生存|適應|行為/.test(text))
+  if (!paleontologyAlgae && /survival|adaptation|behavior|behaviour|生存|適應|行為/.test(text))
     pieces.push("生存適應");
-  if (/reproduction|mating|繁殖|交配/.test(text)) pieces.push("繁殖策略");
+  if (!paleontologyAlgae && /reproduction|mating|繁殖|交配/.test(text)) pieces.push("繁殖策略");
+  if (!paleontologyAlgae && /dinosaur|恐龍/.test(text)) pieces.push("恐龍");
+  if (/fossil record|fossil preservation|fossil formation|fossil|化石紀錄|化石保存|化石形成|化石/.test(text))
+    pieces.push("化石證據");
+  if (/stratigraphy|stratigraphic|geological age|sedimentary|sediment|taphonomy|地層|地層年代|沉積|埋藏|年代判定/.test(text))
+    pieces.push("地層與年代資料");
+  if (/paleoenvironment|palaeoenvironment|paleoecology|palaeoecology|古環境|古生態|環境重建/.test(text))
+    pieces.push("古環境重建");
+  if (/algae|algal|cyanobacteria|stromatolite|microfossil|biomarker|藻類|藍綠菌|疊層石|微化石|生物標誌/.test(text))
+    pieces.push("藻類或微化石線索");
 
   if (pieces.length > 0) {
     return `此片段指出${unique(pieces).slice(0, 4).join("、")}與${facets.topicCore[0] ?? "主題"}相關。`;
@@ -280,34 +296,45 @@ function buildSummary(snippets: string[], facets: TopicFacets): string {
 
   const combined = lower(snippets.join(" "));
   const focus: string[] = [];
-  if (/greenhouse gas|greenhouse gases|溫室氣體/.test(combined))
+  const paleontologyAlgae = isPaleontologyAlgaeFacets(facets);
+  if (!paleontologyAlgae && /greenhouse gas|greenhouse gases|溫室氣體/.test(combined))
     focus.push("溫室氣體");
-  if (/fossil fuel|fossil fuels|化石燃料/.test(combined))
+  if (!paleontologyAlgae && /fossil fuel|fossil fuels|化石燃料/.test(combined))
     focus.push("化石燃料");
-  if (/carbon dioxide|co2|二氧化碳/.test(combined)) focus.push("二氧化碳");
-  if (/methane|甲烷/.test(combined)) focus.push("甲烷");
-  if (/emission|排放/.test(combined)) focus.push("排放");
-  if (/land use|deforestation|土地利用|森林砍伐/.test(combined))
+  if (!paleontologyAlgae && /carbon dioxide|co2|二氧化碳/.test(combined)) focus.push("二氧化碳");
+  if (!paleontologyAlgae && /methane|甲烷/.test(combined)) focus.push("甲烷");
+  if (!paleontologyAlgae && /emission|排放/.test(combined)) focus.push("排放");
+  if (!paleontologyAlgae && /land use|deforestation|土地利用|森林砍伐/.test(combined))
     focus.push("土地利用變遷");
   if (
+    !paleontologyAlgae &&
     /observed warming|temperature|global warming|全球升溫|溫度/.test(combined)
   )
     focus.push("觀測升溫");
-  if (/co2 concentration|concentration|濃度/.test(combined))
+  if (!paleontologyAlgae && /co2 concentration|concentration|濃度/.test(combined))
     focus.push("溫室氣體濃度");
-  if (/sea level|海平面/.test(combined)) focus.push("海平面");
-  if (/spider|spiders|arachnid|araneae|蜘蛛|蛛形綱/.test(combined))
+  if (!paleontologyAlgae && /sea level|海平面/.test(combined)) focus.push("海平面");
+  if (!paleontologyAlgae && /spider|spiders|arachnid|araneae|蜘蛛|蛛形綱/.test(combined))
     focus.push("蜘蛛主體");
-  if (/habitat|microhabitat|棲地|微棲地/.test(combined)) focus.push("棲地需求");
-  if (/predation|prey capture|foraging|捕食|獵食|覓食/.test(combined))
+  if (!paleontologyAlgae && /habitat|microhabitat|棲地|微棲地/.test(combined)) focus.push("棲地需求");
+  if (!paleontologyAlgae && /predation|prey capture|foraging|捕食|獵食|覓食/.test(combined))
     focus.push("捕食策略");
-  if (/anti-predator|anti predator|camouflage|避敵|偽裝/.test(combined))
+  if (!paleontologyAlgae && /anti-predator|anti predator|camouflage|避敵|偽裝/.test(combined))
     focus.push("避敵行為");
-  if (/web building|web-building|web|築網|蛛網/.test(combined))
+  if (!paleontologyAlgae && /web building|web-building|web|築網|蛛網/.test(combined))
     focus.push("築網行為");
-  if (/survival|adaptation|behavior|behaviour|生存|適應|行為/.test(combined))
+  if (!paleontologyAlgae && /survival|adaptation|behavior|behaviour|生存|適應|行為/.test(combined))
     focus.push("生存適應");
-  if (/reproduction|mating|繁殖|交配/.test(combined)) focus.push("繁殖策略");
+  if (!paleontologyAlgae && /reproduction|mating|繁殖|交配/.test(combined)) focus.push("繁殖策略");
+  if (!paleontologyAlgae && /dinosaur|恐龍/.test(combined)) focus.push("恐龍");
+  if (/fossil record|fossil preservation|fossil formation|fossil|化石紀錄|化石保存|化石形成|化石/.test(combined))
+    focus.push("化石證據");
+  if (/stratigraphy|stratigraphic|geological age|sedimentary|sediment|taphonomy|地層|地層年代|沉積|埋藏|年代判定/.test(combined))
+    focus.push("地層與年代資料");
+  if (/paleoenvironment|palaeoenvironment|paleoecology|palaeoecology|古環境|古生態|環境重建/.test(combined))
+    focus.push("古環境重建");
+  if (/algae|algal|cyanobacteria|stromatolite|microfossil|biomarker|藻類|藍綠菌|疊層石|微化石|生物標誌/.test(combined))
+    focus.push("藻類或微化石線索");
 
   if (focus.length > 0) {
     return `此來源可用摘要片段涵蓋${unique(focus).slice(0, 5).join("、")}，可用來判斷${facets.topicCore[0] ?? "研究主題"}的核心面向。`;

@@ -15,6 +15,21 @@ import {
   type ResearchProject,
   type ResearchSectionKey,
 } from "./qualityJudge.ts";
+import {
+  buildStableCitationMarkerMap,
+  buildSupportedClaimsFromEvidenceCards,
+  citationMarkersForSourceIds,
+  extractCitationMarkers,
+  getSectionEvidencePolicy,
+  guardUnsupportedSectionClaims,
+  selectSupportedClaimsForSection,
+  sourceIdsFromCitationMarkers,
+  synthesizeSectionParagraph,
+  validateSectionEvidenceCoverage,
+  type EvidenceCoverageStatus,
+  type SectionEvidenceCoverage,
+  type SupportedClaim,
+} from "./sectionEvidencePolicy.ts";
 
 export interface ReportDraftInput {
   project: ResearchProject;
@@ -34,6 +49,8 @@ export interface ReportDraftSectionEvidenceMapEntry {
   purpose: string;
   evidenceCardIds: string[];
   citationIds: string[];
+  citationMarkers: string[];
+  coverageStatus: EvidenceCoverageStatus;
   abstractOnlyCount: number;
   missingEvidence: string[];
 }
@@ -61,6 +78,8 @@ export interface ReportDraftDebug {
   evidenceGaps: string[];
   sectionEvidenceMap: ReportDraftSectionEvidenceMapEntry[];
   paragraphPlans: ReportParagraphPlan[];
+  supportedClaims: SupportedClaim[];
+  sectionCoverage: SectionEvidenceCoverage[];
   reportDraftGeneratedFromPlans: boolean;
 }
 
@@ -68,6 +87,7 @@ export interface ReportDraftSection {
   sectionId: string;
   title: string;
   body: string;
+  synthesizedProseZhTw: string;
   sectionGoal: string;
   supportingSourceIds: string[];
   citationMarkers: string[];
@@ -76,13 +96,20 @@ export interface ReportDraftSection {
   writerNote: string;
   evidenceCardIds: string[];
   citationIds: string[];
+  evidenceCoverageStatus: EvidenceCoverageStatus;
+  citationCount: number;
+  evidenceCardCount: number;
   warnings: string[];
 }
 
 export interface ReportDraft {
+  reportId: string;
+  workflowId: string | null;
+  topicHash: string | null;
   title: string;
   sections: ReportDraftSection[];
   referenceList: string[];
+  references: string[];
   text: string;
   qualityReport: QualityReport;
   sectionEvidenceMap: ReportDraftSectionEvidenceMapEntry[];
@@ -100,6 +127,8 @@ export interface ReportSynthesisContext {
   outline: ReportOutline;
   acceptedSourceDigest: AcceptedSourceDigest;
   evidenceNumbers: Map<string, number>;
+  sourceMarkerMap: Map<string, string>;
+  supportedClaims: SupportedClaim[];
 }
 
 export interface SectionPlan {
@@ -144,8 +173,8 @@ function stripTrailingPunctuation(value: string): string {
   return cleanText(value).replace(/[。！？.!?；;：:、，,\s]+$/u, "");
 }
 
-function marker(card: EvidenceCard, evidenceNumbers: Map<string, number>): string {
-  return `（來源 ${evidenceNumbers.get(card.id) ?? "?"}）`;
+function marker(card: EvidenceCard, sourceMarkerMap: Map<string, string>): string {
+  return sourceMarkerMap.get(card.sourceId) ?? "";
 }
 
 function cardsFor(cards: EvidenceCard[], sections: WorkflowReportSection[]): EvidenceCard[] {
@@ -153,8 +182,8 @@ function cardsFor(cards: EvidenceCard[], sections: WorkflowReportSection[]): Evi
   return cards.filter((card) => card.usableSections.some((section) => wanted.has(section)));
 }
 
-function sectionMarkers(cards: EvidenceCard[], evidenceNumbers: Map<string, number>): string[] {
-  return cards.slice(0, 3).map((card) => marker(card, evidenceNumbers));
+function sectionMarkers(cards: EvidenceCard[], sourceMarkerMap: Map<string, string>): string[] {
+  return citationMarkersForSourceIds(cards.map((card) => card.sourceId), sourceMarkerMap);
 }
 
 function citationIdsForCards(cards: EvidenceCard[]): string[] {
@@ -183,15 +212,15 @@ function evidenceLead(card: EvidenceCard): string {
   );
 }
 
-function evidenceTitleSummary(cards: EvidenceCard[], evidenceNumbers: Map<string, number>, limit = 3): string {
+function evidenceTitleSummary(cards: EvidenceCard[], sourceMarkerMap: Map<string, string>, limit = 3): string {
   return cards
     .slice(0, limit)
-    .map((card) => `${card.sourceTitle || "已接受來源"}${marker(card, evidenceNumbers)}`)
+    .map((card) => `${card.sourceTitle || "已接受來源"}${marker(card, sourceMarkerMap)}`)
     .join("、");
 }
 
-function evidenceHighlights(cards: EvidenceCard[], evidenceNumbers: Map<string, number>, limit = 3): string[] {
-  return cards.slice(0, limit).map((card) => `${evidenceLead(card)}${marker(card, evidenceNumbers)}`);
+function evidenceHighlights(cards: EvidenceCard[], sourceMarkerMap: Map<string, string>, limit = 3): string[] {
+  return cards.slice(0, limit).map((card) => `${evidenceLead(card)}${marker(card, sourceMarkerMap)}`);
 }
 
 function evidenceLimitationSummary(cards: EvidenceCard[]): string {
@@ -298,6 +327,11 @@ export function buildReportSynthesisContext(input: ReportDraftInput): ReportSynt
     input.acceptedSourceDigest ??
     buildAcceptedSourceDigest(input.acceptedSources, { topic });
 
+  const sourceMarkerMap = buildStableCitationMarkerMap(input.acceptedSources);
+  const supportedClaims = buildSupportedClaimsFromEvidenceCards(input.evidenceCards, {
+    markerMap: sourceMarkerMap,
+  });
+
   return {
     project: input.project,
     topic,
@@ -308,6 +342,8 @@ export function buildReportSynthesisContext(input: ReportDraftInput): ReportSynt
     outline: input.outline,
     acceptedSourceDigest,
     evidenceNumbers: new Map(input.evidenceCards.map((card, index) => [card.id, index + 1])),
+    sourceMarkerMap,
+    supportedClaims,
   };
 }
 
@@ -315,7 +351,9 @@ export function selectEvidenceForSection(
   evidenceCards: EvidenceCard[],
   sectionId: string,
 ): EvidenceCard[] {
-  return cardsFor(evidenceCards, SECTION_EVIDENCE_MAP[sectionId] ?? []).slice(0, 4);
+  const policy = getSectionEvidencePolicy(sectionId);
+  const defaultLimit = sectionId === "literature_review" ? 8 : Math.max(4, policy.minEvidenceCards);
+  return cardsFor(evidenceCards, SECTION_EVIDENCE_MAP[sectionId] ?? []).slice(0, defaultLimit);
 }
 
 export function buildSectionPlan(
@@ -344,16 +382,39 @@ function buildSectionEvidenceMap(
     .filter((section) => !["title", "references"].includes(section.sectionId))
     .map((section) => {
       const plan = buildSectionPlan(section, context);
+      const selectedClaims = selectSupportedClaimsForSection(
+        context.supportedClaims,
+        section.sectionId as ResearchSectionKey,
+      );
+      const evidenceCardIdsFromClaims = Array.from(
+        new Set(selectedClaims.flatMap((claim) => claim.evidenceIds)),
+      );
+      const citationMarkers = Array.from(
+        new Set(selectedClaims.flatMap((claim) => claim.citationMarkers)),
+      );
+      const citationIds = sourceIdsFromCitationMarkers(citationMarkers, context.sourceMarkerMap);
+      const evidenceCardIds = evidenceCardIdsFromClaims.length > 0
+        ? evidenceCardIdsFromClaims
+        : plan.selectedEvidence.map((card) => card.id);
+      const coverage = validateSectionEvidenceCoverage({
+        sectionKey: section.sectionId as ResearchSectionKey,
+        text: "",
+        claims: selectedClaims,
+        evidenceCardIds,
+        citationMarkers,
+      });
       return {
         sectionId: section.sectionId,
         title: sectionTitleFor(section.sectionId, section.title),
         purpose: section.purpose,
-        evidenceCardIds: plan.selectedEvidence.map((card) => card.id),
-        citationIds: citationIdsForCards(plan.selectedEvidence),
+        evidenceCardIds,
+        citationIds: citationIds.length > 0 ? citationIds : citationIdsForCards(plan.selectedEvidence),
+        citationMarkers,
+        coverageStatus: coverage.status,
         abstractOnlyCount: plan.selectedEvidence.filter(abstractOnly).length,
-        missingEvidence: plan.needsMoreEvidence
+        missingEvidence: coverage.diagnostics.length > 0 || plan.needsMoreEvidence
           ? sectionGapSummary(
-              context.acceptedSourceDigest.gaps,
+              [...coverage.diagnostics, ...context.acceptedSourceDigest.gaps],
               "本節尚缺直接對應的證據卡",
             )
           : [],
@@ -368,7 +429,7 @@ function buildParagraphPlans(
   return sectionEvidenceMap.map((entry) => {
     const cards = context.evidenceCards.filter((card) => entry.evidenceCardIds.includes(card.id));
     const claims = cards.length > 0
-      ? evidenceHighlights(cards, context.evidenceNumbers, 3)
+      ? evidenceHighlights(cards, context.sourceMarkerMap, 3)
       : [];
     const missingEvidence =
       cards.length > 0
@@ -396,7 +457,7 @@ function renderParagraphPlan(
   context: ReportSynthesisContext,
 ): string {
   const cards = context.evidenceCards.filter((card) => plan.evidenceCardIds.includes(card.id));
-  const sourceSummary = evidenceTitleSummary(cards, context.evidenceNumbers, 3);
+  const sourceSummary = evidenceTitleSummary(cards, context.sourceMarkerMap, 3);
 
   if (plan.sectionId === "research_question") {
     return sanitizeReportParagraph([
@@ -515,6 +576,9 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
         sectionId: "references",
         title: "參考資料",
         body: references.map((reference, index) => `${index + 1}. ${reference}`).join("\n"),
+        synthesizedProseZhTw: references
+          .map((reference, index) => `${index + 1}. ${reference}`)
+          .join("\n"),
         sectionGoal: outlineSection.purpose,
         supportingSourceIds: context.acceptedSources.map((source) => source.id).filter(Boolean),
         citationMarkers: [],
@@ -523,6 +587,9 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
         writerNote: "僅列已接受來源，不使用 demo 或未審查來源。",
         evidenceCardIds: [],
         citationIds: context.acceptedSources.map((source) => source.id).filter(Boolean),
+        evidenceCoverageStatus: "sufficient",
+        citationCount: 0,
+        evidenceCardCount: 0,
         warnings: [],
       };
     }
@@ -532,6 +599,7 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
         sectionId: "title",
         title: "標題",
         body: `《${context.topic}》${context.reportType}`,
+        synthesizedProseZhTw: `《${context.topic}》${context.reportType}`,
         sectionGoal: outlineSection.purpose,
         supportingSourceIds: [],
         citationMarkers: [],
@@ -540,6 +608,9 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
         writerNote: "保留主題本身，不延伸成模板句。",
         evidenceCardIds: [],
         citationIds: [],
+        evidenceCoverageStatus: "sufficient",
+        citationCount: 0,
+        evidenceCardCount: 0,
         warnings: [],
       };
     }
@@ -556,22 +627,57 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
     if (selectedEvidence.some(abstractOnly)) {
       warnings.push("本段部分依據僅來自摘要或書目片段。");
     }
+    const sectionKey = outlineSection.sectionId as ResearchSectionKey;
+    const synthesized = synthesizeSectionParagraph({
+      sectionKey,
+      topic: context.topic,
+      claims: context.supportedClaims,
+      acceptedSources: context.acceptedSources,
+      evidenceCards: context.evidenceCards,
+      markerMap: context.sourceMarkerMap,
+    });
+    warnings.push(...synthesized.warnings);
+    const fallbackBody = plan ? renderParagraphPlan(plan, context) : `本節尚未完成：${outlineSection.purpose}`;
+    const body = synthesized.body || fallbackBody;
+    const acceptedMarkers = new Set(context.sourceMarkerMap.values());
+    const actualMarkers = extractCitationMarkers(body).filter((marker) =>
+      acceptedMarkers.has(marker),
+    );
+    const actualCitationIds = sourceIdsFromCitationMarkers(actualMarkers, context.sourceMarkerMap);
+    const sectionEvidenceCardIds = synthesized.evidenceCardIds.length > 0
+      ? synthesized.evidenceCardIds
+      : evidenceEntry?.evidenceCardIds ?? [];
+    const supportedSectionClaims = selectSupportedClaimsForSection(
+      context.supportedClaims,
+      sectionKey,
+    );
+    const sectionCoverage = validateSectionEvidenceCoverage({
+      sectionKey,
+      text: body,
+      claims: supportedSectionClaims,
+      evidenceCardIds: sectionEvidenceCardIds,
+      citationMarkers: actualMarkers,
+    });
 
     return {
       sectionId: outlineSection.sectionId,
       title: sectionTitleFor(outlineSection.sectionId, outlineSection.title),
-      body: plan ? renderParagraphPlan(plan, context) : `本節尚未完成：${outlineSection.purpose}`,
+      body,
+      synthesizedProseZhTw: body,
       sectionGoal: outlineSection.purpose,
-      supportingSourceIds: evidenceEntry?.citationIds ?? [],
-      citationMarkers: sectionMarkers(selectedEvidence, context.evidenceNumbers),
+      supportingSourceIds: actualCitationIds,
+      citationMarkers: actualMarkers,
       evidenceSummary:
         selectedEvidence.length > 0
-          ? evidenceTitleSummary(selectedEvidence, context.evidenceNumbers)
+          ? evidenceTitleSummary(selectedEvidence, context.sourceMarkerMap)
           : "目前尚未連結到對應 evidence card。",
       evidenceGaps: evidenceEntry?.missingEvidence ?? [],
       writerNote: plan?.synthesisGoal ?? outlineSection.purpose,
-      evidenceCardIds: evidenceEntry?.evidenceCardIds ?? [],
-      citationIds: evidenceEntry?.citationIds ?? [],
+      evidenceCardIds: sectionEvidenceCardIds,
+      citationIds: actualCitationIds,
+      evidenceCoverageStatus: sectionCoverage.status,
+      citationCount: sectionCoverage.citationCount,
+      evidenceCardCount: sectionCoverage.evidenceCardCount,
       warnings,
     };
   });
@@ -604,13 +710,27 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
     evidenceGaps: context.acceptedSourceDigest.gaps,
     sectionEvidenceMap,
     paragraphPlans,
+    supportedClaims: context.supportedClaims,
+    sectionCoverage: sections.map((section) =>
+      validateSectionEvidenceCoverage({
+        sectionKey: section.sectionId as ResearchSectionKey,
+        text: section.body,
+        claims: selectSupportedClaimsForSection(context.supportedClaims, section.sectionId as ResearchSectionKey),
+        evidenceCardIds: section.evidenceCardIds,
+        citationMarkers: section.citationMarkers,
+      }),
+    ),
     reportDraftGeneratedFromPlans: true,
   };
 
   return {
+    reportId: input.project.id,
+    workflowId: context.acceptedSources[0]?.workflowId ?? null,
+    topicHash: context.acceptedSources[0]?.topicHash ?? null,
     title: `《${context.topic}》${context.reportType}草稿`,
     sections,
     referenceList: references,
+    references,
     text,
     qualityReport,
     sectionEvidenceMap,

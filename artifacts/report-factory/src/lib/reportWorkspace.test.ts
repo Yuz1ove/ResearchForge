@@ -3,19 +3,27 @@ import test from "node:test";
 import type { ReportInput } from "./generateReport.ts";
 import type { SourceRecord } from "./sourceRecords.ts";
 import {
+  createReportWorkspace,
   generationReadiness,
   generatorWorkflowVisibility,
+  reportGenerationBlockingReason,
   reportSourceGuardDiagnostics,
   reportWorkspacePath,
   reportTopicFingerprint,
+  serializeReportWorkspaceForStorageForTests,
   startReportWorkspaceNavigation,
   workspaceSnapshotIsConsistent,
   workspaceMatchesTopic,
 } from "./reportWorkspace.ts";
 
+const DEFAULT_TEST_TOPIC = "短影音使用對高中生注意力與睡眠品質之影響";
+const DEFAULT_WORKFLOW_ID = "wf-report-workspace-test";
+const DEFAULT_TOPIC_HASH = reportTopicFingerprint(DEFAULT_TEST_TOPIC);
+const DEFAULT_QUERY_PLAN_HASH = "qp-report-workspace-test";
+
 function input(overrides: Partial<ReportInput> = {}): ReportInput {
   return {
-    topic: "短影音使用對高中生注意力與睡眠品質之影響",
+    topic: DEFAULT_TEST_TOPIC,
     reportType: "研究報告",
     academicLevel: "高中",
     targetAudience: "高中",
@@ -66,31 +74,62 @@ function source(
     reviewNotes: "usable",
     relevanceLevel: "primary",
     evidenceGrounding: "abstract_grounded",
+    workflowId: DEFAULT_WORKFLOW_ID,
+    topic: DEFAULT_TEST_TOPIC,
+    normalizedTopic: DEFAULT_TEST_TOPIC,
+    topicHash: DEFAULT_TOPIC_HASH,
+    queryPlanHash: DEFAULT_QUERY_PLAN_HASH,
     ...overrides,
   };
 }
 
-test("generation readiness allows evidence-first quick drafts from a single accepted source", () => {
-  const blocked = generationReadiness(0);
-  const quickDraft = generationReadiness(1);
-  const fullReport = generationReadiness(10);
+function sourceForTopic(
+  index: number,
+  topic: string,
+  overrides: Partial<SourceRecord> = {},
+): SourceRecord {
+  const topicHash = reportTopicFingerprint(topic);
+  return source(index, {
+    workflowId: `wf-${topicHash}`,
+    topic,
+    normalizedTopic: topic,
+    topicHash,
+    queryPlanHash: `qp-${topicHash}`,
+    ...overrides,
+  });
+}
+
+const SUNSET_TOPIC = "夕陽餘暉與光波長的關係";
+
+test("generation readiness uses canonical 3-source short and 10-source standard thresholds", () => {
+  const blocked = generationReadiness(2);
+  const shortReport = generationReadiness(3);
+  const standardReport = generationReadiness(10);
 
   assert.equal(blocked.canGenerate, false);
-  assert.equal(blocked.buttonLabel, "來源品質不足");
-  assert.equal(quickDraft.mode, "quick_draft");
-  assert.equal(quickDraft.buttonLabel, "生成初步報告");
-  assert.match(quickDraft.warning ?? "", /完整報告門檻/);
+  assert.equal(blocked.buttonLabel, "來源不足");
+  assert.equal(blocked.minRequiredSources, 3);
+  assert.equal(blocked.reportMode, "blocked");
+  assert.equal(shortReport.mode, "short_research_report");
+  assert.equal(shortReport.buttonLabel, "生成短版研究報告");
+  assert.equal(shortReport.reportMode, "short");
+  assert.equal(shortReport.claimMode, "academic_claim_mode");
+  assert.equal(shortReport.canGenerateFull, false);
+  assert.match(shortReport.warning ?? "", /可生成短版研究報告/);
   assert.equal(generationReadiness(9).canGenerateFull, false);
-  assert.equal(fullReport.mode, "full_report");
-  assert.equal(fullReport.buttonLabel, "生成正式報告");
-  assert.equal(fullReport.canGenerateFull, true);
+  assert.equal(standardReport.mode, "standard_research_report");
+  assert.equal(standardReport.buttonLabel, "生成標準研究報告");
+  assert.equal(standardReport.reportMode, "standard");
+  assert.equal(standardReport.canGenerateFull, true);
 });
 
-test("generation readiness surfaces low-quality contamination while keeping evidence-first drafts available", () => {
+test("generation readiness keeps short reports available with accepted metadata and surfaces diagnostics", () => {
   const lowQualityAccepted = [
     source(1),
     source(2),
     source(3, { relevanceLevel: "off_topic" } as Partial<SourceRecord>),
+    source(4),
+    source(5),
   ];
   const quickDraftSources = [
     source(1, { usableSections: ["研究背景"] }),
@@ -102,6 +141,9 @@ test("generation readiness surfaces low-quality contamination while keeping evid
       relevanceLevel: "primary",
       usableSections: ["結論"],
     } as Partial<SourceRecord>),
+    source(4, { usableSections: ["數據分析"] }),
+    source(5, { usableSections: ["研究方法"] }),
+    source(6, { usableSections: ["文獻探討"] }),
   ];
   const fullSources = Array.from({ length: 10 }, (_, index) =>
     source(index + 1, {
@@ -127,45 +169,183 @@ test("generation readiness surfaces low-quality contamination while keeping evid
 
   assert.equal(blocked.canGenerate, true);
   assert.equal(blocked.lowQualityAcceptedCount, 1);
-  assert.ok(
-    (blocked.warning ?? "").includes("延伸或低相關來源"),
-  );
+  assert.equal(blocked.reportMode, "short");
   assert.equal(quickDraft.canGenerate, true);
   assert.equal(quickDraft.canGenerateFull, false);
-  assert.equal(quickDraft.relevantSourceCount, 3);
-  assert.equal(quickDraft.usableSummaryCount, 3);
+  assert.equal(quickDraft.relevantSourceCount, 6);
+  assert.equal(quickDraft.usableSummaryCount, 6);
   assert.equal(full.canGenerateFull, true);
   assert.equal(full.coverageCount >= 2, true);
 });
 
-test("generation readiness allows preliminary report from three secondary sources", () => {
+test("generation readiness allows short report from five secondary sources", () => {
   const secondarySources = [
     source(1, { relevanceLevel: "secondary", usableSections: ["研究背景"] }),
     source(2, { relevanceLevel: "secondary", usableSections: ["文獻探討"] }),
     source(3, { relevanceLevel: "clue", usableSections: ["結論"] }),
+    source(4, { relevanceLevel: "secondary", usableSections: ["研究方法"] }),
+    source(5, { relevanceLevel: "clue", usableSections: ["數據分析"] }),
   ];
 
   const readiness = generationReadiness(secondarySources);
 
   assert.equal(readiness.canGenerate, true);
   assert.equal(readiness.canGenerateFull, false);
-  assert.equal(readiness.mode, "quick_draft");
+  assert.equal(readiness.mode, "short_research_report");
   assert.equal(readiness.primarySourceCount, 0);
-  assert.equal(readiness.secondarySourceCount, 3);
-  assert.match(readiness.warning ?? "", /主要來源僅 0 筆/);
-  assert.equal(readiness.buttonLabel, "生成初步報告");
+  assert.equal(readiness.secondarySourceCount, 5);
+  assert.match(readiness.warning ?? "", /可生成短版研究報告/);
+  assert.equal(readiness.buttonLabel, "生成短版研究報告");
+});
+
+test("official background sources can generate a background report without academic-claim mode", () => {
+  const officialSources = [
+    {
+      title: "NASA Space Place: Why is the sky blue?",
+      publisher: "NASA Space Place",
+      url: "https://spaceplace.nasa.gov/blue-sky/en/",
+    },
+    {
+      title: "UCAR Center for Science Education: Sunset Colors",
+      publisher: "UCAR Center for Science Education",
+      url: "https://scied.ucar.edu/",
+    },
+    {
+      title: "NOAA education: Atmospheric scattering",
+      publisher: "NOAA",
+      url: "https://www.noaa.gov/education",
+    },
+  ].map((item, index) =>
+    sourceForTopic(index + 1, SUNSET_TOPIC, {
+      title: item.title,
+      publisher: item.publisher,
+      url: item.url,
+      doi: null,
+      sourceType: "Official Source",
+      sourceKind: "web",
+      sourceCategory: "government_or_institution",
+      recommendationBucket: "official_background",
+      sourceRole: "official_background_explanation",
+      isPeerReviewed: false,
+      relevanceLevel: "secondary",
+      usableSections: ["研究背景"],
+    }),
+  );
+
+  const readiness = generationReadiness(officialSources);
+
+  assert.equal(readiness.canGenerate, true);
+  assert.equal(readiness.mode, "background_report_mode");
+  assert.equal(readiness.claimMode, "background_report_mode");
+  assert.equal(readiness.scholarlyEvidenceCount, 0);
+  assert.equal(readiness.officialBackgroundCount, 3);
+  assert.equal(readiness.officialBackgroundSourcesCount, 3);
+  assert.match(readiness.warning ?? "", /背景型研究報告/);
+  assert.equal(
+    reportGenerationBlockingReason({
+      topic: SUNSET_TOPIC,
+      acceptedSources: officialSources,
+      evidenceCardCount: 3,
+      workflowId: `wf-${reportTopicFingerprint(SUNSET_TOPIC)}`,
+      topicHash: reportTopicFingerprint(SUNSET_TOPIC),
+    }),
+    null,
+  );
+
+  const result = startReportWorkspaceNavigation({
+    input: input({ topic: SUNSET_TOPIC }),
+    acceptedSources: officialSources,
+    navigate: () => {},
+    saveWorkspace: () => {},
+  });
+
+  assert.ok(result);
+  assert.equal(result.workspace.generationMode, "background_report_mode");
+  assert.equal(result.workspace.evidenceCards.length >= 3, true);
+  assert.equal(
+    result.workspace.evidenceCards.every((card) => card.sourceType === "official_background"),
+    true,
+  );
+});
+
+test("report generation blocking reason is explicit below three accepted sources and clears at three", () => {
+  const topic = "月球表面撞擊坑形成機制";
+  const twoAccepted = [
+    sourceForTopic(1, topic, { title: "月球表面撞擊坑形成機制 source 1" }),
+    sourceForTopic(2, topic, { title: "月球表面撞擊坑形成機制 source 2" }),
+  ];
+  const threeAccepted = [
+    ...twoAccepted,
+    sourceForTopic(3, topic, { title: "月球表面撞擊坑形成機制 source 3" }),
+  ];
+
+  assert.equal(
+    reportGenerationBlockingReason({
+      topic,
+      acceptedSources: twoAccepted,
+      evidenceCardCount: 2,
+      workflowId: `wf-${reportTopicFingerprint(topic)}`,
+      topicHash: reportTopicFingerprint(topic),
+    }),
+    "目前已接受 2 筆可用來源，至少需 3 筆才能生成研究報告。",
+  );
+  assert.equal(
+    reportGenerationBlockingReason({
+      topic,
+      acceptedSources: threeAccepted,
+      evidenceCardCount: 3,
+      workflowId: `wf-${reportTopicFingerprint(topic)}`,
+      topicHash: reportTopicFingerprint(topic),
+    }),
+    null,
+  );
+  assert.equal(
+    reportGenerationBlockingReason({
+      topic,
+      acceptedSources: threeAccepted,
+      evidenceCardCount: 2,
+      workflowId: `wf-${reportTopicFingerprint(topic)}`,
+      topicHash: reportTopicFingerprint(topic),
+    }),
+    "來源已接受，但證據卡只有 2 張，少於已接受來源 3 筆。請先補齊證據卡。",
+  );
+});
+
+test("report generation blocks when workflow topic hash is missing", () => {
+  const acceptedSources = [source(1), source(2), source(3)];
+
+  assert.match(
+    reportGenerationBlockingReason({
+      topic: DEFAULT_TEST_TOPIC,
+      acceptedSources,
+      evidenceCardCount: 3,
+      workflowId: DEFAULT_WORKFLOW_ID,
+      topicHash: null,
+    }) ?? "",
+    /主題識別碼遺失/,
+  );
+  assert.throws(
+    () =>
+      createReportWorkspace(
+        input(),
+        acceptedSources.map((item) => ({ ...item, topicHash: undefined })),
+        "initial_brief",
+        "rf-missing-topic-hash",
+      ),
+    /主題識別碼遺失/,
+  );
 });
 
 test("standard depth recommends ten sources while keeping evidence-first draft generation", () => {
   const blocked = generationReadiness(0, "standard");
-  const quickDraft = generationReadiness(1, "standard");
+  const quickDraft = generationReadiness(6, "standard");
   const full = generationReadiness(10, "standard");
 
   assert.equal(blocked.canGenerate, false);
   assert.equal(quickDraft.canGenerate, true);
   assert.equal(quickDraft.canGenerateFull, false);
   assert.equal(full.canGenerateFull, true);
-  assert.equal(full.buttonLabel, "生成正式報告");
+  assert.equal(full.buttonLabel, "生成標準研究報告");
 });
 
 test("generation readiness infers coverage from accepted source summaries", () => {
@@ -186,13 +366,91 @@ test("generation readiness infers coverage from accepted source summaries", () =
         "This research discusses findings and impact of sugar exposure among adolescents in enough detail.",
       usableSections: [],
     }),
+    source(4),
+    source(5),
   ];
 
   const readiness = generationReadiness(inferredCoverageSources);
 
   assert.equal(readiness.canGenerate, true);
-  assert.equal(readiness.mode, "quick_draft");
+  assert.equal(readiness.mode, "short_research_report");
   assert.equal(readiness.coverageCount >= 1, true);
+});
+
+test("createReportWorkspace tolerates sparse report input and still emits a draft", () => {
+  const topic = "過氯酸鈉在實驗操作與儲存上的安全風險";
+  const workspace = createReportWorkspace(
+    {
+      topic,
+      reportType: "研究報告",
+      academicLevel: "高中",
+      targetAudience: "",
+      researchDepth: "quick",
+      purpose: "",
+      domainOverride: "",
+      mode: "",
+      sourceRequirement: "",
+      citationFormat: "",
+      chartRequirement: "",
+      style: "",
+      length: "",
+      wordCount: "",
+      formalTone: "",
+      conversationalTone: "",
+      specifiedStructure: "",
+      rubric: "",
+      personalStyle: "",
+      supplementalMaterials: "",
+      outputLanguage: "",
+      rewriteSection: "",
+      additionalInfo: "",
+      acceptedSources: [],
+    },
+    [sourceForTopic(1, topic), sourceForTopic(2, topic), sourceForTopic(3, topic)],
+    "initial_brief",
+    "rf-sparse-input",
+  );
+
+  assert.equal(workspace.draft.sections.length > 0, true);
+  assert.match(workspace.report.meta.title ?? "", /過氯酸鈉/);
+});
+
+test("report workspace storage omits heavy extracted chunks after LLM generation", () => {
+  const hugeText = "massive chunk text ".repeat(1_000);
+  const workspace = createReportWorkspace(
+    input(),
+    [
+      source(1, {
+        extractedText: hugeText,
+        extractedChunks: [
+          {
+            chunkId: "chunk-1",
+            text: hugeText,
+            pageStart: 1,
+            pageEnd: 3,
+            charStart: 0,
+            charEnd: hugeText.length,
+          },
+        ],
+      } as Partial<SourceRecord>),
+      source(2),
+      source(3),
+    ],
+    "initial_brief",
+    "rf-storage-compact",
+  );
+
+  const serialized = serializeReportWorkspaceForStorageForTests(workspace);
+  const stored = JSON.parse(serialized) as {
+    acceptedSources: Array<Record<string, unknown>>;
+    generationPayload: { acceptedSources: Array<Record<string, unknown>> };
+  };
+
+  assert.equal(serialized.includes("massive chunk text"), false);
+  assert.equal(stored.acceptedSources[0]?.extractedText, undefined);
+  assert.equal(stored.acceptedSources[0]?.extractedChunks, undefined);
+  assert.equal(stored.generationPayload.acceptedSources[0]?.extractedChunks, undefined);
+  assert.match(String(stored.acceptedSources[0]?.abstract ?? ""), /Evidence abstract 1/);
 });
 
 test("generator hides evidence cards unless developer debug is open", () => {
@@ -224,7 +482,7 @@ test("workspace topic fingerprint isolates different topics", () => {
     sourceIds: ["source-1"],
     createdAt: "2026-06-17T00:00:00.000Z",
     updatedAt: "2026-06-17T00:00:00.000Z",
-    generationMode: "quick_draft" as const,
+    generationMode: "single_source_review" as const,
     input: input({ topic: topicA }),
     acceptedSources: [source(1)],
     acceptedSourceDigest: {
@@ -268,7 +526,7 @@ test("workspace topic fingerprint isolates different topics", () => {
 });
 
 test("start report workspace navigation saves workspace and calls navigation with preview route", () => {
-  const acceptedSources = Array.from({ length: 3 }, (_, index) =>
+  const acceptedSources = Array.from({ length: 6 }, (_, index) =>
     source(index + 1),
   );
   const navigateCalls: string[] = [];
@@ -283,14 +541,14 @@ test("start report workspace navigation saves workspace and calls navigation wit
 
   assert.ok(result);
   assert.match(result.workspace.id, /^rf-/);
-  assert.equal(result.workspace.generationMode, "quick_draft");
-  assert.equal(result.workspace.payloadVersion, 2);
+  assert.equal(result.workspace.generationMode, "short_research_report");
+  assert.equal(result.workspace.payloadVersion, 3);
   assert.equal(result.workspace.reportId, result.workspace.id);
   assert.match(result.workspace.workflowId, /^([0-9a-f-]{36}|wf-)/i);
   assert.equal(result.workspace.topicHash, reportTopicFingerprint(result.workspace.input.topic));
   assert.deepEqual(result.workspace.sourceIds, acceptedSources.map((source) => source.id));
   assert.equal(workspaceSnapshotIsConsistent(result.workspace), true);
-  assert.match(result.workspace.acceptedSourceDigest.summary, /目前已接受 3 筆來源/);
+  assert.match(result.workspace.acceptedSourceDigest.summary, /目前已接受 6 筆來源/);
   assert.equal(result.workspace.project.depth, "standard");
   assert.equal(
     result.workspace.evidenceCards.length >= acceptedSources.length,
@@ -301,11 +559,19 @@ test("start report workspace navigation saves workspace and calls navigation wit
     acceptedSources.length,
   );
   assert.deepEqual(savedWorkspaceIds, [result.workspace.id]);
-  assert.deepEqual(navigateCalls, [reportWorkspacePath(result.workspace.id)]);
+  assert.deepEqual(
+    navigateCalls,
+    [
+      reportWorkspacePath(result.workspace.id, {
+        workflowId: result.workspace.workflowId,
+        topicHash: result.workspace.topicHash,
+      }),
+    ],
+  );
 });
 
-test("single accepted source still seeds evidence cards and citations in the report workspace", () => {
-  const acceptedSources = [source(1)];
+test("five accepted sources seed evidence cards and citations in the report workspace", () => {
+  const acceptedSources = Array.from({ length: 5 }, (_, index) => source(index + 1));
 
   const result = startReportWorkspaceNavigation({
     input: input(),
@@ -315,8 +581,8 @@ test("single accepted source still seeds evidence cards and citations in the rep
   });
 
   assert.ok(result);
-  assert.equal(result.workspace.acceptedSources.length, 1);
-  assert.equal(result.workspace.evidenceCards.length >= 1, true);
+  assert.equal(result.workspace.acceptedSources.length, 5);
+  assert.equal(result.workspace.evidenceCards.length >= 5, true);
   assert.equal(
     result.workspace.draft.sections.some((section) => section.evidenceCardIds.length > 0),
     true,
@@ -344,11 +610,12 @@ test("start report workspace navigation does not navigate when accepted sources 
 });
 
 test("workspace snapshot consistency rejects topic or source contamination", () => {
-  const acceptedSources = Array.from({ length: 3 }, (_, index) =>
-    source(index + 1),
+  const topic = "可樂成分與青少年健康影響";
+  const acceptedSources = Array.from({ length: 6 }, (_, index) =>
+    sourceForTopic(index + 1, topic),
   );
   const workspace = startReportWorkspaceNavigation({
-    input: input({ topic: "可樂成分與青少年健康影響" }),
+    input: input({ topic }),
     acceptedSources,
     navigate: () => {},
     saveWorkspace: () => {},
@@ -356,7 +623,7 @@ test("workspace snapshot consistency rejects topic or source contamination", () 
 
   assert.ok(workspace);
   assert.equal(workspaceSnapshotIsConsistent(workspace), true);
-  assert.equal(workspaceMatchesTopic(workspace, "可樂成分與青少年健康影響"), true);
+  assert.equal(workspaceMatchesTopic(workspace, topic), true);
   assert.equal(workspaceMatchesTopic(workspace, "氣候變遷"), false);
 
   assert.equal(

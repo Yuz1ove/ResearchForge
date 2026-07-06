@@ -140,6 +140,6 @@ test("keyword source search returns grouped provider errors without crashing", a
   assert.equal(result.keyword_expansion.fallback_used, true);
   assert.equal(result.groups.length, 3);
   assert.ok(result.groups.every((group) => group.ok === false));
-  assert.ok(result.groups.every((group) => group.error_type === "api-failure"));
+  assert.ok(result.groups.every((group) => group.error_type === "server_error"));
   assert.deepEqual(result.sources, []);
 });

@@ -11,7 +11,6 @@ export function Navbar() {
   const navLinks = [
     { href: "/", label: "首頁" },
     { href: "/features", label: "功能介紹" },
-    { href: "/pricing", label: "定價方案" },
     { href: "/faq", label: "常見問題" },
   ];
 
@@ -43,8 +42,8 @@ export function Navbar() {
             </Link>
           ))}
           <div className="flex items-center gap-4 ml-4 pl-4 border-l border-border">
-            <Link href="/generator" data-testid="link-nav-try-free">
-              <Button>免費試用</Button>
+            <Link href="/generator" data-testid="link-nav-start-project">
+              <Button>開始整理內容</Button>
             </Link>
           </div>
         </div>
@@ -74,8 +73,8 @@ export function Navbar() {
                 {link.label}
               </Link>
             ))}
-            <Link href="/generator" onClick={() => setIsMobileMenuOpen(false)} data-testid="link-mobile-nav-try-free">
-              <Button className="w-full">免費試用</Button>
+            <Link href="/generator" onClick={() => setIsMobileMenuOpen(false)} data-testid="link-mobile-nav-start-project">
+              <Button className="w-full">開始整理內容</Button>
             </Link>
           </div>
         </div>

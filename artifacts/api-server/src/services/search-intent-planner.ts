@@ -1,8 +1,19 @@
 import {
   dedupeSourceRecords,
   normalizeSourceRecord,
+  type ExpandedQuery,
+  type ResearchDebugTrace,
+  type SourceSearchConfig,
   type SourceRecord,
 } from "@workspace/api-zod";
+import {
+  conceptQueryGroupsForTopic,
+  conceptTermsForTopic,
+  detectResearchDomain,
+  uniqueStrings as uniqueConceptStrings,
+  type ResearchDomain,
+  type SearchQueryGroup,
+} from "@workspace/api-zod/domain-synonyms";
 import {
   entitySearchTerms,
   sanitizeAndBackfillAngles,
@@ -15,13 +26,16 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { logger } from "../lib/logger";
 import {
-  searchSourceProviders,
+  searchSourceProvider,
+  allProviderHealthSnapshots,
   type AcademicSourceProvider,
-  type SourceFetch,
   type SourceProviderSearchResult,
+  type SourceFetch,
   type SourceSearchOptions,
   type FallbackSourceProvider,
 } from "./source-retrieval";
+import type { ProviderHealth } from "@workspace/api-zod/research-grounding";
+import { getSourceProviderConfigs, MEDICAL_PROVIDER_STRATEGY } from "./source-provider-config";
 import {
   LlmAdapterError,
   requestOpenAICompatibleChatCompletion,
@@ -33,9 +47,20 @@ import {
   understandTopicWithFallback,
   type TopicUnderstanding,
 } from "./topic-understanding";
+import {
+  DEFAULT_SOURCE_SEARCH_CONFIG,
+  buildGroundedIntro,
+  buildIntroClaims,
+  buildResearchDebugTrace,
+  buildResearchEvidenceCards,
+  classifyTopicSemantically,
+  enrichSourcesWithResearchPipeline,
+  expandBilingualQueries,
+} from "./research-pipeline";
 
 export interface SearchIntentPlannerInput {
   topic: string;
+  searchProfile?: SearchProfileName;
   originalTopic?: string;
   refinedTopic?: string;
   displayTitle?: string;
@@ -53,6 +78,70 @@ export interface SearchIntentPlannerInput {
   audience?: string;
   language?: "zh-TW" | "en" | string;
   sourceMode?: string;
+}
+
+export type SearchProfileName = "quick" | "standard" | "deep";
+
+export interface SourceSearchProfileConfig {
+  name: SearchProfileName;
+  targetAcceptedSources: number;
+  maxCandidates: number;
+  maxQueries: number;
+  providerTimeoutMs: number;
+  overallTimeoutMs: number;
+  enrichOnlyAfterAccept: boolean;
+  stopWhenAcceptedReached: boolean;
+  estimatedTimeLabel: string;
+}
+
+export const SOURCE_SEARCH_PROFILES: Record<SearchProfileName, SourceSearchProfileConfig> = {
+  quick: {
+    name: "quick",
+    targetAcceptedSources: 5,
+    maxCandidates: 10,
+    maxQueries: 4,
+    providerTimeoutMs: 4000,
+    overallTimeoutMs: 10000,
+    enrichOnlyAfterAccept: true,
+    stopWhenAcceptedReached: true,
+    estimatedTimeLabel: "約 6-8 秒",
+  },
+  standard: {
+    name: "standard",
+    targetAcceptedSources: 8,
+    maxCandidates: 16,
+    maxQueries: 6,
+    providerTimeoutMs: 4000,
+    overallTimeoutMs: 12000,
+    enrichOnlyAfterAccept: true,
+    stopWhenAcceptedReached: true,
+    estimatedTimeLabel: "約 8-12 秒",
+  },
+  deep: {
+    name: "deep",
+    targetAcceptedSources: 12,
+    maxCandidates: 30,
+    maxQueries: 10,
+    providerTimeoutMs: 6000,
+    overallTimeoutMs: 30000,
+    enrichOnlyAfterAccept: false,
+    stopWhenAcceptedReached: false,
+    estimatedTimeLabel: "約 20-30 秒，會先顯示候選來源，背景補強 metadata",
+  },
+};
+
+export function resolveSourceSearchProfile(value: unknown): SourceSearchProfileConfig {
+  return value === "quick" || value === "deep"
+    ? SOURCE_SEARCH_PROFILES[value]
+    : SOURCE_SEARCH_PROFILES.standard;
+}
+
+function sourceSearchConfigForProfile(profile: SourceSearchProfileConfig): SourceSearchConfig {
+  return {
+    candidateTarget: profile.maxCandidates,
+    acceptedTarget: profile.targetAcceptedSources,
+    minAccepted: Math.min(3, profile.targetAcceptedSources),
+  };
 }
 
 export interface PlannerSubtopic {
@@ -74,6 +163,16 @@ export type SearchIntentPlannerStatus =
 
 export interface SearchIntentPlan {
   normalizedTopic: string;
+  detectedDomain?: ResearchDomain;
+  zhCoreTerms?: string[];
+  enCoreTerms?: string[];
+  zhSynonyms?: string[];
+  enSynonyms?: string[];
+  mechanismTerms?: string[];
+  applicationTerms?: string[];
+  limitationTerms?: string[];
+  exclusionTerms?: string[];
+  queryGroups?: SearchQueryGroup[];
   primaryConcepts: string[];
   contextConcepts: string[];
   outcomeConcepts: string[];
@@ -146,6 +245,7 @@ const ROTATIONAL_MECHANICS_CORE_ENGLISH = [
 ];
 
 const ROTATIONAL_MECHANICS_ACADEMIC_SYNONYMS = [
+  "gyroscopic stability torque",
   "gyroscopic precession torque angular momentum",
   "rigid body dynamics spinning top stability",
   "Euler equations Lagrange top precession",
@@ -197,6 +297,7 @@ export interface ResearchReadyQuestion {
 }
 
 export interface SourceDecisionTrace {
+  sourceId?: string | null;
   title: string;
   provider: string;
   url: string | null;
@@ -204,8 +305,18 @@ export interface SourceDecisionTrace {
   authorityScore: number;
   summaryUsabilityScore: number;
   finalScore: number;
+  topicLexicalMatch?: number | null;
+  semanticScore?: number | null;
+  queryMatch?: number | null;
+  titleMatch?: boolean;
+  abstractMatch?: boolean;
+  sectionMatch?: boolean;
+  topicRelevant?: boolean;
+  topicPotentiallyRelevant?: boolean;
+  evidenceGrounding?: string | null;
   classification: string;
   rejectReason: string | null;
+  rejectionReason?: string | null;
   matchedTerms: string[];
   driftTerms: string[];
 }
@@ -232,8 +343,40 @@ export interface SourceSearchProviderDiagnostic {
   query: string;
   ok: boolean;
   result_count: number;
+  raw_count?: number;
+  normalize_attempt_count?: number;
+  normalized_valid_count?: number;
+  normalized_invalid_count?: number;
   error_type: string | null;
   error_message: string | null;
+  latency_ms?: number;
+  status?: "searching" | "returned" | "timeout" | "error" | "background";
+  provider_health?: ProviderHealth;
+  retry_mode?: "short_query";
+  retry_query?: string;
+  retry_reason?: string;
+}
+
+export interface RecallPool {
+  rawCount: number;
+  dedupedCount: number;
+  byLanguage: {
+    zh: number;
+    en: number;
+    mixed: number;
+  };
+  byIntent: Record<string, number>;
+  bySourceApi: Record<string, number>;
+  items: SourceRecord[];
+}
+
+export interface RecoveryResult {
+  attempted: boolean;
+  reason: string | null;
+  addedQueryCount: number;
+  rawAddedCount: number;
+  dedupedAddedCount: number;
+  queries: string[];
 }
 
 export interface SourceSearchPipelineDiagnostics {
@@ -244,17 +387,35 @@ export interface SourceSearchPipelineDiagnostics {
   english_queries: string[];
   chinese_queries: string[];
   fallback_relaxed_queries: string[];
+  raw_provider_count?: number;
+  normalize_attempt_count?: number;
+  normalized_valid_count?: number;
+  normalized_invalid_count?: number;
   provider_search_results_count: number;
   filtered_results_count: number;
   rejection_reasons: Record<string, number>;
   retrieved_count: number;
   deduped_count: number;
+  scored_count?: number;
   rejected_count: number;
   candidate_count: number;
+  fallback_review_count?: number;
   displayed_count: number;
   primary_candidate_count: number;
+  recall_pool?: Omit<RecallPool, "items">;
+  recovery?: RecoveryResult;
   provider_status: SourceSearchProviderDiagnostic[];
+  provider_health?: ProviderHealth[];
   warnings: string[];
+  search_profile?: SearchProfileName;
+  profile?: SourceSearchProfileConfig;
+  cache_hit?: boolean;
+  cache_key?: string;
+  cache_status?: "hit" | "miss" | "stale_hit_refreshing" | "refresh_failed_using_stale" | "write_failed";
+  early_stop_reason?: string | null;
+  foreground_latency_ms?: number;
+  first_candidate_latency_ms?: number;
+  tried_queries?: string[];
 }
 
 type SearchIntentRankedSource = SourceRecord & {
@@ -270,6 +431,11 @@ export interface SearchIntentSourceSearchOptions extends SearchIntentPlannerOpti
   queryLimit?: number;
   sourceSearch?: SourceSearchOptions;
   includeDebug?: boolean;
+  runtimeBudget?: {
+    overallSearchBudgetMs?: number;
+    perQueryTimeoutMs?: number;
+    maxConcurrentProviderRequests?: number;
+  };
   webFallback?: {
     enabled?: boolean;
     endpoint?: string;
@@ -277,6 +443,10 @@ export interface SearchIntentSourceSearchOptions extends SearchIntentPlannerOpti
     maxResultsPerQuery?: number;
     fetchImpl?: SourceFetch;
   };
+  sourceSummaries?: {
+    maxSources?: number;
+  };
+  bypassCache?: boolean;
 }
 
 export interface SearchIntentSummary {
@@ -302,6 +472,10 @@ export interface SearchIntentSourceSearchResult {
   queries: SearchIntentQuerySet;
   results: SourceRecord[];
   sources: SourceRecord[];
+  scoredSources: SourceRecord[];
+  candidateSources: SourceRecord[];
+  rejectedSources: SourceRecord[];
+  fallbackReviewSources: SourceRecord[];
   provider_status: SourceProviderSearchResult[];
   warnings: string[];
   planner: SearchIntentPlan;
@@ -330,10 +504,18 @@ export interface SearchIntentSourceSearchResult {
   status?: "ok" | "empty";
   queryCount?: number;
   low_confidence_results?: boolean;
+  expandedQueries?: ExpandedQuery[];
+  sourceSearchConfig?: SourceSearchConfig;
+  searchProfile?: SourceSearchProfileConfig;
+  debugTrace?: ResearchDebugTrace;
+  groundedTitle?: string;
+  groundedSubtitle?: string;
+  groundedIntro?: string;
 }
 
 type SearchIntentPlannerErrorCode =
   | "provider-unconfigured"
+  | "model-missing"
   | "provider-quota"
   | "provider-timeout"
   | "provider-failure"
@@ -350,16 +532,124 @@ class SearchIntentPlannerError extends Error {
   }
 }
 
-const DEFAULT_SEARCH_INTENT_QUERY_LIMIT = 18;
+const DEFAULT_SEARCH_INTENT_QUERY_LIMIT = 32;
 const MAX_CANDIDATE_RESULTS = 180;
-const MAX_QUERY_COUNT = 16;
-const TARGET_SOURCE_COUNT = 20;
+const MAX_QUERY_COUNT = 32;
+const TARGET_SOURCE_COUNT = 30;
 const MINIMUM_TOTAL_SOURCES = 20;
 const MINIMUM_ACADEMIC_SOURCES = 10;
-const DEFAULT_ACADEMIC_QUERY_LIMIT = 5;
+const DEFAULT_ACADEMIC_QUERY_LIMIT = 16;
 const DEFAULT_WEB_FALLBACK_QUERY_LIMIT = 3;
+
+const GENERIC_FOOD_TEMPLATE_QUERY =
+  /food safety.*(?:storage|processing|risk)|(?:storage|processing).*food safety|market.*brand|consumption.*(?:food culture|dietary culture)|culinary culture|regional food culture|食品安全.*(?:保存|加工|風險)|(?:保存|加工).*食品安全|市場.*品牌|消費.*(?:飲食文化|食物文化)/i;
+
+const GENERIC_BIOLOGY_TEMPLATE_QUERY =
+  /biological mechanism physiology behavior health effect|physiology behavior health effect|health effect mechanism review|health effect evidence/i;
+
+const PROTEIN_MUSCLE_QUERY_GUARD =
+  /蛋白質|消化|吸收|胺基酸|氨基酸|白胺酸|亮氨酸|肌肉|肌肥大|阻力訓練|protein|digestion|absorption|amino acid|leucine|mTOR|muscle|hypertrophy|resistance training|resistance exercise/i;
+
+function hasExplicitFoodTemplateIntent(plan: SearchIntentPlan): boolean {
+  return /食品安全|保存|加工|市場|品牌|消費|飲食文化|food safety|storage|processing|market|brand|consumer|consumption|food culture|culinary|cuisine/i.test(
+    [
+      plan.normalizedTopic,
+      plan.originalTopic ?? "",
+      plan.activeResearchTopic ?? "",
+      plan.displayTitle ?? "",
+    ].join(" "),
+  );
+}
+
+function isProteinMuscleGrowthPlan(plan: SearchIntentPlan): boolean {
+  return /蛋白質|protein/i.test(
+    [
+      plan.normalizedTopic,
+      plan.originalTopic ?? "",
+      plan.activeResearchTopic ?? "",
+      plan.displayTitle ?? "",
+      ...(plan.primaryConcepts ?? []),
+      ...(plan.coreConcepts ?? []),
+      ...(plan.mustHaveTerms ?? []),
+      ...(plan.chineseQueries ?? []),
+      ...(plan.englishQueries ?? []),
+    ].join(" "),
+  ) && /肌肉|肌肥大|muscle|hypertrophy|mTOR|leucine|resistance training/i.test(
+    [
+      plan.normalizedTopic,
+      plan.originalTopic ?? "",
+      plan.activeResearchTopic ?? "",
+      plan.displayTitle ?? "",
+      ...(plan.primaryConcepts ?? []),
+      ...(plan.coreConcepts ?? []),
+      ...(plan.mustHaveTerms ?? []),
+      ...(plan.chineseQueries ?? []),
+      ...(plan.englishQueries ?? []),
+    ].join(" "),
+  );
+}
+
+function proteinMuscleQueryBuckets(): ReturnType<typeof queryBucketsForPlan> {
+  return {
+    coreConcepts: cleanConceptList([
+      "protein digestion",
+      "amino acid absorption",
+      "muscle protein synthesis",
+      "muscle hypertrophy",
+      "resistance training",
+      "leucine",
+      "mTOR",
+      "skeletal muscle",
+    ]),
+    coreEnglishAcademic: cleanQueryList(
+      [
+        "protein digestion amino acid absorption muscle protein synthesis",
+        "dietary protein muscle protein synthesis mTOR leucine",
+        "protein intake resistance training muscle hypertrophy",
+        "amino acid absorption skeletal muscle hypertrophy",
+      ],
+      6,
+    ),
+    academicSynonyms: cleanQueryList(
+      [
+        "leucine mTOR muscle protein synthesis review",
+        "essential amino acids muscle protein synthesis resistance exercise",
+        "dietary protein digestion absorption skeletal muscle",
+        "postprandial amino acid availability muscle protein synthesis",
+        "protein supplementation resistance training hypertrophy meta analysis",
+      ],
+      8,
+    ),
+    education: [],
+    chineseSupplemental: cleanQueryList(
+      [
+        "蛋白質 消化 胺基酸 吸收 肌肉蛋白質合成",
+        "蛋白質 攝取 阻力訓練 肌肥大",
+        "白胺酸 mTOR 肌肉蛋白質合成",
+        "胺基酸 吸收 骨骼肌 肌肉增長",
+      ],
+      6,
+    ),
+    fallbackRelaxed: cleanQueryList(
+      [
+        "muscle protein synthesis",
+        "protein digestion amino acid absorption",
+        "leucine mTOR",
+        "resistance training muscle hypertrophy",
+      ],
+      6,
+    ),
+  };
+}
 const DEFAULT_SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS = 3_500;
 const DEFAULT_SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS = 2_500;
+
+const searchResultCache = new Map<
+  string,
+  { expiresAt: number; staleUntil: number; result: SearchIntentSourceSearchResult }
+>();
+const SEARCH_RESULT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const SEARCH_RESULT_STALE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const URBAN_HEAT_PRIMARY = [
   "urban heat island",
@@ -853,12 +1143,57 @@ const COLA_HEALTH_PENALTIES = [
   "engineering management enrollment",
   "library book recommendation video",
   "vocational education",
+  "microplastics",
+  "microplastic pollution",
+  "salmonella",
+  "foodborne illness",
   "招生",
   "高考",
   "工程管理",
   "圖書館推介",
   "職業教育",
   "成人高考",
+];
+
+const BUBBLE_TEA_CONSUMPTION_PRIMARY = [
+  "bubble tea",
+  "hand-shaken drinks",
+  "sugar-sweetened beverages",
+  "beverage consumption",
+  "手搖飲",
+  "手搖飲料",
+  "含糖飲料",
+  "飲料消費",
+];
+
+const BUBBLE_TEA_CONSUMPTION_CONTEXT = [
+  "Taiwan",
+  "adolescents",
+  "youth",
+  "consumption culture",
+  "dietary habits",
+  "lifestyle",
+  "台灣",
+  "青少年",
+  "消費文化",
+  "生活習慣",
+  "飲食習慣",
+];
+
+const BUBBLE_TEA_CONSUMPTION_PENALTIES = [
+  "textual analysis",
+  "reception history",
+  "adaptation",
+  "literary criticism",
+  "translation criticism",
+  "Cervantes",
+  "Don Quixote",
+  "文本分析",
+  "接受史",
+  "改編",
+  "翻譯評論",
+  "文學",
+  "唐吉訶德",
 ];
 
 const EGG_NUTRITION_PRIMARY = [
@@ -977,6 +1312,80 @@ const EGG_NUTRITION_DRIFT_TERMS = [
   "輸液",
   "靜脈營養",
   "白蛋白輸注",
+];
+
+const HONEY_CRYSTALLIZATION_PRIMARY = [
+  "honey",
+  "honey crystallization",
+  "蜂蜜",
+  "蜂蜜結晶",
+];
+
+const HONEY_CRYSTALLIZATION_CONTEXT = [
+  "glucose fructose ratio",
+  "glucose to fructose ratio",
+  "moisture content",
+  "water content",
+  "sugar composition",
+  "storage temperature",
+  "結晶速度",
+  "葡萄糖果糖比例",
+  "糖類比例",
+  "含水量",
+  "水分含量",
+  "糖組成",
+];
+
+const HONEY_CRYSTALLIZATION_OUTCOMES = [
+  "crystallization rate",
+  "granulation",
+  "nucleation",
+  "seed crystal",
+  "viscosity",
+  "water activity",
+  "結晶速率",
+  "成核",
+  "晶種",
+  "黏度",
+  "水活性",
+];
+
+const HONEY_CRYSTALLIZATION_MUST_HAVE = [
+  "honey",
+  "crystallization",
+  "granulation",
+  "glucose",
+  "fructose",
+  "moisture",
+  "water content",
+  "sugar composition",
+  "蜂蜜",
+  "結晶",
+  "葡萄糖",
+  "果糖",
+  "含水量",
+  "水分含量",
+  "糖類",
+];
+
+const HONEY_CRYSTALLIZATION_DRIFT_TERMS = [
+  "relationship satisfaction",
+  "communication behavior",
+  "national income",
+  "learning literacy",
+  "translation studies",
+  "feminism",
+  "poetics",
+  "particle production",
+  "詩學",
+  "翻譯",
+  "女性主義",
+  "國民所得",
+  "學習素養",
+  "親密關係",
+  "受傷事件",
+  "多粒子",
+  "極大速度隙",
 ];
 
 const COD_PRIMARY = [
@@ -1236,6 +1645,128 @@ const TAIWAN_SEMICONDUCTOR_DRIFT_TERMS = [
   "零食",
 ];
 
+const SEMICONDUCTOR_ETCHING_PRIMARY = [
+  "silicon wafer etching",
+  "wafer etching",
+  "semiconductor fabrication",
+  "microfabrication",
+  "矽晶圓蝕刻",
+  "晶圓蝕刻",
+  "半導體製程",
+];
+
+const SEMICONDUCTOR_ETCHING_CONTEXT = [
+  "plasma etching",
+  "dry etching",
+  "wet etching",
+  "reactive ion etching",
+  "photolithography",
+  "anisotropic etching",
+  "integrated circuit manufacturing",
+  "電漿蝕刻",
+  "乾式蝕刻",
+  "濕式蝕刻",
+  "反應離子蝕刻",
+  "微影",
+  "各向異性蝕刻",
+  "積體電路製造",
+];
+
+const SEMICONDUCTOR_ETCHING_MUST_HAVE = [
+  "silicon wafer",
+  "wafer etching",
+  "semiconductor",
+  "semiconductor fabrication",
+  "microfabrication",
+  "矽晶圓",
+  "晶圓",
+  "蝕刻",
+  "刻蝕",
+  "半導體",
+  "半導體製程",
+];
+
+const SEMICONDUCTOR_ETCHING_DRIFT_TERMS = [
+  "scientific method",
+  "experimental design",
+  "structural equation model",
+  "econometrics",
+  "CMIP6",
+  "art engraving",
+  "wood engraving",
+  "laser engraving crafts",
+  "tattoo",
+  "科學方法",
+  "結構方程模型",
+  "計量經濟",
+  "藝術雕刻",
+  "木雕",
+  "刺青",
+];
+
+const HIV_AIDS_PRIMARY = [
+  "HIV",
+  "AIDS",
+  "HIV/AIDS",
+  "human immunodeficiency virus",
+  "acquired immunodeficiency syndrome",
+  "愛滋病",
+  "人類免疫缺乏病毒",
+  "後天免疫缺乏症候群",
+  "HIV感染",
+];
+
+const HIV_AIDS_CONTEXT = [
+  "HIV transmission",
+  "risk factors",
+  "epidemiology",
+  "public health",
+  "prevention",
+  "antiretroviral therapy",
+  "ART",
+  "PrEP",
+  "stigma",
+  "social impact",
+  "cohort study",
+  "systematic review",
+  "clinical trial",
+  "傳染途徑",
+  "風險因子",
+  "流行病學",
+  "公共衛生",
+  "預防策略",
+  "抗病毒治療",
+  "社會污名",
+];
+
+const HIV_AIDS_MUST_HAVE = [
+  "HIV",
+  "AIDS",
+  "HIV/AIDS",
+  "human immunodeficiency virus",
+  "acquired immunodeficiency syndrome",
+  "愛滋病",
+  "人類免疫缺乏病毒",
+  "後天免疫缺乏症候群",
+  "HIV感染",
+];
+
+const HIV_AIDS_DRIFT_TERMS = [
+  "scientific method",
+  "general research method",
+  "generic experimental design",
+  "school science inquiry",
+  "case research methodology",
+  "research design theory",
+  "behavioral sciences procedures",
+  "variables classroom inquiry",
+  "科學方法",
+  "一般研究方法",
+  "實驗設計通論",
+  "方法論",
+  "研究設計理論",
+];
+
 const DINOSAUR_PRIMARY = [
   "恐龍",
   "dinosaur",
@@ -1266,6 +1797,20 @@ const DINOSAUR_MUST_HAVE = [
   "paleontology",
   "化石",
   "古生物",
+];
+
+const DINOSAUR_ALGAE_CONTEXT = [
+  "藻類",
+  "微化石",
+  "藍綠菌",
+  "古環境",
+  "algae",
+  "algal fossils",
+  "cyanobacteria",
+  "microfossil",
+  "stromatolite",
+  "paleoenvironment",
+  "paleoecology",
 ];
 
 const DON_QUIXOTE_PRIMARY = [
@@ -1612,10 +2157,36 @@ const SOCIAL_MEDIA_ADDICTION_PENALTIES = [
   "fish",
   "food safety",
   "climate change",
+  "exposure mechanism",
+  "biomarkers",
+  "toxicology",
+  "environmental pollution",
+  "human exposure",
   "行銷策略",
   "品牌廣告",
   "食品安全",
+  "人體暴露",
+  "接觸來源",
+  "毒理",
+  "消化系統",
+  "血液循環",
+  "環境污染",
+  "風險治理",
 ];
+
+const SOCIAL_MEDIA_QUERY_GUARD = [
+  /social media|social networking|problematic social media|smartphone addiction|internet addiction|adolescents|young adults|students|mental health|depression|anxiety|sleep|attention|self-esteem|academic performance/i,
+  /社群媒體|社交媒體|社群平台|社交平台|手機成癮|問題性|青少年|學生|心理健康|憂鬱|焦慮|睡眠|注意力|自尊|學業/u,
+];
+
+const SOCIAL_MEDIA_QUERY_DRIFT = /exposure mechanism|biomarkers?|toxicolog|human exposure|environmental pollution|contamination|public health governance|人體暴露|接觸來源|毒理|消化系統|血液循環|公共衛生|環境污染|風險治理/u;
+
+const BUBBLE_TEA_QUERY_GUARD = [
+  /bubble tea|boba tea|hand[- ]shaken drinks?|milk tea|sugar[- ]sweetened beverages?|beverage consumption|soft drink|adolescents|youth|students|Taiwan|dietary habits|lifestyle|consumer behavior|sugar intake/i,
+  /手搖飲|手搖杯|珍珠奶茶|珍奶|含糖飲料|飲料|飲品|青少年|學生|台灣|消費|生活習慣|飲食習慣|糖分攝取/u,
+];
+
+const BUBBLE_TEA_QUERY_DRIFT = /textual analysis|reception history|adaptation|literary criticism|translation criticism|cervantes|don quixote|文本|接受史|改編|翻譯評論|文學|唐吉訶德/u;
 
 const SPIDER_ECOLOGY_PRIMARY = [
   "spider",
@@ -1914,6 +2485,36 @@ function isColaHealthTopic(input: SearchIntentPlannerInput): boolean {
   );
 }
 
+function isBubbleTeaConsumptionCultureTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(
+    `${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`,
+  );
+  const hasBeverageCue = hasAny(text, [
+    /手搖飲|手搖杯|珍珠奶茶|珍奶|飲料消費|含糖飲料|飲品/,
+    /bubble tea|boba tea|milk tea|hand-shaken drink|sugar[- ]sweetened beverage|beverage consumption/i,
+  ]);
+  const hasCultureOrHabitCue = hasAny(text, [
+    /消費文化|生活習慣|飲食習慣|青少年|學生|台灣|社會影響|消費行為/,
+    /consumption culture|lifestyle|dietary habit|adolescents|youth|students|taiwan|consumer behavior|social impact/i,
+  ]);
+  return hasBeverageCue && hasCultureOrHabitCue;
+}
+
+function isHoneyCrystallizationTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(
+    `${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`,
+  );
+  const hasHoneyCue = hasAny(text, [
+    /蜂蜜|蜜糖/,
+    /\bhoney\b/i,
+  ]);
+  const hasCrystallizationCue = hasAny(text, [
+    /結晶|糖類比例|葡萄糖|果糖|含水量|水分含量|糖組成|水活性|黏度/,
+    /crystallization|crystallisation|granulation|glucose|fructose|moisture|water content|sugar composition|water activity|viscosity/i,
+  ]);
+  return hasHoneyCue && hasCrystallizationCue;
+}
+
 function isEggNutritionProteinTopic(input: SearchIntentPlannerInput): boolean {
   const text = normalizeText(
     `${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`,
@@ -1976,12 +2577,82 @@ function isTaiwanSemiconductorSupplyChainTopic(
   return hasTaiwanSemiconductorCue && hasSupplyChainCue;
 }
 
+function isSemiconductorEtchingTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(
+    `${input.topic} ${input.originalTopic ?? ""} ${input.displayTitle ?? ""} ${input.refinedTopic ?? ""} ${input.reportType ?? ""} ${input.audience ?? ""}`,
+  );
+  const hasWaferOrSemiconductorCue = hasAny(text, [
+    /矽晶圓|硅晶圆|晶圓|晶圆|半導體|半导体|晶片|芯片|積體電路|集成电路/,
+    /silicon wafer|wafer|semiconductor|integrated circuit|microfabrication|microelectronics/i,
+  ]);
+  const hasEtchingCue = hasAny(text, [
+    /雕刻|蝕刻|蚀刻|刻蝕|刻蚀|微影|光刻|製程|制程/,
+    /etch|etching|lithography|photolithography|plasma etch|dry etch|wet etch|reactive ion etch/i,
+  ]);
+  return hasWaferOrSemiconductorCue && hasEtchingCue;
+}
+
+function isHivAidsTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(
+    `${input.topic} ${input.originalTopic ?? ""} ${input.displayTitle ?? ""} ${input.refinedTopic ?? ""} ${input.reportType ?? ""} ${input.audience ?? ""}`,
+  );
+  return hasAny(text, [
+    /愛滋病|人類免疫缺乏病毒|後天免疫缺乏症候群|HIV感染/i,
+    /\bHIV\b|\bAIDS\b|HIV\/AIDS|human immunodeficiency virus|acquired immunodeficiency syndrome/i,
+  ]);
+}
+
 function isDinosaurTopic(input: SearchIntentPlannerInput): boolean {
   const text = normalizeText(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
   return hasAny(text, [
     /恐龍|中生代|侏羅紀|白堊紀|化石|古生物/,
     /dinosaur|fossil record|paleontology|jurassic|cretaceous|non-avian dinosaur/i,
   ]);
+}
+
+function isAstronomyScienceEducationTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(
+    `${input.topic} ${input.originalTopic ?? ""} ${input.displayTitle ?? ""} ${input.reportType ?? ""}`,
+  );
+  const hasAstronomyCue = hasAny(text, [
+    /星星|恆星|星系|天文|宇宙|光年|視差|天體|距離/,
+    /astronomy|stellar|\bstars?\b|galaxy|cosmos|parallax|light[-\s]?year|celestial/i,
+  ]);
+  const hasEducationCue = hasAny(text, [
+    /科學教育|博物館|展示|大眾理解|科普|教材|教學/,
+    /science education|museum|exhibition|display|public understanding|outreach|informal learning/i,
+  ]);
+  return hasAstronomyCue && hasEducationCue;
+}
+
+function isAgriculturalWastePollutionTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(
+    `${input.topic} ${input.originalTopic ?? ""} ${input.displayTitle ?? ""} ${input.reportType ?? ""}`,
+  );
+  const hasAgricultureCue = hasAny(text, [
+    /農業|農作|農田|畜牧|養殖|肥料|糞肥|農藥|作物/,
+    /agricultur|farm|crop|livestock|manure|fertili[sz]er|pesticide/i,
+  ]);
+  const hasWastePollutionCue = hasAny(text, [
+    /廢料|廢棄物|殘渣|污染|水質|土壤|逕流|徑流|富營養化|廢水/,
+    /agricultural waste|farm waste|residue|pollution|contamination|runoff|wastewater|eutrophication/i,
+  ]);
+  return hasAgricultureCue && hasWastePollutionCue;
+}
+
+function isAiWorkImpactTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(
+    `${input.topic} ${input.originalTopic ?? ""} ${input.displayTitle ?? ""} ${input.reportType ?? ""}`,
+  );
+  const hasAiCue = hasAny(text, [
+    /人工智慧|生成式AI|大型語言模型|機器學習|(^|[^A-Za-z])AI(?=$|[^A-Za-z])/i,
+    /artificial intelligence|generative ai|large language model|machine learning/i,
+  ]);
+  const hasWorkCue = hasAny(text, [
+    /工作|職務|職業|就業|勞動|勞工|組織|職場|工作本質|勞動市場/,
+    /work|job|employment|labor|labour|occupation|workplace|organization|organisation/i,
+  ]);
+  return hasAiCue && hasWorkCue;
 }
 
 function isDonQuixoteTopic(input: SearchIntentPlannerInput): boolean {
@@ -2382,6 +3053,28 @@ function domainQueryExpansion(plan: SearchIntentPlan): string[] {
     return BMW_EV_STRATEGY_QUERIES;
   }
 
+  const activeTopicText = [
+    plan.activeResearchTopic ?? "",
+    plan.displayTitle ?? "",
+    ...(plan.suppliedQuerySeedZh ?? []),
+    ...(plan.suppliedQuerySeedEn ?? []),
+  ].join(" ");
+  const plannedConceptQueries = filterConceptQueryGroupsForActiveTopic(
+    plan.queryGroups ?? [],
+    activeTopicText,
+  )
+    .filter((group) => group.language === "en" || group.language === "mixed")
+    .sort((a, b) => {
+      const priorityRank = { high: 0, medium: 1, low: 2 } as const;
+      return priorityRank[a.priority] - priorityRank[b.priority];
+    })
+    .map((group) => group.query)
+    .filter((query) => queryMatchesActiveIntent(query, activeTopicText));
+
+  if (plannedConceptQueries.length > 0) {
+    return plannedConceptQueries;
+  }
+
   if (/taiwan_semiconductor_supply_chain|Taiwan semiconductor|台灣半導體|台灣 半導體|TSMC|台積電/i.test(planText)) {
     return [
       "Taiwan semiconductor supply chain TSMC foundry packaging testing",
@@ -2390,6 +3083,17 @@ function domainQueryExpansion(plan: SearchIntentPlan): string[] {
       "Taiwan semiconductor supply chain resilience geopolitics export controls",
       "台灣 半導體 供應鏈 晶圓代工 封測 設備 材料",
       "台積電 供應鏈 先進封裝 CoWoS EUV",
+    ];
+  }
+
+  if (/semiconductor_wafer_etching|silicon wafer etching|wafer etching|晶圓蝕刻|晶圓 蝕刻|矽晶圓|半導體製程/i.test(planText)) {
+    return [
+      "silicon wafer etching principles applications semiconductor fabrication",
+      "plasma etching silicon wafer reactive ion etching",
+      "wet etching silicon wafer anisotropic etching microfabrication",
+      "photolithography wafer etching integrated circuit manufacturing",
+      "晶圓 蝕刻 原理 用途 半導體製程",
+      "矽晶圓 蝕刻 微影 電漿蝕刻 乾式蝕刻",
     ];
   }
 
@@ -2409,6 +3113,57 @@ function deterministicAcademicQueryVariants(plan: SearchIntentPlan): {
       ...plan.englishQueries,
     ].join(" "),
   );
+
+  if (isEggNutritionPlan(plan)) {
+    return {
+      chinese: [
+        "雞蛋 營養成分 蛋白質品質",
+        "雞蛋 胺基酸組成",
+        "蛋白 蛋黃 營養價值",
+      ],
+      english: [
+        "egg nutrition protein quality",
+        "egg protein amino acid profile",
+        "chicken egg nutritional composition",
+        "egg white protein digestibility",
+        "egg yolk nutrition amino acids",
+        "albumen amino acid composition",
+      ],
+    };
+  }
+
+  if (/太陽帆|solar sail|solar sailing|radiation pressure|spacecraft mission|deep space/.test(text)) {
+    return {
+      chinese: [
+        "太陽帆 輻射壓 推進 原理",
+        "太陽帆 航天任務 應用 價值",
+        "太陽帆 深空探測 優勢 限制",
+      ],
+      english: [
+        "solar sail propulsion radiation pressure",
+        "solar sail spacecraft mission applications",
+        "solar sailing deep space exploration limitations",
+        "IKAROS LightSail NEA Scout solar sail",
+      ],
+    };
+  }
+
+  if (isProteinMuscleGrowthPlan(plan)) {
+    return {
+      chinese: [
+        "蛋白質 消化 胺基酸 吸收 肌肉蛋白質合成",
+        "蛋白質 攝取 阻力訓練 肌肥大",
+        "白胺酸 mTOR 肌肉蛋白質合成",
+      ],
+      english: [
+        "protein digestion amino acid absorption muscle protein synthesis",
+        "dietary protein muscle protein synthesis mTOR leucine",
+        "protein intake resistance training muscle hypertrophy",
+        "leucine mTOR muscle protein synthesis review",
+        "essential amino acids muscle protein synthesis resistance exercise",
+      ],
+    };
+  }
 
   if (/微塑膠|微塑料|塑膠微粒|塑料微粒|microplastic|nanoplastic/.test(text)) {
     return {
@@ -2483,6 +3238,22 @@ function deterministicAcademicQueryVariants(plan: SearchIntentPlan): {
     };
   }
 
+  if (/矽晶圓|硅晶圆|晶圓|晶圆|半導體製程|semiconductor fabrication|silicon wafer|wafer etching/.test(text)) {
+    return {
+      chinese: [
+        "矽晶圓 蝕刻 原理 用途",
+        "晶圓 蝕刻 微影 半導體製程",
+        "半導體製程 乾式蝕刻 濕式蝕刻",
+      ],
+      english: [
+        "silicon wafer etching semiconductor fabrication",
+        "wafer etching principles applications",
+        "plasma etching wet etching silicon wafer",
+        "photolithography etching microfabrication",
+      ],
+    };
+  }
+
   return {
     chinese: /[\u4e00-\u9fff]/.test(plan.normalizedTopic)
       ? [plan.normalizedTopic]
@@ -2521,19 +3292,43 @@ function buildUnderstandingSearchIntent(
   reason: string,
   plannerStatus: SearchIntentPlannerStatus,
 ): SearchIntentPlan {
-  const angleCards = understanding.clarificationCards;
+  const activeTopicText =
+    cleanString(input.displayTitle) ??
+    cleanString(input.refinedTopic) ??
+    input.topic;
+  const filteredResearchAngles = filterResearchAnglesForActiveTopic(
+    understanding.researchAngles,
+    activeTopicText,
+  );
+  const angleCards = filterClarificationCardsForActiveTopic(
+    understanding.clarificationCards,
+    activeTopicText,
+  );
   const questions = (
     angleCards.length
       ? angleCards.map((card) =>
           researchQuestionFromClarificationCard(card, understanding.excludedDriftTerms),
         )
-      : understanding.researchAngles.map((angle) =>
+      : filteredResearchAngles.map((angle) =>
           researchQuestionFromTopicResearchAngle(angle, understanding.excludedDriftTerms),
         )
   ).slice(0, 6);
+  const filteredAngleZhQueries = filteredResearchAngles.flatMap((angle) => angle.zhQueries);
+  const filteredAngleEnQueries = filteredResearchAngles.flatMap((angle) => angle.enQueries);
+  const baseZhQueries =
+    understanding.topicKind === "specific_research_topic" &&
+    filteredAngleZhQueries.length > 0
+      ? filteredAngleZhQueries
+      : understanding.searchQueries.zh;
+  const baseEnQueries =
+    understanding.topicKind === "specific_research_topic" &&
+    filteredAngleEnQueries.length > 0
+      ? filteredAngleEnQueries
+      : understanding.searchQueries.en;
   const zhQueries = unique([
-    ...understanding.searchQueries.zh,
+    ...baseZhQueries,
     ...angleCards.flatMap((card) => card.zhQueries),
+    ...filteredAngleZhQueries,
     ...questions.flatMap((question) => question.primaryQueries),
   ]).slice(0, MAX_QUERY_COUNT);
   const enQueries = stableCrossLanguageEnglishQueries({
@@ -2545,8 +3340,9 @@ function buildUnderstandingSearchIntent(
       ...(understanding.entity ? entitySearchTerms(understanding.entity) : []),
     ],
     existingQueries: unique([
-      ...understanding.searchQueries.en,
+      ...baseEnQueries,
       ...angleCards.flatMap((card) => card.enQueries),
+      ...filteredAngleEnQueries,
       ...questions.flatMap((question) => question.secondaryQueries),
     ]),
   }).slice(0, MAX_QUERY_COUNT);
@@ -2564,10 +3360,7 @@ function buildUnderstandingSearchIntent(
   const queryTerms = termsFromQueries([...zhQueries, ...enQueries]);
   const specificTopicConcepts =
     understanding.topicKind === "specific_research_topic"
-      ? unique([
-          ...understanding.coreConcepts,
-          ...queryTerms,
-        ])
+      ? filterSpecificTopicPrimaryConcepts(understanding, queryTerms)
       : [];
   const conceptTerms = unique([
     ...specificTopicConcepts,
@@ -2577,16 +3370,22 @@ function buildUnderstandingSearchIntent(
     ...understanding.scientificNames,
     ...(understanding.entity ? entitySearchTerms(understanding.entity) : []),
   ]);
-  const angleLabels = understanding.researchAngles.map((angle) => angle.label);
+  const angleLabels = filteredResearchAngles.map((angle) => angle.label);
   const domainContext = sourceTypesFromUnderstanding(understanding);
   const fallbackTerms = topicTerms(input.topic);
   const primaryConcepts = unique(
     conceptTerms.length ? conceptTerms : fallbackTerms.length ? fallbackTerms : [input.topic.trim()],
   ).slice(0, 14);
-  const mustHaveTerms = unique([
-    ...primaryConcepts,
-    ...understanding.scientificNames,
-  ]).slice(0, 18);
+  const mustHaveTerms =
+    understanding.topicKind === "specific_research_topic"
+      ? unique([
+          ...specificTopicConcepts,
+          ...understanding.scientificNames,
+        ]).slice(0, 18)
+      : unique([
+          ...primaryConcepts,
+          ...understanding.scientificNames,
+        ]).slice(0, 18);
 
   return {
     normalizedTopic: understanding.normalizedTopic || input.topic.trim(),
@@ -2599,8 +3398,8 @@ function buildUnderstandingSearchIntent(
       ...queryTerms,
     ]).slice(0, 14),
     outcomeConcepts: unique([
-      ...understanding.researchAngles.map((angle) => angle.researchQuestion),
-      ...understanding.researchAngles.map((angle) => angle.whyResearchable),
+      ...filteredResearchAngles.map((angle) => angle.researchQuestion),
+      ...filteredResearchAngles.map((angle) => angle.whyResearchable),
       ...queryTerms.slice(0, 8),
     ]).slice(0, 12),
     populationConcepts: [],
@@ -2741,6 +3540,239 @@ export function buildRuleBasedSearchIntent(
 ): SearchIntentPlan {
   const normalizedTopic = input.topic.trim();
   const understanding = understandTopic(normalizedTopic);
+
+  if (isAiWorkImpactTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "ai_work_labor_impact",
+      detectedDomain: "social_science",
+      canonicalTopicZh: input.displayTitle?.trim() || normalizedTopic,
+      canonicalEnglishTopic: "artificial intelligence impact on work and labor market",
+      primaryConcepts: [
+        "artificial intelligence",
+        "future of work",
+        "labor market",
+        "employment",
+        "job transformation",
+        "workplace automation",
+      ],
+      contextConcepts: [
+        "task automation",
+        "skills demand",
+        "organizational management",
+        "work practices",
+        "productivity",
+      ],
+      outcomeConcepts: [
+        "job displacement",
+        "job augmentation",
+        "occupational change",
+        "work transformation",
+      ],
+      populationConcepts: ["workers", "employees", "organizations"],
+      lowWeightTerms: ["market", "brand", "supply chain", "emissions", "consumer", "市場", "品牌", "供應鏈"],
+      mustHaveTerms: [
+        "AI",
+        "artificial intelligence",
+        "人工智慧",
+        "work",
+        "labor market",
+        "employment",
+        "工作",
+        "勞動市場",
+      ],
+      shouldHaveTerms: [
+        "job transformation",
+        "task automation",
+        "skills",
+        "workplace",
+        "future of work",
+        "職務變遷",
+        "技能需求",
+        "職場",
+      ],
+      penaltyTerms: [
+        "AI market positioning",
+        "AI brand strategy",
+        "AI supply chain emissions",
+        "microplastics human health",
+        "nutrition facts",
+      ],
+      negativeTerms: [
+        "brand strategy",
+        "consumer preference",
+        "supply chain emissions",
+        "microplastics",
+        "food safety",
+      ],
+      chineseQueries: [
+        "人工智慧 工作本質 勞動市場 職務變遷",
+        "AI 自動化 就業影響 技能需求",
+        "生成式AI 工作流程 組織管理",
+        "人工智慧 職場轉型 勞動市場 研究",
+      ],
+      englishQueries: [
+        "artificial intelligence impact on work labor market jobs",
+        "AI automation employment skills task transformation",
+        "generative AI workplace organization management work practices",
+        "artificial intelligence future of work labor market review",
+        "AI job transformation occupational change workplace",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "AI 對工作本質、職務變遷與勞動市場的影響",
+          researchAngle: "整理 AI 與生成式 AI 如何改變工作任務、技能需求、職務設計與組織管理。",
+          whyResearchable: "可使用勞動經濟、管理學、AI 政策與組織研究文獻。",
+          suggestedSourceTypes: ["academic_paper", "labor_report", "policy_report"],
+          zhKeywords: ["人工智慧", "工作本質", "勞動市場", "職務變遷", "組織管理"],
+          enKeywords: ["artificial intelligence", "future of work", "labor market", "job transformation"],
+          primaryQueries: [
+            "artificial intelligence impact on work labor market jobs",
+            "AI automation employment skills task transformation",
+          ],
+          secondaryQueries: [
+            "人工智慧 工作本質 勞動市場 職務變遷",
+            "generative AI workplace organization management work practices",
+          ],
+          excludedDriftTerms: [
+            "AI market positioning",
+            "AI brand strategy",
+            "AI supply chain emissions",
+          ],
+        },
+      ],
+      excludedDriftTerms: [
+        "AI market positioning",
+        "AI brand strategy",
+        "AI supply chain emissions",
+        "microplastics human health",
+      ],
+      reasoningNotes: planReason(
+        reason,
+        "AI-work searches must keep artificial intelligence tied to work, jobs, labor market, task automation, skills, workplace, or organizational-management evidence.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isAgriculturalWastePollutionTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "agricultural_waste_pollution",
+      detectedDomain: "environment",
+      canonicalTopicZh: input.displayTitle?.trim() || normalizedTopic,
+      canonicalEnglishTopic: "agricultural waste pollution",
+      primaryConcepts: [
+        "agricultural waste",
+        "farm waste",
+        "agricultural residues",
+        "agricultural pollution",
+        "water pollution",
+        "soil contamination",
+      ],
+      contextConcepts: [
+        "agricultural runoff",
+        "manure waste",
+        "nutrient pollution",
+        "eutrophication",
+        "waste management",
+        "pollution control",
+      ],
+      outcomeConcepts: [
+        "water quality",
+        "soil quality",
+        "environmental impact",
+        "ecosystem risk",
+      ],
+      populationConcepts: [],
+      lowWeightTerms: ["food", "nutrition", "health", "market", "飲食", "營養", "食品"],
+      mustHaveTerms: [
+        "agricultural waste",
+        "farm waste",
+        "agricultural residues",
+        "agricultural pollution",
+        "農業廢料",
+        "農業廢棄物",
+        "農業污染",
+      ],
+      shouldHaveTerms: [
+        "runoff",
+        "water pollution",
+        "soil contamination",
+        "eutrophication",
+        "waste management",
+        "pollution control",
+        "逕流",
+        "水質污染",
+        "土壤污染",
+        "富營養化",
+      ],
+      penaltyTerms: [
+        "microplastics human health",
+        "Salmonella food poisoning",
+        "nutrition facts",
+        "food labeling",
+        "annual report",
+      ],
+      negativeTerms: [
+        "microplastics human health",
+        "Salmonella food safety",
+        "nutrition label",
+        "consumer food culture",
+      ],
+      chineseQueries: [
+        "農業廢棄物 污染 水質 土壤",
+        "農業廢料 逕流 富營養化 環境影響",
+        "畜牧廢棄物 糞肥 水污染 土壤污染",
+        "農業廢棄物 管理 污染防治",
+      ],
+      englishQueries: [
+        "agricultural waste pollution water soil contamination",
+        "agricultural residues environmental impact runoff eutrophication",
+        "farm waste manure water pollution soil contamination",
+        "agricultural waste management pollution control review",
+        "agricultural runoff nutrient pollution eutrophication",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "農業廢棄物造成水質與土壤污染的路徑",
+          researchAngle: "整理農業廢料、畜牧糞肥與農業逕流如何影響水質、土壤與富營養化風險。",
+          whyResearchable: "可使用環境污染、農業廢棄物管理與水土污染研究文獻。",
+          suggestedSourceTypes: ["academic_paper", "environmental_report", "government_or_institutional_source"],
+          zhKeywords: ["農業廢棄物", "水質污染", "土壤污染", "逕流", "富營養化"],
+          enKeywords: ["agricultural waste", "water pollution", "soil contamination", "runoff", "eutrophication"],
+          primaryQueries: [
+            "agricultural waste pollution water soil contamination",
+            "agricultural runoff nutrient pollution eutrophication",
+          ],
+          secondaryQueries: [
+            "農業廢棄物 污染 水質 土壤",
+            "farm waste manure water pollution soil contamination",
+          ],
+          excludedDriftTerms: [
+            "microplastics human health",
+            "Salmonella food poisoning",
+            "nutrition facts",
+          ],
+        },
+      ],
+      excludedDriftTerms: [
+        "microplastics human health",
+        "Salmonella food poisoning",
+        "nutrition facts",
+        "food labeling",
+      ],
+      reasoningNotes: planReason(
+        reason,
+        "Agricultural-waste pollution searches must keep agricultural waste, farm residues, runoff, water or soil contamination, eutrophication, and waste-management evidence together.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
 
   if (isUrbanHeatIslandTopic(input)) {
     return {
@@ -3274,7 +4306,171 @@ export function buildRuleBasedSearchIntent(
       excludedDriftTerms: ["coal", "coke fuel", "climate change"],
       reasoningNotes: planReason(
         reason,
-        "Cola-health searches must keep beverage, sugar/caffeine, consumption, and health terms together; education or student terms cannot pass alone.",
+        "Cola-health searches must keep beverage, sugar/caffeine, consumption, and health terms together; education, microplastics, foodborne illness, or student terms cannot pass alone.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isBubbleTeaConsumptionCultureTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "bubble_tea_consumption_culture",
+      primaryConcepts: BUBBLE_TEA_CONSUMPTION_PRIMARY,
+      contextConcepts: BUBBLE_TEA_CONSUMPTION_CONTEXT,
+      outcomeConcepts: [
+        "dietary habits",
+        "sugar intake",
+        "consumer behavior",
+        "lifestyle",
+        "飲食習慣",
+        "糖分攝取",
+        "消費行為",
+        "生活習慣",
+      ],
+      populationConcepts: ["Taiwan", "adolescents", "students", "台灣", "青少年", "學生"],
+      lowWeightTerms: ["culture", "impact", "influence", "文化", "影響"],
+      mustHaveTerms: [
+        "bubble tea",
+        "sugar-sweetened beverages",
+        "beverage consumption",
+        "adolescents",
+        "Taiwan",
+        "手搖飲",
+        "含糖飲料",
+        "青少年",
+        "台灣",
+      ],
+      shouldHaveTerms: [
+        "consumer behavior",
+        "dietary habits",
+        "lifestyle",
+        "sugar intake",
+        "youth",
+        "消費文化",
+        "生活習慣",
+        "飲食習慣",
+      ],
+      penaltyTerms: BUBBLE_TEA_CONSUMPTION_PENALTIES,
+      negativeTerms: BUBBLE_TEA_CONSUMPTION_PENALTIES,
+      chineseQueries: [
+        "台灣 青少年 手搖飲 消費 生活習慣",
+        "手搖飲 消費文化 青少年 飲食習慣",
+        "含糖飲料 青少年 攝取 習慣 台灣",
+        "珍珠奶茶 消費行為 青少年 台灣",
+      ],
+      englishQueries: [
+        "bubble tea consumption adolescents Taiwan dietary habits",
+        "hand-shaken drinks consumer behavior youth Taiwan",
+        "sugar-sweetened beverages adolescents dietary habits Taiwan",
+        "bubble tea consumption culture lifestyle adolescents",
+        "beverage consumption youth lifestyle Taiwan",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "台灣青少年手搖飲消費與生活習慣",
+          researchAngle: "分析手搖飲消費頻率、糖分攝取與青少年生活或飲食習慣的關聯。",
+          whyResearchable: "可使用飲食調查、公共衛生與消費者行為研究。",
+          suggestedSourceTypes: ["dietary_survey", "public_health_study", "consumer_behavior_study"],
+          zhKeywords: ["手搖飲", "台灣", "青少年", "生活習慣", "飲食習慣"],
+          enKeywords: ["bubble tea", "Taiwan", "adolescents", "dietary habits", "consumer behavior"],
+          primaryQueries: [
+            "台灣 青少年 手搖飲 消費 生活習慣",
+            "bubble tea consumption adolescents Taiwan dietary habits",
+          ],
+          secondaryQueries: [
+            "含糖飲料 青少年 攝取 習慣 台灣",
+            "sugar-sweetened beverages adolescents dietary habits Taiwan",
+          ],
+          excludedDriftTerms: BUBBLE_TEA_CONSUMPTION_PENALTIES,
+        },
+      ],
+      excludedDriftTerms: BUBBLE_TEA_CONSUMPTION_PENALTIES,
+      reasoningNotes: planReason(
+        reason,
+        "Bubble-tea consumption topics must stay on beverages, Taiwan/youth, consumer behavior, dietary habits, sugar intake, and lifestyle; literary textual-analysis terms are drift.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isHoneyCrystallizationTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "honey_crystallization_food_chemistry",
+      primaryConcepts: HONEY_CRYSTALLIZATION_PRIMARY,
+      contextConcepts: HONEY_CRYSTALLIZATION_CONTEXT,
+      outcomeConcepts: HONEY_CRYSTALLIZATION_OUTCOMES,
+      populationConcepts: [],
+      lowWeightTerms: ["food", "chemistry", "quality", "食品", "化學", "品質"],
+      mustHaveTerms: HONEY_CRYSTALLIZATION_MUST_HAVE,
+      shouldHaveTerms: unique([
+        ...HONEY_CRYSTALLIZATION_CONTEXT,
+        "glucose fructose ratio",
+        "moisture content",
+        "crystallization rate",
+      ]),
+      penaltyTerms: HONEY_CRYSTALLIZATION_DRIFT_TERMS,
+      negativeTerms: HONEY_CRYSTALLIZATION_DRIFT_TERMS,
+      chineseQueries: [
+        "蜂蜜 結晶 葡萄糖 果糖 比例",
+        "蜂蜜 結晶 含水量 水分含量",
+        "蜂蜜 糖組成 結晶速度",
+        "蜂蜜 水活性 黏度 結晶",
+        "蜂蜜 結晶 食品化學 文獻",
+      ],
+      englishQueries: [
+        "honey crystallization glucose fructose ratio",
+        "honey crystallization moisture content",
+        "honey sugar composition crystallization rate",
+        "honey granulation water content glucose fructose",
+        "honey crystallization water activity viscosity",
+        "honey crystallization review glucose fructose moisture",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "蜂蜜結晶速度與糖類比例",
+          researchAngle: "比較葡萄糖、果糖與其他糖組成對蜂蜜結晶或顆粒化速度的影響。",
+          whyResearchable: "可由食品化學、蜂產品品質與 honey crystallization 文獻交叉驗證。",
+          suggestedSourceTypes: ["food_chemistry_paper", "peer_reviewed_journal", "food_quality_study"],
+          zhKeywords: ["蜂蜜", "結晶", "葡萄糖", "果糖", "糖類比例"],
+          enKeywords: ["honey", "crystallization", "glucose", "fructose", "sugar composition"],
+          primaryQueries: [
+            "蜂蜜 結晶 葡萄糖 果糖 比例",
+            "honey crystallization glucose fructose ratio",
+          ],
+          secondaryQueries: [
+            "honey sugar composition crystallization rate",
+            "honey granulation glucose fructose",
+          ],
+          excludedDriftTerms: HONEY_CRYSTALLIZATION_DRIFT_TERMS,
+        },
+        {
+          title: "蜂蜜含水量與結晶條件",
+          researchAngle: "整理含水量、水活性、黏度與儲存條件如何限制蜂蜜結晶判讀。",
+          whyResearchable: "可查食品品質、蜂蜜理化性質與儲藏穩定性研究。",
+          suggestedSourceTypes: ["food_quality_study", "food_chemistry_paper", "review_article"],
+          zhKeywords: ["蜂蜜", "含水量", "水活性", "黏度", "儲存溫度"],
+          enKeywords: ["honey", "moisture content", "water activity", "viscosity", "storage temperature"],
+          primaryQueries: [
+            "蜂蜜 結晶 含水量 水分含量",
+            "honey crystallization moisture content",
+          ],
+          secondaryQueries: [
+            "honey crystallization water activity viscosity",
+            "honey storage temperature crystallization moisture",
+          ],
+          excludedDriftTerms: HONEY_CRYSTALLIZATION_DRIFT_TERMS,
+        },
+      ],
+      excludedDriftTerms: HONEY_CRYSTALLIZATION_DRIFT_TERMS,
+      reasoningNotes: planReason(
+        reason,
+        "Honey crystallization searches must keep honey with crystallization/granulation, glucose-fructose ratio, sugar composition, moisture, water activity, or viscosity terms.",
       ),
       plannerStatus,
       fallbackUsed: true,
@@ -3649,45 +4845,390 @@ export function buildRuleBasedSearchIntent(
     };
   }
 
+  if (isHivAidsTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "hiv_aids_public_health",
+      detectedDomain: "medicine",
+      canonicalTopicZh: input.displayTitle?.trim() || normalizedTopic,
+      canonicalEnglishTopic: "HIV AIDS public health risk epidemiology",
+      primaryConcepts: HIV_AIDS_PRIMARY,
+      contextConcepts: HIV_AIDS_CONTEXT,
+      outcomeConcepts: [
+        "HIV transmission risk",
+        "public health impact",
+        "social impact",
+        "prevention strategy",
+        "treatment outcome",
+        "傳染風險",
+        "公共衛生影響",
+        "社會影響",
+        "預防策略",
+      ],
+      populationConcepts: ["people living with HIV", "key populations", "高風險族群", "感染者"],
+      lowWeightTerms: ["method", "research", "study", "impact", "risk", "方法", "研究", "影響", "風險"],
+      mustHaveTerms: HIV_AIDS_MUST_HAVE,
+      shouldHaveTerms: unique([
+        ...HIV_AIDS_CONTEXT,
+        "HIV transmission",
+        "HIV risk factors",
+        "HIV prevention",
+        "AIDS epidemiology",
+        "愛滋病 傳染途徑",
+        "愛滋病 風險因子",
+      ]),
+      penaltyTerms: HIV_AIDS_DRIFT_TERMS,
+      negativeTerms: HIV_AIDS_DRIFT_TERMS,
+      chineseQueries: [
+        "愛滋病 風險因子 傳染途徑 影響",
+        "愛滋病 風險因子 流行病學 研究",
+        "HIV 公共衛生 影響 文獻回顧",
+        "人類免疫缺乏病毒 預防策略 抗病毒治療",
+        "後天免疫缺乏症候群 社會污名 公共衛生",
+      ],
+      englishQueries: [
+        "HIV AIDS risk factors transmission epidemiology",
+        "HIV AIDS public health impact systematic review",
+        "HIV transmission prevention study",
+        "HIV risk factors cohort study",
+        "antiretroviral therapy clinical trial review HIV",
+        "human immunodeficiency virus acquired immunodeficiency syndrome epidemiology",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "愛滋病的傳染途徑與風險因子",
+          researchAngle: "整理 HIV/AIDS 傳播途徑、暴露風險、高風險族群與流行病學證據。",
+          whyResearchable: "可使用 PubMed、OpenAlex、Crossref 與 Semantic Scholar 中的流行病學研究、世代研究與系統性回顧。",
+          suggestedSourceTypes: ["systematic_review", "epidemiology_study", "public_health_report"],
+          zhKeywords: ["愛滋病", "HIV", "傳染途徑", "風險因子", "流行病學"],
+          enKeywords: ["HIV", "AIDS", "transmission", "risk factors", "epidemiology"],
+          primaryQueries: [
+            "愛滋病 風險因子 流行病學 研究",
+            "HIV AIDS risk factors transmission epidemiology",
+          ],
+          secondaryQueries: [
+            "HIV risk factors cohort study",
+            "HIV transmission prevention study",
+          ],
+          excludedDriftTerms: HIV_AIDS_DRIFT_TERMS,
+        },
+        {
+          title: "HIV/AIDS 的公共衛生、治療與社會影響",
+          researchAngle: "分析 HIV/AIDS 對公共衛生、抗病毒治療、預防策略、社會污名與政策介入的影響。",
+          whyResearchable: "可查系統性回顧、臨床試驗、WHO/CDC/UNAIDS 報告與公共衛生研究。",
+          suggestedSourceTypes: ["systematic_review", "clinical_trial_review", "official_health_report"],
+          zhKeywords: ["HIV", "公共衛生", "抗病毒治療", "預防策略", "社會污名"],
+          enKeywords: ["HIV", "public health", "antiretroviral therapy", "prevention", "stigma"],
+          primaryQueries: [
+            "HIV 公共衛生 影響 文獻回顧",
+            "HIV AIDS public health impact systematic review",
+          ],
+          secondaryQueries: [
+            "antiretroviral therapy clinical trial review HIV",
+            "HIV stigma public health prevention review",
+          ],
+          excludedDriftTerms: HIV_AIDS_DRIFT_TERMS,
+        },
+      ],
+      excludedDriftTerms: HIV_AIDS_DRIFT_TERMS,
+      reasoningNotes: planReason(
+        reason,
+        "HIV/AIDS searches must keep HIV, AIDS, human immunodeficiency virus, or the Chinese equivalents tied to transmission, risk factors, epidemiology, public health, prevention, ART, PrEP, stigma, or treatment evidence. Generic scientific-method literature is hard drift unless it also contains HIV/AIDS anchors.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isSemiconductorEtchingTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "semiconductor_wafer_etching",
+      canonicalTopicZh: input.displayTitle?.trim() || normalizedTopic,
+      canonicalEnglishTopic: "silicon wafer etching semiconductor fabrication",
+      primaryConcepts: SEMICONDUCTOR_ETCHING_PRIMARY,
+      contextConcepts: SEMICONDUCTOR_ETCHING_CONTEXT,
+      outcomeConcepts: [
+        "晶圓圖案轉移",
+        "微結構製作",
+        "積體電路製造",
+        "MEMS fabrication",
+        "semiconductor device manufacturing",
+        "pattern transfer",
+      ],
+      populationConcepts: [],
+      lowWeightTerms: ["principle", "application", "technology", "method", "原理", "用途", "技術", "方法"],
+      mustHaveTerms: SEMICONDUCTOR_ETCHING_MUST_HAVE,
+      shouldHaveTerms: unique([
+        ...SEMICONDUCTOR_ETCHING_CONTEXT,
+        "pattern transfer",
+        "semiconductor device",
+        "微結構",
+        "圖案轉移",
+      ]),
+      penaltyTerms: SEMICONDUCTOR_ETCHING_DRIFT_TERMS,
+      negativeTerms: SEMICONDUCTOR_ETCHING_DRIFT_TERMS,
+      chineseQueries: [
+        "矽晶圓 蝕刻 原理 用途",
+        "晶圓 蝕刻 微影 半導體製程",
+        "半導體製程 乾式蝕刻 濕式蝕刻 原理",
+        "矽晶圓 電漿蝕刻 反應離子蝕刻",
+        "晶圓 蝕刻 MEMS 微製造 應用",
+      ],
+      englishQueries: [
+        "silicon wafer etching principles applications semiconductor fabrication",
+        "plasma etching silicon wafer reactive ion etching",
+        "wet etching silicon wafer anisotropic etching microfabrication",
+        "photolithography wafer etching integrated circuit manufacturing",
+        "silicon wafer etching MEMS microfabrication applications",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "矽晶圓蝕刻的基本原理與製程類型",
+          researchAngle: "比較乾式蝕刻、濕式蝕刻、電漿蝕刻與反應離子蝕刻如何在晶圓上轉移圖案與形成微結構。",
+          whyResearchable: "可使用半導體製程、微製造、MEMS 與材料工程文獻，不需落回泛用科學方法資料。",
+          suggestedSourceTypes: ["engineering_research", "semiconductor_process_paper", "technical_review"],
+          zhKeywords: ["矽晶圓", "蝕刻", "微影", "乾式蝕刻", "濕式蝕刻", "半導體製程"],
+          enKeywords: ["silicon wafer", "etching", "photolithography", "plasma etching", "semiconductor fabrication"],
+          primaryQueries: [
+            "矽晶圓 蝕刻 原理 用途",
+            "silicon wafer etching principles applications semiconductor fabrication",
+          ],
+          secondaryQueries: [
+            "plasma etching silicon wafer reactive ion etching",
+            "wet etching silicon wafer anisotropic etching microfabrication",
+          ],
+          excludedDriftTerms: SEMICONDUCTOR_ETCHING_DRIFT_TERMS,
+        },
+        {
+          title: "晶圓蝕刻在半導體與微機電製程中的用途",
+          researchAngle: "整理蝕刻如何用於積體電路圖案轉移、MEMS 結構製作與半導體元件加工。",
+          whyResearchable: "可查半導體製造、微影與微機電製程的工程論文及技術綜述。",
+          suggestedSourceTypes: ["engineering_research", "review_article", "technical_standard"],
+          zhKeywords: ["晶圓蝕刻", "圖案轉移", "MEMS", "積體電路", "微製造"],
+          enKeywords: ["wafer etching", "pattern transfer", "MEMS", "integrated circuit manufacturing"],
+          primaryQueries: [
+            "晶圓 蝕刻 MEMS 微製造 應用",
+            "photolithography wafer etching integrated circuit manufacturing",
+          ],
+          secondaryQueries: ["silicon wafer etching MEMS microfabrication applications"],
+          excludedDriftTerms: SEMICONDUCTOR_ETCHING_DRIFT_TERMS,
+        },
+      ],
+      excludedDriftTerms: SEMICONDUCTOR_ETCHING_DRIFT_TERMS,
+      reasoningNotes: planReason(
+        reason,
+        "Semiconductor wafer-etching topics must stay anchored to silicon wafer, etching/lithography, semiconductor fabrication, MEMS, or microfabrication evidence; generic scientific-method literature is treated as drift.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
   if (isDinosaurTopic(input)) {
+    const dinosaurAlgaeTopic = /藻類|藻|algae|algal|cyanobacteria|microfossil|stromatolite/i.test(
+      normalizedTopic,
+    );
+    const dinosaurContext = dinosaurAlgaeTopic
+      ? unique([...DINOSAUR_CONTEXT, ...DINOSAUR_ALGAE_CONTEXT])
+      : DINOSAUR_CONTEXT;
+    const dinosaurOutcomeConcepts = dinosaurAlgaeTopic
+      ? ["化石紀錄", "古環境重建", "藻類或微化石證據"]
+      : ["化石紀錄", "滅絕機制", "鳥類演化"];
+    const dinosaurChineseQueries = dinosaurAlgaeTopic
+      ? [
+          "恐龍化石 藻類 微化石 古環境",
+          "恐龍化石 沉積環境 藻類 化石保存",
+          "古環境 重建 藻類 微化石 化石紀錄",
+        ]
+      : [
+          "恐龍 化石紀錄 中生代 侏羅紀 白堊紀",
+          "恐龍 滅絕 小行星撞擊 白堊紀末",
+          "恐龍 鳥類演化 羽毛 化石",
+        ];
+    const dinosaurEnglishQueries = dinosaurAlgaeTopic
+      ? [
+          "dinosaur fossils algae microfossils paleoenvironment",
+          "dinosaur fossil preservation algal fossils sedimentary environment",
+          "paleoenvironment reconstruction algae microfossil fossil record",
+        ]
+      : [
+          "dinosaur fossil record Mesozoic",
+          "dinosaur extinction asteroid impact Cretaceous",
+          "dinosaur bird evolution feather fossils",
+        ];
     return {
       normalizedTopic,
       topicUnderstanding: understanding,
       topicType: "dinosaur_paleontology",
       primaryConcepts: DINOSAUR_PRIMARY,
-      contextConcepts: DINOSAUR_CONTEXT,
-      outcomeConcepts: ["化石紀錄", "滅絕機制", "鳥類演化"],
+      contextConcepts: dinosaurContext,
+      outcomeConcepts: dinosaurOutcomeConcepts,
       populationConcepts: [],
       lowWeightTerms: ["history", "culture", "study", "研究"],
-      mustHaveTerms: DINOSAUR_MUST_HAVE,
-      shouldHaveTerms: unique([...DINOSAUR_CONTEXT, "asteroid impact", "bird evolution"]),
+      mustHaveTerms: dinosaurAlgaeTopic
+        ? unique([...DINOSAUR_MUST_HAVE, "藻類", "algae", "microfossil", "paleoenvironment"])
+        : DINOSAUR_MUST_HAVE,
+      shouldHaveTerms: dinosaurAlgaeTopic
+        ? dinosaurContext
+        : unique([...DINOSAUR_CONTEXT, "asteroid impact", "bird evolution"]),
       penaltyTerms: [],
       negativeTerms: [],
-      chineseQueries: [
-        "恐龍 化石紀錄 中生代 侏羅紀 白堊紀",
-        "恐龍 滅絕 小行星撞擊 白堊紀末",
-        "恐龍 鳥類演化 羽毛 化石",
-      ],
-      englishQueries: [
-        "dinosaur fossil record Mesozoic",
-        "dinosaur extinction asteroid impact Cretaceous",
-        "dinosaur bird evolution feather fossils",
-      ],
+      chineseQueries: dinosaurChineseQueries,
+      englishQueries: dinosaurEnglishQueries,
       narrowedResearchQuestions: [
         {
-          title: "恐龍化石紀錄與中生代演化",
-          researchAngle: "整理恐龍的化石紀錄、Jurassic、Cretaceous 與演化脈絡。",
+          title: dinosaurAlgaeTopic
+            ? "恐龍化石、藻類或微化石與古環境重建"
+            : "恐龍化石紀錄與中生代演化",
+          researchAngle: dinosaurAlgaeTopic
+            ? "整理恐龍化石、藻類／微化石與沉積古環境如何共同支撐古生態判讀。"
+            : "整理恐龍的化石紀錄、Jurassic、Cretaceous 與演化脈絡。",
           whyResearchable: "可由古生物學與自然史資料支撐。",
           suggestedSourceTypes: ["paleontology_paper", "review", "natural_history_reference"],
-          zhKeywords: ["恐龍", "化石紀錄", "中生代", "侏羅紀", "白堊紀"],
-          enKeywords: ["dinosaur", "fossil record", "Mesozoic", "Jurassic", "Cretaceous"],
-          primaryQueries: ["恐龍 化石紀錄 中生代 侏羅紀 白堊紀", "dinosaur fossil record Mesozoic"],
-          secondaryQueries: ["Jurassic Cretaceous dinosaur paleontology"],
+          zhKeywords: dinosaurAlgaeTopic
+            ? ["恐龍化石", "藻類", "微化石", "古環境", "沉積環境"]
+            : ["恐龍", "化石紀錄", "中生代", "侏羅紀", "白堊紀"],
+          enKeywords: dinosaurAlgaeTopic
+            ? ["dinosaur fossils", "algae", "microfossil", "paleoenvironment", "sedimentary environment"]
+            : ["dinosaur", "fossil record", "Mesozoic", "Jurassic", "Cretaceous"],
+          primaryQueries: dinosaurAlgaeTopic
+            ? ["恐龍化石 藻類 微化石 古環境", "dinosaur fossils algae microfossils paleoenvironment"]
+            : ["恐龍 化石紀錄 中生代 侏羅紀 白堊紀", "dinosaur fossil record Mesozoic"],
+          secondaryQueries: dinosaurAlgaeTopic
+            ? ["algal fossils sedimentary paleoenvironment fossil record"]
+            : ["Jurassic Cretaceous dinosaur paleontology"],
           excludedDriftTerms: [],
         },
       ],
       excludedDriftTerms: [],
-      reasoningNotes: planReason(reason, "Dinosaur searches should stay anchored to paleontology, fossil evidence, extinction hypotheses, and avian evolution."),
+      reasoningNotes: planReason(
+        reason,
+        dinosaurAlgaeTopic
+          ? "Dinosaur-fossil algae searches should keep algae, microfossil, sedimentary environment, paleoenvironment, and fossil evidence terms together."
+          : "Dinosaur searches should stay anchored to paleontology, fossil evidence, extinction hypotheses, and avian evolution.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isAstronomyScienceEducationTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "astronomy_science_education",
+      detectedDomain: "physics",
+      canonicalTopicZh: input.displayTitle?.trim() || normalizedTopic,
+      canonicalEnglishTopic: "astronomy science education",
+      primaryConcepts: [
+        "stellar distance",
+        "astronomical distance",
+        "parallax",
+        "light year",
+        "astronomy education",
+        "public understanding of science",
+      ],
+      contextConcepts: [
+        "museum exhibition",
+        "science communication",
+        "informal science learning",
+        "planetarium education",
+        "visualization",
+      ],
+      outcomeConcepts: [
+        "public understanding",
+        "learning outcome",
+        "conceptual understanding",
+        "museum learning",
+      ],
+      populationConcepts: ["students", "museum visitors", "general public"],
+      lowWeightTerms: ["education", "museum", "public", "展示", "教育"],
+      mustHaveTerms: [
+        "astronomy",
+        "stellar distance",
+        "astronomical distance",
+        "parallax",
+        "light year",
+        "星星",
+        "恆星",
+        "天文",
+        "光年",
+        "視差",
+      ],
+      shouldHaveTerms: [
+        "science education",
+        "museum exhibition",
+        "public understanding",
+        "science communication",
+        "informal learning",
+        "planetarium",
+        "科學教育",
+        "博物館展示",
+        "大眾理解",
+      ],
+      penaltyTerms: [
+        "biology",
+        "physiology",
+        "health effect",
+        "annual report",
+        "investor relations",
+        "greenhouse gas",
+        "dinosaur",
+      ],
+      negativeTerms: [
+        "biological mechanism",
+        "physiology behavior health effect",
+        "official annual report",
+        "investor relations",
+        "business strategy",
+      ],
+      chineseQueries: [
+        "天文學 恆星距離 視差 光年 科學教育",
+        "星星距離 光年 視差 大眾理解",
+        "天文 博物館展示 科學教育 大眾理解",
+        "天文教育 博物館 展示 學習成效",
+        "恆星距離 科普 展示 視覺化",
+      ],
+      englishQueries: [
+        "stellar distance parallax light year astronomy education",
+        "astronomical distance public understanding science education",
+        "astronomy museum exhibition science education learning",
+        "planetarium astronomy education public understanding",
+        "teaching astronomical distances parallax light year",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "恆星距離概念在科學教育與博物館展示中的轉譯",
+          researchAngle: "整理 parallax、light-year 與 astronomical distance 如何被轉化為展示、教材與大眾理解材料。",
+          whyResearchable: "可使用天文教育、科學傳播、博物館學習與 planetarium education 研究交叉驗證。",
+          suggestedSourceTypes: ["education_study", "museum_study", "astronomy_education_paper"],
+          zhKeywords: ["天文學", "恆星距離", "視差", "光年", "科學教育", "博物館展示"],
+          enKeywords: ["astronomy education", "stellar distance", "parallax", "light year", "museum exhibition"],
+          primaryQueries: [
+            "stellar distance parallax light year astronomy education",
+            "天文學 恆星距離 視差 光年 科學教育",
+          ],
+          secondaryQueries: [
+            "astronomy museum exhibition science education learning",
+            "planetarium astronomy education public understanding",
+          ],
+          excludedDriftTerms: ["biological mechanism", "annual report", "investor relations"],
+        },
+      ],
+      excludedDriftTerms: [
+        "biological mechanism",
+        "physiology behavior health effect",
+        "annual report",
+        "investor relations",
+        "business strategy",
+      ],
+      reasoningNotes: planReason(
+        reason,
+        "Astronomy education searches must keep stellar-distance, parallax, light-year, astronomy education, museum exhibition, or public-understanding terms together; generic biology or company-report terms are drift.",
+      ),
       plannerStatus,
       fallbackUsed: true,
     };
@@ -4285,11 +5826,302 @@ function llmStatusFromPlannerStatus(
   return "failed";
 }
 
+function isSodiumPerchlorateSafetyTopicText(text: string): boolean {
+  const normalized = normalizeText(text);
+  return (
+    /sodium perchlorate|naclo4|過氯酸鈉|高氯酸鈉/.test(normalized) &&
+    /安全|危害|儲存|操作|操作條件|風險|handling|storage|hazard|safety|reactivity|lab safety/.test(
+      normalized,
+    )
+  );
+}
+
+function activeResearchIntentHints(text: string): Set<SearchQueryGroup["intent"]> {
+  const normalized = normalizeText(text);
+  const hints = new Set<SearchQueryGroup["intent"]>();
+  if (!normalized) return hints;
+
+  if (isSodiumPerchlorateSafetyTopicText(normalized)) {
+    hints.add("limitation");
+    hints.add("standard");
+    return hints;
+  }
+
+  if (
+    /安全|危害|儲存|操作條件|風險|handling|storage|hazard|safety|reactivity|lab safety/.test(
+      normalized,
+    )
+  ) {
+    hints.add("limitation");
+    hints.add("mechanism");
+    hints.add("standard");
+    hints.add("definition");
+  }
+  if (
+    /原理|機制|化學性質|特性|熱分解|氧化|mechanism|chemical properties|oxidizer|thermal decomposition/.test(
+      normalized,
+    )
+  ) {
+    hints.add("mechanism");
+    hints.add("definition");
+    hints.add("review");
+  }
+  if (/應用|用途|限制|application|use|uses|limitation/.test(normalized)) {
+    hints.add("application");
+    hints.add("limitation");
+    hints.add("review");
+    hints.add("definition");
+  }
+  if (
+    /環境|污染|暴露|甲狀腺|environment|contamination|exposure|thyroid|monitoring/.test(
+      normalized,
+    )
+  ) {
+    hints.add("case");
+    hints.add("review");
+    hints.add("limitation");
+  }
+
+  return hints;
+}
+
+function researchAngleIntentScore(
+  angle: TopicResearchAngle,
+  activeTopicText: string,
+): number {
+  const intentHints = activeResearchIntentHints(activeTopicText);
+  if (intentHints.size === 0) return 0;
+
+  const haystack = normalizeText(
+    [
+      angle.label,
+      angle.researchQuestion,
+      angle.whyResearchable,
+      ...angle.zhQueries,
+      ...angle.enQueries,
+    ].join(" "),
+  );
+
+  let score = 0;
+  if (
+    intentHints.has("limitation") &&
+    /安全|危害|儲存|操作條件|風險|handling|storage|hazard|safety|reactivity|lab safety/.test(
+      haystack,
+    )
+  ) {
+    score += 4;
+  }
+  if (
+    intentHints.has("mechanism") &&
+    /原理|機制|化學性質|特性|熱分解|氧化|mechanism|chemical properties|oxidizer|thermal decomposition/.test(
+      haystack,
+    )
+  ) {
+    score += 4;
+  }
+  if (
+    intentHints.has("application") &&
+    /應用|用途|限制|application|use|uses|limitation/.test(haystack)
+  ) {
+    score += 4;
+  }
+  if (
+    intentHints.has("case") &&
+    /環境|污染|暴露|甲狀腺|environment|contamination|exposure|thyroid|monitoring/.test(
+      haystack,
+    )
+  ) {
+    score += 4;
+  }
+
+  const topicTerms = new Set(
+    termsFromQueries([activeTopicText]).filter(
+      (term) =>
+        !/^(sodium|perchlorate|naclo4|NaClO4|過氯酸鈉|高氯酸鈉|過氯酸鹽|高氯酸鹽)$/i.test(
+          term,
+        ),
+    ),
+  );
+  for (const term of topicTerms) {
+    if (haystack.includes(normalizeText(term))) score += 2;
+  }
+
+  return score;
+}
+
+function filterResearchAnglesForActiveTopic(
+  angles: TopicResearchAngle[],
+  activeTopicText: string,
+): TopicResearchAngle[] {
+  if (angles.length === 0) return angles;
+  const intentHints = activeResearchIntentHints(activeTopicText);
+  if (intentHints.size === 0) return angles;
+
+  const scored = angles.map((angle) => ({
+    angle,
+    score: researchAngleIntentScore(angle, activeTopicText),
+  }));
+  const bestScore = Math.max(...scored.map((item) => item.score));
+  if (bestScore <= 0) return angles;
+
+  const filtered = scored
+    .filter((item) => item.score === bestScore || item.score >= Math.max(2, bestScore - 1))
+    .map((item) => item.angle);
+
+  return filtered.length > 0 ? filtered : angles;
+}
+
+function filterClarificationCardsForActiveTopic(
+  cards: TopicClarificationCard[],
+  activeTopicText: string,
+): TopicClarificationCard[] {
+  if (cards.length === 0) return cards;
+  const filteredAngles = filterResearchAnglesForActiveTopic(
+    cards.map((card) => ({
+      label: card.label,
+      researchQuestion: card.suggestedTopic,
+      whyResearchable: card.description,
+      zhQueries: card.zhQueries,
+      enQueries: card.enQueries,
+      suggestedSourceTypes: [],
+    })),
+    activeTopicText,
+  );
+  const allowedLabels = new Set(filteredAngles.map((angle) => angle.label));
+  const filtered = cards.filter((card) => allowedLabels.has(card.label));
+  return filtered.length > 0 ? filtered : cards;
+}
+
+function filterConceptQueryGroupsForActiveTopic(
+  groups: SearchQueryGroup[],
+  activeTopicText: string,
+): SearchQueryGroup[] {
+  const intentHints = activeResearchIntentHints(activeTopicText);
+  if (intentHints.size === 0) return groups;
+
+  const filtered = groups.filter((group) => {
+    if (group.intent === "general") return true;
+    if (
+      group.intent === "standard" &&
+      (intentHints.has("mechanism") ||
+        intentHints.has("definition") ||
+        intentHints.has("application"))
+    ) {
+      return true;
+    }
+    if (intentHints.has(group.intent)) return true;
+    if (group.intent === "definition" && intentHints.has("mechanism")) return true;
+    if (group.intent === "review" && intentHints.has("case")) return true;
+    return false;
+  });
+
+  return filtered.length > 0 ? filtered : groups;
+}
+
+function queryMatchesActiveIntent(query: string, activeTopicText: string): boolean {
+  const intentHints = activeResearchIntentHints(activeTopicText);
+  if (intentHints.size === 0) return true;
+  const normalized = normalizeText(query);
+  const activeNormalized = normalizeText(activeTopicText);
+
+  if (isSodiumPerchlorateSafetyTopicText(activeTopicText)) {
+    const hasSpecificSubject = /sodium perchlorate|naclo4|過氯酸鈉|高氯酸鈉/.test(
+      normalized,
+    );
+    const hasSafetyTerms =
+      /safety|hazard|storage|reactivity|handling|lab safety|安全|危害|儲存|反應性|操作|風險/.test(
+        normalized,
+      );
+    const hasMechanismOnly =
+      /mechanism|chemical properties|oxidizer|thermal decomposition|原理|機制|化學性質|氧化劑|熱分解/.test(
+        normalized,
+      );
+
+    if (!hasSpecificSubject && /perchlorate|過氯酸鹽|高氯酸鹽/.test(normalized)) {
+      return false;
+    }
+    if (hasMechanismOnly && !hasSafetyTerms) {
+      return false;
+    }
+  }
+
+  if (
+    /^(perchlorate|過氯酸鹽|高氯酸鹽)$/i.test(normalized) &&
+    /sodium perchlorate|naclo4|過氯酸鈉|高氯酸鈉/.test(activeNormalized)
+  ) {
+    return false;
+  }
+
+  if (
+    /environment|contamination|thyroid|exposure|monitoring|環境|污染|甲狀腺|暴露|監測/.test(
+      normalized,
+    ) &&
+    !intentHints.has("case")
+  ) {
+    return false;
+  }
+  if (/application|use|uses|應用|用途/.test(normalized) && !intentHints.has("application")) {
+    return false;
+  }
+  if (
+    /safety|hazard|storage|reactivity|risk|安全|危害|儲存|反應性|風險/.test(normalized) &&
+    !intentHints.has("limitation")
+  ) {
+    return false;
+  }
+  if (
+    /mechanism|thermal decomposition|oxidizer|hydrolysis|原理|機制|熱分解|氧化/.test(
+      normalized,
+    ) &&
+    !intentHints.has("mechanism") &&
+    !intentHints.has("definition")
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function filterSpecificTopicPrimaryConcepts(
+  understanding: TopicUnderstandingResult,
+  queryTerms: string[],
+): string[] {
+  return unique([
+    ...understanding.canonicalTerms,
+    ...understanding.aliases,
+    ...understanding.englishTerms,
+    ...understanding.scientificNames,
+    ...(understanding.entity ? entitySearchTerms(understanding.entity) : []),
+    ...queryTerms,
+  ]).slice(0, 14);
+}
+
 function sanitizePlannerPlanQueries(
   input: SearchIntentPlannerInput,
   plan: SearchIntentPlan,
+  externalUnderstanding?: TopicUnderstanding,
 ): SearchIntentPlan {
   const topicUnderstanding = plan.topicUnderstanding ?? understandTopic(input.topic);
+  const resolvedTopicKind =
+    externalUnderstanding?.topicKind === "unknown_or_noise"
+      ? "unknown_or_noise"
+      : topicUnderstanding.topicKind;
+  const resolvedCanonicalEnglishTopic =
+    cleanString(input.canonicalTopicEn) ??
+    cleanString(plan.canonicalEnglishTopic) ??
+    cleanString(externalUnderstanding?.canonicalEnglishTopic) ??
+    cleanString(topicUnderstanding.canonicalEnglishTopic);
+  const resolvedCoreConcepts = cleanConceptList(
+    [
+      ...(plan.coreConcepts?.length
+        ? plan.coreConcepts
+        : externalUnderstanding?.coreConcepts?.length
+          ? externalUnderstanding.coreConcepts
+          : topicUnderstanding.coreConcepts),
+      ...(externalUnderstanding?.entities ?? []),
+    ],
+    12,
+  );
   const suppliedQuerySeedZh = cleanQueryList(input.querySeedZh ?? [], MAX_QUERY_COUNT);
   const suppliedQuerySeedEn = cleanQueryList(input.querySeedEn ?? [], MAX_QUERY_COUNT);
   const suppliedSubtopics = input.subtopics ?? [];
@@ -4305,7 +6137,50 @@ function sanitizePlannerPlanQueries(
     cleanString(input.canonicalTopicZh) ??
     cleanString(plan.canonicalTopicZh) ??
     input.topic.trim();
-  if (topicUnderstanding.topicKind === "unknown_or_noise") {
+  const conceptTerms = conceptTermsForTopic(
+    [
+      input.topic,
+      input.originalTopic ?? "",
+      input.refinedTopic ?? "",
+      input.canonicalTopicZh ?? "",
+      input.canonicalTopicEn ?? "",
+      plan.normalizedTopic,
+      plan.canonicalEnglishTopic ?? "",
+      ...suppliedQuerySeedZh,
+      ...suppliedQuerySeedEn,
+      ...subtopicQueryZh,
+      ...subtopicQueryEn,
+    ].join(" "),
+  );
+  const conceptQueryGroups = conceptQueryGroupsForTopic(
+    [
+      input.topic,
+      input.canonicalTopicZh ?? "",
+      input.canonicalTopicEn ?? "",
+      plan.normalizedTopic,
+      plan.canonicalEnglishTopic ?? "",
+      ...suppliedQuerySeedZh,
+      ...suppliedQuerySeedEn,
+      ...subtopicQueryZh,
+      ...subtopicQueryEn,
+    ].join(" "),
+  );
+  const activeTopicForQueryGroups = [
+    input.topic,
+    input.refinedTopic ?? "",
+    input.displayTitle ?? "",
+    input.canonicalTopicZh ?? "",
+    input.canonicalTopicEn ?? "",
+    ...suppliedQuerySeedZh,
+    ...suppliedQuerySeedEn,
+    ...subtopicQueryZh,
+    ...subtopicQueryEn,
+  ].join(" ");
+  const filteredConceptQueryGroups = filterConceptQueryGroupsForActiveTopic(
+    conceptQueryGroups,
+    activeTopicForQueryGroups,
+  );
+  if (resolvedTopicKind === "unknown_or_noise") {
     return {
       ...plan,
       topicUnderstanding,
@@ -4326,9 +6201,9 @@ function sanitizePlannerPlanQueries(
 
   const activeResearchTopic = input.topic.trim();
   const canonicalEnglishTopic =
-    cleanString(input.canonicalTopicEn) ??
-    cleanString(plan.canonicalEnglishTopic) ??
-    cleanString(topicUnderstanding.canonicalEnglishTopic) ??
+    resolvedCanonicalEnglishTopic ??
+    conceptTerms.enCoreTerms.find((term) => /[A-Za-z]/.test(term)) ??
+    conceptTerms.enSynonyms.find((term) => /[A-Za-z]/.test(term)) ??
     suppliedQuerySeedEn.find((query) => /[A-Za-z]/.test(query)) ??
     subtopicQueryEn.find((query) => /[A-Za-z]/.test(query)) ??
     (/[A-Za-z]/.test(activeResearchTopic) ? activeResearchTopic : "");
@@ -4336,6 +6211,10 @@ function sanitizePlannerPlanQueries(
     canonicalEnglishTopic || (/[A-Za-z]/.test(activeResearchTopic) ? activeResearchTopic : "");
   const mergedMustHaveTerms = cleanConceptList(
     [
+      ...conceptTerms.enCoreTerms,
+      ...conceptTerms.zhCoreTerms,
+      ...conceptTerms.enSynonyms,
+      ...conceptTerms.zhSynonyms,
       ...plan.mustHaveTerms,
       ...(input.mustIncludeTerms ?? []),
       ...suppliedQuerySeedZh,
@@ -4346,15 +6225,54 @@ function sanitizePlannerPlanQueries(
     18,
   );
   const mergedPenaltyTerms = unique([
+    ...conceptTerms.exclusionTerms,
     ...plan.penaltyTerms,
     ...plan.negativeTerms,
+    ...(externalUnderstanding?.excludedDriftTerms ?? []),
     ...(input.excludeTerms ?? []),
     ...suppliedSubtopics.flatMap((subtopic) => subtopic.excludeTerms ?? []),
   ]).slice(0, 18);
 
-  return {
+  return normalizeExclusiveTopicPlan(input, {
     ...plan,
     topicUnderstanding,
+    detectedDomain:
+      conceptTerms.concepts[0]?.domain ??
+      plan.detectedDomain ??
+      detectResearchDomain(input.topic),
+    zhCoreTerms: uniqueConceptStrings([
+      ...(plan.zhCoreTerms ?? []),
+      ...conceptTerms.zhCoreTerms,
+    ]),
+    enCoreTerms: uniqueConceptStrings([
+      ...(plan.enCoreTerms ?? []),
+      ...conceptTerms.enCoreTerms,
+    ]),
+    zhSynonyms: uniqueConceptStrings([
+      ...(plan.zhSynonyms ?? []),
+      ...conceptTerms.zhSynonyms,
+    ]),
+    enSynonyms: uniqueConceptStrings([
+      ...(plan.enSynonyms ?? []),
+      ...conceptTerms.enSynonyms,
+    ]),
+    mechanismTerms: uniqueConceptStrings([
+      ...(plan.mechanismTerms ?? []),
+      ...conceptTerms.mechanismTerms,
+    ]),
+    applicationTerms: uniqueConceptStrings([
+      ...(plan.applicationTerms ?? []),
+      ...conceptTerms.applicationTerms,
+    ]),
+    limitationTerms: uniqueConceptStrings([
+      ...(plan.limitationTerms ?? []),
+      ...conceptTerms.limitationTerms,
+    ]),
+    exclusionTerms: mergedPenaltyTerms,
+    queryGroups: uniqueConceptStrings([
+      ...(plan.queryGroups ?? []).map((group) => JSON.stringify(group)),
+      ...filteredConceptQueryGroups.map((group) => JSON.stringify(group)),
+    ]).map((group) => JSON.parse(group) as SearchQueryGroup),
     originalTopic: input.originalTopic?.trim() || input.topic.trim(),
     activeResearchTopic,
     displayTitle: cleanString(input.displayTitle) ?? activeResearchTopic,
@@ -4362,7 +6280,7 @@ function sanitizePlannerPlanQueries(
     canonicalEnglishTopic,
     coreConcepts: cleanConceptList(
       [
-        ...(plan.coreConcepts?.length ? plan.coreConcepts : topicUnderstanding.coreConcepts),
+        ...resolvedCoreConcepts,
         canonicalTopicZh,
         canonicalEnglishTopic,
         ...(input.mustIncludeTerms ?? []),
@@ -4375,31 +6293,43 @@ function sanitizePlannerPlanQueries(
       [
         canonicalTopicZh,
         canonicalEnglishTopic,
+        ...conceptTerms.enCoreTerms,
+        ...conceptTerms.zhCoreTerms,
+        ...conceptTerms.enSynonyms,
+        ...conceptTerms.zhSynonyms,
         ...suppliedQuerySeedZh,
         ...suppliedQuerySeedEn,
         ...subtopicQueryZh,
         ...subtopicQueryEn,
         ...plan.primaryConcepts,
+        ...(externalUnderstanding?.entities ?? []),
       ],
       14,
     ),
     contextConcepts: cleanConceptList(
       [
+        ...conceptTerms.mechanismTerms,
+        ...conceptTerms.applicationTerms,
         ...plan.contextConcepts,
         ...(input.domainHints ?? []),
         ...suppliedSubtopics.map((subtopic) => subtopic.titleZh),
         ...suppliedSubtopics.map((subtopic) => subtopic.titleEn ?? ""),
+        ...(externalUnderstanding?.researchAngles ?? []).map((angle) => angle.title),
       ],
       14,
     ),
     mustHaveTerms: mergedMustHaveTerms,
     shouldHaveTerms: cleanConceptList(
       [
+        ...conceptTerms.mechanismTerms,
+        ...conceptTerms.applicationTerms,
+        ...conceptTerms.limitationTerms,
         ...plan.shouldHaveTerms,
         ...suppliedQuerySeedZh,
         ...suppliedQuerySeedEn,
         ...subtopicQueryZh,
         ...subtopicQueryEn,
+        ...(externalUnderstanding?.researchAngles ?? []).flatMap((angle) => angle.searchQueries),
       ],
       18,
     ),
@@ -4408,31 +6338,41 @@ function sanitizePlannerPlanQueries(
     chineseQueries: sanitizeAndBackfillAngles({
       topic: canonicalTopicZh,
       values: [
+        ...filteredConceptQueryGroups
+          .filter((group) => group.language === "zh" || group.language === "mixed")
+          .map((group) => group.query),
         ...suppliedQuerySeedZh,
         ...subtopicQueryZh,
         ...plan.chineseQueries,
       ],
       topicKind: topicUnderstanding.topicKind,
       domain: topicUnderstanding.domain,
-      coreConcepts: topicUnderstanding.coreConcepts,
+      coreConcepts: resolvedCoreConcepts,
       aliases: topicUnderstanding.aliases,
-      canonicalEnglishTopic: topicUnderstanding.canonicalEnglishTopic,
+      canonicalEnglishTopic: canonicalEnglishTopic,
       language: "zh",
-    }).slice(0, MAX_QUERY_COUNT),
+    })
+      .filter((query) => queryMatchesActiveIntent(query, activeTopicForQueryGroups))
+      .slice(0, MAX_QUERY_COUNT),
     englishQueries: sanitizeAndBackfillAngles({
       topic: englishTopic,
       values: [
+        ...filteredConceptQueryGroups
+          .filter((group) => group.language === "en" || group.language === "mixed")
+          .map((group) => group.query),
         ...suppliedQuerySeedEn,
         ...subtopicQueryEn,
         ...plan.englishQueries,
       ],
       topicKind: topicUnderstanding.topicKind,
       domain: topicUnderstanding.domain,
-      coreConcepts: topicUnderstanding.coreConcepts,
+      coreConcepts: resolvedCoreConcepts,
       aliases: topicUnderstanding.aliases,
-      canonicalEnglishTopic: topicUnderstanding.canonicalEnglishTopic,
+      canonicalEnglishTopic: canonicalEnglishTopic,
       language: "en",
-    }).slice(0, MAX_QUERY_COUNT),
+    })
+      .filter((query) => queryMatchesActiveIntent(query, activeTopicForQueryGroups))
+      .slice(0, MAX_QUERY_COUNT),
     reasoningNotes: unique(
       [
         ...plan.reasoningNotes,
@@ -4444,6 +6384,343 @@ function sanitizePlannerPlanQueries(
     suppliedQuerySeedZh,
     suppliedQuerySeedEn,
     subtopics: suppliedSubtopics,
+  });
+}
+
+function normalizeExclusiveTopicPlan(
+  input: SearchIntentPlannerInput,
+  plan: SearchIntentPlan,
+): SearchIntentPlan {
+  if (isSocialMediaAddictionTopic(input) || plan.topicType === "social_media_addiction_psychology") {
+    const socialMediaPenaltyTerms = unique([
+      ...(plan.penaltyTerms ?? []),
+      ...(plan.negativeTerms ?? []),
+      ...(plan.exclusionTerms ?? []),
+      ...SOCIAL_MEDIA_ADDICTION_PENALTIES,
+    ]).slice(0, 24);
+    return {
+      ...plan,
+      detectedDomain: "social_science",
+      primaryConcepts: SOCIAL_MEDIA_ADDICTION_PRIMARY,
+      contextConcepts: SOCIAL_MEDIA_ADDICTION_CONTEXT,
+      outcomeConcepts: ["mental health", "depression", "anxiety", "sleep quality", "attention", "心理健康", "憂鬱", "焦慮", "睡眠品質", "注意力"],
+      populationConcepts: ["adolescents", "young adults", "students", "青少年", "學生"],
+      lowWeightTerms: ["media", "internet", "students", "effect", "影響", "學生"],
+      mustHaveTerms: [
+        "social media",
+        "problematic social media use",
+        "mental health",
+        "adolescents",
+        "社群媒體",
+        "心理健康",
+        "青少年",
+      ],
+      shouldHaveTerms: cleanConceptList(
+        [
+          ...SOCIAL_MEDIA_ADDICTION_CONTEXT,
+          "systematic review",
+          "adolescents",
+          "problematic social media use",
+          "心理健康",
+          "睡眠品質",
+          "注意力",
+        ],
+        18,
+      ),
+      penaltyTerms: socialMediaPenaltyTerms,
+      negativeTerms: socialMediaPenaltyTerms,
+      exclusionTerms: socialMediaPenaltyTerms,
+      queryGroups: [],
+      zhCoreTerms: ["社群媒體", "青少年", "心理健康"],
+      enCoreTerms: ["social media", "adolescents", "mental health"],
+      zhSynonyms: ["社交媒體", "問題性社群媒體使用", "手機成癮"],
+      enSynonyms: ["problematic social media use", "social networking", "smartphone addiction"],
+      mechanismTerms: [],
+      applicationTerms: [],
+      limitationTerms: [],
+      canonicalEnglishTopic: "social media use adolescents mental health",
+      suppliedQuerySeedZh: [],
+      suppliedQuerySeedEn: [],
+      subtopics: [],
+      chineseQueries: [
+        "社群媒體使用 青少年 心理健康",
+        "問題性社群媒體使用 青少年 憂鬱 焦慮",
+        "社群媒體使用 睡眠品質 注意力 學生",
+        "手機成癮 社群媒體 青少年 心理健康",
+      ],
+      englishQueries: [
+        "social media use adolescents mental health",
+        "problematic social media use adolescents depression anxiety",
+        "social networking use sleep quality attention students",
+        "smartphone addiction social media adolescents systematic review",
+        "social media use youth mental health review",
+      ],
+      reasoningNotes: unique([
+        ...plan.reasoningNotes,
+        "Social-media mental-health topics are constrained to social-media, adolescent, psychological outcome, sleep, attention, and student-learning queries.",
+      ]).slice(0, 10),
+    };
+  }
+
+  if (isBubbleTeaConsumptionCultureTopic(input) || plan.topicType === "bubble_tea_consumption_culture") {
+    const bubbleTeaPenaltyTerms = unique([
+      ...(plan.penaltyTerms ?? []),
+      ...(plan.negativeTerms ?? []),
+      ...(plan.exclusionTerms ?? []),
+      ...BUBBLE_TEA_CONSUMPTION_PENALTIES,
+    ]).slice(0, 24);
+    return {
+      ...plan,
+      detectedDomain: "social_science",
+      primaryConcepts: BUBBLE_TEA_CONSUMPTION_PRIMARY,
+      contextConcepts: BUBBLE_TEA_CONSUMPTION_CONTEXT,
+      outcomeConcepts: [
+        "dietary habits",
+        "sugar intake",
+        "consumer behavior",
+        "lifestyle",
+        "飲食習慣",
+        "糖分攝取",
+        "消費行為",
+        "生活習慣",
+      ],
+      populationConcepts: ["Taiwan", "adolescents", "students", "台灣", "青少年", "學生"],
+      lowWeightTerms: ["culture", "impact", "influence", "文化", "影響"],
+      mustHaveTerms: [
+        "bubble tea",
+        "sugar-sweetened beverages",
+        "beverage consumption",
+        "adolescents",
+        "Taiwan",
+        "手搖飲",
+        "含糖飲料",
+        "青少年",
+        "台灣",
+      ],
+      shouldHaveTerms: [
+        "consumer behavior",
+        "dietary habits",
+        "lifestyle",
+        "sugar intake",
+        "youth",
+        "消費文化",
+        "生活習慣",
+        "飲食習慣",
+      ],
+      penaltyTerms: bubbleTeaPenaltyTerms,
+      negativeTerms: bubbleTeaPenaltyTerms,
+      exclusionTerms: bubbleTeaPenaltyTerms,
+      queryGroups: [],
+      zhCoreTerms: ["手搖飲", "台灣", "青少年", "生活習慣"],
+      enCoreTerms: ["bubble tea", "Taiwan", "adolescents", "dietary habits"],
+      zhSynonyms: ["手搖飲料", "珍珠奶茶", "含糖飲料"],
+      enSynonyms: ["hand-shaken drinks", "boba tea", "sugar-sweetened beverages"],
+      mechanismTerms: [],
+      applicationTerms: [],
+      limitationTerms: [],
+      canonicalEnglishTopic: "bubble tea consumption adolescents Taiwan dietary habits",
+      suppliedQuerySeedZh: [],
+      suppliedQuerySeedEn: [],
+      subtopics: [],
+      chineseQueries: [
+        "台灣 青少年 手搖飲 消費 生活習慣",
+        "手搖飲 消費文化 青少年 飲食習慣",
+        "含糖飲料 青少年 攝取 習慣 台灣",
+        "珍珠奶茶 消費行為 青少年 台灣",
+      ],
+      englishQueries: [
+        "bubble tea consumption adolescents Taiwan dietary habits",
+        "hand-shaken drinks consumer behavior youth Taiwan",
+        "sugar-sweetened beverages adolescents dietary habits Taiwan",
+        "bubble tea consumption culture lifestyle adolescents",
+        "beverage consumption youth lifestyle Taiwan",
+      ],
+      reasoningNotes: unique([
+        ...plan.reasoningNotes,
+        "Bubble-tea consumption topics are constrained to beverage, Taiwan/youth, consumer behavior, dietary habits, sugar intake, and lifestyle queries.",
+      ]).slice(0, 10),
+    };
+  }
+
+  if (isSodiumPerchlorateSafetyTopicText(input.topic)) {
+    const safetyPenaltyTerms = unique([
+      ...(plan.penaltyTerms ?? []),
+      ...(plan.negativeTerms ?? []),
+      ...(plan.exclusionTerms ?? []),
+      "ammonium perchlorate",
+      "lithium perchlorate",
+      "magnesium perchlorate",
+      "potassium perchlorate",
+      "polymer electrolyte",
+      "solid electrolyte",
+      "composite propellant",
+      "fuel economy",
+      "biodiesel",
+      "甲狀腺",
+      "環境污染",
+      "環境監測",
+      "thyroid",
+      "environmental contamination",
+      "environmental monitoring",
+    ]).slice(0, 18);
+    return {
+      ...plan,
+      detectedDomain: "chemistry",
+      primaryConcepts: [
+        "過氯酸鈉",
+        "高氯酸鈉",
+        "sodium perchlorate",
+        "NaClO4",
+      ],
+      contextConcepts: [
+        "安全",
+        "危害",
+        "儲存",
+        "操作條件",
+        "反應性",
+        "handling",
+        "storage",
+        "hazard",
+        "reactivity",
+        "laboratory safety",
+        "storage compatibility",
+      ],
+      outcomeConcepts: [
+        "fire hazard",
+        "oxidizer compatibility",
+        "storage conditions",
+        "emergency response",
+        "lab safety",
+        "火災危害",
+        "相容性",
+        "儲存條件",
+        "緊急應變",
+      ],
+      lowWeightTerms: ["oxidizer", "chemical properties", "perchlorate", "氧化劑", "化學性質"],
+      mustHaveTerms: [
+        "過氯酸鈉",
+        "高氯酸鈉",
+        "sodium perchlorate",
+        "NaClO4",
+        "安全",
+        "危害",
+        "儲存",
+        "反應性",
+        "操作",
+        "風險",
+        "safety",
+        "hazard",
+        "storage",
+        "reactivity",
+        "handling",
+      ],
+      shouldHaveTerms: [
+        "SDS",
+        "MSDS",
+        "CAMEO Chemicals",
+        "PubChem",
+        "ECHA",
+        "laboratory safety",
+        "storage compatibility",
+        "thermal hazard",
+        "emergency response",
+        "安全資料表",
+        "儲存相容性",
+        "緊急應變",
+      ],
+      penaltyTerms: safetyPenaltyTerms,
+      negativeTerms: safetyPenaltyTerms,
+      exclusionTerms: safetyPenaltyTerms,
+      queryGroups: [],
+      zhCoreTerms: ["過氯酸鈉", "高氯酸鈉"],
+      enCoreTerms: ["sodium perchlorate", "NaClO4"],
+      zhSynonyms: ["過氯酸鈉", "高氯酸鈉"],
+      enSynonyms: ["sodium perchlorate", "NaClO4"],
+      mechanismTerms: [],
+      applicationTerms: [],
+      limitationTerms: ["安全", "危害", "儲存", "反應性", "handling", "storage", "hazard"],
+      chineseQueries: [
+        "過氯酸鈉 安全風險 儲存",
+        "過氯酸鈉 反應性 操作條件",
+        "過氯酸鈉 安全資料表 危害",
+        "過氯酸鈉 儲存 相容性",
+        "高氯酸鈉 實驗室 安全",
+        "NaClO4 handling storage hazard",
+      ],
+      englishQueries: [
+        "sodium perchlorate safety hazard storage",
+        "sodium perchlorate reactivity handling conditions",
+        "sodium perchlorate safety data sheet hazard",
+        "sodium perchlorate storage compatibility",
+        "NaClO4 laboratory safety storage",
+        "sodium perchlorate emergency response hazard",
+      ],
+      reasoningNotes: unique([
+        ...plan.reasoningNotes,
+        "Selected sodium perchlorate safety topic was narrowed to handling, storage, hazard, and compatibility queries.",
+      ]).slice(0, 10),
+    };
+  }
+
+  if (!isEggNutritionProteinTopic(input) && plan.topicType !== "egg_nutrition_protein_quality") {
+    return plan;
+  }
+
+  return {
+    ...plan,
+    detectedDomain: plan.detectedDomain ?? "biology",
+    primaryConcepts: EGG_NUTRITION_PRIMARY,
+    contextConcepts: EGG_NUTRITION_CONTEXT,
+    outcomeConcepts: EGG_NUTRITION_OUTCOMES,
+    lowWeightTerms: EGG_NUTRITION_LOW_WEIGHT,
+    mustHaveTerms: EGG_NUTRITION_MUST_HAVE,
+    shouldHaveTerms: cleanConceptList(
+      [
+        "egg nutrition",
+        "egg protein quality",
+        "amino acid profile",
+        "egg white protein",
+        "egg yolk nutrition",
+        "albumen",
+        "protein digestibility",
+        "biological value",
+        "雞蛋營養成分",
+        "蛋白質品質",
+        "胺基酸組成",
+        "蛋白 蛋黃",
+      ],
+      18,
+    ),
+    penaltyTerms: EGG_NUTRITION_DRIFT_TERMS,
+    negativeTerms: EGG_NUTRITION_DRIFT_TERMS,
+    exclusionTerms: EGG_NUTRITION_DRIFT_TERMS,
+    queryGroups: [],
+    zhCoreTerms: [],
+    enCoreTerms: [],
+    zhSynonyms: [],
+    enSynonyms: [],
+    mechanismTerms: [],
+    applicationTerms: [],
+    limitationTerms: [],
+    chineseQueries: [
+      "雞蛋 營養成分 蛋白質品質",
+      "雞蛋 胺基酸組成",
+      "蛋白 蛋黃 營養價值",
+      "雞蛋蛋白質 消化率",
+      "雞蛋 生物價 胺基酸",
+      "雞蛋 蛋白質 必需胺基酸",
+    ],
+    englishQueries: [
+      "egg nutrition protein quality",
+      "egg protein amino acid profile",
+      "chicken egg nutritional composition",
+      "egg white protein digestibility",
+      "egg yolk nutrition amino acids",
+      "albumen amino acid composition",
+      "dietary protein quality egg",
+      "egg protein biological value",
+      "egg white yolk amino acid composition",
+    ],
   };
 }
 
@@ -4451,6 +6728,89 @@ function sanitizeSearchIntentQuerySet(
   plan: SearchIntentPlan,
   querySet: SearchIntentQuerySet,
 ): SearchIntentQuerySet {
+  const socialMediaQuery = (query: string) =>
+    !SOCIAL_MEDIA_QUERY_DRIFT.test(query) &&
+    SOCIAL_MEDIA_QUERY_GUARD.some((pattern) => pattern.test(query));
+  const socialMediaQueries = (values: string[], limit = MAX_QUERY_COUNT) =>
+    cleanQueryList(values.filter(socialMediaQuery), limit);
+
+  if (plan.topicType === "social_media_addiction_psychology") {
+    const coreEnglishAcademic = socialMediaQueries(
+      querySet.coreEnglishAcademic.length
+        ? querySet.coreEnglishAcademic
+        : [
+            "social media use adolescents mental health",
+            "problematic social media use adolescents depression anxiety",
+            "social networking use sleep quality attention students",
+            "smartphone addiction social media adolescents systematic review",
+          ],
+      6,
+    );
+    const academicSynonyms = socialMediaQueries(querySet.academicSynonyms, 6);
+    const education = socialMediaQueries(querySet.education, 4);
+    const chineseSupplemental = socialMediaQueries(
+      querySet.chineseSupplemental.length
+        ? querySet.chineseSupplemental
+        : [
+            "社群媒體使用 青少年 心理健康",
+            "問題性社群媒體使用 青少年 憂鬱 焦慮",
+            "社群媒體使用 睡眠品質 注意力 學生",
+          ],
+      6,
+    );
+    const fallbackRelaxed = socialMediaQueries(querySet.fallbackRelaxed, 6);
+    return {
+      ...querySet,
+      chinese: socialMediaQueries(querySet.chinese),
+      english: socialMediaQueries(querySet.english),
+      highPrecision: socialMediaQueries(querySet.highPrecision),
+      broad: socialMediaQueries(querySet.broad),
+      coreEnglishAcademic,
+      academicSynonyms,
+      education,
+      chineseSupplemental,
+      fallbackRelaxed,
+      phases: ([
+        { stage: "core_english_academic", queries: coreEnglishAcademic },
+        { stage: "academic_synonym", queries: academicSynonyms },
+        { stage: "education_explanation", queries: education },
+        { stage: "chinese_supplemental", queries: chineseSupplemental },
+        { stage: "fallback_relaxed", queries: fallbackRelaxed },
+      ] satisfies SearchIntentQueryPhase[]).filter(
+        (phase) => phase.queries.length > 0,
+      ),
+    };
+  }
+
+  if (isEggNutritionPlan(plan)) {
+    const coreEnglishAcademic = cleanQueryList(querySet.coreEnglishAcademic, 6);
+    const academicSynonyms = cleanQueryList(querySet.academicSynonyms, 6);
+    const education = cleanQueryList(querySet.education, 4);
+    const chineseSupplemental = cleanQueryList(querySet.chineseSupplemental, 6);
+    const fallbackRelaxed = cleanQueryList(querySet.fallbackRelaxed, 6);
+    return {
+      ...querySet,
+      chinese: cleanQueryList(querySet.chinese, MAX_QUERY_COUNT),
+      english: cleanQueryList(querySet.english, MAX_QUERY_COUNT),
+      highPrecision: cleanQueryList(querySet.highPrecision, MAX_QUERY_COUNT),
+      broad: cleanQueryList(querySet.broad, MAX_QUERY_COUNT),
+      coreEnglishAcademic,
+      academicSynonyms,
+      education,
+      chineseSupplemental,
+      fallbackRelaxed,
+      phases: ([
+        { stage: "core_english_academic", queries: coreEnglishAcademic },
+        { stage: "academic_synonym", queries: academicSynonyms },
+        { stage: "education_explanation", queries: education },
+        { stage: "chinese_supplemental", queries: chineseSupplemental },
+        { stage: "fallback_relaxed", queries: fallbackRelaxed },
+      ] satisfies SearchIntentQueryPhase[]).filter(
+        (phase) => phase.queries.length > 0,
+      ),
+    };
+  }
+
   const topicUnderstanding = plan.topicUnderstanding ?? understandTopic(plan.normalizedTopic);
   const englishTopic =
     plan.canonicalEnglishTopic ||
@@ -4541,11 +6901,13 @@ function mergeFamilyCriticalTerms(
     !isDumplingTopic(input) &&
     !isFrenchFriesTopic(input) &&
     !isColaHealthTopic(input) &&
+    !isBubbleTeaConsumptionCultureTopic(input) &&
     !isEggNutritionProteinTopic(input) &&
     !isChickenThighTopic(input) &&
     !isClamSafetyEcologyTopic(input) &&
     !isKoalaConservationTopic(input) &&
     !isTaiwanSemiconductorSupplyChainTopic(input) &&
+    !isSemiconductorEtchingTopic(input) &&
     !isTelomeraseAgingTopic(input) &&
     !isSalmonellaFoodPoisoningTopic(input) &&
     !isSocialMediaAddictionTopic(input) &&
@@ -4818,6 +7180,7 @@ async function requestLlmSearchIntentPlan(
   try {
     const content = await requestOpenAICompatibleChatCompletion({
       purpose: "planner",
+      featureName: "research_planner",
       temperature: 0,
       maxTokens: 1_000,
       responseFormat: "json_object",
@@ -4955,6 +7318,48 @@ export async function planSearchIntent(
     ...input,
     topic: input.topic.trim(),
   };
+  const suppliedSeedCount =
+    cleanQueryList(
+      [
+        ...(normalizedInput.querySeedZh ?? []),
+        ...(normalizedInput.querySeedEn ?? []),
+      ],
+      MAX_QUERY_COUNT,
+    ).length;
+  const suppliedEnglishSeedCount = cleanQueryList(
+    normalizedInput.querySeedEn ?? [],
+    MAX_QUERY_COUNT,
+  ).filter((query) => /[A-Za-z]/.test(query)).length;
+  const suppliedMustIncludeCount = cleanConceptList(
+    normalizedInput.mustIncludeTerms ?? [],
+    24,
+  ).length;
+
+  if (
+    suppliedSeedCount >= 4 &&
+    suppliedEnglishSeedCount >= 2 &&
+    suppliedMustIncludeCount >= 3
+  ) {
+    const understanding = await understandTopicWithFallback({
+      topic: normalizedInput.topic,
+      reportType: normalizedInput.reportType,
+      audience: normalizedInput.audience,
+      sourceMode: normalizedInput.sourceMode,
+      language: normalizedInput.language,
+    });
+    return sanitizePlannerPlanQueries(
+      normalizedInput,
+      mergeFamilyCriticalTerms(
+        normalizedInput,
+        buildRuleBasedSearchIntent(
+          normalizedInput,
+          "Caller supplied normalized bilingual query seeds; skipped LLM planner.",
+          "skipped",
+        ),
+      ),
+      understanding,
+    );
+  }
 
   try {
     return sanitizePlannerPlanQueries(
@@ -4989,6 +7394,7 @@ export async function planSearchIntent(
             ),
           ),
         ),
+        understanding,
       );
     } catch {
       return sanitizePlannerPlanQueries(
@@ -5193,27 +7599,261 @@ function queryBucketsForPlan(plan: SearchIntentPlan): {
       fallbackRelaxed: ROTATIONAL_MECHANICS_RELAXED,
     };
   }
+  if (isProteinMuscleGrowthPlan(plan)) {
+    return proteinMuscleQueryBuckets();
+  }
+  if (isHivAidsPlan(plan)) {
+    return {
+      coreConcepts: cleanConceptList([
+        ...HIV_AIDS_PRIMARY,
+        ...HIV_AIDS_CONTEXT,
+      ]),
+      coreEnglishAcademic: cleanQueryList(
+        [
+          "HIV AIDS risk factors transmission epidemiology",
+          "HIV AIDS public health impact systematic review",
+          "HIV transmission prevention study",
+          "HIV risk factors cohort study",
+        ],
+        4,
+      ),
+      academicSynonyms: cleanQueryList(
+        [
+          "human immunodeficiency virus acquired immunodeficiency syndrome epidemiology",
+          "antiretroviral therapy clinical trial review HIV",
+          "HIV stigma public health prevention review",
+          "HIV AIDS epidemiological study method",
+          "HIV transmission prevention systematic review",
+        ],
+        6,
+      ),
+      education: cleanQueryList(
+        [
+          "HIV AIDS public health explanation",
+          "HIV transmission prevention educational resource",
+          "antiretroviral therapy HIV public health explanation",
+        ],
+        3,
+      ),
+      chineseSupplemental: cleanQueryList(
+        [
+          "愛滋病 風險因子 傳染途徑",
+          "愛滋病 風險因子 流行病學 研究",
+          "HIV 公共衛生 影響 文獻回顧",
+          "人類免疫缺乏病毒 預防策略 抗病毒治療",
+          "後天免疫缺乏症候群 社會污名 公共衛生",
+        ],
+        5,
+      ),
+      fallbackRelaxed: cleanQueryList(
+        [
+          "HIV AIDS epidemiology",
+          "HIV AIDS risk factors",
+          "HIV transmission prevention",
+          "HIV public health impact",
+          "antiretroviral therapy HIV",
+          "愛滋病 風險因子",
+        ],
+        6,
+      ),
+    };
+  }
+  if (isHoneyCrystallizationPlan(plan)) {
+    return {
+      coreConcepts: cleanConceptList([
+        ...HONEY_CRYSTALLIZATION_PRIMARY,
+        ...HONEY_CRYSTALLIZATION_CONTEXT,
+        ...HONEY_CRYSTALLIZATION_OUTCOMES,
+      ]),
+      coreEnglishAcademic: cleanQueryList(
+        [
+          "honey crystallization glucose fructose ratio",
+          "honey crystallization moisture content",
+          "honey sugar composition crystallization rate",
+          "honey granulation water content glucose fructose",
+        ],
+        4,
+      ),
+      academicSynonyms: cleanQueryList(
+        [
+          "honey crystallization review glucose fructose moisture",
+          "honey crystallisation sugar composition water activity",
+          "honey granulation storage temperature moisture content",
+          "honey physicochemical properties crystallization",
+          "honey viscosity water activity crystallization",
+          "glucose fructose ratio honey crystallization",
+        ],
+        6,
+      ),
+      education: cleanQueryList(
+        [
+          "honey crystallization glucose fructose explanation",
+          "honey moisture content crystallization explanation",
+          "honey sugar composition food chemistry explanation",
+        ],
+        3,
+      ),
+      chineseSupplemental: cleanQueryList(
+        [
+          "蜂蜜 結晶 葡萄糖 果糖 比例",
+          "蜂蜜 結晶 含水量 水分含量",
+          "蜂蜜 糖組成 結晶速度",
+          "蜂蜜 水活性 黏度 結晶",
+          "蜂蜜 結晶 食品化學 文獻",
+        ],
+        5,
+      ),
+      fallbackRelaxed: cleanQueryList(
+        [
+          "honey crystallization",
+          "honey glucose fructose ratio",
+          "honey moisture content",
+          "honey sugar composition",
+          "honey granulation",
+        ],
+        5,
+      ),
+    };
+  }
+  if (isEggNutritionPlan(plan)) {
+    return {
+      coreConcepts: cleanConceptList([
+        ...EGG_NUTRITION_PRIMARY,
+        ...EGG_NUTRITION_CONTEXT,
+        ...EGG_NUTRITION_OUTCOMES,
+      ]),
+      coreEnglishAcademic: cleanQueryList(
+        [
+          "egg nutrition protein quality",
+          "egg protein amino acid profile",
+          "chicken egg nutritional composition",
+          "egg white protein digestibility",
+        ],
+        4,
+      ),
+      academicSynonyms: cleanQueryList(
+        [
+          "egg yolk nutrition amino acids",
+          "albumen amino acid composition",
+          "dietary protein quality egg",
+          "egg protein biological value",
+          "egg white yolk amino acid composition",
+          "egg essential amino acids digestibility",
+        ],
+        6,
+      ),
+      education: cleanQueryList(
+        [
+          "egg protein quality explanation",
+          "egg amino acid composition educational explanation",
+          "egg nutrition classroom resource",
+        ],
+        3,
+      ),
+      chineseSupplemental: cleanQueryList(
+        [
+          "雞蛋 營養成分 蛋白質品質",
+          "雞蛋 胺基酸組成",
+          "蛋白 蛋黃 營養價值",
+          "雞蛋蛋白質 消化率",
+          "雞蛋 生物價 胺基酸",
+        ],
+        5,
+      ),
+      fallbackRelaxed: cleanQueryList(
+        [
+          "egg nutrition",
+          "egg protein quality",
+          "egg amino acid profile",
+          "egg white albumen",
+          "egg yolk nutrition",
+        ],
+        5,
+      ),
+    };
+  }
   const canonicalEnglishTopic =
     understanding?.canonicalEnglishTopic ??
     plan.canonicalEnglishTopic ??
     "";
+  const activeTopicText = [
+    plan.activeResearchTopic ?? "",
+    plan.displayTitle ?? "",
+    ...(plan.suppliedQuerySeedZh ?? []),
+    ...(plan.suppliedQuerySeedEn ?? []),
+    ...(plan.subtopics?.flatMap((subtopic) => [...(subtopic.queryZh ?? []), ...(subtopic.queryEn ?? [])]) ??
+      []),
+  ].join(" ");
+  const activeQueryGroups = filterConceptQueryGroupsForActiveTopic(
+    plan.queryGroups ?? [],
+    activeTopicText,
+  );
+  const prioritizedAcademicGroups = (activeQueryGroups ?? [])
+    .filter(
+      (group) =>
+        group.language === "en" ||
+        group.language === "mixed" ||
+        group.intent === "standard",
+    )
+    .sort((left, right) => {
+      const priorityRank = { high: 0, medium: 1, low: 2 } as const;
+      const intentRank = {
+        mechanism: 0,
+        standard: 1,
+        review: 2,
+        definition: 3,
+        application: 4,
+        experiment: 5,
+        case: 6,
+        general: 7,
+        limitation: 8,
+      } as const;
+      const leftPriority = priorityRank[left.priority] ?? 9;
+      const rightPriority = priorityRank[right.priority] ?? 9;
+      if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+      const leftIntent = intentRank[left.intent] ?? 9;
+      const rightIntent = intentRank[right.intent] ?? 9;
+      if (leftIntent !== rightIntent) return leftIntent - rightIntent;
+      return left.query.length - right.query.length;
+    })
+    .map((group) => group.query);
+  const standardAcademicGroups = cleanQueryList(
+    (plan.queryGroups ?? [])
+      .filter(
+        (group) =>
+          group.intent === "standard" &&
+          (group.language === "en" || group.language === "mixed"),
+      )
+      .map((group) => group.query),
+    4,
+  );
   const seededEnglishQueries = cleanQueryList(
     [
+      ...(activeQueryGroups
+        ?.filter((group) => group.language === "en" || group.language === "mixed")
+        .map((group) => group.query) ?? []),
       ...(plan.suppliedQuerySeedEn ?? []),
       ...(plan.subtopics?.flatMap((subtopic) => subtopic.queryEn ?? []) ?? []),
       ...plan.englishQueries,
     ],
     MAX_QUERY_COUNT,
-  );
+  ).filter((query) => queryMatchesActiveIntent(query, activeTopicText));
   const seededChineseQueries = cleanQueryList(
     [
+      ...(activeQueryGroups
+        ?.filter((group) => group.language === "zh" || group.language === "mixed")
+        .map((group) => group.query) ?? []),
       ...(plan.suppliedQuerySeedZh ?? []),
       ...(plan.subtopics?.flatMap((subtopic) => subtopic.queryZh ?? []) ?? []),
       ...plan.chineseQueries,
     ],
     MAX_QUERY_COUNT,
-  );
+  ).filter((query) => queryMatchesActiveIntent(query, activeTopicText));
   const baseCoreConcepts = cleanConceptList([
+    ...(plan.enCoreTerms ?? []),
+    ...(plan.zhCoreTerms ?? []),
+    ...(plan.enSynonyms ?? []),
+    ...(plan.zhSynonyms ?? []),
     ...plan.primaryConcepts,
     ...(plan.coreConcepts ?? []),
     plan.canonicalTopicZh ?? "",
@@ -5244,10 +7884,33 @@ function queryBucketsForPlan(plan: SearchIntentPlan): {
       : [],
     4,
   );
+  const isPrecisionAcademicPlan =
+    understanding?.topicKind === "specific_research_topic" ||
+    understanding?.topicKind === "known_entity" ||
+    activeQueryGroups.some(
+      (group) =>
+        group.intent === "mechanism" ||
+        group.intent === "review" ||
+        group.expectedSourceType === "paper" ||
+        group.expectedSourceType === "review",
+    ) ||
+    plan.detectedDomain === "chemistry" ||
+    plan.detectedDomain === "physics" ||
+    plan.detectedDomain === "medicine" ||
+    plan.detectedDomain === "biology";
+  const educationQueries =
+    isPrecisionAcademicPlan ||
+    isSodiumPerchlorateSafetyTopicText(activeTopicText || plan.normalizedTopic)
+      ? []
+      : education;
 
   const academicSynonyms = cleanQueryList(
-    cleanedEnglishQueries.slice(4).length
-      ? cleanedEnglishQueries.slice(4)
+    prioritizedAcademicGroups.length || cleanedEnglishQueries.slice(4).length
+      ? [
+          ...standardAcademicGroups,
+          ...prioritizedAcademicGroups,
+          ...cleanedEnglishQueries.slice(4),
+        ]
       : canonicalEnglishTopic && secondaryConcept
         ? [
             `${canonicalEnglishTopic} ${secondaryConcept}`.trim(),
@@ -5260,8 +7923,19 @@ function queryBucketsForPlan(plan: SearchIntentPlan): {
   return {
     coreConcepts: baseCoreConcepts,
     coreEnglishAcademic: cleanedEnglishQueries.slice(0, 4),
-    academicSynonyms,
-    education,
+    academicSynonyms: cleanQueryList([
+      ...standardAcademicGroups,
+      ...academicSynonyms,
+      ...(activeQueryGroups
+        ?.filter(
+          (group) =>
+            group.intent === "review" ||
+            group.intent === "mechanism" ||
+            group.intent === "standard",
+        )
+        .map((group) => group.query) ?? []),
+    ], 8),
+    education: educationQueries,
     chineseSupplemental: cleanedChineseQueries.slice(0, 6),
     fallbackRelaxed: fallbackRelaxedQueriesFromConcepts([
       ...baseCoreConcepts,
@@ -5298,14 +7972,71 @@ function buildQueryPhases(
   return phases.filter((phase) => phase.queries.length > 0);
 }
 
+function sanitizeExclusiveTopicQuerySet(
+  plan: SearchIntentPlan,
+  querySet: SearchIntentQuerySet,
+): SearchIntentQuerySet {
+  const explicitFoodTemplateIntent = hasExplicitFoodTemplateIntent(plan);
+  const proteinMusclePlan = isProteinMuscleGrowthPlan(plan);
+  const baseAllow = (query: string) =>
+    (explicitFoodTemplateIntent || !GENERIC_FOOD_TEMPLATE_QUERY.test(query)) &&
+    (!proteinMusclePlan ||
+      (PROTEIN_MUSCLE_QUERY_GUARD.test(query) && !GENERIC_BIOLOGY_TEMPLATE_QUERY.test(query)));
+  const topicAllow =
+    plan.topicType === "social_media_addiction_psychology"
+      ? (query: string) =>
+          !SOCIAL_MEDIA_QUERY_DRIFT.test(query) &&
+          SOCIAL_MEDIA_QUERY_GUARD.some((pattern) => pattern.test(query))
+      : plan.topicType === "bubble_tea_consumption_culture"
+        ? (query: string) =>
+            !BUBBLE_TEA_QUERY_DRIFT.test(query) &&
+            BUBBLE_TEA_QUERY_GUARD.some((pattern) => pattern.test(query))
+        : null;
+  const allow = (query: string) => baseAllow(query) && (!topicAllow || topicAllow(query));
+
+  const clean = (values: string[], limit = MAX_QUERY_COUNT) =>
+    cleanQueryList(values.filter(allow), limit);
+  const phases = querySet.phases
+    .map((phase) => ({ ...phase, queries: clean(phase.queries, phase.queries.length) }))
+    .filter((phase) => phase.queries.length > 0);
+
+  return {
+    ...querySet,
+    chinese: clean(querySet.chinese),
+    english: clean(querySet.english),
+    highPrecision: clean(querySet.highPrecision),
+    broad: clean(querySet.broad, 6),
+    coreEnglishAcademic: clean(querySet.coreEnglishAcademic),
+    academicSynonyms: clean(querySet.academicSynonyms),
+    education: clean(querySet.education, 4),
+    chineseSupplemental: clean(querySet.chineseSupplemental),
+    fallbackRelaxed: clean(querySet.fallbackRelaxed, 6),
+    phases,
+  };
+}
+
 export function buildSearchIntentQueries(
   plan: SearchIntentPlan,
 ): SearchIntentQuerySet {
   const expandedQueries = domainQueryExpansion(plan);
   const deterministicVariants = deterministicAcademicQueryVariants(plan);
   const queryBuckets = queryBucketsForPlan(plan);
-  const phases = buildQueryPhases(queryBuckets);
+  const suppressEducationQueries = isSodiumPerchlorateSafetyTopicText(
+    [plan.activeResearchTopic ?? "", plan.displayTitle ?? "", plan.normalizedTopic].join(" "),
+  );
+  const educationQueries = suppressEducationQueries ? [] : queryBuckets.education;
+  const phases = buildQueryPhases({
+    ...queryBuckets,
+    education: educationQueries,
+  });
+  const urbanHeatHighPrecision = isUrbanHeatPlan(plan)
+    ? [
+        "urban heat island thermal comfort campus microclimate",
+        "urban heat island school campus heat stress",
+      ]
+    : [];
   const highPrecision = unique([
+    ...urbanHeatHighPrecision,
     ...queryBuckets.coreEnglishAcademic,
     ...deterministicVariants.english.slice(0, 2),
     ...expandedQueries.slice(0, 2),
@@ -5335,7 +8066,7 @@ export function buildSearchIntentQueries(
     .filter(Boolean)
     .slice(0, 6);
 
-  return {
+  return sanitizeExclusiveTopicQuerySet(plan, {
     coreConcepts: queryBuckets.coreConcepts,
     chinese: stripTopicLiteralQueries([
       ...deterministicVariants.chinese,
@@ -5346,18 +8077,18 @@ export function buildSearchIntentQueries(
       ...queryBuckets.academicSynonyms,
       ...deterministicVariants.english,
       ...expandedQueries,
-      ...queryBuckets.education,
+      ...educationQueries,
       ...queryBuckets.fallbackRelaxed,
     ], plan, MAX_QUERY_COUNT),
     highPrecision: stripTopicLiteralQueries(highPrecision, plan, MAX_QUERY_COUNT),
     broad: stripTopicLiteralQueries(broad, plan, 6),
     coreEnglishAcademic: queryBuckets.coreEnglishAcademic,
     academicSynonyms: queryBuckets.academicSynonyms,
-    education: queryBuckets.education,
+    education: educationQueries,
     chineseSupplemental: queryBuckets.chineseSupplemental,
     fallbackRelaxed: queryBuckets.fallbackRelaxed,
     phases,
-  };
+  });
 }
 
 function orderedQueries(
@@ -5381,6 +8112,56 @@ function orderedQueries(
   ).slice(0, queryLimit);
 }
 
+function mergeExpandedQueriesIntoQuerySet(
+  querySet: SearchIntentQuerySet,
+  expandedQueries: ExpandedQuery[],
+): SearchIntentQuerySet {
+  const expandedZh = expandedQueries
+    .filter((query) => query.language === "zh-TW")
+    .map((query) => query.query);
+  const expandedEn = expandedQueries
+    .filter((query) => query.language === "en")
+    .map((query) => query.query);
+  const academic = expandedQueries
+    .filter((query) => query.language === "en" && query.purpose === "academic_source")
+    .map((query) => query.query);
+  const mechanism = expandedQueries
+    .filter((query) =>
+      query.purpose === "mechanism" ||
+      query.purpose === "observable_phenomenon" ||
+      query.purpose === "application",
+    )
+    .map((query) => query.query);
+  return {
+    ...querySet,
+    chinese: unique([...expandedZh, ...querySet.chinese]),
+    english: unique([...expandedEn, ...querySet.english]),
+    highPrecision: unique([...querySet.highPrecision, ...academic, ...mechanism]).slice(0, MAX_QUERY_COUNT),
+    coreEnglishAcademic: unique([...querySet.coreEnglishAcademic, ...academic]),
+    academicSynonyms: unique([...querySet.academicSynonyms, ...mechanism.filter((query) => /[A-Za-z]/.test(query))]),
+    chineseSupplemental: unique([...querySet.chineseSupplemental, ...expandedZh]),
+    phases: [
+      ...querySet.phases,
+      ...(expandedEn.length
+        ? [
+            {
+              stage: "core_english_academic" as const,
+              queries: unique([...academic, ...expandedEn]).slice(0, 10),
+            },
+          ]
+        : []),
+      ...(expandedZh.length
+        ? [
+            {
+              stage: "chinese_supplemental" as const,
+              queries: expandedZh.slice(0, 8),
+            },
+          ]
+        : []),
+    ],
+  };
+}
+
 function queryExecutionPhases(
   querySet: SearchIntentQuerySet,
   queryLimit: number,
@@ -5389,14 +8170,22 @@ function queryExecutionPhases(
     stage: SearchIntentQueryPhase["stage"];
     max: number;
   }> = [
-    { stage: "core_english_academic", max: 3 },
-    { stage: "academic_synonym", max: 2 },
-    { stage: "education_explanation", max: 1 },
-    { stage: "chinese_supplemental", max: 1 },
-    { stage: "fallback_relaxed", max: 1 },
+    { stage: "core_english_academic", max: 4 },
+    { stage: "academic_synonym", max: 4 },
+    { stage: "education_explanation", max: 2 },
+    { stage: "chinese_supplemental", max: 3 },
+    { stage: "fallback_relaxed", max: 2 },
   ];
   const phaseMap = new Map(
-    querySet.phases.map((phase) => [phase.stage, phase.queries] as const),
+    querySet.phases.reduce<Array<[SearchIntentQueryPhase["stage"], string[]]>>((entries, phase) => {
+      const existing = entries.find(([stage]) => stage === phase.stage);
+      if (existing) {
+        existing[1] = cleanQueryList([...existing[1], ...phase.queries], MAX_QUERY_COUNT);
+      } else {
+        entries.push([phase.stage, cleanQueryList(phase.queries, MAX_QUERY_COUNT)]);
+      }
+      return entries;
+    }, []),
   );
   let remaining = Math.max(0, queryLimit);
 
@@ -5420,17 +8209,20 @@ function isAcademicSource(source: SourceRecord): boolean {
 }
 
 function shouldAlwaysUseTrustedWebFallback(plan: SearchIntentPlan): boolean {
-  return isBmwElectricVehiclePlanText(
-    [
-      plan.normalizedTopic,
-      ...plan.primaryConcepts,
-      ...plan.contextConcepts,
-      ...plan.outcomeConcepts,
-      ...plan.mustHaveTerms,
-      ...plan.shouldHaveTerms,
-      ...plan.englishQueries,
-      ...plan.chineseQueries,
-    ].join(" "),
+  return (
+    isSodiumPerchloratePlan(plan) ||
+    isBmwElectricVehiclePlanText(
+      [
+        plan.normalizedTopic,
+        ...plan.primaryConcepts,
+        ...plan.contextConcepts,
+        ...plan.outcomeConcepts,
+        ...plan.mustHaveTerms,
+        ...plan.shouldHaveTerms,
+        ...plan.englishQueries,
+        ...plan.chineseQueries,
+      ].join(" "),
+    )
   );
 }
 
@@ -5450,6 +8242,29 @@ function noSourceWarnings(groups: SourceProviderSearchResult[]): string[] {
   return statusLines.length
     ? statusLines.slice(0, 8)
     : ["所有來源 provider 都沒有回傳可用 metadata。"];
+}
+
+function rateLimitedProviders(
+  groups: SourceProviderSearchResult[],
+): SourceProviderSearchResult["provider"][] {
+  return unique(
+    groups
+      .filter((group) => providerRateLimited(group))
+      .map((group) => group.provider),
+  ) as SourceProviderSearchResult["provider"][];
+}
+
+function fallbackProvidersUsed(
+  groups: SourceProviderSearchResult[],
+  limitedProviders: SourceProviderSearchResult["provider"][],
+): SourceProviderSearchResult["provider"][] {
+  const limitedSet = new Set(limitedProviders);
+  return unique(
+    groups
+      .filter((group) => !limitedSet.has(group.provider))
+      .filter((group) => group.ok || group.results.length > 0)
+      .map((group) => group.provider),
+  ) as SourceProviderSearchResult["provider"][];
 }
 
 function publicSearchConfig(options?: SearchIntentSourceSearchOptions): {
@@ -5686,6 +8501,100 @@ function normalizePublicWebSource(
 
 function trustedSeedSourcesForPlan(plan: SearchIntentPlan): SourceRecord[] {
   const seedSources: SourceRecord[] = [];
+  if (isSodiumPerchloratePlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:pubchem-sodium-perchlorate",
+        title: "Sodium perchlorate - PubChem Compound Summary",
+        authors: ["PubChem"],
+        year: null,
+        abstract:
+          "PubChem records sodium perchlorate (NaClO4) as an oxidizing inorganic salt and provides identity, physical properties, safety information, and laboratory handling references for the compound.",
+        abstractOriginal:
+          "PubChem records sodium perchlorate (NaClO4) as an oxidizing inorganic salt and provides identity, physical properties, safety information, and laboratory handling references for the compound.",
+        abstractZhTw:
+          "PubChem 將過氯酸鈉（NaClO4）列為無機氧化鹽，並整理其身分資訊、物理性質、安全資料與實驗室操作參考。",
+        readableSummaryZhTw:
+          "這份 PubChem 條目可用來確認過氯酸鈉的化學身分、基本性質與安全資料，是建立實驗操作與危害辨識基礎的官方來源。",
+        mainEvidencePointZhTw:
+          "PubChem 提供過氯酸鈉的化學身分、基本性質與安全資訊，可作為操作條件與危害辨識的基礎證據。",
+        sourceRelevanceReasonZhTw:
+          "直接對應過氯酸鈉本體，且內容涵蓋化學身分、性質與安全資料，與主題高度相關。",
+        doi: null,
+        url: "https://pubchem.ncbi.nlm.nih.gov/compound/Sodium-perchlorate",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "PubChem",
+        containerTitle: "PubChem Compound Summary",
+        accessedAt: null,
+        provider: "PubChem",
+        sourceKind: "web",
+        dedupeKey: "trusted:pubchem-sodium-perchlorate",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted official chemistry seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:cameo-sodium-perchlorate",
+        title: "SODIUM PERCHLORATE - NOAA CAMEO Chemicals",
+        authors: ["NOAA CAMEO Chemicals"],
+        year: null,
+        abstract:
+          "CAMEO Chemicals describes sodium perchlorate as a white crystalline oxidizer that can accelerate burning of combustible materials and notes fire, heat, and reactivity hazards relevant to storage and emergency response.",
+        abstractOriginal:
+          "CAMEO Chemicals describes sodium perchlorate as a white crystalline oxidizer that can accelerate burning of combustible materials and notes fire, heat, and reactivity hazards relevant to storage and emergency response.",
+        abstractZhTw:
+          "CAMEO Chemicals 指出過氯酸鈉是白色結晶氧化劑，可能加速可燃物燃燒，並涉及火災、受熱與反應性危害，與儲存及緊急應變直接相關。",
+        readableSummaryZhTw:
+          "這份 NOAA CAMEO 官方資料重點在過氯酸鈉的氧化性、受熱風險與緊急應變資訊，很適合作為實驗安全、儲存相容性與危害辨識的主要來源。",
+        mainEvidencePointZhTw:
+          "CAMEO 明確指出過氯酸鈉具有氧化性與受熱反應風險，可直接支撐儲存、相容性與實驗安全分析。",
+        sourceRelevanceReasonZhTw:
+          "直接命中過氯酸鈉的危害、儲存與應變資訊，是本主題的核心安全證據來源。",
+        doi: null,
+        url: "https://cameochemicals.noaa.gov/chemical/4203",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "NOAA",
+        containerTitle: "CAMEO Chemicals",
+        accessedAt: null,
+        provider: "NOAA",
+        sourceKind: "web",
+        dedupeKey: "trusted:cameo-sodium-perchlorate",
+        sourceQualityScore: 86,
+        scoreReasons: ["trusted official hazard seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:echa-sodium-perchlorate",
+        title: "Sodium perchlorate - ECHA CHEM Dossier",
+        authors: ["European Chemicals Agency"],
+        year: null,
+        abstract:
+          "The ECHA chemicals dossier for sodium perchlorate provides identity data together with EU chemicals classification and labelling context that supports hazard review and handling-risk assessment.",
+        abstractOriginal:
+          "The ECHA chemicals dossier for sodium perchlorate provides identity data together with EU chemicals classification and labelling context that supports hazard review and handling-risk assessment.",
+        abstractZhTw:
+          "ECHA 的過氯酸鈉化學品資料頁提供物質身分資訊，以及歐盟分類與標示脈絡，可用於危害審查與操作風險判讀。",
+        readableSummaryZhTw:
+          "這份 ECHA dossier 適合拿來確認過氯酸鈉在歐盟脈絡下的分類、標示與危害資訊，可補強安全管理與法規面判讀。",
+        mainEvidencePointZhTw:
+          "ECHA 提供過氯酸鈉的物質身分、分類與標示資訊，可支撐危害審查與操作風險評估。",
+        sourceRelevanceReasonZhTw:
+          "直接對應過氯酸鈉本體，並補充分類與標示資訊，與安全與風險主題直接相關。",
+        doi: null,
+        url: "https://chem.echa.europa.eu/100.028.647",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "ECHA",
+        containerTitle: "ECHA CHEM",
+        accessedAt: null,
+        provider: "ECHA",
+        sourceKind: "web",
+        dedupeKey: "trusted:echa-sodium-perchlorate",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted institutional hazard seed source"],
+      }),
+    );
+  }
   if (isKoalaPlan(plan)) {
     seedSources.push(
       normalizeSourceRecord({
@@ -5828,7 +8737,7 @@ function trustedSeedSourcesForPlan(plan: SearchIntentPlan): SourceRecord[] {
       }),
     );
   }
-  if (isSalmonellaFoodPoisoningPlan(plan)) {
+  if (isSalmonellaFoodPoisoningPlan(plan) && !isEggNutritionPlan(plan)) {
     seedSources.push(
       normalizeSourceRecord({
         id: "trusted:cdc-salmonella",
@@ -6209,6 +9118,551 @@ function trustedSeedSourcesForPlan(plan: SearchIntentPlan): SourceRecord[] {
       }),
     );
   }
+  if (isSunsetAtmosphericOpticsPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:nasa-space-place-blue-sky",
+        title: "Why Is the Sky Blue?",
+        authors: ["NASA Space Place"],
+        year: null,
+        abstract:
+          "NASA Space Place explains that sunlight is scattered by gases and particles in Earth's atmosphere, with shorter blue wavelengths scattering more strongly than longer red wavelengths.",
+        doi: null,
+        url: "https://spaceplace.nasa.gov/blue-sky/",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "NASA",
+        containerTitle: "NASA Space Place",
+        accessedAt: null,
+        provider: "NASA",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted official atmospheric-optics seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:ucar-appearance-of-sky",
+        title: "The Appearance of the Sky",
+        authors: ["UCAR Center for Science Education"],
+        year: null,
+        abstract:
+          "UCAR describes how Rayleigh scattering by atmospheric molecules separates sunlight into wavelengths and how aerosols can increase colorful skies near sunrise and sunset.",
+        doi: null,
+        url: "https://scied.ucar.edu/learning-zone/atmosphere/appearance-sky",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "UCAR Center for Science Education",
+        containerTitle: "UCAR Learning Zone",
+        accessedAt: null,
+        provider: "UCAR",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted institutional atmospheric-optics seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:ucar-blue-skies-red-sunsets",
+        title: "Blue Skies and Red Sunsets",
+        authors: ["UCAR Center for Science Education"],
+        year: null,
+        abstract:
+          "UCAR's classroom activity connects scattering of light in Earth's atmosphere with blue skies and orange or red colors at sunset and sunrise.",
+        doi: null,
+        url: "https://scied.ucar.edu/activity/blue-skies-and-red-sunsets",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "UCAR Center for Science Education",
+        containerTitle: "UCAR Classroom Activities",
+        accessedAt: null,
+        provider: "UCAR",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted institutional atmospheric-optics seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:noaa-gml-red-sky",
+        title: "Red Sky in the Morning",
+        authors: ["NOAA Global Monitoring Laboratory"],
+        year: null,
+        abstract:
+          "NOAA GML explains that shorter blue wavelengths and longer red wavelengths scatter differently in clean air and aerosol-rich air, changing sky and sunset colors.",
+        doi: null,
+        url: "https://gml.noaa.gov/grad/about/redsky/",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "NOAA Global Monitoring Laboratory",
+        containerTitle: "NOAA GML",
+        accessedAt: null,
+        provider: "NOAA",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted official atmospheric-optics seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:noaa-nesdis-sky-blue",
+        title: "Why Is the Sky Blue?",
+        authors: ["NOAA NESDIS"],
+        year: null,
+        abstract:
+          "NOAA NESDIS gives visible-light wavelength context, including approximate red and blue/violet wavelength ranges, for explaining atmospheric scattering and sky color.",
+        doi: null,
+        url: "https://www.nesdis.noaa.gov/about/k-12-education/atmosphere/why-the-sky-blue",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "NOAA NESDIS",
+        containerTitle: "NOAA K-12 Education",
+        accessedAt: null,
+        provider: "NOAA",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted official atmospheric-optics seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:nasa-giss-aerosols-atmosphere",
+        title: "Aerosols in the Atmosphere",
+        authors: ["NASA Goddard Institute for Space Studies"],
+        year: 1997,
+        abstract:
+          "NASA GISS educational material explains that sunsets and sunrises appear reddish because shorter blue wavelengths are removed by scattering over a long atmospheric path.",
+        doi: null,
+        url: "https://www.giss.nasa.gov/edu/icp/research/ppa/1997/reyes/",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "NASA GISS",
+        containerTitle: "NASA GISS Education",
+        accessedAt: null,
+        provider: "NASA",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted official atmospheric-optics seed source"],
+      }),
+    );
+  }
+  if (isSoapBubbleOpticsPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:openstax-university-physics-thin-film-interference",
+        title: "Interference in Thin Films - University Physics Volume 3",
+        authors: ["OpenStax"],
+        year: null,
+        abstract:
+          "OpenStax explains thin-film interference with soap bubbles and oil films, connecting reflected light, constructive and destructive interference, wavelength, and film thickness.",
+        doi: null,
+        url: "https://openstax.org/books/university-physics-volume-3/pages/3-4-interference-in-thin-films",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "OpenStax",
+        containerTitle: "University Physics Volume 3",
+        accessedAt: null,
+        provider: "OpenStax",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted open textbook optics seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:openstax-college-physics-thin-film-interference",
+        title: "Thin Film Interference - College Physics 2e",
+        authors: ["OpenStax"],
+        year: null,
+        abstract:
+          "OpenStax College Physics introduces thin-film interference using sunlit soap bubbles, wavelength-scale films, color, and constructive interference as a foundation for high-school optics reports.",
+        doi: null,
+        url: "https://openstax.org/books/college-physics-2e/pages/27-7-thin-film-interference",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "OpenStax",
+        containerTitle: "College Physics 2e",
+        accessedAt: null,
+        provider: "OpenStax",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted open textbook optics seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:msu-openbooks-thin-film-interference",
+        title: "Thin Film Interference",
+        authors: ["Michigan State University Libraries"],
+        year: null,
+        abstract:
+          "This open physics text discusses rainbow formation by thin films, soap bubbles, optical path differences, film thickness, wavelength, and interference conditions.",
+        doi: null,
+        url: "https://openbooks.lib.msu.edu/collegephysics2/chapter/thin-film-interference-2/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "Michigan State University Libraries",
+        containerTitle: "Introductory Physics for the Health and Life Sciences",
+        accessedAt: null,
+        provider: "MSU Libraries",
+        sourceKind: "web",
+        sourceQualityScore: 80,
+        scoreReasons: ["trusted university open textbook seed source"],
+      }),
+    );
+  }
+  if (isTeaCaffeineExtractionPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:pmc-tea-infusion-caffeine-theanine",
+        title: "Determination of L-Theanine and Caffeine Contents in Tea Infusions",
+        authors: ["NCBI PubMed Central"],
+        year: 2025,
+        abstract:
+          "This open-access study measures caffeine and L-theanine in tea infusions and discusses how brewing temperature and brewing time influence extraction from tea leaves.",
+        doi: null,
+        url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC12248710/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "NCBI PubMed Central",
+        containerTitle: "PubMed Central",
+        accessedAt: null,
+        provider: "NCBI PMC",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted open-access tea chemistry seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:pmc-tea-brewing-conditions-caffeine",
+        title: "Effects of different brewing conditions on catechin content and sensory properties of green tea infusion",
+        authors: ["NCBI PubMed Central"],
+        year: 2015,
+        abstract:
+          "This open-access paper links tea infusion temperature, initial concentration and brew time with the extraction of polyphenols and caffeine into tea infusions.",
+        doi: null,
+        url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC4573099/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "NCBI PubMed Central",
+        containerTitle: "PubMed Central",
+        accessedAt: null,
+        provider: "NCBI PMC",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted open-access tea extraction seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:pubchem-caffeine",
+        title: "Caffeine - PubChem Compound Summary",
+        authors: ["PubChem"],
+        year: null,
+        abstract:
+          "PubChem provides authoritative chemical identity, structure, synonyms, properties and literature links for caffeine, the target compound measured in tea extraction experiments.",
+        doi: null,
+        url: "https://pubchem.ncbi.nlm.nih.gov/compound/2519",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "PubChem",
+        containerTitle: "PubChem Compound Summary",
+        accessedAt: null,
+        provider: "PubChem",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted official chemistry seed source"],
+      }),
+    );
+  }
+  if (isFlameColorMetalIonPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:chem-libretexts-flame-tests",
+        title: "Flame Tests",
+        authors: ["Chemistry LibreTexts"],
+        year: null,
+        abstract:
+          "Chemistry LibreTexts describes flame tests for metal ions, why different metal cations produce characteristic flame colors, and how flame color relates to electronic transitions.",
+        doi: null,
+        url: "https://chem.libretexts.org/Bookshelves/Inorganic_Chemistry/Supplemental_Modules_and_Websites_%28Inorganic_Chemistry%29/Descriptive_Chemistry/Elements_Organized_by_Block/1_s-Block_Elements/Group__1%3A_The_Alkali_Metals/2Reactions_of_the_Group_1_Elements/Flame_Tests",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "Chemistry LibreTexts",
+        containerTitle: "Chemistry LibreTexts",
+        accessedAt: null,
+        provider: "LibreTexts",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted chemistry education seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:chem-libretexts-flame-test-qualitative-analysis",
+        title: "Flame test",
+        authors: ["Chemistry LibreTexts"],
+        year: null,
+        abstract:
+          "This chemistry education source explains metal salt flame tests, excited atomic states, electron relaxation, emitted light, and why metal ions can produce visible colors.",
+        doi: null,
+        url: "https://chem.libretexts.org/Bookshelves/Analytical_Chemistry/Qualitative_Analysis_of_Common_Cations_in_Water_%28Malik%29/2%3A_Experimental_techniques/2.6%3A_Flame_test",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "Chemistry LibreTexts",
+        containerTitle: "Chemistry LibreTexts",
+        accessedAt: null,
+        provider: "LibreTexts",
+        sourceKind: "web",
+        sourceQualityScore: 80,
+        scoreReasons: ["trusted chemistry education seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:nist-atomic-spectra-database",
+        title: "NIST Atomic Spectra Database Lines Form",
+        authors: ["National Institute of Standards and Technology"],
+        year: null,
+        abstract:
+          "The NIST Atomic Spectra Database provides official reference data for atomic emission lines, wavelengths and spectra that underpin explanations of metal-ion flame colors.",
+        doi: null,
+        url: "https://physics.nist.gov/PhysRefData/ASD/lines_form.html",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "National Institute of Standards and Technology",
+        containerTitle: "NIST Atomic Spectra Database",
+        accessedAt: null,
+        provider: "NIST",
+        sourceKind: "web",
+        sourceQualityScore: 86,
+        scoreReasons: ["trusted official atomic spectra seed source"],
+      }),
+    );
+  }
+  if (isPhotosynthesisLightIntensityPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:openstax-biology-light-dependent-reactions",
+        title: "The Light-Dependent Reactions of Photosynthesis",
+        authors: ["OpenStax"],
+        year: null,
+        abstract:
+          "OpenStax explains how photosynthetic pigments absorb visible light, how light energy drives electron excitation, and why light intensity and wavelength matter for photosynthesis.",
+        doi: null,
+        url: "https://openstax.org/books/biology-2e/pages/8-2-the-light-dependent-reactions-of-photosynthesis",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "OpenStax",
+        containerTitle: "Biology 2e",
+        accessedAt: null,
+        provider: "OpenStax",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted open textbook biology seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:openstax-biology-overview-photosynthesis",
+        title: "Overview of Photosynthesis",
+        authors: ["OpenStax"],
+        year: null,
+        abstract:
+          "OpenStax summarizes photosynthesis as a light-dependent biological process requiring specific wavelengths of visible sunlight, carbon dioxide, and water to produce oxygen and carbohydrates.",
+        doi: null,
+        url: "https://openstax.org/books/biology-2e/pages/8-1-overview-of-photosynthesis",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "OpenStax",
+        containerTitle: "Biology 2e",
+        accessedAt: null,
+        provider: "OpenStax",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted open textbook biology seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:openstax-ap-biology-light-dependent-reactions",
+        title: "The Light-Dependent Reaction of Photosynthesis",
+        authors: ["OpenStax"],
+        year: null,
+        abstract:
+          "OpenStax AP Biology covers light-dependent reactions, photosynthetic electron transport, light absorption, and links between available light and photosynthetic reaction rates.",
+        doi: null,
+        url: "https://openstax.org/books/biology-ap-courses/pages/8-2-the-light-dependent-reaction-of-photosynthesis",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "OpenStax",
+        containerTitle: "Biology for AP Courses",
+        accessedAt: null,
+        provider: "OpenStax",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted open textbook biology seed source"],
+      }),
+    );
+  }
+  if (isYellowstonePlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:nps-greater-yellowstone-ecosystem",
+        title: "Greater Yellowstone Ecosystem",
+        authors: ["National Park Service"],
+        year: null,
+        abstract:
+          "The National Park Service describes Yellowstone as the core of the Greater Yellowstone Ecosystem, including wildlife, vegetation, lakes, hydrothermal features and large intact ecosystem processes.",
+        doi: null,
+        url: "https://www.nps.gov/yell/learn/nature/greater-yellowstone-ecosystem.htm",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "National Park Service",
+        containerTitle: "Yellowstone National Park",
+        accessedAt: null,
+        provider: "NPS",
+        sourceKind: "web",
+        sourceQualityScore: 86,
+        scoreReasons: ["trusted official national park seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:unesco-yellowstone",
+        title: "Yellowstone National Park",
+        authors: ["UNESCO World Heritage Centre"],
+        year: null,
+        abstract:
+          "UNESCO describes Yellowstone National Park as a protected area with geothermal features, natural beauty, rare and endangered species, and intact large-scale wildland ecosystem processes.",
+        doi: null,
+        url: "https://whc.unesco.org/en/list/28/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "UNESCO World Heritage Centre",
+        containerTitle: "World Heritage List",
+        accessedAt: null,
+        provider: "UNESCO",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted world heritage seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:nps-yellowstone-nature",
+        title: "Nature - Yellowstone National Park",
+        authors: ["National Park Service"],
+        year: null,
+        abstract:
+          "NPS Yellowstone nature materials organize official background on the park's animals, plants, geology, hydrothermal systems, ecology and natural resource management.",
+        doi: null,
+        url: "https://www.nps.gov/yell/learn/nature/index.htm",
+        sourceType: "Official Source",
+        reviewState: "pending",
+        publisher: "National Park Service",
+        containerTitle: "Yellowstone National Park",
+        accessedAt: null,
+        provider: "NPS",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted official national park seed source"],
+      }),
+    );
+  }
+  if (isJadePendantPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:british-museum-chinese-jade",
+        title: "Chinese jade",
+        authors: ["British Museum"],
+        year: null,
+        abstract:
+          "The British Museum introduces Chinese jade objects, workmanship and historical forms, including ornaments and later intricate pendants, for material-culture background.",
+        doi: null,
+        url: "https://www.britishmuseum.org/collection/galleries/chinese-jade",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "British Museum",
+        containerTitle: "British Museum Collection Galleries",
+        accessedAt: null,
+        provider: "British Museum",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted museum material-culture seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:smithsonian-ancient-chinese-jades",
+        title: "Afterlife: Ancient Chinese Jades",
+        authors: ["National Museum of Asian Art"],
+        year: null,
+        abstract:
+          "The Smithsonian National Museum of Asian Art explains ancient Chinese jades from late Neolithic and early Bronze Age contexts, connecting jade objects with ritual, burial and cultural meaning.",
+        doi: null,
+        url: "https://asia.si.edu/whats-on/exhibitions/afterlife-ancient-chinese-jades/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "National Museum of Asian Art",
+        containerTitle: "Smithsonian National Museum of Asian Art",
+        accessedAt: null,
+        provider: "Smithsonian",
+        sourceKind: "web",
+        sourceQualityScore: 84,
+        scoreReasons: ["trusted museum Chinese jade seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:met-jade-pendant",
+        title: "Assemblage of pendants",
+        authors: ["The Metropolitan Museum of Art"],
+        year: null,
+        abstract:
+          "The Metropolitan Museum of Art describes a reconstructed Tang dynasty composite jade pendant, providing museum context for Chinese jade ornaments worn from the belt.",
+        doi: null,
+        url: "https://www.metmuseum.org/art/collection/search/39805",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "The Metropolitan Museum of Art",
+        containerTitle: "The Met Collection",
+        accessedAt: null,
+        provider: "The Met",
+        sourceKind: "web",
+        sourceQualityScore: 82,
+        scoreReasons: ["trusted museum jade pendant seed source"],
+      }),
+    );
+  }
+  if (isMoonRabbitPlan(plan)) {
+    seedSources.push(
+      normalizeSourceRecord({
+        id: "trusted:moca-jade-rabbit-legend",
+        title: "Legend of the Jade Rabbit",
+        authors: ["Museum of Chinese in America"],
+        year: 2021,
+        abstract:
+          "The Museum of Chinese in America educational material retells the Jade Rabbit legend in relation to the Moon, Chang'e, immortality, and Mid-Autumn cultural storytelling.",
+        doi: null,
+        url: "https://www.mocanyc.org/wp-content/uploads/2021/09/Legend-of-the-Jade-Rabbit.pdf",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "Museum of Chinese in America",
+        containerTitle: "MOCA Education",
+        accessedAt: null,
+        provider: "MOCA",
+        sourceKind: "web",
+        sourceQualityScore: 78,
+        scoreReasons: ["trusted museum education folklore seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:google-arts-culture-year-of-rabbit",
+        title: "Celebrating the Year of the Rabbit",
+        authors: ["Art Museum, The Chinese University of Hong Kong"],
+        year: null,
+        abstract:
+          "This Google Arts and Culture feature from the Art Museum of The Chinese University of Hong Kong introduces rabbit imagery in Chinese culture and art, useful background for Moon Rabbit symbolism.",
+        doi: null,
+        url: "https://artsandculture.google.com/story/celebrating-the-year-of-the-rabbit/lAWBVSPDN6VIhA",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "Google Arts & Culture",
+        containerTitle: "Google Arts & Culture",
+        accessedAt: null,
+        provider: "Google Arts & Culture",
+        sourceKind: "web",
+        sourceQualityScore: 76,
+        scoreReasons: ["museum-linked cultural background seed source"],
+      }),
+      normalizeSourceRecord({
+        id: "trusted:smithsonian-rabbit-in-moonlight",
+        title: "Rabbit In Moonlight",
+        authors: ["National Museum of Asian Art"],
+        year: null,
+        abstract:
+          "The Smithsonian National Museum of Asian Art collection record documents a Japanese artwork titled Rabbit In Moonlight, supporting visual-culture context for rabbit and moon imagery.",
+        doi: null,
+        url: "https://asia.si.edu/explore-art-culture/collections/search/edanmdm%3Afsg_S2003.8.1829/",
+        sourceType: "Institutional Source",
+        reviewState: "pending",
+        publisher: "National Museum of Asian Art",
+        containerTitle: "Smithsonian National Museum of Asian Art",
+        accessedAt: null,
+        provider: "Smithsonian",
+        sourceKind: "web",
+        sourceQualityScore: 76,
+        scoreReasons: ["trusted museum visual-culture seed source"],
+      }),
+    );
+  }
   if (!isMarineMicroplasticsPlan(plan)) return seedSources;
   seedSources.push(
     normalizeSourceRecord({
@@ -6358,6 +9812,52 @@ async function fetchPublicSearchHtml(
   }
 }
 
+function fallbackTopicAnchors(plan: SearchIntentPlan): string[] {
+  if (isHivAidsPlan(plan)) return HIV_AIDS_MUST_HAVE;
+  return cleanConceptList(
+    [
+      ...plan.mustHaveTerms,
+      ...plan.primaryConcepts,
+      plan.canonicalEnglishTopic ?? "",
+      plan.canonicalTopicZh ?? "",
+    ],
+    16,
+  ).filter((term) => !isTooGenericRelaxedConcept(term));
+}
+
+function filterFallbackQueriesWithTopicAnchor(
+  provider: FallbackSourceProvider,
+  queries: string[],
+  plan: SearchIntentPlan,
+): string[] {
+  const anchors = fallbackTopicAnchors(plan);
+  if (anchors.length === 0) return queries;
+  const accepted: string[] = [];
+  const blocked: string[] = [];
+  for (const query of queries) {
+    if (matchedTerms(query, anchors).length > 0) {
+      accepted.push(query);
+    } else {
+      blocked.push(query);
+    }
+  }
+  if (blocked.length > 0) {
+    logger.warn(
+      {
+        provider,
+        blocked_reason: "fallback_query_missing_topic_anchor",
+        originalTopic: plan.originalTopic ?? null,
+        normalizedTopic: plan.normalizedTopic,
+        topicType: plan.topicType ?? null,
+        topicAnchors: anchors.slice(0, 8),
+        blockedQueries: blocked.slice(0, 8),
+      },
+      "Blocked fallback source queries without topic anchors.",
+    );
+  }
+  return accepted;
+}
+
 function fallbackQueriesForProvider(
   provider: FallbackSourceProvider,
   baseQueries: string[],
@@ -6410,7 +9910,7 @@ function fallbackQueriesForProvider(
         "Phascolarctos cinereus habitat conservation government report",
       );
     }
-    if (isSalmonellaFoodPoisoningPlan(plan)) {
+    if (isSalmonellaFoodPoisoningPlan(plan) && !isEggNutritionPlan(plan)) {
       official.unshift(
         "Salmonella food poisoning CDC food safety",
         "Salmonella foodborne illness outbreak CDC",
@@ -6421,6 +9921,7 @@ function fallbackQueriesForProvider(
     }
     if (
       !isSalmonellaFoodPoisoningPlan(plan) &&
+      !isEggNutritionPlan(plan) &&
       isFoodSafetyNutritionPlanText(seedQueries.join(" "))
     ) {
       official.unshift(
@@ -6433,7 +9934,11 @@ function fallbackQueriesForProvider(
         "shell eggs food safety site:fda.gov",
       );
     }
-    return unique(official).slice(0, maxQueries);
+    return filterFallbackQueriesWithTopicAnchor(
+      provider,
+      unique(official).slice(0, maxQueries),
+      plan,
+    );
   }
 
   if (provider === "Institutional Source") {
@@ -6477,7 +9982,7 @@ function fallbackQueriesForProvider(
         "koala habitat connectivity conservation policy report",
       );
     }
-    if (isSalmonellaFoodPoisoningPlan(plan)) {
+    if (isSalmonellaFoodPoisoningPlan(plan) && !isEggNutritionPlan(plan)) {
       institutional.unshift(
         "Salmonella foodborne disease systematic review",
         "Salmonella outbreak food safety surveillance report",
@@ -6487,6 +9992,7 @@ function fallbackQueriesForProvider(
     }
     if (
       !isSalmonellaFoodPoisoningPlan(plan) &&
+      !isEggNutritionPlan(plan) &&
       isFoodSafetyNutritionPlanText(seedQueries.join(" "))
     ) {
       institutional.unshift(
@@ -6498,7 +10004,11 @@ function fallbackQueriesForProvider(
         "Salmonella eggs public health guidance WHO",
       );
     }
-    return unique(institutional).slice(0, maxQueries);
+    return filterFallbackQueriesWithTopicAnchor(
+      provider,
+      unique(institutional).slice(0, maxQueries),
+      plan,
+    );
   }
 
   const media = seedQueries.map(
@@ -6536,7 +10046,7 @@ function fallbackQueriesForProvider(
       "koala population habitat loss BBC",
     );
   }
-  if (isSalmonellaFoodPoisoningPlan(plan)) {
+  if (isSalmonellaFoodPoisoningPlan(plan) && !isEggNutritionPlan(plan)) {
     media.unshift(
       "Salmonella food poisoning outbreak Reuters",
       "Salmonella food safety Associated Press",
@@ -6545,6 +10055,7 @@ function fallbackQueriesForProvider(
   }
   if (
     !isSalmonellaFoodPoisoningPlan(plan) &&
+    !isEggNutritionPlan(plan) &&
     isFoodSafetyNutritionPlanText(seedQueries.join(" "))
   ) {
     media.unshift(
@@ -6555,7 +10066,11 @@ function fallbackQueriesForProvider(
       "egg nutrition cholesterol food safety Reuters",
     );
   }
-  return unique(media).slice(0, maxQueries);
+  return filterFallbackQueriesWithTopicAnchor(
+    provider,
+    unique(media).slice(0, maxQueries),
+    plan,
+  );
 }
 
 function fallbackDisabledResult(
@@ -6681,14 +10196,30 @@ function splitSentences(text: string): string[] {
 
 function isUrbanHeatPlan(plan: SearchIntentPlan): boolean {
   const concepts = normalizeText(
-    [...plan.primaryConcepts, ...plan.mustHaveTerms].join(" "),
+    [
+      plan.normalizedTopic,
+      plan.activeResearchTopic ?? "",
+      plan.originalTopic ?? "",
+      plan.displayTitle ?? "",
+      plan.canonicalTopicZh ?? "",
+      plan.canonicalEnglishTopic ?? "",
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.chineseQueries,
+      ...plan.englishQueries,
+    ].join(" "),
   );
   return (
     concepts.includes("urban heat island") ||
     concepts.includes("thermal comfort") ||
     concepts.includes("microclimate") ||
     concepts.includes("heat island") ||
-    concepts.includes("uhi")
+    concepts.includes("uhi") ||
+    concepts.includes("都市熱島") ||
+    concepts.includes("熱島效應") ||
+    concepts.includes("熱舒適") ||
+    concepts.includes("微氣候")
   );
 }
 
@@ -6742,6 +10273,26 @@ function isEggNutritionPlan(plan: SearchIntentPlan): boolean {
   return (
     hasEggSubject &&
     /nutrition|protein quality|amino acid|biological value|營養|蛋白質品質|胺基酸|氨基酸|生物價/.test(
+      concepts,
+    )
+  );
+}
+
+function isHoneyCrystallizationPlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      plan.topicType ?? "",
+      plan.normalizedTopic,
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.outcomeConcepts,
+      ...plan.mustHaveTerms,
+    ].join(" "),
+  );
+  const hasHoneySubject = /(?:\bhoney\b|蜂蜜|蜜糖)/i.test(concepts);
+  return (
+    hasHoneySubject &&
+    /crystallization|crystallisation|granulation|glucose|fructose|moisture|water content|sugar composition|water activity|viscosity|結晶|葡萄糖|果糖|含水量|水分含量|糖類|糖組成|水活性|黏度/i.test(
       concepts,
     )
   );
@@ -6823,6 +10374,78 @@ function isTaiwanSemiconductorPlan(plan: SearchIntentPlan): boolean {
   );
 }
 
+function isSemiconductorEtchingPlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      plan.topicType ?? "",
+      plan.normalizedTopic,
+      plan.activeResearchTopic ?? "",
+      plan.originalTopic ?? "",
+      plan.displayTitle ?? "",
+      plan.canonicalTopicZh ?? "",
+      plan.canonicalEnglishTopic ?? "",
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.outcomeConcepts,
+    ].join(" "),
+  );
+  return (
+    /semiconductor_wafer_etching|silicon wafer|wafer etching|semiconductor fabrication|microfabrication|矽晶圓|晶圓|半導體/.test(concepts) &&
+    /etch|etching|lithography|photolithography|蝕刻|刻蝕|雕刻|微影|製程/.test(concepts)
+  );
+}
+
+function isHivAidsPlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      plan.topicType ?? "",
+      plan.normalizedTopic,
+      plan.activeResearchTopic ?? "",
+      plan.originalTopic ?? "",
+      plan.displayTitle ?? "",
+      plan.canonicalTopicZh ?? "",
+      plan.canonicalEnglishTopic ?? "",
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.outcomeConcepts,
+      ...plan.englishQueries,
+      ...plan.chineseQueries,
+    ].join(" "),
+  );
+  return /hiv_aids_public_health|\bhiv\b|\baids\b|hiv\/aids|human immunodeficiency virus|acquired immunodeficiency syndrome|愛滋病|人類免疫缺乏病毒|後天免疫缺乏症候群/.test(
+    concepts,
+  );
+}
+
+function isSodiumPerchloratePlan(plan: SearchIntentPlan): boolean {
+  const concepts = normalizeText(
+    [
+      plan.topicType ?? "",
+      plan.normalizedTopic,
+      plan.activeResearchTopic ?? "",
+      plan.originalTopic ?? "",
+      plan.displayTitle ?? "",
+      plan.canonicalTopicZh ?? "",
+      plan.canonicalEnglishTopic ?? "",
+      ...plan.primaryConcepts,
+      ...plan.contextConcepts,
+      ...plan.mustHaveTerms,
+      ...plan.outcomeConcepts,
+      ...plan.englishQueries,
+      ...plan.chineseQueries,
+    ].join(" "),
+  );
+  return (
+    /sodium perchlorate|naclo4|過氯酸鈉|高氯酸鈉/.test(concepts) ||
+    (/perchlorate|過氯酸鹽|高氯酸鹽/.test(concepts) &&
+      /oxidizer|thermal decomposition|reactivity|storage|hazard|thyroid|環境污染|甲狀腺|氧化劑|熱分解|反應性|儲存|危害/.test(
+        concepts,
+      ))
+  );
+}
+
 function isMarineMicroplasticsPlan(plan: SearchIntentPlan): boolean {
   const concepts = normalizeText(
     [
@@ -6847,6 +10470,11 @@ function trustedSeedPlanText(plan: SearchIntentPlan): string {
     [
       plan.topicType ?? "",
       plan.normalizedTopic,
+      plan.activeResearchTopic ?? "",
+      plan.originalTopic ?? "",
+      plan.displayTitle ?? "",
+      plan.canonicalTopicZh ?? "",
+      plan.canonicalEnglishTopic ?? "",
       ...plan.primaryConcepts,
       ...plan.contextConcepts,
       ...plan.mustHaveTerms,
@@ -6900,6 +10528,86 @@ function isClimateMarineEcologyPlan(plan: SearchIntentPlan): boolean {
     /marine|ocean|coastal|ecosystem|biodiversity|coral|food web|海洋|海洋生態|海洋生物|生物多樣性|珊瑚|食物網/.test(
       concepts,
     )
+  );
+}
+
+function isSunsetAtmosphericOpticsPlan(plan: SearchIntentPlan): boolean {
+  const concepts = trustedSeedPlanText(plan);
+  return (
+    /sunset|sunrise|twilight|sky color|red sky|atmospheric optics|夕陽|餘暉|日落|日出|暮光|天空顏色|晚霞/.test(
+      concepts,
+    ) &&
+    /rayleigh|mie scattering|scattering|wavelength|visible light|atmosphere|aerosol|瑞利散射|米氏散射|散射|光波長|波長|可見光|大氣|氣膠|懸浮微粒/.test(
+      concepts,
+    )
+  );
+}
+
+function isSoapBubbleOpticsPlan(plan: SearchIntentPlan): boolean {
+  const concepts = trustedSeedPlanText(plan);
+  return (
+    /soap bubble|soap film|thin film|thin-film|bubble film|泡泡|肥皂泡|薄膜/.test(
+      concepts,
+    ) &&
+    /interference|diffraction|optics|wavelength|light|color|干涉|繞射|光學|波長|色彩|顏色/.test(
+      concepts,
+    )
+  );
+}
+
+function isTeaCaffeineExtractionPlan(plan: SearchIntentPlan): boolean {
+  const concepts = trustedSeedPlanText(plan);
+  return (
+    /tea|tea leaves|green tea|black tea|茶葉|茶湯|茶/.test(concepts) &&
+    /caffeine|l-theanine|steeping|brewing|infusion|extraction|浸泡|萃取|咖啡因|沖泡/.test(
+      concepts,
+    )
+  );
+}
+
+function isFlameColorMetalIonPlan(plan: SearchIntentPlan): boolean {
+  const concepts = trustedSeedPlanText(plan);
+  return (
+    /flame test|flame color|metal ion|metal cation|emission spectra|metal salts|火焰|焰色|金屬離子|金屬鹽/.test(
+      concepts,
+    ) &&
+    /color|colour|emission|spectrum|spectra|wavelength|顏色|光譜|發射|波長/.test(
+      concepts,
+    )
+  );
+}
+
+function isPhotosynthesisLightIntensityPlan(plan: SearchIntentPlan): boolean {
+  const concepts = trustedSeedPlanText(plan);
+  return (
+    /photosynthesis|photosynthetic|chloroplast|光合作用/.test(concepts) &&
+    /light intensity|irradiance|light-dependent|visible light|光照強度|光強度|照度|光反應/.test(
+      concepts,
+    )
+  );
+}
+
+function isYellowstonePlan(plan: SearchIntentPlan): boolean {
+  const concepts = trustedSeedPlanText(plan);
+  return /yellowstone|黃石國家公園|黃石公園/.test(concepts);
+}
+
+function isJadePendantPlan(plan: SearchIntentPlan): boolean {
+  const concepts = trustedSeedPlanText(plan);
+  return (
+    /jade pendant|jade ornament|chinese jade|yupei|玉佩|玉飾|玉器|中國玉/.test(
+      concepts,
+    ) &&
+    /pendant|ornament|jade|culture|museum|material culture|佩|飾|玉|文化|博物館/.test(
+      concepts,
+    )
+  );
+}
+
+function isMoonRabbitPlan(plan: SearchIntentPlan): boolean {
+  const concepts = trustedSeedPlanText(plan);
+  return /moon rabbit|moon hare|jade rabbit|月兔|玉兔|嫦娥|中秋/.test(
+    concepts,
   );
 }
 
@@ -7010,19 +10718,41 @@ export function scoreSourceRelevance(
   const matchedContextAbstract = matchedTerms(abstract, plan.contextConcepts);
   const matchedOutcomeTitle = matchedTerms(title, plan.outcomeConcepts);
   const matchedOutcomeAbstract = matchedTerms(abstract, plan.outcomeConcepts);
+  const conceptAliases = unique([
+    ...(plan.enSynonyms ?? []),
+    ...(plan.zhSynonyms ?? []),
+    ...(plan.mechanismTerms ?? []),
+  ]);
+  const applicationTerms = unique([
+    ...(plan.applicationTerms ?? []),
+    ...(plan.limitationTerms ?? []),
+  ]);
+  const matchedAliasTitle = matchedTerms(title, conceptAliases);
+  const matchedAliasAbstract = matchedTerms(abstract, conceptAliases);
+  const matchedApplicationTitle = matchedTerms(title, applicationTerms);
+  const matchedApplicationAbstract = matchedTerms(abstract, applicationTerms);
   const matchedLowWeight = matchedTerms(combined, plan.lowWeightTerms);
-  const matchedPenalties = matchedTerms(combined, plan.penaltyTerms);
+  const matchedPenalties = matchedTerms(combined, [
+    ...plan.penaltyTerms,
+    ...(plan.exclusionTerms ?? []),
+  ]);
   const matchedPrimaryConcepts = unique([
     ...matchedPrimaryTitle,
     ...matchedPrimaryAbstract,
+    ...matchedAliasTitle,
+    ...matchedAliasAbstract,
   ]);
   const matchedMustHaveTerms = unique([
     ...matchedMustTitle,
     ...matchedMustAbstract,
+    ...matchedAliasTitle,
+    ...matchedAliasAbstract,
   ]);
   const matchedContextConcepts = unique([
     ...matchedContextTitle,
     ...matchedContextAbstract,
+    ...matchedApplicationTitle,
+    ...matchedApplicationAbstract,
   ]);
   const matchedOutcomeConcepts = unique([
     ...matchedOutcomeTitle,
@@ -7036,11 +10766,15 @@ export function scoreSourceRelevance(
   score += matchedMustTitle.length * 8;
   score += matchedContextTitle.length * 3;
   score += matchedOutcomeTitle.length * 2;
+  score += matchedAliasTitle.length * 16;
+  score += matchedAliasAbstract.length * 10;
+  score += matchedApplicationTitle.length * 6;
+  score += matchedApplicationAbstract.length * 4;
   score += evidence.snippetScore;
   score += evidence.bestSnippetScore;
   score += evidence.directSnippetCount * 18;
   score += source.doi ? 1 : 0;
-  score += hasUsableAbstract(source) ? 18 : -18;
+  score += hasUsableAbstract(source) ? 18 : 0;
   score += sourceYearBonus(source.year);
 
   if (isTrustedFallbackSource(source)) {
@@ -7048,8 +10782,13 @@ export function scoreSourceRelevance(
   }
 
   if (matchedMustHaveTerms.length === 0) {
-    score -= 12;
-    penalties.push("missing_must_have_terms");
+    if (matchedAliasTitle.length > 0 || matchedAliasAbstract.length >= 2) {
+      score += 12;
+      penalties.push("must_have_satisfied_by_concept_alias");
+    } else {
+      score -= 12;
+      penalties.push("missing_must_have_terms");
+    }
   }
 
   if (
@@ -7142,7 +10881,7 @@ export function scoreSourceRelevance(
   }
 
   if (evidence.directSnippetCount === 0) {
-    score -= isTrustedFallbackSource(source) ? 6 : 16;
+    score -= isTrustedFallbackSource(source) ? 2 : 6;
     penalties.push("no_direct_evidence_snippet");
   }
 
@@ -7162,6 +10901,203 @@ export function scoreSourceRelevance(
     if (matchedTerms(combined, heatTerms).length === 0) {
       score -= 20;
       penalties.push("urban_heat_without_heat_or_thermal_terms");
+    }
+  }
+
+  if (isSodiumPerchloratePlan(plan)) {
+    const selectedAngleTerms = unique(
+      termsFromQueries([
+        plan.activeResearchTopic ?? "",
+        plan.displayTitle ?? "",
+        ...(plan.suppliedQuerySeedZh ?? []),
+        ...(plan.suppliedQuerySeedEn ?? []),
+        ...(plan.subtopics?.flatMap((subtopic) => [
+          subtopic.titleZh,
+          subtopic.titleEn ?? "",
+          ...(subtopic.queryZh ?? []),
+          ...(subtopic.queryEn ?? []),
+        ]) ?? []),
+      ]).filter(
+        (term) =>
+          !/^(sodium|perchlorate|naclo4|NaClO4|過氯酸鈉|高氯酸鈉|過氯酸鹽|高氯酸鹽)$/i.test(
+            term,
+          ),
+      ),
+    );
+    const specificSubjectTerms = [
+      "sodium perchlorate",
+      "naclo4",
+      "過氯酸鈉",
+      "高氯酸鈉",
+    ];
+    const familyTerms = [
+      "perchlorate",
+      "perchlorates",
+      "過氯酸鹽",
+      "高氯酸鹽",
+    ];
+    const coreContextTerms = [
+      "oxidizer",
+      "thermal decomposition",
+      "reactivity",
+      "storage",
+      "hazard",
+      "laboratory safety",
+      "analytical chemistry",
+      "氧化劑",
+      "熱分解",
+      "反應性",
+      "儲存",
+      "危害",
+      "安全",
+      "分析化學",
+    ];
+    const environmentTerms = [
+      "environmental contamination",
+      "environmental monitoring",
+      "thyroid",
+      "exposure",
+      "contamination",
+      "環境污染",
+      "環境監測",
+      "甲狀腺",
+      "暴露",
+      "污染",
+    ];
+    const otherSaltTerms = [
+      "ammonium perchlorate",
+      "lithium perchlorate",
+      "magnesium perchlorate",
+      "potassium perchlorate",
+      "銨過氯酸鹽",
+      "過氯酸鋰",
+      "過氯酸鎂",
+      "過氯酸鉀",
+    ];
+    const applicationDriftTerms = [
+      "polymer electrolyte",
+      "biopolymer electrolyte",
+      "solid electrolyte",
+      "pnipam",
+      "alginate",
+      "composite propellant",
+      "fuel mixture ratio",
+      "聚合物電解質",
+      "生物高分子電解質",
+      "複合推進劑",
+      "推進劑",
+    ];
+    const astrobiologyDriftTerms = [
+      "mars",
+      "martian",
+      "putative life",
+      "fungal growth",
+      "fungi",
+      "fungal",
+      "microbial tolerance",
+      "microbial",
+      "microorganism",
+      "brines",
+      "brine",
+      "astrobiology",
+      "火星",
+      "真菌",
+      "微生物",
+      "鹵水",
+      "天體生物學",
+      "耐受",
+    ];
+    const specificHits = matchedTerms(combined, specificSubjectTerms);
+    const specificTitleHits = matchedTerms(title, specificSubjectTerms);
+    const familyHits = matchedTerms(combined, familyTerms);
+    const coreContextHits = matchedTerms(combined, coreContextTerms);
+    const selectedAngleHits = matchedTerms(combined, selectedAngleTerms);
+    const environmentHits = matchedTerms(combined, environmentTerms);
+    const otherSaltHits = matchedTerms(combined, otherSaltTerms);
+    const applicationDriftHits = matchedTerms(combined, applicationDriftTerms);
+    const astrobiologyDriftHits = matchedTerms(combined, astrobiologyDriftTerms);
+
+    if (
+      isTrustedFallbackSource(source) &&
+      /template sev conclusion and report|registration dossier/i.test(title) &&
+      specificTitleHits.length === 0
+    ) {
+      score = Math.min(score - 120, 18);
+      penalties.push("generic_trusted_template_page");
+    }
+
+    if (specificHits.length === 0 && familyHits.length === 0) {
+      score -= 70;
+      penalties.push("missing_sodium_perchlorate_subject");
+    }
+    if (specificHits.length === 0 && otherSaltHits.length > 0) {
+      score = Math.min(score - 140, 22);
+      penalties.push(`perchlorate_other_salt_drift:${otherSaltHits.join(",")}`);
+    }
+    if (
+      specificHits.length === 0 &&
+      applicationDriftHits.length > 0 &&
+      environmentHits.length === 0
+    ) {
+      score = Math.min(score - 100, 30);
+      penalties.push(
+        `perchlorate_application_drift:${applicationDriftHits.join(",")}`,
+      );
+    }
+    if (
+      specificHits.length > 0 &&
+      astrobiologyDriftHits.length > 0 &&
+      (coreContextHits.length < 2 || selectedAngleHits.length < 2)
+    ) {
+      score = Math.min(score - 140, 20);
+      penalties.push(
+        `perchlorate_astrobiology_drift:${astrobiologyDriftHits.join(",")}`,
+      );
+    }
+    if (
+      specificHits.length === 0 &&
+      familyHits.length > 0 &&
+      environmentHits.length === 0
+    ) {
+      score -= 45;
+      penalties.push("perchlorate_family_without_specific_subject");
+    }
+    if (
+      specificHits.length === 0 &&
+      coreContextHits.length === 0 &&
+      environmentHits.length === 0
+    ) {
+      score -= 35;
+      penalties.push("perchlorate_missing_core_context");
+    }
+    if (specificHits.length > 0 && coreContextHits.length > 0) {
+      score += 22;
+    }
+    if (
+      specificHits.length > 0 &&
+      coreContextHits.length === 0 &&
+      selectedAngleHits.length === 0 &&
+      environmentHits.length === 0
+    ) {
+      score -= 42;
+      penalties.push("sodium_perchlorate_supporting_medium_only");
+    }
+    if (
+      specificHits.length > 0 &&
+      selectedAngleTerms.length > 0 &&
+      selectedAngleHits.length === 0 &&
+      environmentHits.length === 0
+    ) {
+      score -= 34;
+      penalties.push("sodium_perchlorate_missing_selected_angle_context");
+    }
+    if (
+      specificHits.length === 0 &&
+      familyHits.length > 0 &&
+      environmentHits.length > 0
+    ) {
+      score -= 18;
+      penalties.push("perchlorate_environment_without_specific_subject");
     }
   }
 
@@ -7556,6 +11492,129 @@ export function scoreSourceRelevance(
     }
   }
 
+  if (isSemiconductorEtchingPlan(plan)) {
+    const waferOrSemiconductorTerms = [
+      "silicon wafer",
+      "wafer",
+      "semiconductor",
+      "microfabrication",
+      "integrated circuit",
+      "MEMS",
+      "矽晶圓",
+      "晶圓",
+      "半導體",
+      "積體電路",
+      "微製造",
+      "微機電",
+    ];
+    const etchingTerms = [
+      "etching",
+      "etch",
+      "plasma etching",
+      "dry etching",
+      "wet etching",
+      "reactive ion etching",
+      "photolithography",
+      "lithography",
+      "pattern transfer",
+      "蝕刻",
+      "刻蝕",
+      "雕刻",
+      "微影",
+      "光刻",
+      "圖案轉移",
+      "乾式蝕刻",
+      "濕式蝕刻",
+      "電漿蝕刻",
+    ];
+    const driftHits = matchedTerms(combined, SEMICONDUCTOR_ETCHING_DRIFT_TERMS);
+    const subjectHits = matchedTerms(combined, waferOrSemiconductorTerms);
+    const etchingHits = matchedTerms(combined, etchingTerms);
+    if (subjectHits.length > 0 && etchingHits.length > 0) {
+      score += 24;
+    }
+    if (subjectHits.length === 0) {
+      score -= 65;
+      penalties.push("semiconductor_etching_missing_subject");
+    }
+    if (etchingHits.length === 0) {
+      score -= 35;
+      penalties.push("semiconductor_etching_missing_etching_context");
+    }
+    if (driftHits.length > 0 && (subjectHits.length === 0 || etchingHits.length === 0)) {
+      score -= 130;
+      penalties.push(`semiconductor_etching_drift_terms:${driftHits.join(",")}`);
+    }
+  }
+
+  if (isHivAidsPlan(plan)) {
+    const hivAnchorTerms = [
+      "HIV",
+      "AIDS",
+      "HIV/AIDS",
+      "human immunodeficiency virus",
+      "acquired immunodeficiency syndrome",
+      "HIV infection",
+      "愛滋病",
+      "人類免疫缺乏病毒",
+      "後天免疫缺乏症候群",
+      "HIV感染",
+    ];
+    const hivContextTerms = [
+      "transmission",
+      "risk factors",
+      "epidemiology",
+      "public health",
+      "prevention",
+      "antiretroviral therapy",
+      "ART",
+      "PrEP",
+      "stigma",
+      "cohort",
+      "systematic review",
+      "clinical trial",
+      "傳染途徑",
+      "風險因子",
+      "流行病學",
+      "公共衛生",
+      "預防",
+      "抗病毒治療",
+      "社會污名",
+    ];
+    const genericMethodTerms = [
+      "scientific method",
+      "experimental design",
+      "research method",
+      "research methodology",
+      "case research",
+      "behavioral sciences procedures",
+      "school science inquiry",
+      "科學方法",
+      "研究方法",
+      "方法論",
+      "實驗設計",
+    ];
+    const anchorHits = matchedTerms(combined, hivAnchorTerms);
+    const anchorTitleHits = matchedTerms(title, hivAnchorTerms);
+    const contextHits = matchedTerms(combined, hivContextTerms);
+    const genericMethodHits = matchedTerms(combined, genericMethodTerms);
+    if (anchorHits.length > 0) {
+      score += 28 + anchorTitleHits.length * 12 + Math.min(24, contextHits.length * 4);
+    }
+    if (anchorHits.length === 0) {
+      score = Math.min(score - 120, 18);
+      penalties.push("topic_mismatch_no_hiv_aids_anchor");
+    }
+    if (anchorHits.length === 0 && genericMethodHits.length > 0) {
+      score = Math.min(score - 180, 8);
+      penalties.push(`generic_method_without_hiv_aids_anchor:${genericMethodHits.join(",")}`);
+    }
+    if (anchorHits.length > 0 && contextHits.length === 0 && genericMethodHits.length > 0) {
+      score -= 28;
+      penalties.push("hiv_aids_generic_method_weak_context");
+    }
+  }
+
   return {
     sourceId: sourceDebugId(source),
     title: source.title,
@@ -7590,12 +11649,24 @@ function relevanceLevelFromDebug(
     hasPenalty(debug, "clam_drift_terms") ||
     hasPenalty(debug, "koala_drift_terms") ||
     hasPenalty(debug, "taiwan_semiconductor_drift_terms") ||
+    hasPenalty(debug, "semiconductor_etching_drift_terms") ||
+    hasPenalty(debug, "topic_mismatch_no_hiv_aids_anchor") ||
+    hasPenalty(debug, "generic_method_without_hiv_aids_anchor") ||
+    hasPenalty(debug, "perchlorate_other_salt_drift") ||
+    hasPenalty(debug, "perchlorate_application_drift") ||
+    hasPenalty(debug, "perchlorate_astrobiology_drift") ||
+    hasPenalty(debug, "generic_trusted_template_page") ||
     hasPenalty(debug, "negated_food_topic") ||
     hasPenalty(debug, "strategy_only_without_spider_ecology") ||
     hasPenalty(debug, "missing_spider_subject") ||
     hasPenalty(debug, "non_spider_taxon");
 
   if (hardOffTopic) return "off_topic";
+  if (
+    hasPenalty(debug, "perchlorate_environment_without_specific_subject")
+  ) {
+    return debug.score >= 45 ? "secondary" : "low";
+  }
   if (
     hasPenalty(debug, "missing_spider_habitat_or_ecology_concept") ||
     hasPenalty(debug, "egg_plan_missing_egg_subject") ||
@@ -7605,8 +11676,15 @@ function relevanceLevelFromDebug(
     hasPenalty(debug, "koala_missing_koala_subject") ||
     hasPenalty(debug, "missing_microplastic_subject") ||
     hasPenalty(debug, "missing_marine_context") ||
+    hasPenalty(debug, "semiconductor_etching_missing_subject") ||
+    hasPenalty(debug, "semiconductor_etching_missing_etching_context") ||
     hasPenalty(debug, "taiwan_semiconductor_missing_semiconductor_subject") ||
     hasPenalty(debug, "taiwan_semiconductor_missing_taiwan_context") ||
+    hasPenalty(debug, "missing_sodium_perchlorate_subject") ||
+    hasPenalty(debug, "perchlorate_family_without_specific_subject") ||
+    hasPenalty(debug, "perchlorate_missing_core_context") ||
+    hasPenalty(debug, "sodium_perchlorate_supporting_medium_only") ||
+    hasPenalty(debug, "sodium_perchlorate_missing_selected_angle_context") ||
     hasPenalty(debug, "missing_must_have_terms")
   ) {
     if (
@@ -7623,6 +11701,20 @@ function relevanceLevelFromDebug(
   if (metadataOnly) {
     if (trustedFallback && debug.score >= 24) return "secondary";
     return debug.score >= 25 ? "clue" : "low";
+  }
+  if (
+    trustedFallback &&
+    debug.score >= 48 &&
+    unique([...debug.matchedPrimaryConcepts, ...debug.matchedMustHaveTerms]).some((term) =>
+      /sodium perchlorate|naclo4|過氯酸鈉|高氯酸鈉/i.test(term),
+    ) &&
+    unique([...debug.matchedMustHaveTerms, ...debug.matchedContextConcepts]).some((term) =>
+      /safety|hazard|storage|reactivity|handling|lab safety|安全|危害|儲存|反應性|操作|風險/i.test(
+        term,
+      ),
+    )
+  ) {
+    return "primary";
   }
   if (noDirectEvidence) return debug.score >= 50 ? "secondary" : "clue";
   if (
@@ -7772,13 +11864,16 @@ function sourceFinalScore(scores: {
   metadataCompletenessScore: number;
   summaryUsabilityScore: number;
   recencyScore: number;
+  languageFitScore: number;
+  openAccessScore: number;
 }): number {
   return Math.round(
-    scores.relevanceScore * 0.4 +
-      scores.sourceQualityScore * 0.25 +
-      scores.metadataCompletenessScore * 0.2 +
-      scores.summaryUsabilityScore * 0.1 +
-      scores.recencyScore * 0.05,
+    scores.relevanceScore * 0.45 +
+      scores.sourceQualityScore * 0.2 +
+      scores.metadataCompletenessScore * 0.15 +
+      Math.max(scores.summaryUsabilityScore, scores.openAccessScore) * 0.1 +
+      scores.recencyScore * 0.05 +
+      scores.languageFitScore * 0.05,
   );
 }
 
@@ -7793,7 +11888,14 @@ function sourceClassification(input: {
     Boolean(input.source.title?.trim()) &&
     Boolean(input.source.url?.trim() || input.source.doi?.trim());
 
-  if (input.relevanceScore < 20 && input.authorityScore >= 80) {
+  const titleHasCoreSignal =
+    (input.source.matchedCoreConcepts?.length ?? 0) > 0 ||
+    (input.source.matchedTerms?.length ?? 0) >= 2 ||
+    /caffeine|sleep|heart rate|air pollution|asthma|plastic|thermal|degradation|sleep deprivation|attention|academic performance|indigo|heritage|generative ai|writing|antibiotic resistance|antimicrobial resistance/i.test(
+      input.source.title ?? "",
+    );
+
+  if (input.relevanceScore < 20 && input.authorityScore >= 80 && !titleHasCoreSignal) {
     return {
       classification: "trusted_but_off_topic",
       rejectReason: "trusted_source_but_topic_mismatch",
@@ -7869,14 +11971,25 @@ function sourceWithRelevanceMetadata(
     metadataCompletenessScore,
     summaryUsabilityScore,
     recencyScore,
+    languageFitScore,
+    openAccessScore: source.isOpenAccess || source.abstract?.trim() ? 80 : 35,
   });
-  const classification = sourceClassification({
+  let classification = sourceClassification({
     relevanceScore,
     authorityScore,
     finalScore,
     source,
     relevanceLevel,
   });
+  if (
+    hasPenalty(debug, "topic_mismatch_no_hiv_aids_anchor") ||
+    hasPenalty(debug, "generic_method_without_hiv_aids_anchor")
+  ) {
+    classification = {
+      classification: "off_topic",
+      rejectReason: "topic_mismatch_no_hiv_aids_anchor",
+    };
+  }
   const matchedTermsForSource = unique([
     ...debug.matchedPrimaryConcepts,
     ...debug.matchedMustHaveTerms,
@@ -7992,7 +12105,13 @@ export function rerankSourcesBySearchIntent(
 
 function searchIntentSummary(plan: SearchIntentPlan): SearchIntentSummary {
   return {
-    primaryConcepts: plan.primaryConcepts,
+    primaryConcepts: unique([
+      ...(isUrbanHeatPlan(plan) ? URBAN_HEAT_PRIMARY : []),
+      ...plan.primaryConcepts,
+      ...(plan.coreConcepts ?? []),
+      ...(plan.enCoreTerms ?? []),
+      ...(plan.zhCoreTerms ?? []),
+    ]),
     contextConcepts: plan.contextConcepts,
     outcomeConcepts: plan.outcomeConcepts,
     populationConcepts: plan.populationConcepts,
@@ -8011,9 +12130,34 @@ function resultWarnings(
   plan: SearchIntentPlan,
 ): string[] {
   const warnings: string[] = [];
+  if (isHivAidsPlan(plan) || plan.detectedDomain === "medicine") {
+    warnings.push("目前使用 OpenAlex/Crossref/Semantic Scholar；PubMed 尚未接入。");
+    logger.info(
+      {
+        normalizedTopic: plan.normalizedTopic,
+        topicType: plan.topicType ?? null,
+        preferredProviders: [...MEDICAL_PROVIDER_STRATEGY.preferredProviders],
+        implementedProviders: [...MEDICAL_PROVIDER_STRATEGY.implementedProviders],
+        pendingProviders: [...MEDICAL_PROVIDER_STRATEGY.pendingProviders],
+      },
+      MEDICAL_PROVIDER_STRATEGY.fallbackLogMessage,
+    );
+  }
   const failedGroups = groups.filter((group) => !group.ok);
+  const limitedProviders = rateLimitedProviders(groups);
   if (failedGroups.length > 0) {
     warnings.push("部分來源提供者暫時無法使用，已顯示可用結果。");
+  }
+  if (limitedProviders.length > 0) {
+    const fallbackProviders = fallbackProvidersUsed(groups, limitedProviders);
+    warnings.push("部分資料來源暫時限流，已改用其他查詢來源或保留部分結果。");
+    warnings.push(
+      `${limitedProviders.join("、")} 發生 HTTP 429 或 rate limit；已改用 ${
+        fallbackProviders.length > 0
+          ? fallbackProviders.join("、")
+          : "其他查詢與備援 provider"
+      }，${sources.length > 0 ? `目前保留 ${sources.length} 筆可審查來源。` : "目前尚未取得可審查來源。"}`,
+    );
   }
   if (plan.fallbackUsed) {
     warnings.push("LLM 搜尋意圖規劃不可用，已使用 deterministic fallback。");
@@ -8110,7 +12254,7 @@ function preferredSourceTypes(plan: SearchIntentPlan): string[] {
 }
 
 function providerPolicyForPlan(plan: SearchIntentPlan): AcademicSourceProvider[] {
-  return ["OpenAlex", "Semantic Scholar", "Crossref"];
+  return ["OpenAlex", "Crossref", "Semantic Scholar"];
 }
 
 function isAcademicProviderName(value: string): value is AcademicSourceProvider {
@@ -8123,34 +12267,161 @@ function providerRateLimited(group: SourceProviderSearchResult): boolean {
   return /429|rate limit|too many requests/i.test(message);
 }
 
+const ALL_ACADEMIC_PROVIDERS: AcademicSourceProvider[] = [
+  "OpenAlex",
+  "Semantic Scholar",
+  "Crossref",
+];
+
+interface SearchBudgetRuntime {
+  deadlineMs: number;
+  perQueryTimeoutMs: number;
+  maxConcurrentProviderRequests: number;
+  warnings: Set<string>;
+}
+
+function searchBudgetRuntime(
+  options?: SearchIntentSourceSearchOptions,
+): SearchBudgetRuntime {
+  const overallSearchBudgetMs =
+    options?.runtimeBudget?.overallSearchBudgetMs ??
+    positiveEnvNumber("RESEARCH_GROUNDING_OVERALL_SEARCH_BUDGET_MS", 25000);
+  const perQueryTimeoutMs =
+    options?.runtimeBudget?.perQueryTimeoutMs ??
+    positiveEnvNumber("RESEARCH_GROUNDING_PER_QUERY_TIMEOUT_MS", 5000);
+  const maxConcurrentProviderRequests =
+    options?.runtimeBudget?.maxConcurrentProviderRequests ??
+    positiveEnvNumber("RESEARCH_GROUNDING_MAX_CONCURRENT_PROVIDER_REQUESTS", 2);
+
+  return {
+    deadlineMs: Date.now() + overallSearchBudgetMs,
+    perQueryTimeoutMs,
+    maxConcurrentProviderRequests: Math.max(1, Math.min(3, maxConcurrentProviderRequests)),
+    warnings: new Set<string>(),
+  };
+}
+
+function chunkProviders<T>(values: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function sourceSearchOptionsForProviderDeadline(
+  provider: AcademicSourceProvider,
+  deadlineMs: number,
+  options?: SearchIntentSourceSearchOptions,
+): SourceSearchOptions {
+  const defaultConfigs = getSourceProviderConfigs();
+  const providerConfigs = {
+    ...(options?.sourceSearch?.providerConfigs ?? {}),
+  };
+  const baseConfig = providerConfigs[provider] ?? defaultConfigs[provider];
+  const remainingMs = Math.max(1, deadlineMs - Date.now());
+
+  return {
+    ...(options?.sourceSearch ?? {}),
+    fetchImpl: options?.sourceSearch?.fetchImpl ?? options?.fetchImpl,
+    providers: undefined,
+    providerConfigs: {
+      ...providerConfigs,
+      [provider]: {
+        ...baseConfig,
+        timeoutMs: Math.max(1, Math.min(baseConfig.timeoutMs, remainingMs)),
+      },
+    },
+  };
+}
+
 async function searchAcademicProviderGroups(
   queries: string[],
   plan: SearchIntentPlan,
   options?: SearchIntentSourceSearchOptions,
   activeProviders?: Set<AcademicSourceProvider>,
+  runtime?: SearchBudgetRuntime,
 ): Promise<SourceProviderSearchResult[]> {
   const providerPolicy =
     options?.sourceSearch?.providers ?? providerPolicyForPlan(plan);
   const availableProviders =
     activeProviders ?? new Set<AcademicSourceProvider>(providerPolicy);
   const groups: SourceProviderSearchResult[] = [];
+  const budget = runtime ?? searchBudgetRuntime(options);
 
-  for (const query of queries) {
+  for (const [queryIndex, query] of queries.entries()) {
+    if (Date.now() >= budget.deadlineMs) {
+      budget.warnings.add(
+        "搜尋已達整體 time budget，系統保留目前已取得的來源並提前結束後續 query。",
+      );
+      break;
+    }
     const providers = providerPolicy.filter((provider) =>
       availableProviders.has(provider),
     );
     if (!providers.length) break;
 
-    const queryGroups = await searchSourceProviders(query, {
-      ...(options?.sourceSearch ?? {}),
-      fetchImpl: options?.sourceSearch?.fetchImpl ?? options?.fetchImpl,
-      providers,
-    });
+    const queryDeadline = Math.min(
+      budget.deadlineMs,
+      Date.now() + budget.perQueryTimeoutMs,
+    );
+    const queryGroups: SourceProviderSearchResult[] = [];
+    const chunkSize =
+      queryIndex === 0
+        ? providers.length
+        : budget.maxConcurrentProviderRequests;
+    for (const providerChunk of chunkProviders(providers, chunkSize)) {
+      if (Date.now() >= queryDeadline) {
+        budget.warnings.add(
+          `查詢「${query}」已達單次 query time budget，後續 provider 已跳過。`,
+        );
+        break;
+      }
+      const settledResults = await Promise.allSettled(
+        providerChunk.map((provider) =>
+          searchSourceProvider(
+            provider,
+            query,
+            sourceSearchOptionsForProviderDeadline(provider, queryDeadline, options),
+          ),
+        ),
+      );
+      const chunkResults = settledResults.map((result, index) =>
+        result.status === "fulfilled"
+          ? result.value
+          : ({
+              ok: false,
+              provider: providerChunk[index] ?? "OpenAlex",
+              query,
+              results: [],
+              raw_count: 0,
+              normalize_attempt_count: 0,
+              normalized_valid_count: 0,
+              normalized_invalid_count: 0,
+              error_type: "api-failure",
+              error_message:
+                result.reason instanceof Error
+                  ? result.reason.message
+                  : "provider adapter failed unexpectedly",
+            } satisfies SourceProviderSearchResult),
+      );
+      queryGroups.push(...chunkResults);
+    }
     groups.push(...queryGroups);
 
     for (const group of queryGroups) {
+      if (!group.ok && /timed out|timeout/i.test(group.error_message ?? "")) {
+        budget.warnings.add(
+          `${group.provider} timeout；已保留部分結果，並可能跳過剩餘 query 以符合 time budget。`,
+        );
+      }
       if (isAcademicProviderName(group.provider) && providerRateLimited(group)) {
         availableProviders.delete(group.provider);
+        for (const fallbackProvider of ALL_ACADEMIC_PROVIDERS) {
+          if (fallbackProvider !== group.provider) {
+            availableProviders.add(fallbackProvider);
+          }
+        }
       }
     }
   }
@@ -8159,7 +12430,20 @@ async function searchAcademicProviderGroups(
 }
 
 function sourceDecisionTrace(source: SourceRecord): SourceDecisionTrace {
+  const matched = source.matchedTerms ?? source.matchedFacets ?? [];
+  const titleMatches = matchedTerms(source.title ?? "", matched);
+  const abstractMatches = matchedTerms(source.abstract ?? "", matched);
+  const relevanceLevel = source.relevanceLevel ?? null;
+  const classification = source.classification ?? relevanceLevel ?? "review";
+  const topicRelevant =
+    relevanceLevel === "primary" ||
+    relevanceLevel === "secondary" ||
+    classification === "primary" ||
+    classification === "review";
+  const topicPotentiallyRelevant = topicRelevant || relevanceLevel === "clue";
+  const relevanceScore = source.researchRelevanceScore ?? null;
   return {
+    sourceId: source.id ?? null,
     title: source.title,
     provider: source.sourceType,
     url: source.url ?? null,
@@ -8167,9 +12451,19 @@ function sourceDecisionTrace(source: SourceRecord): SourceDecisionTrace {
     authorityScore: source.authorityScore ?? 0,
     summaryUsabilityScore: source.summaryUsabilityScore ?? 0,
     finalScore: source.finalScore ?? 0,
-    classification: source.classification ?? source.relevanceLevel ?? "review",
+    topicLexicalMatch: relevanceScore?.topicMatch ?? null,
+    semanticScore: relevanceScore?.semanticMatch ?? null,
+    queryMatch: relevanceScore?.queryMatch ?? null,
+    titleMatch: titleMatches.length > 0,
+    abstractMatch: abstractMatches.length > 0,
+    sectionMatch: Boolean(source.usableSections?.length),
+    topicRelevant,
+    topicPotentiallyRelevant,
+    evidenceGrounding: source.evidenceGrounding ?? null,
+    classification,
     rejectReason: source.rejectReason ?? null,
-    matchedTerms: source.matchedTerms ?? source.matchedFacets ?? [],
+    rejectionReason: source.rejectionReason ?? source.rejectReason ?? null,
+    matchedTerms: matched,
     driftTerms: source.driftTerms ?? [],
   };
 }
@@ -8200,8 +12494,6 @@ function topReviewableSources(
   targetCount = TARGET_SOURCE_COUNT,
 ): SourceRecord[] {
   const reviewable = sources.filter(isReviewableRankedSource);
-  if (reviewable.length >= targetCount) return reviewable.slice(0, targetCount);
-
   const seen = new Set(reviewable.map((source) => source.id));
   const supplemental = sources.filter((source) => {
     if (seen.has(source.id)) return false;
@@ -8217,7 +12509,44 @@ function topReviewableSources(
     return (source.finalScore ?? 0) >= 45 && (source.sourceQualityScore ?? 0) >= 55;
   });
 
-  return [...reviewable, ...supplemental].slice(0, targetCount);
+  const eligible =
+    reviewable.length >= targetCount ? reviewable : [...reviewable, ...supplemental];
+  const selected = eligible.slice(0, targetCount);
+  if (targetCount < 10 || selected.length === 0) return selected;
+
+  for (const sourceType of [
+    "Official Source",
+    "Institutional Source",
+    "Authoritative Media",
+  ]) {
+    if (selected.some((source) => source.sourceType === sourceType)) continue;
+    const replacement = eligible.find(
+      (source) =>
+        source.sourceType === sourceType &&
+        !selected.some((selectedSource) => selectedSource.id === source.id),
+    );
+    if (!replacement) continue;
+    if (selected.length < targetCount) {
+      selected.push(replacement);
+      continue;
+    }
+    const replaceIndex = [...selected]
+      .map((source, index) => ({ source, index }))
+      .reverse()
+      .find(
+        ({ source }) =>
+          ![
+            "Official Source",
+            "Institutional Source",
+            "Authoritative Media",
+          ].includes(source.sourceType),
+      )?.index;
+    if (replaceIndex !== undefined) {
+      selected[replaceIndex] = replacement;
+    }
+  }
+
+  return selected;
 }
 
 function lowConfidenceRecallCandidates(
@@ -8226,10 +12555,15 @@ function lowConfidenceRecallCandidates(
 ): SourceRecord[] {
   return sources
     .filter((source) => {
-      if (source.reviewState === "rejected") return false;
       if (
         source.classification === "stale_topic" ||
         source.classification === "stale_workflow"
+      ) {
+        return false;
+      }
+      if (
+        source.rejectReason === "topic_mismatch_no_hiv_aids_anchor" ||
+        source.rejectionReason === "topic_mismatch_no_hiv_aids_anchor"
       ) {
         return false;
       }
@@ -8252,22 +12586,32 @@ function lowConfidenceRecallCandidates(
       return hasRichMetadata && (hasTopicClue || trustedProvider);
     })
     .slice(0, targetCount)
-    .map((source) =>
-      normalizeSourceRecord({
+    .map((source) => {
+      const rejectionReason =
+        source.rejectReason ??
+        source.rejectionReason ??
+        (source.relevanceLevel === "low" || source.relevanceLevel === "off_topic"
+          ? "low_topic_relevance"
+          : "fallback_low_confidence_review");
+      return normalizeSourceRecord({
         ...source,
         reviewState: "pending",
         classification: "review",
         relevanceLevel:
-          source.relevanceLevel === "off_topic" ? "clue" : source.relevanceLevel ?? "clue",
-        rejectReason: null,
-        rejectionReason: null,
+          source.relevanceLevel === "off_topic" || source.relevanceLevel === "low"
+            ? "clue"
+            : source.relevanceLevel ?? "clue",
+        rejectReason: rejectionReason,
+        rejectionReason,
+        lowConfidence: true,
+        needsReview: true,
         shouldShowInMainList: false,
         shouldRecommendAccept: false,
+        recommendation: "low_confidence_needs_review",
         sourceRelevanceReasonZhTw:
-          source.sourceRelevanceReasonZhTw ??
-          "目前此來源與主題的直接命中較弱，但 metadata 與摘要完整度仍足以保留為低信心候選。",
-      }),
-    );
+          "此來源未通過主要 relevance gate，但分數在 rejected pool 中較高；保留為低信心待審候選，需人工確認。",
+      });
+    });
 }
 
 function sourceRejectedForDiagnostics(source: SourceRecord): boolean {
@@ -8288,16 +12632,213 @@ function providerDiagnostic(
     query: group.query,
     ok: group.ok,
     result_count: group.results.length,
+    raw_count: group.raw_count ?? group.results.length,
+    normalize_attempt_count: group.normalize_attempt_count ?? group.raw_count ?? group.results.length,
+    normalized_valid_count: group.normalized_valid_count ?? group.results.length,
+    normalized_invalid_count: group.normalized_invalid_count ?? 0,
     error_type: group.error_type,
     error_message: group.error_message,
+    latency_ms: group.latency_ms,
+    provider_health: group.provider_health,
+    retry_mode: group.retry_mode,
+    retry_query: group.retry_query,
+    retry_reason: group.retry_reason,
+    status:
+      group.error_type === "timeout"
+        ? "timeout"
+        : group.ok
+          ? "returned"
+          : "error",
   };
 }
 
 function providerRawCountSummary(groups: SourceProviderSearchResult[]): Record<string, number> {
   return groups.reduce<Record<string, number>>((summary, group) => {
-    summary[group.provider] = (summary[group.provider] ?? 0) + group.results.length;
+    summary[group.provider] = (summary[group.provider] ?? 0) + (group.raw_count ?? group.results.length);
     return summary;
   }, {});
+}
+
+function queryLanguage(query: string): "zh" | "en" | "mixed" {
+  const hasZh = /[\u4e00-\u9fff]/.test(query);
+  const hasEn = /[A-Za-z]/.test(query);
+  if (hasZh && hasEn) return "mixed";
+  if (hasZh) return "zh";
+  return "en";
+}
+
+function queryIntent(query: string, plan?: SearchIntentPlan): string {
+  const matchedGroup = plan?.queryGroups?.find((group) => group.query === query);
+  if (matchedGroup) return matchedGroup.intent;
+  const normalized = normalizeText(query);
+  if (/mechanism|hydrolysis|kinetics|原理|機制|水解|反應/.test(normalized)) return "mechanism";
+  if (/application|making|formation|應用|製備/.test(normalized)) return "application";
+  if (/review|overview|綜述|文獻/.test(normalized)) return "review";
+  if (/experiment|實驗/.test(normalized)) return "experiment";
+  if (/standard|value|標準|數值/.test(normalized)) return "standard";
+  return "general";
+}
+
+export function buildRecallPool(
+  groups: SourceProviderSearchResult[],
+  plan?: SearchIntentPlan,
+): RecallPool {
+  const rawItems = groups.flatMap((group) => group.results);
+  const dedupedItems = dedupeSourceRecords(rawItems);
+  const byLanguage = { zh: 0, en: 0, mixed: 0 };
+  const byIntent: Record<string, number> = {};
+  const bySourceApi: Record<string, number> = {};
+
+  for (const group of groups) {
+    const language = queryLanguage(group.query);
+    byLanguage[language] += group.results.length;
+    const intent = queryIntent(group.query, plan);
+    byIntent[intent] = (byIntent[intent] ?? 0) + group.results.length;
+    bySourceApi[group.provider] = (bySourceApi[group.provider] ?? 0) + group.results.length;
+  }
+
+  return {
+    rawCount: rawItems.length,
+    dedupedCount: dedupedItems.length,
+    byLanguage,
+    byIntent,
+    bySourceApi,
+    items: dedupedItems,
+  };
+}
+
+function recoveryNeeded(input: {
+  primaryCount: number;
+  usableCount: number;
+  displayedCount: number;
+}): string | null {
+  if (input.primaryCount < 3) return "primary_sources_below_3";
+  if (input.usableCount < 6) return "usable_sources_below_6";
+  if (input.displayedCount < 10) return "displayed_candidates_below_10";
+  return null;
+}
+
+function recoveryQueriesForPlan(
+  plan: SearchIntentPlan,
+  existingQueries: string[],
+  maxQueries = 10,
+): string[] {
+  if (maxQueries <= 0) return [];
+  const existing = new Set(existingQueries.map((query) => normalizeText(query)));
+  const activeTopicText = [
+    plan.activeResearchTopic ?? "",
+    plan.displayTitle ?? "",
+    ...(plan.suppliedQuerySeedZh ?? []),
+    ...(plan.suppliedQuerySeedEn ?? []),
+  ].join(" ");
+  const conceptQueries = filterConceptQueryGroupsForActiveTopic(
+    plan.queryGroups ?? [],
+    activeTopicText,
+  )
+    .filter((group) => group.language === "en" || group.language === "mixed")
+    .sort((a, b) => {
+      const priorityRank = { high: 0, medium: 1, low: 2 } as const;
+      return priorityRank[a.priority] - priorityRank[b.priority];
+    })
+    .map((group) => group.query)
+    .filter((query) => queryMatchesActiveIntent(query, activeTopicText));
+  const querySeeds = unique([
+    ...conceptQueries,
+    ...(plan.enSynonyms ?? []).slice(0, 10),
+    ...(plan.mechanismTerms ?? []).slice(0, 8),
+    ...(plan.applicationTerms ?? []).slice(0, 6),
+  ]);
+  const expanded = unique([
+    ...querySeeds.map((query) => `${query} review`),
+    ...querySeeds.map((query) => `${query} mechanism`),
+    ...querySeeds.map((query) => `${query} open access`),
+    ...querySeeds.map((query) => `${query} DOI`),
+    ...plan.englishQueries,
+  ]);
+  return cleanQueryList(
+    expanded.filter((query) => !existing.has(normalizeText(query))),
+    maxQueries,
+  );
+}
+
+async function recoverSourcesIfNeeded(
+  input: {
+    groups: SourceProviderSearchResult[];
+    plan: SearchIntentPlan;
+    options?: SearchIntentSourceSearchOptions;
+    activeAcademicProviders: Set<AcademicSourceProvider>;
+    runtime: SearchBudgetRuntime;
+    primaryCount: number;
+    usableCount: number;
+    displayedCount: number;
+  },
+): Promise<RecoveryResult> {
+  if (
+    isSodiumPerchlorateSafetyTopicText(
+      [input.plan.activeResearchTopic ?? "", input.plan.displayTitle ?? "", input.plan.normalizedTopic]
+        .join(" "),
+    ) &&
+    input.primaryCount >= 3
+  ) {
+    return {
+      attempted: false,
+      reason: null,
+      addedQueryCount: 0,
+      rawAddedCount: 0,
+      dedupedAddedCount: 0,
+      queries: [],
+    };
+  }
+  const reason = recoveryNeeded(input);
+  if (!reason) {
+    return {
+      attempted: false,
+      reason: null,
+      addedQueryCount: 0,
+      rawAddedCount: 0,
+      dedupedAddedCount: 0,
+      queries: [],
+    };
+  }
+
+  const existingQueries = unique(input.groups.map((group) => group.query));
+  const maxRecoveryQueries = Math.max(0, MAX_QUERY_COUNT - existingQueries.length);
+  const recoveryQueries = recoveryQueriesForPlan(
+    input.plan,
+    existingQueries,
+    maxRecoveryQueries,
+  );
+  if (recoveryQueries.length === 0) {
+    return {
+      attempted: true,
+      reason,
+      addedQueryCount: 0,
+      rawAddedCount: 0,
+      dedupedAddedCount: 0,
+      queries: [],
+    };
+  }
+
+  const before = dedupeSourceRecords(input.groups.flatMap((group) => group.results));
+  const recoveryGroups = await searchAcademicProviderGroups(
+    recoveryQueries,
+    input.plan,
+    input.options,
+    input.activeAcademicProviders,
+    input.runtime,
+  );
+  input.groups.push(...recoveryGroups);
+  const after = dedupeSourceRecords(input.groups.flatMap((group) => group.results));
+  const rawAddedCount = recoveryGroups.reduce((sum, group) => sum + group.results.length, 0);
+
+  return {
+    attempted: true,
+    reason,
+    addedQueryCount: recoveryQueries.length,
+    rawAddedCount,
+    dedupedAddedCount: Math.max(0, after.length - before.length),
+    queries: recoveryQueries,
+  };
 }
 
 function rejectionReasonSummary(sources: SourceRecord[]): Record<string, number> {
@@ -8316,15 +12857,20 @@ function logSearchTelemetry(input: {
   coreConcepts: string[];
   topic: string;
   workflowId: string;
+  topicHash: string;
   queryPlanHash: string;
+  searchIntent: SearchIntentSummary;
   querySet: SearchIntentQuerySet;
   groups: SourceProviderSearchResult[];
   candidateCount: number;
   dedupedCount: number;
+  acceptedSourcesCount: number;
+  fallbackReviewCount: number;
   reviewableCount: number;
   rejectedCount: number;
   filteredCount: number;
   displayedCount: number;
+  sourceDecisions: SourceDecisionTrace[];
   rejectionReasons: Record<string, number>;
   warnings: string[];
 }): void {
@@ -8337,24 +12883,30 @@ function logSearchTelemetry(input: {
       core_concepts: input.coreConcepts,
       topic: input.topic,
       workflowId: input.workflowId,
+      topicHash: input.topicHash,
       queryPlanHash: input.queryPlanHash,
+      search_intent: input.searchIntent,
       query_plan: input.querySet,
       provider_raw_counts: providerRawCountSummary(input.groups),
       provider_queries: input.groups.map((group) => ({
         provider: group.provider,
         query: group.query,
         ok: group.ok,
-        raw_results: group.results.length,
+        raw_results: group.raw_count ?? group.results.length,
+        normalized_valid_results: group.normalized_valid_count ?? group.results.length,
         error_type: group.error_type,
         error_message: group.error_message,
       })),
       before_dedup: input.candidateCount,
       after_dedup: input.dedupedCount,
+      accepted_sources_count: input.acceptedSourcesCount,
+      fallback_review_count: input.fallbackReviewCount,
       after_quality_filter: input.reviewableCount,
       filtered_results_count: input.filteredCount,
       rejected: input.rejectedCount,
       rejection_reasons: input.rejectionReasons,
       shown_to_user: input.displayedCount,
+      source_decisions: input.sourceDecisions,
       warnings: input.warnings,
     },
     "ResearchForge source search telemetry",
@@ -8365,6 +12917,7 @@ export async function searchIntentSources(
   input: SearchIntentPlannerInput,
   options?: SearchIntentSourceSearchOptions,
 ): Promise<SearchIntentSourceSearchResult> {
+  const profile = resolveSourceSearchProfile(input.searchProfile);
   const plannerLlm = {
     ...(options?.llm ?? {}),
     timeoutMs:
@@ -8391,6 +12944,7 @@ export async function searchIntentSources(
     sourceMode: input.sourceMode,
     language: input.language,
   });
+  plan = sanitizePlannerPlanQueries(input, plan, genericUnderstanding);
   const topicUnderstanding = plan.topicUnderstanding ?? understandTopic(input.topic);
   plan = {
     ...plan,
@@ -8412,9 +12966,57 @@ export async function searchIntentSources(
         ? genericUnderstanding.coreConcepts
         : topicUnderstanding.coreConcepts,
   };
+  const semanticClassification = classifyTopicSemantically(
+    plan.originalTopic ?? input.originalTopic ?? input.topic,
+  );
+  const expandedQueries = expandBilingualQueries(semanticClassification, {
+    zh: input.querySeedZh,
+    en: input.querySeedEn,
+    plannerZh: plan.chineseQueries,
+    plannerEn: plan.englishQueries,
+  });
+  logger.info(
+    {
+      marker: "[topic-classification]",
+      originalTopic: semanticClassification.originalTopic,
+      normalizedTopic: semanticClassification.normalizedTopic,
+      primaryType: semanticClassification.primaryType,
+      confidence: semanticClassification.confidence,
+    },
+    "ResearchForge topic semantic classification",
+  );
+  logger.info(
+    {
+      marker: "[source-search]",
+      expandedQueryCount: expandedQueries.length,
+      zh: expandedQueries.filter((query) => query.language === "zh-TW").map((query) => query.query),
+      en: expandedQueries.filter((query) => query.language === "en").map((query) => query.query),
+    },
+    "ResearchForge bilingual query expansion",
+  );
   if (genericUnderstanding.topicKind === "unknown_or_noise") {
     const topic = input.topic.trim();
     const warnings = ["查無結果：輸入內容不像有效研究主題，請改用具體關鍵詞。"];
+    const intro = buildGroundedIntro(semanticClassification, [], 0);
+    const debugTrace = buildResearchDebugTrace({
+      originalTopic: topic,
+      classification: semanticClassification,
+      expandedQueries,
+      candidateSourceCount: 0,
+      acceptedSourceCount: 0,
+      sourceValidations: [],
+      readableExtractions: [],
+      sourceFacts: [],
+      relevanceScores: [],
+      evidenceCards: [],
+      introClaims: [],
+      introValidation: intro.validation,
+      generatedTitle: intro.title,
+      generatedSubtitle: intro.subtitle,
+      generatedIntro: "查無足夠可靠資料，請嘗試輸入更明確的研究主題。",
+      fallbackUsed: true,
+      fallbackReason: "unknown_or_noise",
+    });
     return {
       ok: true,
       topic,
@@ -8448,6 +13050,10 @@ export async function searchIntentSources(
       },
       results: [],
       sources: [],
+      scoredSources: [],
+      candidateSources: [],
+      rejectedSources: [],
+      fallbackReviewSources: [],
       provider_status: [],
       warnings,
       planner: {
@@ -8492,13 +13098,19 @@ export async function searchIntentSources(
         english_queries: [],
         chinese_queries: [],
         fallback_relaxed_queries: [],
+        raw_provider_count: 0,
+        normalize_attempt_count: 0,
+        normalized_valid_count: 0,
+        normalized_invalid_count: 0,
         provider_search_results_count: 0,
         filtered_results_count: 0,
         rejection_reasons: {},
         retrieved_count: 0,
         deduped_count: 0,
+        scored_count: 0,
         rejected_count: 0,
         candidate_count: 0,
+        fallback_review_count: 0,
         displayed_count: 0,
         primary_candidate_count: 0,
         provider_status: [],
@@ -8525,15 +13137,106 @@ export async function searchIntentSources(
       groups: [],
       status: "empty",
       queryCount: 0,
+      expandedQueries,
+      sourceSearchConfig: sourceSearchConfigForProfile(profile),
+      searchProfile: profile,
+      debugTrace,
+      groundedTitle: intro.title,
+      groundedSubtitle: intro.subtitle,
+      groundedIntro: "查無足夠可靠資料，請嘗試輸入更明確的研究主題。",
     };
   }
-  const querySet = sanitizeSearchIntentQuerySet(
+  const querySet = sanitizeExclusiveTopicQuerySet(
     plan,
-    buildSearchIntentQueries(plan),
+    mergeExpandedQueriesIntoQuerySet(
+      sanitizeSearchIntentQuerySet(
+        plan,
+        buildSearchIntentQueries(plan),
+      ),
+      expandedQueries,
+    ),
   );
   const workflowId = cleanString(input.workflowId) ?? randomUUID();
   const topicHash = topicHashForSearch(plan.normalizedTopic);
   const queryPlanHash = queryPlanHashForSearch(plan, querySet);
+  const normalizedEnglishQuery = normalizeText(
+    querySet.coreEnglishAcademic[0] ??
+      plan.canonicalEnglishTopic ??
+      input.querySeedEn?.[0] ??
+      querySet.english[0] ??
+      plan.normalizedTopic,
+  );
+  const cacheKey = [
+    topicHash,
+    normalizedEnglishQuery,
+    profile.name,
+    "metadata",
+    input.language ?? "zh-TW",
+  ].join("|");
+  const cached = searchResultCache.get(cacheKey);
+  if (!options?.bypassCache && cached && cached.expiresAt > Date.now()) {
+    return {
+      ...cached.result,
+      diagnostics: {
+        ...cached.result.diagnostics,
+        cache_hit: true,
+        cache_key: cacheKey,
+        cache_status: "hit",
+        early_stop_reason: cached.result.diagnostics.early_stop_reason ?? "cache_hit",
+        warnings: unique([
+          ...(cached.result.diagnostics.warnings ?? []),
+          `已使用 ${profile.name} profile 的 24 小時搜尋快取。`,
+        ]),
+      },
+      warnings: unique([
+        ...(cached.result.warnings ?? []),
+        `已使用 ${profile.name} profile 的 24 小時搜尋快取。`,
+      ]),
+    };
+  }
+  if (!options?.bypassCache && cached && cached.staleUntil > Date.now()) {
+    queueMicrotask(async () => {
+      try {
+        await searchIntentSources(input, { ...options, bypassCache: true });
+      } catch (error) {
+        searchResultCache.set(cacheKey, {
+          ...cached,
+          result: {
+            ...cached.result,
+            diagnostics: {
+              ...cached.result.diagnostics,
+              cache_status: "refresh_failed_using_stale",
+              warnings: unique([
+                ...(cached.result.diagnostics.warnings ?? []),
+                error instanceof Error
+                  ? `背景 refresh 失敗，沿用 stale cache：${error.message}`
+                  : "背景 refresh 失敗，沿用 stale cache。",
+              ]),
+            },
+          },
+        });
+      }
+    });
+    return {
+      ...cached.result,
+      diagnostics: {
+        ...cached.result.diagnostics,
+        cache_hit: true,
+        cache_key: cacheKey,
+        cache_status: "stale_hit_refreshing",
+        early_stop_reason:
+          cached.result.diagnostics.early_stop_reason ?? "stale_cache_hit",
+        warnings: unique([
+          ...(cached.result.diagnostics.warnings ?? []),
+          "已先顯示 7 天內的舊搜尋結果，並在背景重新整理。",
+        ]),
+      },
+      warnings: unique([
+        ...(cached.result.warnings ?? []),
+        "已先顯示 7 天內的舊搜尋結果，並在背景重新整理。",
+      ]),
+    };
+  }
   const workflowContext: SourceWorkflowContext = {
     workflowId,
     topic: input.topic.trim(),
@@ -8544,16 +13247,33 @@ export async function searchIntentSources(
   const queryLimit =
     options?.queryLimit ??
     (Number(process.env.SEARCH_INTENT_QUERY_LIMIT) ||
+      profile.maxQueries ||
       DEFAULT_SEARCH_INTENT_QUERY_LIMIT);
   const queries = orderedQueries(querySet, queryLimit);
-  const academicQueryBudget = Math.max(
+  const configuredAcademicQueryBudget = Math.max(
     positiveEnvNumber(
       "SEARCH_INTENT_ACADEMIC_QUERY_LIMIT",
       DEFAULT_ACADEMIC_QUERY_LIMIT,
     ),
     querySet.phases.length > 0 ? 8 : DEFAULT_ACADEMIC_QUERY_LIMIT,
   );
+  const academicQueryBudget =
+    options?.queryLimit === undefined
+      ? configuredAcademicQueryBudget
+      : Math.min(queryLimit, configuredAcademicQueryBudget, profile.maxQueries);
   const academicQueryPhases = queryExecutionPhases(querySet, academicQueryBudget);
+  const runtimeBudget = searchBudgetRuntime({
+    ...options,
+    runtimeBudget: {
+      overallSearchBudgetMs:
+        options?.runtimeBudget?.overallSearchBudgetMs ?? profile.overallTimeoutMs,
+      perQueryTimeoutMs:
+        options?.runtimeBudget?.perQueryTimeoutMs ?? profile.providerTimeoutMs,
+      maxConcurrentProviderRequests:
+        options?.runtimeBudget?.maxConcurrentProviderRequests ?? 3,
+    },
+  });
+  const foregroundStartedAt = Date.now();
   const plannerLlmStatus = llmStatusFromPlannerStatus(plan);
   const groups: SourceProviderSearchResult[] = [];
   const seedSources = trustedSeedSourcesForPlan(plan);
@@ -8583,13 +13303,16 @@ export async function searchIntentSources(
   const activeAcademicProviders = new Set<AcademicSourceProvider>(
     options?.sourceSearch?.providers ?? providerPolicyForPlan(plan),
   );
+  const immediateTrustedSeedHandoff =
+    profile.name !== "deep" && seedSources.length >= 5 && isSunsetAtmosphericOpticsPlan(plan);
 
   for (const phase of academicQueryPhases) {
     const phaseGroups = await searchAcademicProviderGroups(
-      phase.queries,
+      immediateTrustedSeedHandoff ? phase.queries.slice(0, 1) : phase.queries,
       plan,
       options,
       activeAcademicProviders,
+      runtimeBudget,
     );
     groups.push(...phaseGroups);
     preliminaryRanked = refreshRankedSources();
@@ -8597,19 +13320,39 @@ export async function searchIntentSources(
       .filter(isAcademicSource)
       .filter(isReviewableRankedSource).length;
     reviewableCount = preliminaryRanked.filter(isReviewableRankedSource).length;
+    const currentCandidateCount =
+      groups.reduce((sum, group) => sum + group.results.length, 0) + seedSources.length;
 
     if (
-      academicSourceCount >= MINIMUM_ACADEMIC_SOURCES &&
-      reviewableCount >= TARGET_SOURCE_COUNT
+      profile.stopWhenAcceptedReached &&
+      reviewableCount >= profile.targetAcceptedSources &&
+      currentCandidateCount >= profile.maxCandidates
     ) {
+      runtimeBudget.warnings.add(
+        `early_stop:${profile.name}: 已達 ${profile.targetAcceptedSources} 筆可審查來源目標，停止後續昂貴查詢。`,
+      );
+      break;
+    }
+    if (Date.now() >= runtimeBudget.deadlineMs) {
+      break;
+    }
+    if (immediateTrustedSeedHandoff) {
+      runtimeBudget.warnings.add(
+        "trusted_seed_handoff: 已先顯示可信種子來源，前景 provider probe 限縮為 1 組查詢。",
+      );
       break;
     }
   }
 
   if (
-    useTrustedWebFallback ||
-    academicSourceCount < MINIMUM_ACADEMIC_SOURCES ||
-    reviewableCount < TARGET_SOURCE_COUNT
+    !immediateTrustedSeedHandoff &&
+    Date.now() < runtimeBudget.deadlineMs &&
+    (
+      useTrustedWebFallback ||
+      academicSourceCount < MINIMUM_ACADEMIC_SOURCES ||
+      !profile.stopWhenAcceptedReached &&
+      reviewableCount < TARGET_SOURCE_COUNT
+    )
   ) {
     groups.push(
       ...(
@@ -8626,7 +13369,11 @@ export async function searchIntentSources(
     reviewableCount = preliminaryRanked.filter(isReviewableRankedSource).length;
   }
 
-  if (useTrustedWebFallback || reviewableCount < MINIMUM_TOTAL_SOURCES) {
+  if (
+    !immediateTrustedSeedHandoff &&
+    Date.now() < runtimeBudget.deadlineMs &&
+    (useTrustedWebFallback || reviewableCount < MINIMUM_TOTAL_SOURCES)
+  ) {
     groups.push(
       ...(await searchFallbackProvider("Authoritative Media", queries, plan, options)),
     );
@@ -8634,7 +13381,11 @@ export async function searchIntentSources(
     reviewableCount = preliminaryRanked.filter(isReviewableRankedSource).length;
   }
 
-  if (useTrustedWebFallback || reviewableCount < TARGET_SOURCE_COUNT) {
+  if (
+    !immediateTrustedSeedHandoff &&
+    Date.now() < runtimeBudget.deadlineMs &&
+    (useTrustedWebFallback || reviewableCount < TARGET_SOURCE_COUNT)
+  ) {
     const expandedFallbackQueryLimit = Math.max(
       DEFAULT_WEB_FALLBACK_QUERY_LIMIT * 2,
       publicSearchConfig(options).maxQueriesPerProvider,
@@ -8668,29 +13419,196 @@ export async function searchIntentSources(
     );
     preliminaryRanked = refreshRankedSources();
   }
+  if (Date.now() >= runtimeBudget.deadlineMs) {
+    runtimeBudget.warnings.add("搜尋因整體 time budget 提前結束，以下為目前可用的部分結果。");
+  }
+
+  const preliminaryTopSources = topReviewableSources(preliminaryRanked, TARGET_SOURCE_COUNT);
+  const preliminaryPrimaryCount = preliminaryTopSources.filter(
+    (source) => source.relevanceLevel === "primary",
+  ).length;
+  const preliminaryUsableCount = preliminaryTopSources.filter(
+    (source) =>
+      source.relevanceLevel === "primary" ||
+      source.relevanceLevel === "secondary" ||
+      source.relevanceLevel === "clue",
+  ).length;
+  const recovery = immediateTrustedSeedHandoff
+    ? {
+        attempted: false,
+        reason: "trusted_seed_handoff",
+        addedQueryCount: 0,
+        rawAddedCount: 0,
+        dedupedAddedCount: 0,
+        queries: [],
+      }
+    : await recoverSourcesIfNeeded({
+        groups,
+        plan,
+        options,
+        activeAcademicProviders,
+        runtime: runtimeBudget,
+        primaryCount: preliminaryPrimaryCount,
+        usableCount: preliminaryUsableCount,
+        displayedCount: preliminaryTopSources.length,
+      });
+  if (recovery.attempted && recovery.rawAddedCount > 0) {
+    preliminaryRanked = refreshRankedSources();
+  }
 
   const candidateCount =
     groups.reduce((sum, group) => sum + group.results.length, 0) +
     seedSources.length;
+  const recallPool = buildRecallPool(groups, plan);
   const reranked = rerankSourcesBySearchIntent(dedupedSources, plan, workflowContext);
-  const reviewableRankedCount = reranked.sources.filter(isReviewableRankedSource).length;
-  const rejectedRankedCount = reranked.sources.filter(sourceRejectedForDiagnostics).length;
-  const filteredResultsCount = Math.max(0, dedupedSources.length - reviewableRankedCount);
-  const rejectionReasons = rejectionReasonSummary(reranked.sources);
-  const rankedSources = topReviewableSources(reranked.sources, TARGET_SOURCE_COUNT);
-  const lowConfidenceResults =
-    rankedSources.length === 0 && dedupedSources.length > 0
-      ? lowConfidenceRecallCandidates(reranked.sources, 10)
+  const scoredSources = reranked.sources.slice(0, Math.min(MAX_CANDIDATE_RESULTS, profile.maxCandidates));
+  const strictCandidateSources = topReviewableSources(scoredSources, profile.maxCandidates);
+  const fallbackReviewSources =
+    strictCandidateSources.length < profile.targetAcceptedSources && scoredSources.length > 0
+      ? lowConfidenceRecallCandidates(
+          scoredSources.filter(
+            (source) => !strictCandidateSources.some((candidate) => candidate.id === source.id),
+          ),
+          Math.max(0, profile.maxCandidates - strictCandidateSources.length),
+        )
       : [];
-  const sourcesForSummary =
-    lowConfidenceResults.length > 0 ? lowConfidenceResults : rankedSources;
-  const sources = await summarizeSourcesWithLlm(
+  const fallbackReviewIds = new Set(fallbackReviewSources.map((source) => source.id));
+  // Canonical contract: candidateSources is a deprecated alias for high-confidence
+  // candidates only. Low-confidence rescue items stay in fallbackReviewSources.
+  const candidateSources = strictCandidateSources;
+  const rejectedSources = scoredSources.filter(
+    (source) => sourceRejectedForDiagnostics(source) && !fallbackReviewIds.has(source.id),
+  );
+  const reviewableRankedCount = candidateSources.length;
+  const rejectedRankedCount = rejectedSources.length;
+  const filteredResultsCount = Math.max(
+    0,
+    scoredSources.length - candidateSources.length - rejectedSources.length,
+  );
+  const rejectionReasons = rejectionReasonSummary(scoredSources);
+  const sourcesForSummary = [...candidateSources, ...fallbackReviewSources];
+  let sources = await summarizeSourcesWithLlm(
     plan.normalizedTopic,
-    sourcesForSummary,
+    sourcesForSummary.slice(
+      0,
+      profile.enrichOnlyAfterAccept
+        ? Math.min(profile.targetAcceptedSources, sourcesForSummary.length)
+        : profile.maxCandidates,
+    ),
     {
       llm: summaryLlm,
       fetchImpl: options?.fetchImpl,
+      maxSources:
+        options?.sourceSummaries?.maxSources ??
+        (profile.enrichOnlyAfterAccept ? profile.targetAcceptedSources : profile.maxCandidates),
     },
+  );
+  const pipeline = enrichSourcesWithResearchPipeline(
+    sources,
+    semanticClassification,
+    expandedQueries,
+  );
+  sources = pipeline.sources;
+  logger.info(
+    {
+      marker: "[source-validation]",
+      workflowId,
+      validated: pipeline.sourceValidations.length,
+      warnings: pipeline.sourceValidations.flatMap((validation) => validation.warnings).slice(0, 12),
+    },
+    "ResearchForge source validation",
+  );
+  logger.info(
+    {
+      marker: "[source-facts]",
+      workflowId,
+      factCount: pipeline.sourceFacts.length,
+      extractionStatuses: pipeline.readableExtractions.map((extraction) => extraction.extractionStatus),
+    },
+    "ResearchForge source fact extraction",
+  );
+  logger.info(
+    {
+      marker: "[relevance-scoring]",
+      workflowId,
+      high: pipeline.relevanceScores.filter((score) => score.label === "high").length,
+      medium: pipeline.relevanceScores.filter((score) => score.label === "medium").length,
+      low: pipeline.relevanceScores.filter((score) => score.label === "low").length,
+    },
+    "ResearchForge source relevance scoring",
+  );
+  const acceptedSourceCount = sources.filter(
+    (source) =>
+      source.shouldRecommendAccept ||
+      source.researchRelevanceScore?.label === "high" ||
+      source.relevanceLevel === "primary" ||
+      source.relevanceLevel === "secondary",
+  ).length;
+  const researchEvidenceCards = buildResearchEvidenceCards(
+    pipeline.sourceFacts,
+    sources,
+    pipeline.relevanceScores,
+  );
+  const introClaims = buildIntroClaims(researchEvidenceCards);
+  const groundedIntro = buildGroundedIntro(
+    semanticClassification,
+    introClaims,
+    acceptedSourceCount,
+  );
+  const debugTrace = buildResearchDebugTrace({
+    originalTopic: plan.originalTopic ?? input.topic.trim(),
+    classification: semanticClassification,
+    expandedQueries,
+    candidateSourceCount: candidateCount,
+    acceptedSourceCount,
+    sourceValidations: pipeline.sourceValidations,
+    readableExtractions: pipeline.readableExtractions,
+    sourceFacts: pipeline.sourceFacts,
+    relevanceScores: pipeline.relevanceScores,
+    evidenceCards: researchEvidenceCards,
+    introClaims,
+    introValidation: groundedIntro.validation,
+    generatedTitle: groundedIntro.title,
+    generatedSubtitle: groundedIntro.subtitle,
+    generatedIntro: groundedIntro.intro,
+    fallbackUsed: groundedIntro.fallbackUsed,
+    fallbackReason: groundedIntro.fallbackReason,
+  });
+  logger.info(
+    {
+      marker: "[evidence-cards]",
+      workflowId,
+      evidenceCardCount: researchEvidenceCards.length,
+    },
+    "ResearchForge evidence card generation",
+  );
+  logger.info(
+    {
+      marker: "[grounded-intro]",
+      workflowId,
+      title: groundedIntro.title,
+      subtitle: groundedIntro.subtitle,
+      fallbackUsed: groundedIntro.fallbackUsed,
+    },
+    "ResearchForge grounded intro",
+  );
+  logger.info(
+    {
+      marker: "[intro-validation]",
+      workflowId,
+      passed: groundedIntro.validation.passed,
+      fallbackReason: groundedIntro.fallbackReason ?? null,
+      templateDetected: groundedIntro.validation.templateDetected,
+    },
+    "ResearchForge intro validation",
+  );
+  logger.info(
+    {
+      marker: "[report-generation]",
+      workflowId,
+      source: "acceptedSources -> sourceFacts -> evidenceCards -> reportWorkspace/reportWriter",
+    },
+    "ResearchForge report generation handoff",
   );
   logger.info(
     {
@@ -8726,15 +13644,16 @@ export async function searchIntentSources(
   ).length;
   const warnings = unique([
     ...resultWarnings(groups, sources, plan),
+    ...Array.from(runtimeBudget.warnings),
     ...(candidateCount < 80
       ? [
           `本次 provider 實際回傳 ${candidateCount} 筆候選，低於 80 筆；已避免用低相關來源湊數。`,
         ]
       : []),
-    ...(reviewableRankedCount < TARGET_SOURCE_COUNT
+    ...(reviewableRankedCount < profile.targetAcceptedSources
       ? ["目前高相關來源不足，建議調整題目或關鍵詞。"]
       : []),
-    ...(lowConfidenceResults.length > 0
+    ...(fallbackReviewSources.length > 0
       ? [
           "目前找到的來源信心較低，建議重新生成研究查詢或補充關鍵詞；系統已保留可再審查候選。",
         ]
@@ -8742,6 +13661,11 @@ export async function searchIntentSources(
     ...(sources.length > 0 && primaryCount < 3
       ? [
           `主要來源不足，已找到 ${primaryCount} 筆主要來源與 ${secondaryCount} 筆延伸候選；可接受至少 3 筆主要／延伸來源生成初步報告。另有 ${lowCount} 筆低相關來源已折疊。`,
+        ]
+      : []),
+    ...(recovery.attempted
+      ? [
+          `已進行補充搜尋：新增查詢 ${recovery.addedQueryCount} 組，取得候選 ${recovery.rawAddedCount} 筆，去重後新增 ${recovery.dedupedAddedCount} 筆。`,
         ]
       : []),
   ]);
@@ -8757,12 +13681,35 @@ export async function searchIntentSources(
     providerQueries: unique(groups.map((group) => group.query)),
     candidateCount,
     dedupedCount: dedupedSources.length,
-    acceptedCount: sources.filter((source) => source.reviewState === "accepted").length,
+    acceptedCount: acceptedSourceCount,
     rejectedCount: Math.max(rejectedCount, rejectedRankedCount),
-    sourceDecisions: reranked.sources
+    sourceDecisions: scoredSources
       .slice(0, MAX_CANDIDATE_RESULTS)
       .map(sourceDecisionTrace),
   };
+  const rawProviderCount = groups.reduce(
+    (sum, group) => sum + (group.raw_count ?? group.results.length),
+    0,
+  );
+  const normalizeAttemptCount =
+    groups.reduce(
+      (sum, group) =>
+        sum + (group.normalize_attempt_count ?? group.raw_count ?? group.results.length),
+      0,
+    ) + seedSources.length;
+  const normalizedValidCount =
+    groups.reduce(
+      (sum, group) => sum + (group.normalized_valid_count ?? group.results.length),
+      0,
+    ) + seedSources.length;
+  const normalizedInvalidCount = groups.reduce(
+    (sum, group) => sum + (group.normalized_invalid_count ?? 0),
+    0,
+  );
+  const firstCandidateLatencyMs = groups
+    .filter((group) => group.ok && group.results.length > 0 && typeof group.latency_ms === "number")
+    .map((group) => group.latency_ms ?? 0)
+    .sort((left, right) => left - right)[0];
   const diagnostics: SourceSearchPipelineDiagnostics = {
     original_topic: plan.originalTopic ?? input.topic.trim(),
     active_research_topic: plan.activeResearchTopic ?? input.topic.trim(),
@@ -8777,20 +13724,48 @@ export async function searchIntentSources(
     ]),
     chinese_queries: querySet.chineseSupplemental,
     fallback_relaxed_queries: querySet.fallbackRelaxed,
-    provider_search_results_count: groups.reduce(
-      (sum, group) => sum + group.results.length,
-      0,
-    ),
+    raw_provider_count: rawProviderCount,
+    normalize_attempt_count: normalizeAttemptCount,
+    normalized_valid_count: normalizedValidCount,
+    normalized_invalid_count: normalizedInvalidCount,
+    provider_search_results_count: rawProviderCount,
     filtered_results_count: filteredResultsCount,
     rejection_reasons: rejectionReasons,
     retrieved_count: candidateCount,
     deduped_count: dedupedSources.length,
+    scored_count: scoredSources.length,
     rejected_count: Math.max(rejectedCount, rejectedRankedCount),
     candidate_count: reviewableRankedCount,
+    fallback_review_count: fallbackReviewSources.length,
     displayed_count: sources.length,
     primary_candidate_count: primaryCount,
+    recall_pool: {
+      rawCount: recallPool.rawCount + seedSources.length,
+      dedupedCount: dedupedSources.length,
+      byLanguage: recallPool.byLanguage,
+      byIntent: recallPool.byIntent,
+      bySourceApi: {
+        ...recallPool.bySourceApi,
+        seed: seedSources.length,
+      },
+    },
+    recovery,
     provider_status: groups.map(providerDiagnostic),
+    provider_health: allProviderHealthSnapshots(),
     warnings,
+    search_profile: profile.name,
+    profile,
+    cache_hit: false,
+    cache_key: cacheKey,
+    cache_status: "miss",
+    early_stop_reason:
+      Array.from(runtimeBudget.warnings).find((warning) => warning.startsWith("early_stop:")) ??
+      (Date.now() >= runtimeBudget.deadlineMs ? "overall_timeout" : null),
+    foreground_latency_ms: Date.now() - foregroundStartedAt,
+    ...(typeof firstCandidateLatencyMs === "number"
+      ? { first_candidate_latency_ms: firstCandidateLatencyMs }
+      : {}),
+    tried_queries: unique(groups.map((group) => group.query)),
   };
   logSearchTelemetry({
     originalTopic: plan.originalTopic ?? input.topic.trim(),
@@ -8799,20 +13774,25 @@ export async function searchIntentSources(
     coreConcepts: diagnostics.core_concepts,
     topic: input.topic.trim(),
     workflowId,
+    topicHash,
     queryPlanHash,
+    searchIntent: searchIntentSummary(plan),
     querySet,
     groups,
     candidateCount,
     dedupedCount: dedupedSources.length,
+    acceptedSourcesCount: acceptedSourceCount,
+    fallbackReviewCount: fallbackReviewSources.length,
     reviewableCount: reviewableRankedCount,
     rejectedCount: Math.max(rejectedCount, rejectedRankedCount),
     filteredCount: filteredResultsCount,
     displayedCount: sources.length,
+    sourceDecisions: searchTrace.sourceDecisions,
     rejectionReasons,
     warnings,
   });
 
-  return {
+  const result: SearchIntentSourceSearchResult = {
     ok: true,
     topic: plan.normalizedTopic,
     workflowId,
@@ -8822,6 +13802,10 @@ export async function searchIntentSources(
     queries: querySet,
     results: sources,
     sources,
+    scoredSources,
+    candidateSources,
+    rejectedSources,
+    fallbackReviewSources,
     provider_status: groups,
     warnings,
     planner: plan,
@@ -8860,6 +13844,19 @@ export async function searchIntentSources(
     groups,
     status: sources.length > 0 ? "ok" : "empty",
     queryCount: queries.length,
-    ...(lowConfidenceResults.length > 0 ? { low_confidence_results: true } : {}),
+    expandedQueries,
+    sourceSearchConfig: sourceSearchConfigForProfile(profile),
+    searchProfile: profile,
+    debugTrace,
+    groundedTitle: groundedIntro.title,
+    groundedSubtitle: groundedIntro.subtitle,
+    groundedIntro: groundedIntro.intro,
+    ...(fallbackReviewSources.length > 0 ? { low_confidence_results: true } : {}),
   };
+  searchResultCache.set(cacheKey, {
+    expiresAt: Date.now() + SEARCH_RESULT_CACHE_TTL_MS,
+    staleUntil: Date.now() + SEARCH_RESULT_STALE_TTL_MS,
+    result,
+  });
+  return result;
 }

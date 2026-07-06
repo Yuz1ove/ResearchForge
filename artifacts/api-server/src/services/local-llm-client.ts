@@ -78,6 +78,7 @@ export async function requestLocalLlmJson<T>(
 
     const content = await requestOpenAICompatibleChatCompletion({
       purpose: request.purpose,
+      featureName: "topic_understanding",
       messages: request.messages,
       responseFormat: "json_object",
       llm: {

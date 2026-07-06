@@ -1,14 +1,22 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { beforeEach } from "node:test";
 import {
+  allProviderHealthSnapshots,
+  InMemoryProviderHealthStore,
   dedupeSources,
   normalizeCrossrefWork,
   normalizeOpenAlexWork,
   normalizeSemanticScholarPaper,
+  resetProviderHealthStoreForTesting,
   searchSourceProvider,
   searchSources,
+  setProviderHealthStoreForTesting,
 } from "./source-retrieval";
 import { getSourceProviderConfigs } from "./source-provider-config";
+
+beforeEach(() => {
+  resetProviderHealthStoreForTesting();
+});
 
 test("normalizes Crossref works into the unified Source shape", () => {
   const source = normalizeCrossrefWork({
@@ -208,6 +216,47 @@ test("dedupe enrichment keeps the richer abstract for duplicate DOI records", ()
   assert.equal(sources[0]?.containerTitle, "Ecology Journal");
 });
 
+test("CORE repository link supplements duplicate DOI metadata without replacing canonical source", () => {
+  const sources = dedupeSources([
+    {
+      id: "doi:10.4000/core-contract",
+      title: "Canonical metadata source",
+      authors: ["Ada Lovelace"],
+      year: 2024,
+      abstract: "Canonical Crossref abstract.",
+      doi: "10.4000/core-contract",
+      url: "https://doi.org/10.4000/core-contract",
+      sourceType: "Crossref",
+      reviewState: "pending",
+      publisher: "Example Publisher",
+      containerTitle: "Example Journal",
+      accessedAt: null,
+      provider: "Crossref",
+    },
+    {
+      id: "core-repository",
+      title: "Repository copy of canonical source",
+      authors: [],
+      year: 2024,
+      abstract: null,
+      doi: "10.4000/core-contract",
+      url: "https://repository.example/core-contract.pdf",
+      sourceType: "Institutional Source",
+      reviewState: "pending",
+      publisher: "Repository",
+      containerTitle: null,
+      accessedAt: null,
+      provider: "CORE",
+    },
+  ]);
+
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0]?.sourceType, "Crossref");
+  assert.equal(sources[0]?.provider?.includes("CORE"), true);
+  assert.equal(sources[0]?.url, "https://doi.org/10.4000/core-contract");
+  assert.equal(sources[0]?.containerTitle, "Example Journal");
+});
+
 test("dedupes sources by normalized title, first author, and year when DOI is missing", () => {
   const sources = dedupeSources([
     {
@@ -255,6 +304,7 @@ test("returns structured provider failure instead of throwing", async () => {
         endpoint: "https://example.test/works",
         timeoutMs: 50,
         queryLimit: 1,
+        pageLimit: 1,
       },
     },
     fetchImpl: async () => new Response(JSON.stringify({ message: "failure" }), { status: 500 }),
@@ -263,14 +313,62 @@ test("returns structured provider failure instead of throwing", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.provider, "Crossref");
   assert.equal(result.query, "student attention");
-  assert.equal(result.error_type, "api-failure");
+  assert.equal(result.error_type, "server_error");
   assert.match(result.error_message ?? "", /HTTP 500/);
   assert.deepEqual(result.results, []);
 });
 
+test("retries provider search once after HTTP 429 and returns recovered results", async () => {
+  const configs = getSourceProviderConfigs();
+  let attemptCount = 0;
+
+  const result = await searchSourceProvider("Crossref", "electroplating reaction", {
+    providerConfigs: {
+      Crossref: {
+        ...configs.Crossref,
+        endpoint: "https://example.test/works",
+        timeoutMs: 50,
+        queryLimit: 1,
+        pageLimit: 1,
+      },
+    },
+    fetchImpl: async () => {
+      attemptCount += 1;
+      if (attemptCount === 1) {
+        return new Response(JSON.stringify({ message: "rate limited" }), {
+          status: 429,
+          headers: { "retry-after": "0" },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          message: {
+            items: [
+              {
+                title: ["Electroplating reaction kinetics"],
+                author: [{ given: "Ada", family: "Lovelace" }],
+                issued: { "date-parts": [[2024]] },
+                DOI: "10.4100/electroplating",
+                URL: "https://doi.org/10.4100/electroplating",
+              },
+            ],
+          },
+        }),
+      );
+    },
+  });
+
+  assert.equal(attemptCount, 2);
+  assert.equal(result.ok, true);
+  assert.equal(result.results.length, 1);
+  assert.equal(result.results[0]?.sourceType, "Crossref");
+});
+
 test("returns structured provider timeout instead of throwing", async () => {
   const configs = getSourceProviderConfigs();
+  let attemptCount = 0;
   const timeoutFetch = async (_input: string | URL, init?: RequestInit): Promise<Response> => {
+    attemptCount += 1;
     return new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => {
         const error = new Error("aborted");
@@ -294,9 +392,205 @@ test("returns structured provider timeout instead of throwing", async () => {
 
   assert.equal(result.ok, false);
   assert.equal(result.provider, "Semantic Scholar");
+  assert.equal(attemptCount, 1);
   assert.equal(result.error_type, "timeout");
   assert.match(result.error_message ?? "", /timed out/);
   assert.deepEqual(result.results, []);
+});
+
+test("marks provider degraded after repeated 5xx and shortens degraded timeout", async () => {
+  const configs = getSourceProviderConfigs();
+  const providerConfigs = {
+    OpenAlex: {
+      ...configs.OpenAlex,
+      endpoint: "https://example.test/openalex/works",
+      timeoutMs: 4000,
+      queryLimit: 1,
+      pageLimit: 1,
+    },
+  };
+
+  for (const query of ["rayleigh one", "rayleigh two", "rayleigh three"]) {
+    const result = await searchSourceProvider("OpenAlex", query, {
+      providerConfigs,
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ error: "unavailable" }), { status: 503 }),
+    });
+    assert.equal(result.ok, false);
+  }
+
+  const degraded = allProviderHealthSnapshots().find(
+    (health) => health.provider === "openalex",
+  );
+  assert.equal(degraded?.status, "degraded");
+  assert.equal((degraded?.recentFailureCount ?? 0) >= 3, true);
+
+  const startedAt = Date.now();
+  const timeoutResult = await searchSourceProvider("OpenAlex", "rayleigh degraded timeout", {
+    providerConfigs,
+    fetchImpl: async (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        });
+      }),
+  });
+  const elapsed = Date.now() - startedAt;
+
+  assert.equal(timeoutResult.ok, false);
+  assert.equal(timeoutResult.error_type, "timeout");
+  assert.equal(elapsed < 3500, true);
+  assert.equal(timeoutResult.provider_health?.status, "degraded");
+});
+
+test("marks degraded provider down after continued retryable failures and skips during cooldown", async () => {
+  const configs = getSourceProviderConfigs();
+  const providerConfigs = {
+    OpenAlex: {
+      ...configs.OpenAlex,
+      endpoint: "https://example.test/openalex/works",
+      timeoutMs: 50,
+      queryLimit: 1,
+      pageLimit: 1,
+    },
+  };
+  let fetchCount = 0;
+
+  for (const query of [
+    "rayleigh failure one",
+    "rayleigh failure two",
+    "rayleigh failure three",
+    "rayleigh failure four",
+    "rayleigh failure five",
+    "rayleigh failure six",
+  ]) {
+    await searchSourceProvider("OpenAlex", query, {
+      providerConfigs,
+      fetchImpl: async () => {
+        fetchCount += 1;
+        return new Response(JSON.stringify({ error: "unavailable" }), { status: 503 });
+      },
+    });
+  }
+
+  const down = allProviderHealthSnapshots().find((health) => health.provider === "openalex");
+  assert.equal(down?.status, "down");
+  assert.ok(down?.cooldownUntil);
+
+  const skipped = await searchSourceProvider("OpenAlex", "rayleigh skipped while down", {
+    providerConfigs,
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return new Response(JSON.stringify({ results: [] }));
+    },
+  });
+
+  assert.equal(skipped.ok, false);
+  assert.equal(skipped.provider_health?.status, "down");
+  assert.match(skipped.error_message ?? "", /cooling down/);
+  assert.equal(fetchCount, 12);
+});
+
+test("probes a down provider as degraded after cooldown and recovers after success streak", async () => {
+  const store = new InMemoryProviderHealthStore();
+  setProviderHealthStoreForTesting(store);
+  await store.markDown(
+    "OpenAlex",
+    new Date(Date.now() - 1000),
+    "timeout",
+  );
+  const configs = getSourceProviderConfigs();
+  const providerConfigs = {
+    OpenAlex: {
+      ...configs.OpenAlex,
+      endpoint: "https://example.test/openalex/works",
+      timeoutMs: 4000,
+      queryLimit: 1,
+      pageLimit: 1,
+    },
+  };
+  const fetchImpl = async () =>
+    new Response(
+      JSON.stringify({
+        results: [
+          {
+            id: "https://openalex.org/W1",
+            title: "Rayleigh scattering and sunset color",
+            publication_year: 2024,
+            type: "article",
+          },
+        ],
+      }),
+    );
+
+  const firstProbe = await searchSourceProvider("OpenAlex", "rayleigh probe", {
+    providerConfigs,
+    fetchImpl,
+  });
+  assert.equal(firstProbe.ok, true);
+  assert.equal(firstProbe.provider_health?.status, "degraded");
+
+  const secondProbe = await searchSourceProvider("OpenAlex", "rayleigh probe recovered", {
+    providerConfigs,
+    fetchImpl,
+  });
+  assert.equal(secondProbe.ok, true);
+  assert.equal(secondProbe.provider_health?.status, "healthy");
+});
+
+test("Crossref timeout uses short query retry and records retry diagnostics", async () => {
+  const configs = getSourceProviderConfigs();
+  const providerConfigs = {
+    Crossref: {
+      ...configs.Crossref,
+      endpoint: "https://example.test/works",
+      timeoutMs: 30,
+      queryLimit: 1,
+      pageLimit: 1,
+    },
+  };
+  let longAttempts = 0;
+
+  const result = await searchSourceProvider("Crossref", "sunset color wavelength Rayleigh scattering", {
+    providerConfigs,
+    fetchImpl: async (input, init) => {
+      const url = new URL(String(input));
+      const query = url.searchParams.get("query") ?? "";
+      if (query !== "Rayleigh scattering sunset") {
+        longAttempts += 1;
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            const error = new Error("aborted");
+            error.name = "AbortError";
+            reject(error);
+          });
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          message: {
+            items: [
+              {
+                title: ["Rayleigh scattering and sunset color"],
+                DOI: "10.1000/rayleigh-sunset",
+                "container-title": ["Atmospheric Optics"],
+                type: "journal-article",
+              },
+            ],
+          },
+        }),
+      );
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(longAttempts, 1);
+  assert.equal(result.retry_mode, "short_query");
+  assert.equal(result.retry_reason, "timeout");
+  assert.equal(result.retry_query, "Rayleigh scattering sunset");
+  assert.equal(result.results[0]?.doi, "10.1000/rayleigh-sunset");
 });
 
 test("returns deduped partial results when one provider succeeds and another fails", async () => {

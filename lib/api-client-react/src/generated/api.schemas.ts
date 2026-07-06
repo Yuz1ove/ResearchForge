@@ -44,6 +44,7 @@ export interface SearchSourcesRequest {
   domainHints?: string[];
   selectedResearchPlanId?: string;
   workflowId?: string;
+  searchProfile?: 'quick' | 'standard' | 'deep';
   reportType?: string;
   audience?: string;
   sourceMode?: string;
@@ -260,6 +261,8 @@ export interface SourceRecord {
   isPrimaryEvidence?: boolean | null;
   rejectionReason?: string | null;
   recommendation?: string | null;
+  lowConfidence?: boolean | null;
+  needsReview?: boolean | null;
 }
 
 export type SourceSearchResultLlmStatus = typeof SourceSearchResultLlmStatus[keyof typeof SourceSearchResultLlmStatus];

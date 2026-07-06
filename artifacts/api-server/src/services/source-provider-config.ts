@@ -2,6 +2,14 @@ export const SOURCE_PROVIDER_NAMES = ["OpenAlex", "Semantic Scholar", "Crossref"
 
 export type SourceProviderName = (typeof SOURCE_PROVIDER_NAMES)[number];
 
+export const MEDICAL_PROVIDER_STRATEGY = {
+  preferredProviders: ["PubMed", "Europe PMC", "OpenAlex", "Crossref", "Semantic Scholar"] as const,
+  implementedProviders: SOURCE_PROVIDER_NAMES,
+  pendingProviders: ["PubMed", "Europe PMC"] as const,
+  fallbackLogMessage:
+    "Medical/public-health search is using OpenAlex/Crossref/Semantic Scholar; PubMed and Europe PMC are not integrated yet.",
+} as const;
+
 export interface SourceProviderConfig {
   provider: SourceProviderName;
   endpoint: string;
@@ -12,7 +20,8 @@ export interface SourceProviderConfig {
   mailto?: string;
 }
 
-const DEFAULT_SOURCE_TIMEOUT_MS = 5000;
+const DEFAULT_METADATA_TIMEOUT_MS = 4000;
+const DEFAULT_FULLER_METADATA_TIMEOUT_MS = 6000;
 const DEFAULT_RESULTS_PER_PROVIDER = 25;
 const DEFAULT_PAGES_PER_PROVIDER_QUERY = 2;
 const DEFAULT_USER_AGENT = "ReportFactoryAI/1.0";
@@ -30,7 +39,7 @@ export function getSourceProviderConfigs(env: NodeJS.ProcessEnv = process.env): 
     OpenAlex: {
       provider: "OpenAlex",
       endpoint: env.OPENALEX_WORKS_URL?.trim() || "https://api.openalex.org/works",
-      timeoutMs: positiveNumber(env.OPENALEX_TIMEOUT_MS, DEFAULT_SOURCE_TIMEOUT_MS),
+      timeoutMs: positiveNumber(env.OPENALEX_TIMEOUT_MS, DEFAULT_METADATA_TIMEOUT_MS),
       queryLimit: positiveNumber(env.OPENALEX_QUERY_LIMIT, DEFAULT_RESULTS_PER_PROVIDER),
       pageLimit: positiveNumber(env.OPENALEX_PAGE_LIMIT ?? env.SOURCE_PROVIDER_PAGE_LIMIT, DEFAULT_PAGES_PER_PROVIDER_QUERY),
       headers: {
@@ -42,7 +51,7 @@ export function getSourceProviderConfigs(env: NodeJS.ProcessEnv = process.env): 
     Crossref: {
       provider: "Crossref",
       endpoint: env.CROSSREF_WORKS_URL?.trim() || "https://api.crossref.org/works",
-      timeoutMs: positiveNumber(env.CROSSREF_TIMEOUT_MS, DEFAULT_SOURCE_TIMEOUT_MS),
+      timeoutMs: positiveNumber(env.CROSSREF_TIMEOUT_MS, DEFAULT_METADATA_TIMEOUT_MS),
       queryLimit: positiveNumber(env.CROSSREF_QUERY_LIMIT, DEFAULT_RESULTS_PER_PROVIDER),
       pageLimit: positiveNumber(env.CROSSREF_PAGE_LIMIT ?? env.SOURCE_PROVIDER_PAGE_LIMIT, DEFAULT_PAGES_PER_PROVIDER_QUERY),
       headers: {
@@ -54,7 +63,7 @@ export function getSourceProviderConfigs(env: NodeJS.ProcessEnv = process.env): 
     "Semantic Scholar": {
       provider: "Semantic Scholar",
       endpoint: env.SEMANTIC_SCHOLAR_SEARCH_URL?.trim() || "https://api.semanticscholar.org/graph/v1/paper/search",
-      timeoutMs: positiveNumber(env.SEMANTIC_SCHOLAR_TIMEOUT_MS, DEFAULT_SOURCE_TIMEOUT_MS),
+      timeoutMs: positiveNumber(env.SEMANTIC_SCHOLAR_TIMEOUT_MS, DEFAULT_FULLER_METADATA_TIMEOUT_MS),
       queryLimit: positiveNumber(env.SEMANTIC_SCHOLAR_QUERY_LIMIT, DEFAULT_RESULTS_PER_PROVIDER),
       pageLimit: positiveNumber(env.SEMANTIC_SCHOLAR_PAGE_LIMIT ?? env.SOURCE_PROVIDER_PAGE_LIMIT, DEFAULT_PAGES_PER_PROVIDER_QUERY),
       headers: {

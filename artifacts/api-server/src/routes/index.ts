@@ -7,6 +7,8 @@ import expandTopicRouter from "./expand-topic";
 import topicUnderstandingRouter from "./topic-understanding";
 import researchToolsRouter from "./research-tools";
 import researchRouter from "./research";
+import researchGroundingJobsRouter from "./research-grounding-jobs";
+import llmRouter from "./llm";
 
 const router: IRouter = Router();
 
@@ -18,5 +20,7 @@ router.use(expandTopicRouter);
 router.use(topicUnderstandingRouter);
 router.use(researchToolsRouter);
 router.use(researchRouter);
+router.use(researchGroundingJobsRouter);
+router.use(llmRouter);
 
 export default router;

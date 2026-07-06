@@ -81,6 +81,17 @@ export function buildTopicFacets(topic: string): TopicFacets {
     /氣候變遷|全球暖化|溫室氣體|climate change|global warming|greenhouse gas|co2|carbon dioxide/.test(
       normalized,
     );
+  const paleontologyTopic =
+    /恐龍|化石|古生物|古生態|地層|白堊紀|侏羅紀|藻類|dinosaur|fossil|paleontology|paleoecology|stratigraphy|cretaceous|jurassic|algae|algal|cyanobacteria/.test(
+      normalized,
+    );
+  const paleontologyAlgaeTopic =
+    /化石|古生物|古環境|古生態|地層|沉積|fossil|paleontology|paleoenvironment|paleoecology|stratigraphy|sedimentary/.test(
+      normalized,
+    ) &&
+    /藻類|藻|微化石|疊層石|藍綠菌|algae|algal|microfossil|stromatolite|cyanobacteria/.test(
+      normalized,
+    );
 
   if (spiderEcologyTopic) {
     return {
@@ -368,6 +379,223 @@ export function buildTopicFacets(topic: string): TopicFacets {
         "耶路撒冷",
         "功能定位",
         "金融風險",
+      ],
+    };
+  }
+
+  if (paleontologyAlgaeTopic) {
+    return {
+      topicCore: [
+        "藻類化石",
+        "微化石",
+        "古環境",
+        "沉積環境",
+        "algal fossils",
+        "microfossils",
+        "paleoenvironment",
+        "sedimentary environment",
+      ],
+      researchIntent: classifyResearchIntent(topic),
+      requiredFacets: [
+        {
+          id: "causes",
+          labelZhTw: "藻類或微化石證據",
+          terms: [
+            "algae",
+            "algal",
+            "fossil algae",
+            "microfossil",
+            "microfossils",
+            "cyanobacteria",
+            "stromatolite",
+            "biomarker",
+            "藻類",
+            "藻類化石",
+            "微化石",
+            "藍綠菌",
+            "疊層石",
+            "生物標誌",
+          ],
+        },
+        {
+          id: "current_status",
+          labelZhTw: "古環境與沉積環境",
+          terms: [
+            "paleoenvironment",
+            "palaeoenvironment",
+            "paleoecology",
+            "palaeoecology",
+            "sedimentary",
+            "sediment",
+            "stratigraphy",
+            "marine shale",
+            "古環境",
+            "古生態",
+            "沉積環境",
+            "沉積",
+            "地層",
+          ],
+        },
+      ],
+      secondaryFacets: [
+        {
+          id: "impacts",
+          labelZhTw: "化石紀錄與保存條件",
+          terms: [
+            "fossil record",
+            "fossil preservation",
+            "fossil formation",
+            "taphonomy",
+            "化石紀錄",
+            "化石保存",
+            "化石形成",
+            "埋藏",
+          ],
+        },
+        {
+          id: "ecological_effects",
+          labelZhTw: "分類或指標用途",
+          terms: [
+            "indicator",
+            "classification",
+            "reconstruction",
+            "environment indicators",
+            "分類",
+            "指標",
+            "重建",
+            "環境指標",
+          ],
+        },
+      ],
+      excludeOrDowngrade: [
+        "dinosaur extinction only",
+        "dinosaur soft tissue only",
+        "asteroid impact only",
+        "volcanism only",
+        "mass extinction only",
+        "恐龍滅絕",
+        "恐龍軟組織",
+        "小行星撞擊",
+        "火山作用",
+        "大滅絕",
+      ],
+    };
+  }
+
+  if (paleontologyTopic) {
+    return {
+      topicCore: [
+        "恐龍",
+        "恐龍化石",
+        "化石",
+        "古生物",
+        "dinosaur",
+        "dinosaur fossil",
+        "fossil",
+        "paleontology",
+      ],
+      researchIntent: classifyResearchIntent(topic),
+      requiredFacets: [
+        {
+          id: "causes",
+          labelZhTw: "化石與地層證據",
+          terms: [
+            "fossil record",
+            "fossil preservation",
+            "fossil formation",
+            "fossil locality",
+            "stratigraphy",
+            "stratigraphic",
+            "geological age",
+            "sedimentary",
+            "sediment",
+            "taphonomy",
+            "化石紀錄",
+            "化石保存",
+            "化石形成",
+            "化石產地",
+            "地層",
+            "地層年代",
+            "沉積環境",
+            "埋藏",
+            "年代判定",
+          ],
+        },
+        {
+          id: "current_status",
+          labelZhTw: "古環境與藻類關聯",
+          terms: [
+            "paleoenvironment",
+            "palaeoenvironment",
+            "paleoecology",
+            "palaeoecology",
+            "algae",
+            "algal",
+            "cyanobacteria",
+            "stromatolite",
+            "microfossil",
+            "biomarker",
+            "古環境",
+            "古生態",
+            "藻類",
+            "藍綠菌",
+            "疊層石",
+            "微化石",
+            "生物標誌",
+          ],
+        },
+      ],
+      secondaryFacets: [
+        {
+          id: "impacts",
+          labelZhTw: "恐龍演化與分類",
+          terms: [
+            "dinosaur evolution",
+            "taxonomy",
+            "phylogeny",
+            "morphology",
+            "Cretaceous",
+            "Jurassic",
+            "Mesozoic",
+            "恐龍演化",
+            "分類",
+            "親緣關係",
+            "形態",
+            "白堊紀",
+            "侏羅紀",
+            "中生代",
+          ],
+        },
+        {
+          id: "ecological_effects",
+          labelZhTw: "生態與棲地背景",
+          terms: [
+            "habitat",
+            "ecosystem",
+            "ecological",
+            "food web",
+            "environmental reconstruction",
+            "棲地",
+            "生態系",
+            "生態",
+            "食物網",
+            "環境重建",
+          ],
+        },
+      ],
+      excludeOrDowngrade: [
+        "asteroid impact only",
+        "volcanism only",
+        "mass extinction only",
+        "小行星撞擊",
+        "火山作用",
+        "大滅絕",
+        "museum exhibition",
+        "science education",
+        "public understanding",
+        "博物館展示",
+        "科學教育",
+        "大眾理解",
       ],
     };
   }

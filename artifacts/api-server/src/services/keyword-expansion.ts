@@ -58,6 +58,7 @@ export interface KeywordSourceSearchOptions extends KeywordExpansionOptions {
 
 type KeywordExpansionErrorCode =
   | "provider-unconfigured"
+  | "model-missing"
   | "provider-quota"
   | "provider-timeout"
   | "provider-failure"
@@ -362,6 +363,7 @@ async function requestLlmKeywordExpansion(
   try {
     const content = await requestOpenAICompatibleChatCompletion({
       purpose: "planner",
+      featureName: "topic_keyword_expansion",
       temperature: 0.1,
       maxTokens: 1_200,
       responseFormat: "json_object",

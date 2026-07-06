@@ -48,6 +48,8 @@ export interface TopicUnderstandingRequest {
 
 type ResearchProfile =
   | "animal_entity"
+  | "chemistry_compound"
+  | "scientific_concept"
   | "mechanics_principle"
   | "pathogen_health"
   | "health_effect"
@@ -77,6 +79,42 @@ function containsLatin(value: string): boolean {
   return /[A-Za-z]/.test(value);
 }
 
+function isChemicalFormulaLike(topic: string): boolean {
+  const compact = compactWhitespace(topic).replace(/\s+/g, "");
+  return (
+    /^(?:[A-Z][a-z]?\d{0,3}){2,}(?:[+-]\d*)?$/u.test(compact) &&
+    /[a-z]|\d/.test(compact)
+  );
+}
+
+function isChemistryLikeTopic(topic: string): boolean {
+  const text = `${topic} ${topic.toLowerCase()}`;
+  if (isChemicalFormulaLike(topic)) return true;
+  return /過氯酸|高氯酸|硝酸|硫酸|鹽酸|醋酸|檸檬酸|氫氧化|皂化|氧化還原|氧化數|氧化劑|還原劑|鹼水解|酯|酸鹼|陽離子|陰離子|離子化合物|配位|沉澱|滴定|電解質|化學反應|無機鹽|金屬鹽|saponification|redox|oxidation|reduction|alkaline hydrolysis|ester hydrolysis|electrolyte|oxidizer|reductant|ionic compound|titration|chemical reaction|chemistry/i.test(
+    text,
+  );
+}
+
+function chemistryCanonicalEnglishTopic(topic: string): string {
+  const text = `${topic} ${topic.toLowerCase()}`;
+  if (/過氯酸鈉|高氯酸鈉|naclo4|sodium perchlorate|perchlorate/i.test(text)) {
+    return "sodium perchlorate";
+  }
+  if (/皂化|saponification/i.test(text)) {
+    return "saponification";
+  }
+  if (/氧化還原|redox|oxidation|reduction/i.test(text)) {
+    return "redox reaction";
+  }
+  if (/鹼水解|alkaline hydrolysis/i.test(text)) {
+    return "alkaline hydrolysis";
+  }
+  if (isChemicalFormulaLike(topic)) {
+    return compactWhitespace(topic).replace(/\s+/g, "");
+  }
+  return "";
+}
+
 function splitTopicTerms(topic: string): string[] {
   const normalized = compactWhitespace(topic)
     .replace(/[「」"'`~!@#$%^&*+=|\\/<>{}\[\]]/g, " ")
@@ -93,6 +131,7 @@ function invalidInputReason(topic: string): string | null {
   const normalized = compactWhitespace(topic);
   if (!normalized) return "empty-topic";
   if (!/[A-Za-z0-9\u3400-\u9fff]/u.test(normalized)) return "symbol-only-topic";
+  if (isChemicalFormulaLike(normalized)) return null;
   const stripped = normalized.replace(/\s+/g, "");
   if (stripped.length <= 2 && !containsCjk(stripped)) return "too-short";
   if (/^[A-Za-z0-9_-]+$/.test(stripped)) {
@@ -110,6 +149,7 @@ function invalidInputReason(topic: string): string | null {
 
 function inferDomain(topic: string, taxonomy?: TopicUnderstandingResult): TopicDomain {
   const text = topic.toLowerCase();
+  if (isChemistryLikeTopic(topic)) return "materials_design";
   if (
     /[貓狗鼠兔羊牛馬鹿狐狼豹獅虎象猴熊龜蛇蛙魚蝦蟹蜂蟻鳥鷹鴨鵝雞豬駝鹿]/u.test(topic) ||
     /動物|生物|物種|繁殖|畜牧|飼養|獸醫|毛纖維|棲地|animal|species|husbandry|veterinary|habitat|wildlife/i.test(text)
@@ -182,6 +222,9 @@ function inferResearchProfile(
   domain: TopicDomain,
 ): ResearchProfile {
   const text = topic.toLowerCase();
+  if (isChemistryLikeTopic(topic)) {
+    return "chemistry_compound";
+  }
   if (
     /[貓狗鼠兔羊牛馬鹿狐狼豹獅虎象猴熊龜蛇蛙魚蝦蟹蜂蟻鳥鷹鴨鵝雞豬駝]/u.test(topic) ||
     domain === "animal_science"
@@ -193,6 +236,13 @@ function inferResearchProfile(
   }
   if (/運動原理|力學|旋轉|轉動|角動量|扭矩|力矩|進動|歲差|慣量|穩定性|物理模型|physics|mechanics|precession|torque|momentum/i.test(text)) {
     return "mechanics_principle";
+  }
+  if (
+    /負離子|air ions?|negative ions?|ionizer|酸鹼值|ph\b|摩擦力|光合作用|溫室效應|photosynthesis|greenhouse effect|friction/i.test(
+      text,
+    )
+  ) {
+    return "scientific_concept";
   }
   if (
     /飲料|汽水|可樂|碳酸|含糖|飲用|beverage|drink|soda|cola/i.test(text) &&
@@ -222,6 +272,8 @@ function profileCoreConcepts(
 ): string[] {
   const concepts: Record<ResearchProfile, string[]> = {
     animal_entity: ["生態特徵", "飼養管理", "行為特徵", "經濟價值", "疾病與健康管理", "與人類互動"],
+    chemistry_compound: ["化學性質", "反應機制", "氧化還原行為", "熱穩定性", "安全風險", "應用限制"],
+    scientific_concept: ["科學定義", "量測指標", "作用機制", "證據評估", "應用限制", "實驗判讀"],
     mechanics_principle: ["角動量", "歲差", "轉動慣量", "穩定性", "扭矩", "物理模型"],
     pathogen_health: ["感染途徑", "致病機制", "腸胃道症狀", "食品安全", "公共衛生", "預防控制"],
     health_effect: ["人體暴露", "毒理", "消化系統", "血液循環", "公共衛生", "環境來源"],
@@ -327,6 +379,64 @@ function angleTemplates(
         [`${subject} 經濟價值`, `${subject} 毛纖維 應用`, `${subject} 與人類互動`],
         en,
         ["economic value industry", "fiber application human interaction"],
+      ),
+    },
+  ];
+  const chemistryAngles = [
+    {
+      title:
+        /皂化|saponification/u.test(subject)
+          ? `${subject}中鹼濃度對反應速率與產物性質的影響`
+          : /氧化還原|redox|oxidation|reduction/u.test(subject)
+            ? `${subject}中電子轉移與氧化數變化的對照分析`
+            : /反應|reaction|hydrolysis/u.test(subject)
+              ? `${subject}在不同條件下的反應機制、速率與產物差異`
+              : `${subject}的化學性質、反應性與穩定性分析`,
+      angle:
+        /皂化|saponification/u.test(subject)
+          ? `先釐清 ${subject} 中鹼濃度、反應速率與產物差異之間的關係。`
+          : /氧化還原|redox|oxidation|reduction/u.test(subject)
+            ? `先釐清 ${subject} 中電子轉移、氧化數變化與氧化劑/還原劑判讀。`
+            : /反應|reaction|hydrolysis/u.test(subject)
+              ? `先釐清 ${subject} 在不同反應條件下的機制、反應速率與產物差異。`
+              : `先釐清 ${subject} 的化學組成、反應性、穩定性與可量測特徵。`,
+      reason: "化學主題要先把研究對象、條件與反應框架界定清楚，搜尋才不會漂到只沾到關鍵字的不相關資料。",
+      queries: bilingualQueries(
+        /皂化|saponification/u.test(subject)
+          ? [`${subject} 鹼濃度 反應速率 產物性質`, `${subject} 鹼性水解 動力學`]
+          : /氧化還原|redox|oxidation|reduction/u.test(subject)
+            ? [`${subject} 電子轉移 氧化數 比較`, `${subject} 氧化劑 還原劑 機制`]
+            : /反應|reaction|hydrolysis/u.test(subject)
+              ? [`${subject} 反應機制 反應速率`, `${subject} 條件 產物 比較`]
+          : [`${subject} 化學性質`, `${subject} 反應性 穩定性`, `${subject} 組成 分析`],
+        en,
+        /皂化|saponification/u.test(subject)
+          ? ["alkali concentration reaction rate product properties", "alkaline hydrolysis kinetics"]
+          : /氧化還原|redox|oxidation|reduction/u.test(subject)
+            ? ["electron transfer oxidation state comparison", "oxidant reductant mechanism"]
+            : /反應|reaction|hydrolysis/u.test(subject)
+              ? ["reaction mechanism kinetics products", "reaction conditions comparison"]
+          : ["chemical properties reactivity stability", "compound chemistry composition analysis"],
+      ),
+    },
+    {
+      title: `${subject}的操作條件、量測方法與安全風險`,
+      angle: `整理 ${subject} 在操作條件、量測方法、熱穩定性與安全管理上的限制。`,
+      reason: "化學研究題通常需要同時掌握條件變因、量測方式與危害資訊，才能形成 research-ready 的題目與來源池。",
+      queries: bilingualQueries(
+        [`${subject} 安全風險`, `${subject} 量測 方法`, `${subject} 儲存 條件`],
+        en,
+        ["safety hazard storage thermal stability", "measurement methods handling limitations"],
+      ),
+    },
+    {
+      title: `${subject}在實驗、工業或環境脈絡中的應用限制與證據邊界`,
+      angle: `比較 ${subject} 在實驗、工業或環境脈絡中的用途、限制，以及哪些資料才算直接證據。`,
+      reason: "這能把單一化學物質或反應延伸到應用與限制，同時避免把只沾到油脂、燃料或一般產業詞的資料誤當主證據。",
+      queries: bilingualQueries(
+        [`${subject} 實驗應用`, `${subject} 環境污染`, `${subject} 風險`],
+        en,
+        ["application analytical chemistry environmental contamination", "compound use risk"],
       ),
     },
   ];
@@ -490,6 +600,38 @@ function angleTemplates(
       ),
     },
   ];
+  const scienceConceptAngles = [
+    {
+      title: `如何定義與觀察${subject}：核心指標與量測設計`,
+      angle: `${subject}在科學上如何定義、量測與判讀，其核心指標是什麼？`,
+      reason: "科學概念若沒有先對齊定義、量測方式與指標，後續搜尋很容易混入宣稱性或非研究型資料。",
+      queries: bilingualQueries(
+        [`${subject} 定義 量測 方法`, `${subject} 科學 指標`, `${subject} 儀器 研究`],
+        en,
+        ["definition measurement methods", "scientific indicators", "instrumentation research"],
+      ),
+    },
+    {
+      title: `${subject}如何形成並產生作用：原理、應用與限制`,
+      angle: `${subject}由哪些物理或化學機制形成，在哪些應用情境下才具有研究意義？`,
+      reason: "把形成原理、作用機制與使用限制綁在一起，才會變成可研究而非空泛介紹。",
+      queries: bilingualQueries(
+        [`${subject} 形成機制 應用 限制`, `${subject} 物理 化學 原理`, `${subject} 應用情境`],
+        en,
+        ["formation mechanism applications", "physical chemical principles", "use cases limitations"],
+      ),
+    },
+    {
+      title: `${subject}的效果宣稱與常見迷思，哪些證據站得住腳`,
+      angle: `${subject}若涉及效果宣稱或常見迷思，現有證據是否足以支持這些說法？`,
+      reason: "這能把科學概念跟可驗證證據直接接起來，也能過濾行銷或保健話術。",
+      queries: bilingualQueries(
+        [`${subject} 健康宣稱 證據`, `${subject} 迷思 科學`, `${subject} 效果 檢驗`],
+        en,
+        ["health claims evidence", "scientific myths review", "effectiveness evaluation"],
+      ),
+    },
+  ];
   const generalAngles = [
     {
       title: `${subject}的背景脈絡與觀察面向`,
@@ -512,6 +654,8 @@ function angleTemplates(
   ];
   const profileTemplates: Record<ResearchProfile, Array<{ title: string; angle: string; reason: string; queries: string[] }>> = {
     animal_entity: animalAngles,
+    chemistry_compound: chemistryAngles,
+    scientific_concept: scienceConceptAngles,
     mechanics_principle: mechanicsAngles,
     pathogen_health: pathogenAngles,
     health_effect: healthAngles,
@@ -822,6 +966,7 @@ export function understandTopicHeuristically(
       ])
     : [];
   const englishTerms = uniqueStrings([
+    chemistryCanonicalEnglishTopic(normalizedTopic),
     ...terms.filter((term) => containsLatin(term)),
     ...(taxonomy?.englishTerms ?? []),
     taxonomyCanonicalEnglishTopic(taxonomy),

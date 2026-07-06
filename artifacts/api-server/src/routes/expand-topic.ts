@@ -3,6 +3,7 @@ import { understandTopic } from "@workspace/api-zod/topic-understanding";
 import { randomUUID } from "node:crypto";
 import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
+import { redactKnownSecrets } from "../services/llm/schoolProvider";
 import { expandTopicWithOllama } from "../services/topic-expansion";
 
 const LEGACY_TEMPLATE_TERMS = [
@@ -83,7 +84,15 @@ export function createExpandTopicRouter(): IRouter {
     } catch (error) {
       const understood = understandTopic(parsed.data.topic);
       const generatedAt = new Date().toISOString();
-      logger.warn({ err: error }, "Topic expansion failed unexpectedly");
+      const validationError =
+        error instanceof Error ? redactKnownSecrets(error.message) : "Unknown error.";
+      logger.warn(
+        {
+          errName: error instanceof Error ? error.name : "UnknownError",
+          errMessage: validationError,
+        },
+        "Topic expansion failed unexpectedly",
+      );
       res.status(200).json({
         status: "error",
         message: "Topic expansion service failed unexpectedly.",
@@ -137,7 +146,7 @@ export function createExpandTopicRouter(): IRouter {
           fallbackUsed: true,
           fallback_used: true,
           fallbackReason: "unexpected_topic_expansion_error",
-          validationErrors: [error instanceof Error ? error.message : "Unknown error."],
+          validationErrors: [validationError],
         },
       });
     }
