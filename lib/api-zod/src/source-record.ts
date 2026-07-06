@@ -57,6 +57,12 @@ export const SOURCE_RECOMMENDATION_BUCKETS = [
 export type SourceRecommendationBucket = EvidenceRecommendationBucket;
 
 export const SOURCE_ROLES = [
+  "background_definition",
+  "academic_evidence",
+  "official_statistics",
+  "professional_guidance",
+  "case_or_news",
+  "data_or_dataset",
   "core_scholarly_evidence",
   "official_background_explanation",
   "definition_or_concept",

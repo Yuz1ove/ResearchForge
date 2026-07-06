@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./source-record": "./src/source-record.ts",
+    "./source-mix-profile": "./src/source-mix-profile.ts",
     "./llm-status": "./src/llm-status.ts",
     "./research-tools": "./src/research-tools.ts",
     "./research-grounding": "./src/research-grounding.ts",

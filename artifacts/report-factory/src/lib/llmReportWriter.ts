@@ -64,6 +64,14 @@ export interface LlmReportWriterResult {
   reportMode?: "short" | "standard";
   requestedModel?: string | null;
   actualModel?: string | null;
+  generationMode?: "llm_evidence_grounded" | "fallback_conservative_draft" | string;
+  missingEvidence?: Array<{
+    sectionId: string;
+    title: string;
+    reason: string;
+    requiredEvidenceRoles?: string[];
+  }>;
+  warnings?: string[];
 }
 
 const DEFAULT_REPORT_DRAFT_TIMEOUT_MS = 260_000;
@@ -234,7 +242,55 @@ function normalizeResult(value: unknown): LlmReportWriterResult {
       typeof data.requestedModel === "string" ? data.requestedModel : null,
     actualModel:
       typeof data.actualModel === "string" ? data.actualModel : null,
+    generationMode:
+      typeof data.generationMode === "string" ? data.generationMode : undefined,
+    missingEvidence: Array.isArray(data.missingEvidence)
+      ? data.missingEvidence
+          .map((item): NonNullable<LlmReportWriterResult["missingEvidence"]>[number] | null => {
+            if (!item || typeof item !== "object") return null;
+            const record = item as Record<string, unknown>;
+            const sectionId = typeof record.sectionId === "string" ? record.sectionId : "";
+            const title = typeof record.title === "string" ? record.title : sectionId;
+            const reason = typeof record.reason === "string" ? record.reason : "";
+            if (!sectionId || !reason) return null;
+            const requiredEvidenceRoles = Array.isArray(record.requiredEvidenceRoles)
+              ? record.requiredEvidenceRoles.filter((role): role is string => typeof role === "string")
+              : [];
+            return {
+              sectionId,
+              title,
+              reason,
+              ...(requiredEvidenceRoles.length ? { requiredEvidenceRoles } : {}),
+            };
+          })
+          .filter((item): item is NonNullable<LlmReportWriterResult["missingEvidence"]>[number] => Boolean(item))
+      : undefined,
+    warnings: Array.isArray(data.warnings)
+      ? data.warnings.filter((item): item is string => typeof item === "string")
+      : undefined,
   };
+}
+
+function sourceMixProfileForReportInput(input: ReportInput): string {
+  const text = [
+    input.reportType,
+    input.targetAudience,
+    input.academicLevel,
+    input.topic,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (/商業|企業|產業|產品|市場|business|industry|market|product/.test(text)) {
+    return "business_industry";
+  }
+  if (/醫療|長照|社工|心理|健康|獸醫|medical|health|psycholog|veterinary/.test(text)) {
+    return "professional_guidance";
+  }
+  if (/大學|研究所|碩士|博士|專業|學術|university|college|graduate|academic/.test(text)) {
+    return "academic_strict";
+  }
+  return "school_report_balanced";
 }
 
 async function resultFromErrorResponse(
@@ -301,7 +357,7 @@ export async function requestLlmReportDraft(input: {
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
-    response = await fetch(reportWriterApiUrl("/api/generate-report"), {
+    response = await fetch(reportWriterApiUrl("/api/report-drafts"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -317,6 +373,15 @@ export async function requestLlmReportDraft(input: {
         language: input.reportInput.outputLanguage || "繁體中文",
         locale: "zh-TW",
         generationMode: apiGenerationMode,
+        sourceMixProfile: sourceMixProfileForReportInput(input.reportInput),
+        outline: [
+          { sectionId: "introduction", title: "研究背景" },
+          { sectionId: "literature_review", title: "文獻探討" },
+          { sectionId: "findings", title: "主要發現" },
+          { sectionId: "discussion", title: "分析與討論" },
+          { sectionId: "limitations", title: "限制說明" },
+          { sectionId: "conclusion", title: "結論" },
+        ],
         acceptedSources: input.acceptedSources,
         acceptedSourceIds: input.acceptedSources.map((source) => source.id).filter(Boolean),
         evidenceCards: input.evidenceCards,
@@ -368,6 +433,9 @@ export function mergeLlmReportDraft(
     fallbackReason: llmResult.fallbackReason,
     message: llmResult.message,
     warning: llmResult.warning,
+    generationMode: llmResult.generationMode,
+    missingEvidence: llmResult.missingEvidence,
+    warnings: llmResult.warnings,
     sectionPlan: llmResult.sectionPlan,
   };
   if (llmResult.sections.length === 0) {

@@ -345,7 +345,7 @@ export function evidenceCardIsScholarly(card: EvidenceCard): boolean {
 
 export function evidenceCardIsOfficialOrEducational(card: EvidenceCard): boolean {
   if (card.recommendationBucket === "official_background") return true;
-  return /\b(official_background|official|institutional|government|agency|education|educational|university|extension|encyclopedia|nasa|ucar|noaa|\.gov|\.edu)\b/iu.test(
+  return /\b(background_definition|official_statistics|professional_guidance|data_or_dataset|official_background|official|institutional|government|agency|education|educational|university|extension|encyclopedia|nasa|ucar|noaa|\.gov|\.edu)\b/iu.test(
     [
       card.sourceType,
       card.sourceProvider,

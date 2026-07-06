@@ -41,6 +41,8 @@ export interface SearchSourcesRequest {
   domainHints?: string[];
   selectedResearchPlanId?: string;
   workflowId?: string;
+  searchProfile?: 'quick' | 'standard' | 'deep';
+  sourceMixProfile?: string;
   reportType?: string;
   audience?: string;
   sourceMode?: string;

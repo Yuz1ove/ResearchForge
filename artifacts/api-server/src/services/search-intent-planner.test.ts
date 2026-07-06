@@ -5,6 +5,7 @@ import type { SourceRecord } from "@workspace/api-zod";
 import {
   buildRuleBasedSearchIntent,
   buildSearchIntentQueries,
+  buildSourceMixQueryBuckets,
   planSearchIntent,
   rerankSourcesBySearchIntent,
   searchIntentSources,
@@ -45,6 +46,13 @@ const siliconWaferEtchingTopic = "矽晶圓雕刻的原理及其用途";
 const hivAidsTopic = "愛滋病潛在風險與造成影響";
 const dentalPlaqueTopic = "牙菌斑的產生及對應治療方式";
 const dogResourceGuardingTopic = "狗的護食行為與教育方式";
+const sourceMixAcceptanceTopics = [
+  dogResourceGuardingTopic,
+  "玉佩在華人文化中的象徵意義",
+  "黃石國家公園地熱景觀形成原因",
+  "可樂對青少年健康的影響",
+  "都市熱島效應對校園環境的影響",
+] as const;
 
 function sourceRecord(
   patch: Partial<SourceRecord> & { title: string },
@@ -88,6 +96,54 @@ test("rule fallback returns digital media, sleep, and attention concepts for sho
   assert.ok(plan.chineseQueries.some((query) => query.includes("短影音")));
   assert.equal(plan.plannerStatus, "rule_fallback");
   assert.equal(plan.fallbackUsed, true);
+});
+
+test("school_report_balanced builds parallel source-role query buckets for acceptance topics", () => {
+  for (const topic of sourceMixAcceptanceTopics) {
+    const plan = buildRuleBasedSearchIntent({
+      topic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    });
+    const querySet = buildSearchIntentQueries(plan);
+    const buckets = buildSourceMixQueryBuckets(plan, querySet, "school_report_balanced");
+    const representedRoles = Object.entries(buckets)
+      .filter(([, queries]) => queries.length > 0)
+      .map(([role]) => role);
+
+    assert.ok(
+      representedRoles.length >= 3,
+      `${topic} should have at least three sourceRole buckets`,
+    );
+    assert.ok(buckets.background_definition.some((query) => /wikipedia|britannica|百科/i.test(query)));
+    assert.ok(buckets.academic_evidence.length > 0);
+    assert.ok(
+      buckets.official_statistics.length + buckets.professional_guidance.length >= 2,
+      `${topic} should include official/professional queries`,
+    );
+  }
+});
+
+test("dog resource guarding fallback queries stay balanced instead of review-only", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: dogResourceGuardingTopic,
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const querySet = buildSearchIntentQueries(plan);
+  const buckets = buildSourceMixQueryBuckets(plan, querySet, "school_report_balanced");
+  const allQueries = Object.values(buckets).flat();
+
+  assert.ok(allQueries.some((query) => /狗 護食 行為 訓練/.test(query)));
+  assert.ok(allQueries.some((query) => /dog resource guarding behavior training/i.test(query)));
+  assert.ok(allQueries.some((query) => /veterinary behavior/i.test(query)));
+  assert.ok(allQueries.some((query) => /humane training/i.test(query)));
+  assert.equal(
+    allQueries.every((query) => /peer reviewed|systematic review|文獻回顧/i.test(query)),
+    false,
+  );
 });
 
 test("planner prioritizes supplied research query seeds over display titles", async () => {

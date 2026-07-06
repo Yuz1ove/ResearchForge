@@ -1,4 +1,5 @@
 export * from "./source-record";
+export * from "./source-mix-profile";
 export * from "./research-workflow";
 export * from "./research-pipeline";
 export * from "./research-grounding";

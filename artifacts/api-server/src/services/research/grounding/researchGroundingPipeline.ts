@@ -3375,6 +3375,10 @@ function sourceCandidateIsOfficialBackground(candidate: SourceCandidate): boolea
   if (candidate.isOfficialBackground === true) return true;
   if (candidate.recommendationBucket === "official_background") return true;
   if (
+    candidate.sourceRole === "background_definition" ||
+    candidate.sourceRole === "official_statistics" ||
+    candidate.sourceRole === "professional_guidance" ||
+    candidate.sourceRole === "data_or_dataset" ||
     candidate.sourceRole === "official_background_explanation" ||
     candidate.sourceRole === "definition_or_concept" ||
     candidate.sourceRole === "teaching_or_public_explainer"
@@ -3398,6 +3402,7 @@ function sourceCandidateIsAcademic(candidate: SourceCandidate): boolean {
   if (sourceCandidateIsOfficialBackground(candidate)) return false;
   if (candidate.isAcademic === true) return true;
   if (candidate.recommendationBucket === "scholarly_recommended") return true;
+  if (candidate.sourceRole === "academic_evidence") return true;
   if (candidate.sourceRole === "core_scholarly_evidence") return true;
   if (candidate.sourceType === "paper" || candidate.sourceType === "review") return true;
   const providerAcademic =

@@ -5,6 +5,7 @@ import {
   sourceDecisionHint,
   sourceHasUsableAbstract,
   sourceRecommendedSections,
+  sourceStructuredSummary,
   sourceSummaryForUser,
   sourceSummaryText,
 } from "./sourceSummaries.ts";
@@ -50,7 +51,7 @@ test("sourceSummaryText prefers backend readableSummaryZhTW when available", () 
   assert.doesNotMatch(summary, /主旨：|摘要重點/);
 });
 
-test("sourceSummaryText falls back to an honest zh-TW notice when only English abstract exists", () => {
+test("sourceSummaryText deterministically summarizes English-only abstracts in zh-TW", () => {
   const summary = sourceSummaryText(
     source({
       readableSummaryZhTW: null,
@@ -63,7 +64,29 @@ test("sourceSummaryText falls back to an honest zh-TW notice when only English a
     }),
   );
 
-  assert.equal(summary, "此來源尚未完成繁中摘要，以下顯示原文摘要。");
+  assert.match(summary, /來源|主旨|摘要|線索|英文原文/u);
+  assert.doesNotMatch(summary, /alkaline hydrolysis of carboxylate esters/i);
+});
+
+test("sourceStructuredSummary exposes fixed zh-TW schema without raw English summary leakage", () => {
+  const structured = sourceStructuredSummary(
+    source({
+      title: "Dog resource guarding behavior training",
+      abstract:
+        "Dog resource guarding behavior can be managed through humane training, veterinary behavior guidance, and positive reinforcement.",
+      sourceRole: "professional_guidance",
+      recommendationBucket: "official_background",
+    }),
+    "狗的護食行為與教育方式",
+  );
+
+  assert.equal(structured.sourceRole, "professional_guidance");
+  assert.match(structured.zhTwSummary, /狗|護食|訓練|專業|線索/u);
+  assert.ok(structured.topicRelation.length > 0);
+  assert.ok(structured.usableClaims.length > 0);
+  assert.ok(structured.recommendedSections.length > 0);
+  assert.ok(structured.originalSnippets.length > 0);
+  assert.doesNotMatch(structured.zhTwSummary, /Dog resource guarding behavior can be managed/i);
 });
 
 test("sourceSummaryText does not invent conclusions when abstract is missing", () => {
@@ -109,7 +132,7 @@ test("sourceSummaryForUser explains cola-health topic relation in Traditional Ch
   );
 
   assert.equal(summary.recommendation, "recommended");
-  assert.match(summary.topicRelation, /核心概念|關聯穩定|cola|sugar/i);
+  assert.match(summary.topicRelation, /可樂|含糖飲料|糖分|主要證據/u);
   assert.match(summary.recommendationReason, /可作主要證據/);
   assert.ok(summary.usableSections.length > 0);
 });
@@ -127,7 +150,7 @@ test("sourceSummaryForUser separates content summary from relation and recommend
 
   assert.match(summary.contentSummary, /含糖飲料|soft drink|health/i);
   assert.doesNotMatch(summary.contentSummary, /This cohort study/);
-  assert.match(summary.topicRelation, /核心概念|關聯|cola|soft drink/i);
+  assert.match(summary.topicRelation, /可樂|含糖飲料|糖分|主要證據/u);
   assert.match(summary.recommendationReason, /主要證據|補充來源|僅供參考|建議排除/);
 });
 
@@ -144,7 +167,7 @@ test("sourceSummaryForUser rewrites mixed English aircraft summaries into more n
     "飛機",
   );
 
-  assert.match(summary.contentSummary, /runway overrun|flight safety|aircraft/i);
+  assert.match(summary.contentSummary, /跑道衝出|飛航安全|民航飛機|風險評估/u);
   assert.doesNotMatch(summary.contentSummary, /In this paper|QAR data/i);
 });
 
@@ -160,7 +183,7 @@ test("sourceSummaryForUser does not recommend off-topic sources", () => {
   );
 
   assert.equal(summary.recommendation, "not_recommended");
-  assert.match(summary.topicRelation, /重合不足|核心概念/);
+  assert.match(summary.topicRelation, /關聯不足|不建議納入/);
   assert.match(summary.recommendationReason, /建議排除/);
 });
 

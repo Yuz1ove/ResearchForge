@@ -5,7 +5,14 @@ import {
   type ResearchDebugTrace,
   type SourceSearchConfig,
   type SourceRecord,
+  type SourceRole,
 } from "@workspace/api-zod";
+import {
+  SOURCE_ROLE_BUCKETS,
+  resolveSourceMixProfile,
+  type SourceMixProfile,
+  type SourceRoleBucket,
+} from "@workspace/api-zod/source-mix-profile";
 import {
   conceptQueryGroupsForTopic,
   conceptTermsForTopic,
@@ -61,6 +68,7 @@ import {
 export interface SearchIntentPlannerInput {
   topic: string;
   searchProfile?: SearchProfileName;
+  sourceMixProfile?: SourceMixProfile | string;
   originalTopic?: string;
   refinedTopic?: string;
   displayTitle?: string;
@@ -380,6 +388,11 @@ export interface RecoveryResult {
 }
 
 export interface SourceSearchPipelineDiagnostics {
+  sourceMixProfile?: SourceMixProfile;
+  bucketResultCounts?: Record<SourceRoleBucket, number>;
+  timedOutProviders?: string[];
+  elapsedMs?: number;
+  diversityWarnings?: string[];
   original_topic: string;
   active_research_topic: string;
   canonical_english_topic: string;
@@ -8862,6 +8875,17 @@ function sourcePublisherFromHost(host: string): string {
     "efsa.europa.eu": "European Food Safety Authority",
     "un.org": "United Nations",
     "who.int": "World Health Organization",
+    "wikipedia.org": "Wikipedia",
+    "britannica.com": "Encyclopaedia Britannica",
+    "nps.gov": "National Park Service",
+    "usgs.gov": "U.S. Geological Survey",
+    "nih.gov": "National Institutes of Health",
+    "medlineplus.gov": "MedlinePlus",
+    "merckvetmanual.com": "Merck Veterinary Manual",
+    "avma.org": "American Veterinary Medical Association",
+    "aspca.org": "ASPCA",
+    "humanesociety.org": "Humane Society of the United States",
+    "akc.org": "American Kennel Club",
     "reuters.com": "Reuters",
     "apnews.com": "Associated Press",
     "bbc.com": "BBC",
@@ -8897,7 +8921,7 @@ function officialSourceHost(host: string): boolean {
 }
 
 function institutionalSourceHost(host: string): boolean {
-  return /iea\.org$|oecd\.org$|worldbank\.org$|imf\.org$|europa\.eu$|nhtsa\.gov$|epa\.gov$|energy\.gov$|fda\.gov$|usda\.gov$|cdc\.gov$|foodsafety\.gov$|foodstandards\.gov\.au$|food\.gov\.uk$|efsa\.europa\.eu$|un\.org$|unctad\.org$|wto\.org$|ilo\.org$|who\.int$|itri\.org\.tw$|semi\.org$|semiconductors\.org$|nist\.gov$|iucnredlist\.org$/.test(
+  return /iea\.org$|oecd\.org$|worldbank\.org$|imf\.org$|europa\.eu$|nhtsa\.gov$|epa\.gov$|energy\.gov$|fda\.gov$|usda\.gov$|cdc\.gov$|foodsafety\.gov$|foodstandards\.gov\.au$|food\.gov\.uk$|efsa\.europa\.eu$|un\.org$|unctad\.org$|wto\.org$|ilo\.org$|who\.int$|itri\.org\.tw$|semi\.org$|semiconductors\.org$|nist\.gov$|iucnredlist\.org$|wikipedia\.org$|britannica\.com$|nps\.gov$|usgs\.gov$|nih\.gov$|medlineplus\.gov$|merckvetmanual\.com$|avma\.org$|aspca\.org$|humanesociety\.org$|akc\.org$/.test(
     host,
   );
 }
@@ -10623,6 +10647,550 @@ async function searchFallbackProvider(
   return Promise.all(
     queries.map((query) => searchFallbackProviderQuery(provider, query, options)),
   );
+}
+
+interface SourceMixQueryBuckets {
+  background_definition: string[];
+  academic_evidence: string[];
+  official_statistics: string[];
+  professional_guidance: string[];
+  case_or_news: string[];
+  data_or_dataset: string[];
+}
+
+function topicSearchLabels(plan: SearchIntentPlan): { zh: string; en: string; combined: string } {
+  const zh = cleanQueryList(
+    [
+      plan.activeResearchTopic ?? "",
+      plan.displayTitle ?? "",
+      plan.canonicalTopicZh ?? "",
+      plan.normalizedTopic,
+      ...plan.chineseQueries,
+    ],
+    8,
+  )[0] ?? plan.normalizedTopic;
+  const en = cleanQueryList(
+    [
+      plan.canonicalEnglishTopic ?? "",
+      ...plan.englishQueries,
+      ...(plan.enCoreTerms ?? []),
+      ...(plan.primaryConcepts ?? []),
+    ],
+    8,
+  ).find((query) => /[A-Za-z]/.test(query)) ?? zh;
+  return {
+    zh,
+    en,
+    combined: cleanQueryList([zh, en], 2).join(" "),
+  };
+}
+
+function sourceMixTopicText(plan: SearchIntentPlan): string {
+  return [
+    plan.normalizedTopic,
+    plan.activeResearchTopic ?? "",
+    plan.displayTitle ?? "",
+    plan.canonicalEnglishTopic ?? "",
+    plan.canonicalTopicZh ?? "",
+    plan.detectedDomain ?? "",
+    plan.topicType ?? "",
+    ...plan.primaryConcepts,
+    ...(plan.coreConcepts ?? []),
+    ...plan.chineseQueries,
+    ...plan.englishQueries,
+  ].join(" ");
+}
+
+function profileAwareFallbackQueries(
+  plan: SearchIntentPlan,
+  querySet: SearchIntentQuerySet,
+  profile: SourceMixProfile,
+): string[] {
+  const labels = topicSearchLabels(plan);
+  if (isDogResourceGuardingPlan(plan)) {
+    return cleanQueryList(
+      [
+        "狗 護食 行為 訓練",
+        "dog resource guarding behavior training",
+        "dog food guarding veterinary behavior",
+        "resource guarding dogs humane training",
+        "犬 行為 問題 護食 教育",
+      ],
+      8,
+    );
+  }
+  const base = cleanQueryList([
+    ...querySet.chineseSupplemental,
+    ...querySet.fallbackRelaxed,
+    labels.zh,
+    labels.en,
+  ], 8);
+  if (profile === "academic_strict") {
+    return cleanQueryList([
+      ...base,
+      `${labels.en} empirical study`,
+      `${labels.en} review`,
+      `${labels.zh} 研究`,
+    ], 8);
+  }
+  if (profile === "business_industry") {
+    return cleanQueryList([
+      `${labels.en} industry report`,
+      `${labels.en} market data`,
+      `${labels.en} company report`,
+      `${labels.zh} 產業 報告`,
+      ...base,
+    ], 8);
+  }
+  if (profile === "professional_guidance") {
+    return cleanQueryList([
+      `${labels.en} professional guidance`,
+      `${labels.en} practice guideline`,
+      `${labels.zh} 專業 指引`,
+      `${labels.zh} 官方 指南`,
+      ...base,
+    ], 8);
+  }
+  return cleanQueryList([
+    `${labels.zh} 背景 說明`,
+    `${labels.zh} 官方 資料`,
+    `${labels.zh} 專業 指引`,
+    `${labels.en} explanation`,
+    `${labels.en} official statistics`,
+    `${labels.en} professional guidance`,
+    ...base,
+  ], 8);
+}
+
+export function buildSourceMixQueryBuckets(
+  plan: SearchIntentPlan,
+  querySet: SearchIntentQuerySet,
+  profile: SourceMixProfile,
+): SourceMixQueryBuckets {
+  const labels = topicSearchLabels(plan);
+  const text = sourceMixTopicText(plan);
+  const profileFallback = profileAwareFallbackQueries(plan, querySet, profile);
+  const professionalSeeds = /dog|canine|犬|狗|護食|resource guarding|animal|veterinary|獸醫/i.test(text)
+    ? [
+        "狗 護食 行為 訓練",
+        "dog resource guarding behavior training",
+        "dog resource guarding veterinary behavior",
+        "resource guarding dogs humane training",
+        "dog food guarding veterinary behavior",
+        "犬 行為 問題 護食 教育",
+      ]
+    : /health|medical|adolescent|青少年|健康|醫療|心理|nutrition|cola|soda|可樂/i.test(text)
+      ? [
+          `${labels.en} public health guidance`,
+          `${labels.en} medical association guidance`,
+          `${labels.zh} 健康 指引 專業機構`,
+          `${labels.zh} 公共衛生 官方`,
+        ]
+      : /yellowstone|geothermal|national park|黃石|地熱|公園|geology|地質/i.test(text)
+        ? [
+            "Yellowstone geothermal features National Park Service",
+            "Yellowstone geothermal USGS",
+            `${labels.zh} 官方 地熱 景觀`,
+          ]
+        : /school|campus|education|校園|學校|教育/i.test(text)
+          ? [
+              `${labels.en} education guidance`,
+              `${labels.zh} 教育 專業 機構`,
+              `${labels.en} public institution guidance`,
+            ]
+          : [
+              `${labels.en} professional association guidance`,
+              `${labels.zh} 專業 機構 指引`,
+              `${labels.en} public institution guide`,
+            ];
+
+  return {
+    academic_evidence: cleanQueryList(
+      [
+        ...querySet.coreEnglishAcademic,
+        ...querySet.academicSynonyms,
+        ...(profile === "academic_strict"
+          ? profileFallback
+          : profileFallback.filter((query) => /study|research|review|研究/i.test(query))),
+      ],
+      8,
+    ),
+    background_definition: cleanQueryList(
+      [
+        `${labels.zh} 維基百科`,
+        `${labels.en} site:wikipedia.org`,
+        `${labels.en} site:britannica.com`,
+        `${labels.en} encyclopedia definition`,
+        `${labels.zh} 背景 說明 百科`,
+      ],
+      6,
+    ),
+    official_statistics: cleanQueryList(
+      [
+        `${labels.zh} 官方 統計`,
+        `${labels.zh} site:gov.tw`,
+        `${labels.en} government official statistics`,
+        `${labels.en} site:.gov`,
+        `${labels.en} official report`,
+      ],
+      6,
+    ),
+    professional_guidance: cleanQueryList(professionalSeeds, 6),
+    case_or_news: cleanQueryList(
+      [
+        `${labels.zh} 案例 新聞`,
+        `${labels.en} case news`,
+        `${labels.en} Reuters BBC AP News`,
+      ],
+      5,
+    ),
+    data_or_dataset: cleanQueryList(
+      [
+        `${labels.zh} 資料集 統計`,
+        `${labels.en} dataset statistics`,
+        `${labels.en} data portal`,
+      ],
+      4,
+    ),
+  };
+}
+
+function legacyRoleToSourceRoleBucket(role: string | null | undefined): SourceRoleBucket | null {
+  switch (role) {
+    case "background_definition":
+    case "academic_evidence":
+    case "official_statistics":
+    case "professional_guidance":
+    case "case_or_news":
+    case "data_or_dataset":
+      return role;
+    case "core_scholarly_evidence":
+      return "academic_evidence";
+    case "official_background_explanation":
+    case "definition_or_concept":
+    case "teaching_or_public_explainer":
+      return "background_definition";
+    case "statistics_or_dataset":
+      return "data_or_dataset";
+    default:
+      return null;
+  }
+}
+
+function inferSourceRoleBucket(
+  source: SourceRecord,
+  preferredRole?: SourceRoleBucket,
+): SourceRoleBucket {
+  const existing = legacyRoleToSourceRoleBucket(source.sourceRole);
+  if (existing) return existing;
+  const text = [
+    source.title,
+    source.url ?? "",
+    source.publisher ?? "",
+    source.containerTitle ?? "",
+    source.sourceType,
+    source.provider ?? "",
+    source.queryUsed ?? "",
+  ].join(" ").toLowerCase();
+  if (/wikipedia\.org|britannica\.com|encyclopedia|百科|definition/.test(text)) {
+    return "background_definition";
+  }
+  if (/dataset|data portal|statistics|statistical|資料集|統計/.test(text)) {
+    return "data_or_dataset";
+  }
+  if (/\.gov|gov\.tw|government|official|nps\.gov|usgs\.gov|cdc\.gov|nih\.gov|who\.int/.test(text)) {
+    return "official_statistics";
+  }
+  if (/guideline|guidance|professional|association|veterinary|avma|aspca|humane society|merckvetmanual|教育|指引|指南|專業|獸醫/.test(text)) {
+    return "professional_guidance";
+  }
+  if (/reuters|apnews|bbc|news|case|案例|新聞/.test(text)) {
+    return "case_or_news";
+  }
+  if (source.doi || source.isPeerReviewed || /openalex|crossref|semantic scholar|journal|conference|paper|study|research/.test(text)) {
+    return "academic_evidence";
+  }
+  return preferredRole ?? "background_definition";
+}
+
+function sourceRoleForBucket(bucket: SourceRoleBucket): SourceRole {
+  return bucket;
+}
+
+function recommendationBucketForRole(
+  source: SourceRecord,
+  role: SourceRoleBucket,
+): SourceRecord["recommendationBucket"] {
+  if (role === "academic_evidence") return "scholarly_recommended";
+  if (
+    role === "background_definition" ||
+    role === "official_statistics" ||
+    role === "professional_guidance" ||
+    role === "data_or_dataset"
+  ) {
+    return "official_background";
+  }
+  if (role === "case_or_news") return "manual_review";
+  return source.recommendationBucket ?? "manual_review";
+}
+
+function withSourceMixRole(
+  source: SourceRecord,
+  preferredRole?: SourceRoleBucket,
+): SourceRecord {
+  const role = inferSourceRoleBucket(source, preferredRole);
+  return {
+    ...source,
+    sourceRole: sourceRoleForBucket(role),
+    recommendationBucket: recommendationBucketForRole(source, role),
+    isPrimaryEvidence:
+      role === "academic_evidence" ||
+      role === "official_statistics" ||
+      role === "professional_guidance" ||
+      role === "data_or_dataset"
+        ? (source.isPrimaryEvidence ?? true)
+        : false,
+    scoreReasons: unique([
+      ...(source.scoreReasons ?? []),
+      `source_mix_role:${role}`,
+    ]),
+  };
+}
+
+function withSourceMixRoleForGroup(
+  group: SourceProviderSearchResult,
+  role: SourceRoleBucket,
+): SourceProviderSearchResult {
+  return {
+    ...group,
+    results: group.results.map((source) => withSourceMixRole(source, role)),
+  };
+}
+
+async function searchFallbackDirectQueries(
+  provider: FallbackSourceProvider,
+  queries: string[],
+  options: SearchIntentSourceSearchOptions | undefined,
+  role: SourceRoleBucket,
+): Promise<SourceProviderSearchResult[]> {
+  const directQueries = cleanQueryList(queries, DEFAULT_WEB_FALLBACK_QUERY_LIMIT);
+  if (directQueries.length === 0) return [];
+  const settled = await Promise.allSettled(
+    directQueries.map((query) => searchFallbackProviderQuery(provider, query, options)),
+  );
+  return settled.map((result, index) =>
+    result.status === "fulfilled"
+      ? withSourceMixRoleForGroup(result.value, role)
+      : ({
+          ok: false,
+          provider,
+          query: directQueries[index] ?? "",
+          results: [],
+          raw_count: 0,
+          normalize_attempt_count: 0,
+          normalized_valid_count: 0,
+          normalized_invalid_count: 0,
+          error_type: "api-failure",
+          error_message:
+            result.reason instanceof Error ? result.reason.message : "fallback provider failed",
+        } satisfies SourceProviderSearchResult),
+  );
+}
+
+function timeoutGroupForBucket(
+  provider: FallbackSourceProvider | AcademicSourceProvider,
+  query: string,
+): SourceProviderSearchResult {
+  return {
+    ok: false,
+    provider,
+    query,
+    results: [],
+    raw_count: 0,
+    normalize_attempt_count: 0,
+    normalized_valid_count: 0,
+    normalized_invalid_count: 0,
+    error_type: "timeout",
+    error_message: "source mix bucket timed out before the overall search deadline",
+  };
+}
+
+async function withOverallSearchDeadline(
+  label: string,
+  provider: FallbackSourceProvider | AcademicSourceProvider,
+  promise: Promise<SourceProviderSearchResult[]>,
+  runtime: SearchBudgetRuntime,
+): Promise<SourceProviderSearchResult[]> {
+  const remainingMs = Math.max(0, runtime.deadlineMs - Date.now());
+  if (remainingMs <= 0) {
+    runtime.warnings.add(`${label} bucket skipped because the overall search deadline was reached.`);
+    return [timeoutGroupForBucket(provider, label)];
+  }
+  return new Promise<SourceProviderSearchResult[]>((resolve) => {
+    const timer = setTimeout(() => {
+      runtime.warnings.add(`${label} bucket timed out; using partial results from other buckets.`);
+      resolve([timeoutGroupForBucket(provider, label)]);
+    }, remainingMs);
+    promise.then(
+      (groups) => {
+        clearTimeout(timer);
+        resolve(groups);
+      },
+      (error) => {
+        clearTimeout(timer);
+        resolve([
+          {
+            ...timeoutGroupForBucket(provider, label),
+            error_type: "api-failure",
+            error_message:
+              error instanceof Error ? error.message : `${label} bucket failed`,
+          },
+        ]);
+      },
+    );
+  });
+}
+
+async function searchSourceMixBuckets(input: {
+  plan: SearchIntentPlan;
+  querySet: SearchIntentQuerySet;
+  sourceMixProfile: SourceMixProfile;
+  academicQueryPhases: SearchIntentQueryPhase[];
+  options?: SearchIntentSourceSearchOptions;
+  activeAcademicProviders: Set<AcademicSourceProvider>;
+  runtime: SearchBudgetRuntime;
+  immediateTrustedSeedHandoff: boolean;
+}): Promise<SourceProviderSearchResult[]> {
+  const bucketQueries = buildSourceMixQueryBuckets(
+    input.plan,
+    input.querySet,
+    input.sourceMixProfile,
+  );
+  const academicQueries = cleanQueryList(
+    input.immediateTrustedSeedHandoff
+      ? input.academicQueryPhases[0]?.queries.slice(0, 1) ?? []
+      : [
+          ...bucketQueries.academic_evidence,
+          ...input.academicQueryPhases.flatMap((phase) => phase.queries),
+        ],
+    8,
+  );
+  const tasks: Array<Promise<SourceProviderSearchResult[]>> = [];
+  if (academicQueries.length > 0) {
+    tasks.push(
+      withOverallSearchDeadline(
+        "academic_evidence",
+        "OpenAlex",
+        searchAcademicProviderGroups(
+          academicQueries,
+          input.plan,
+          input.options,
+          input.activeAcademicProviders,
+          input.runtime,
+        ).then((groups) => groups.map((group) => withSourceMixRoleForGroup(group, "academic_evidence"))),
+        input.runtime,
+      ),
+    );
+  }
+  if (!input.immediateTrustedSeedHandoff) {
+    tasks.push(
+      withOverallSearchDeadline(
+        "background_definition",
+        "Institutional Source",
+        searchFallbackDirectQueries(
+          "Institutional Source",
+          bucketQueries.background_definition,
+          input.options,
+          "background_definition",
+        ),
+        input.runtime,
+      ),
+      withOverallSearchDeadline(
+        "official_statistics",
+        "Official Source",
+        searchFallbackDirectQueries(
+          "Official Source",
+          bucketQueries.official_statistics,
+          input.options,
+          "official_statistics",
+        ),
+        input.runtime,
+      ),
+      withOverallSearchDeadline(
+        "professional_guidance",
+        "Institutional Source",
+        searchFallbackDirectQueries(
+          "Institutional Source",
+          bucketQueries.professional_guidance,
+          input.options,
+          "professional_guidance",
+        ),
+        input.runtime,
+      ),
+      withOverallSearchDeadline(
+        "case_or_news",
+        "Authoritative Media",
+        searchFallbackDirectQueries(
+          "Authoritative Media",
+          bucketQueries.case_or_news,
+          input.options,
+          "case_or_news",
+        ),
+        input.runtime,
+      ),
+      withOverallSearchDeadline(
+        "data_or_dataset",
+        "Official Source",
+        searchFallbackDirectQueries(
+          "Official Source",
+          bucketQueries.data_or_dataset,
+          input.options,
+          "data_or_dataset",
+        ),
+        input.runtime,
+      ),
+    );
+  } else {
+    input.runtime.warnings.add(
+      "trusted_seed_handoff: 已先顯示可信種子來源，parallel bucket 限縮為 academic probe。",
+    );
+  }
+  const settled = await Promise.allSettled(tasks);
+  return settled.flatMap((result) =>
+    result.status === "fulfilled"
+      ? result.value
+      : [timeoutGroupForBucket("OpenAlex", "source_mix_parallel_bucket")],
+  );
+}
+
+function bucketResultCountsForSources(
+  sources: SourceRecord[],
+): Record<SourceRoleBucket, number> {
+  const counts = Object.fromEntries(
+    SOURCE_ROLE_BUCKETS.map((role) => [role, 0]),
+  ) as Record<SourceRoleBucket, number>;
+  for (const source of sources) {
+    const role = inferSourceRoleBucket(source);
+    counts[role] += 1;
+  }
+  return counts;
+}
+
+function diversityWarningsForProfile(
+  profile: SourceMixProfile,
+  counts: Record<SourceRoleBucket, number>,
+): string[] {
+  const represented = SOURCE_ROLE_BUCKETS.filter((role) => counts[role] > 0);
+  const warnings: string[] = [];
+  if (profile === "school_report_balanced" && represented.length < 3) {
+    warnings.push(
+      `school_report_balanced 目前只有 ${represented.length} 種 sourceRole，建議補足背景、學術、官方/專業與案例來源。`,
+    );
+  }
+  if (counts.background_definition > 0 && counts.academic_evidence + counts.professional_guidance + counts.official_statistics === 0) {
+    warnings.push("目前只有背景或百科型來源，不能支撐主要發現。");
+  }
+  return warnings;
 }
 
 function escapeRegExp(value: string): string {
@@ -13504,6 +14072,19 @@ export async function searchIntentSources(
   const semanticClassification = classifyTopicSemantically(
     plan.originalTopic ?? input.originalTopic ?? input.topic,
   );
+  const sourceMixProfile = resolveSourceMixProfile({
+    sourceMixProfile: input.sourceMixProfile,
+    reportType: input.reportType,
+    audience: input.audience,
+    domainHints: input.domainHints,
+    topic: [
+      input.topic,
+      input.originalTopic ?? "",
+      input.refinedTopic ?? "",
+      semanticClassification.normalizedTopic,
+      plan.detectedDomain ?? "",
+    ].join(" "),
+  });
   const expandedQueries = expandBilingualQueries(semanticClassification, {
     zh: input.querySeedZh,
     en: input.querySeedEn,
@@ -13626,6 +14207,11 @@ export async function searchIntentSources(
         sourceDecisions: [],
       },
       diagnostics: {
+        sourceMixProfile,
+        bucketResultCounts: bucketResultCountsForSources([]),
+        timedOutProviders: [],
+        elapsedMs: 0,
+        diversityWarnings: [],
         original_topic: plan.originalTopic ?? topic,
         active_research_topic: plan.activeResearchTopic ?? topic,
         canonical_english_topic: plan.canonicalEnglishTopic ?? "",
@@ -13705,6 +14291,7 @@ export async function searchIntentSources(
     topicHash,
     normalizedEnglishQuery,
     profile.name,
+    sourceMixProfile,
     "metadata",
     input.language ?? "zh-TW",
   ].join("|");
@@ -13811,11 +14398,10 @@ export async function searchIntentSources(
   const foregroundStartedAt = Date.now();
   const plannerLlmStatus = llmStatusFromPlannerStatus(plan);
   const groups: SourceProviderSearchResult[] = [];
-  const seedSources = trustedSeedSourcesForPlan(plan);
+  const seedSources = trustedSeedSourcesForPlan(plan).map((source) => withSourceMixRole(source));
   let dedupedSources = dedupeSourceRecords(
     [...groups.flatMap((group) => group.results), ...seedSources],
   );
-  const useTrustedWebFallback = shouldAlwaysUseTrustedWebFallback(plan);
   const refreshRankedSources = (): SearchIntentRankedSource[] => {
     dedupedSources = dedupeSourceRecords(
       [...groups.flatMap((group) => group.results), ...seedSources],
@@ -13831,129 +14417,25 @@ export async function searchIntentSources(
     plan,
     workflowContext,
   ).sources;
-  let academicSourceCount = preliminaryRanked
-    .filter(isAcademicSource)
-    .filter(isReviewableRankedSource).length;
-  let reviewableCount = preliminaryRanked.filter(isReviewableRankedSource).length;
   const activeAcademicProviders = new Set<AcademicSourceProvider>(
     options?.sourceSearch?.providers ?? providerPolicyForPlan(plan),
   );
   const immediateTrustedSeedHandoff =
     profile.name !== "deep" && seedSources.length >= 5 && isSunsetAtmosphericOpticsPlan(plan);
 
-  for (const phase of academicQueryPhases) {
-    const phaseGroups = await searchAcademicProviderGroups(
-      immediateTrustedSeedHandoff ? phase.queries.slice(0, 1) : phase.queries,
+  groups.push(
+    ...(await searchSourceMixBuckets({
       plan,
+      querySet,
+      sourceMixProfile,
+      academicQueryPhases,
       options,
       activeAcademicProviders,
-      runtimeBudget,
-    );
-    groups.push(...phaseGroups);
-    preliminaryRanked = refreshRankedSources();
-    academicSourceCount = preliminaryRanked
-      .filter(isAcademicSource)
-      .filter(isReviewableRankedSource).length;
-    reviewableCount = preliminaryRanked.filter(isReviewableRankedSource).length;
-    const currentCandidateCount =
-      groups.reduce((sum, group) => sum + group.results.length, 0) + seedSources.length;
-
-    if (
-      profile.stopWhenAcceptedReached &&
-      reviewableCount >= profile.targetAcceptedSources &&
-      currentCandidateCount >= profile.maxCandidates
-    ) {
-      runtimeBudget.warnings.add(
-        `early_stop:${profile.name}: 已達 ${profile.targetAcceptedSources} 筆可審查來源目標，停止後續昂貴查詢。`,
-      );
-      break;
-    }
-    if (Date.now() >= runtimeBudget.deadlineMs) {
-      break;
-    }
-    if (immediateTrustedSeedHandoff) {
-      runtimeBudget.warnings.add(
-        "trusted_seed_handoff: 已先顯示可信種子來源，前景 provider probe 限縮為 1 組查詢。",
-      );
-      break;
-    }
-  }
-
-  if (
-    !immediateTrustedSeedHandoff &&
-    Date.now() < runtimeBudget.deadlineMs &&
-    (
-      useTrustedWebFallback ||
-      academicSourceCount < MINIMUM_ACADEMIC_SOURCES ||
-      !profile.stopWhenAcceptedReached &&
-      reviewableCount < TARGET_SOURCE_COUNT
-    )
-  ) {
-    groups.push(
-      ...(
-        await Promise.all([
-          searchFallbackProvider("Official Source", queries, plan, options),
-          searchFallbackProvider("Institutional Source", queries, plan, options),
-        ])
-      ).flat(),
-    );
-    preliminaryRanked = refreshRankedSources();
-    academicSourceCount = preliminaryRanked
-      .filter(isAcademicSource)
-      .filter(isReviewableRankedSource).length;
-    reviewableCount = preliminaryRanked.filter(isReviewableRankedSource).length;
-  }
-
-  if (
-    !immediateTrustedSeedHandoff &&
-    Date.now() < runtimeBudget.deadlineMs &&
-    (useTrustedWebFallback || reviewableCount < MINIMUM_TOTAL_SOURCES)
-  ) {
-    groups.push(
-      ...(await searchFallbackProvider("Authoritative Media", queries, plan, options)),
-    );
-    preliminaryRanked = refreshRankedSources();
-    reviewableCount = preliminaryRanked.filter(isReviewableRankedSource).length;
-  }
-
-  if (
-    !immediateTrustedSeedHandoff &&
-    Date.now() < runtimeBudget.deadlineMs &&
-    (useTrustedWebFallback || reviewableCount < TARGET_SOURCE_COUNT)
-  ) {
-    const expandedFallbackQueryLimit = Math.max(
-      DEFAULT_WEB_FALLBACK_QUERY_LIMIT * 2,
-      publicSearchConfig(options).maxQueriesPerProvider,
-    );
-    groups.push(
-      ...(
-        await Promise.all([
-          searchFallbackProvider(
-            "Official Source",
-            queries,
-            plan,
-            options,
-            expandedFallbackQueryLimit,
-          ),
-          searchFallbackProvider(
-            "Institutional Source",
-            queries,
-            plan,
-            options,
-            expandedFallbackQueryLimit,
-          ),
-          searchFallbackProvider(
-            "Authoritative Media",
-            queries,
-            plan,
-            options,
-            expandedFallbackQueryLimit,
-          ),
-        ])
-      ).flat(),
-    );
-    preliminaryRanked = refreshRankedSources();
-  }
+      runtime: runtimeBudget,
+      immediateTrustedSeedHandoff,
+    })),
+  );
+  preliminaryRanked = refreshRankedSources();
   if (Date.now() >= runtimeBudget.deadlineMs) {
     runtimeBudget.warnings.add("搜尋因整體 time budget 提前結束，以下為目前可用的部分結果。");
   }
@@ -14043,7 +14525,7 @@ export async function searchIntentSources(
     semanticClassification,
     expandedQueries,
   );
-  sources = pipeline.sources;
+  sources = pipeline.sources.map((source) => withSourceMixRole(source));
   logger.info(
     {
       marker: "[source-validation]",
@@ -14177,9 +14659,27 @@ export async function searchIntentSources(
       source.classification === "off_topic" ||
       source.classification === "trusted_but_off_topic",
   ).length;
+  const bucketResultCounts = bucketResultCountsForSources(
+    sources.length > 0 ? sources : dedupedSources,
+  );
+  const timedOutProviders = unique(
+    groups
+      .filter(
+        (group) =>
+          group.error_type === "timeout" ||
+          /timeout|timed out/i.test(group.error_message ?? ""),
+      )
+      .map((group) => group.provider),
+  );
+  const diversityWarnings = diversityWarningsForProfile(
+    sourceMixProfile,
+    bucketResultCounts,
+  );
+  const elapsedMs = Date.now() - foregroundStartedAt;
   const warnings = unique([
     ...resultWarnings(groups, sources, plan),
     ...Array.from(runtimeBudget.warnings),
+    ...diversityWarnings,
     ...(candidateCount < 80
       ? [
           `本次 provider 實際回傳 ${candidateCount} 筆候選，低於 80 筆；已避免用低相關來源湊數。`,
@@ -14246,6 +14746,11 @@ export async function searchIntentSources(
     .map((group) => group.latency_ms ?? 0)
     .sort((left, right) => left - right)[0];
   const diagnostics: SourceSearchPipelineDiagnostics = {
+    sourceMixProfile,
+    bucketResultCounts,
+    timedOutProviders,
+    elapsedMs,
+    diversityWarnings,
     original_topic: plan.originalTopic ?? input.topic.trim(),
     active_research_topic: plan.activeResearchTopic ?? input.topic.trim(),
     canonical_english_topic: plan.canonicalEnglishTopic ?? "",
@@ -14323,7 +14828,7 @@ export async function searchIntentSources(
     early_stop_reason:
       Array.from(runtimeBudget.warnings).find((warning) => warning.startsWith("early_stop:")) ??
       (Date.now() >= runtimeBudget.deadlineMs ? "overall_timeout" : null),
-    foreground_latency_ms: Date.now() - foregroundStartedAt,
+    foreground_latency_ms: elapsedMs,
     ...(typeof firstCandidateLatencyMs === "number"
       ? { first_candidate_latency_ms: firstCandidateLatencyMs }
       : {}),

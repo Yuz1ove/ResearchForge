@@ -7,6 +7,11 @@
  */
 
 export interface SourceSearchPipelineDiagnostics {
+  sourceMixProfile?: string;
+  bucketResultCounts?: Record<string, number>;
+  timedOutProviders?: string[];
+  elapsedMs?: number;
+  diversityWarnings?: string[];
   retrieved_count: number;
   deduped_count: number;
   rejected_count: number;

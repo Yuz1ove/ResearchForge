@@ -25,6 +25,12 @@ export type SourceRecommendationBucket =
   | "manual_review"
   | "rejected";
 export type SourceRole =
+  | "background_definition"
+  | "academic_evidence"
+  | "official_statistics"
+  | "professional_guidance"
+  | "case_or_news"
+  | "data_or_dataset"
   | "core_scholarly_evidence"
   | "official_background_explanation"
   | "definition_or_concept"
@@ -698,6 +704,12 @@ function normalizeRecommendationBucket(
 
 function normalizeSourceRole(value: unknown): SourceRole | null {
   if (
+    value === "background_definition" ||
+    value === "academic_evidence" ||
+    value === "official_statistics" ||
+    value === "professional_guidance" ||
+    value === "case_or_news" ||
+    value === "data_or_dataset" ||
     value === "core_scholarly_evidence" ||
     value === "official_background_explanation" ||
     value === "definition_or_concept" ||

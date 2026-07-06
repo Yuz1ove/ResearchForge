@@ -280,6 +280,12 @@ export const SourceUseCaseSchema = z.enum([
 export type SourceUseCase = z.infer<typeof SourceUseCaseSchema>;
 
 export const SourceRoleSchema = z.enum([
+  "background_definition",
+  "academic_evidence",
+  "official_statistics",
+  "professional_guidance",
+  "case_or_news",
+  "data_or_dataset",
   "core_scholarly_evidence",
   "official_background_explanation",
   "definition_or_concept",

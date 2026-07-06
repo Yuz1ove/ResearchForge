@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
 import generateReportRouter from "./generate-report";
+import reportDraftsRouter from "./report-drafts";
 import searchKeywordsRouter from "./search-keywords";
 import searchSourcesRouter from "./search-sources";
 import expandTopicRouter from "./expand-topic";
@@ -14,6 +15,7 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(generateReportRouter);
+router.use(reportDraftsRouter);
 router.use(searchKeywordsRouter);
 router.use(searchSourcesRouter);
 router.use(expandTopicRouter);

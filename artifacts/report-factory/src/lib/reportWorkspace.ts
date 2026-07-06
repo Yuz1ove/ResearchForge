@@ -81,6 +81,14 @@ export interface ReportWorkspaceLlmDiagnostics {
   fallbackReason: string | null;
   message?: string | null;
   warning: string | null;
+  generationMode?: string;
+  missingEvidence?: Array<{
+    sectionId: string;
+    title: string;
+    reason: string;
+    requiredEvidenceRoles?: string[];
+  }>;
+  warnings?: string[];
   sectionPlan?: Array<{
     sectionId: string;
     title: string;

@@ -45,6 +45,7 @@ export interface SearchSourcesRequest {
   selectedResearchPlanId?: string;
   workflowId?: string;
   searchProfile?: 'quick' | 'standard' | 'deep';
+  sourceMixProfile?: string;
   reportType?: string;
   audience?: string;
   sourceMode?: string;
@@ -417,6 +418,11 @@ export interface SearchTrace {
 }
 
 export interface SourceSearchPipelineDiagnostics {
+  sourceMixProfile?: string;
+  bucketResultCounts?: Record<string, number>;
+  timedOutProviders?: string[];
+  elapsedMs?: number;
+  diversityWarnings?: string[];
   retrieved_count: number;
   deduped_count: number;
   rejected_count: number;

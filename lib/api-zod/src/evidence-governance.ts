@@ -33,6 +33,7 @@ export type EvidenceUserDecision =
 export interface EvidenceGovernanceCard {
   recommendationBucket?: EvidenceRecommendationBucket | null;
   bucket?: EvidenceRecommendationBucket | null;
+  sourceRole?: string | null;
   limitations?: readonly string[] | null;
   limitationsZhTw?: readonly string[] | null;
   acceptedByUser?: boolean | null;
@@ -82,6 +83,22 @@ function bucketForCard(card: EvidenceGovernanceCard): EvidenceRecommendationBuck
   return card.recommendationBucket ?? card.bucket ?? "manual_review";
 }
 
+function sourceRoleForCard(card: EvidenceGovernanceCard): string {
+  return card.sourceRole?.trim() ?? "";
+}
+
+function sourceRoleSupportsScholarlyClaim(card: EvidenceGovernanceCard): boolean {
+  return /^(academic_evidence|core_scholarly_evidence|official_statistics|professional_guidance|data_or_dataset|statistics_or_dataset)$/.test(
+    sourceRoleForCard(card),
+  );
+}
+
+function sourceRoleIsBackgroundOnly(card: EvidenceGovernanceCard): boolean {
+  return /^(background_definition|definition_or_concept|official_background_explanation|teaching_or_public_explainer|case_or_news)$/.test(
+    sourceRoleForCard(card),
+  );
+}
+
 export function evidenceCardHasNonPeerReviewedLimitation(
   card: EvidenceGovernanceCard,
 ): boolean {
@@ -117,6 +134,18 @@ export function canUseEvidenceCardForSection(
 ): boolean {
   const bucket = bucketForCard(card);
   if (bucket === "rejected") return false;
+  if (
+    evidenceSectionSupportsScholarlyClaim(sectionType) &&
+    sourceRoleSupportsScholarlyClaim(card)
+  ) {
+    return !evidenceCardHasNonPeerReviewedLimitation(card);
+  }
+  if (
+    evidenceSectionSupportsScholarlyClaim(sectionType) &&
+    sourceRoleIsBackgroundOnly(card)
+  ) {
+    return false;
+  }
   if (
     evidenceSectionSupportsScholarlyClaim(sectionType) &&
     evidenceCardHasNonPeerReviewedLimitation(card)

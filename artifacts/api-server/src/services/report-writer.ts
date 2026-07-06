@@ -40,6 +40,7 @@ export interface ReportWriterInput {
   language?: string;
   locale?: string;
   generationMode?: "preliminary" | "formal" | string;
+  sourceMixProfile?: string;
   acceptedSources: SourceRecord[];
   acceptedSourceIds?: string[];
   evidenceCards?: ReportWriterEvidenceCard[];
@@ -2418,6 +2419,7 @@ function reportWriterMessages(
           `language: ${input.language ?? "繁體中文"}`,
           `locale: ${input.locale ?? "zh-TW"}`,
           `generationMode: ${input.generationMode ?? "formal"}`,
+          `sourceMixProfile: ${input.sourceMixProfile ?? "unspecified"}`,
           governanceNote,
           "Return exactly 3 sections with these ids only: abstract, findings, conclusion.",
           "Keep each section to 1 short paragraph and return valid JSON even if evidence is limited.",
@@ -2471,6 +2473,7 @@ function reportWriterMessages(
           `language: ${input.language ?? "繁體中文"}`,
           `locale: ${input.locale ?? "zh-TW"}`,
           `generationMode: ${input.generationMode ?? "formal"}`,
+          `sourceMixProfile: ${input.sourceMixProfile ?? "unspecified"}`,
           governanceNote,
           input.generationMode === "preliminary"
             ? "State clearly that this is a constrained draft where evidence is still incomplete."

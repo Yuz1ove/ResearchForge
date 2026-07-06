@@ -51,6 +51,7 @@ export const SearchSourcesBody = zod.object({
   "selectedResearchPlanId": zod.string().min(1).optional(),
   "workflowId": zod.string().min(1).optional(),
   "searchProfile": zod.enum(["quick", "standard", "deep"]).optional(),
+  "sourceMixProfile": zod.string().min(1).optional(),
   "reportType": zod.string().optional(),
   "audience": zod.string().optional(),
   "sourceMode": zod.string().optional(),

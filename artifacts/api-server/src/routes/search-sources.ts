@@ -137,6 +137,7 @@ export function normalizeSearchSourcesRequest(body: unknown): NormalizedSearchSo
   const domainHints = extractStringArray(body, "domainHints");
   const selectedResearchPlanId = extractString(body, "selectedResearchPlanId");
   const workflowId = extractString(body, "workflowId");
+  const sourceMixProfile = extractString(body, "sourceMixProfile");
   const searchProfileRaw = extractString(body, "searchProfile");
   const searchProfile =
     searchProfileRaw === "quick" || searchProfileRaw === "standard" || searchProfileRaw === "deep"
@@ -170,6 +171,7 @@ export function normalizeSearchSourcesRequest(body: unknown): NormalizedSearchSo
         audience: extractString(parsed.data, "audience"),
         language: extractString(parsed.data, "language"),
         sourceMode: extractString(parsed.data, "sourceMode"),
+        ...(sourceMixProfile ? { sourceMixProfile } : {}),
         ...(displayTitle ? { displayTitle } : {}),
         ...(canonicalTopicZh ? { canonicalTopicZh } : {}),
         ...(canonicalTopicEn ? { canonicalTopicEn } : {}),

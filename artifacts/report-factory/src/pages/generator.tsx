@@ -886,6 +886,28 @@ function audienceToAcademicLevel(audience: string): string {
   }
 }
 
+function sourceMixProfileForGeneratorInput(input: ReportInput): string {
+  const text = [
+    input.reportType,
+    input.targetAudience,
+    input.academicLevel,
+    input.topic,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (/商業|企業|產業|產品|市場|business|industry|market|product/.test(text)) {
+    return "business_industry";
+  }
+  if (/醫療|長照|社工|心理|健康|獸醫|medical|health|psycholog|veterinary/.test(text)) {
+    return "professional_guidance";
+  }
+  if (/大學|研究所|碩士|博士|專業|學術|university|college|graduate|academic/.test(text)) {
+    return "academic_strict";
+  }
+  return "school_report_balanced";
+}
+
 function buildResearchDirectionCards(
   topic: string,
   selectedDomain: ResearchDomain | null,
@@ -2360,6 +2382,53 @@ function sourceRecommendationBucketVariant(
   }
 }
 
+function sourceRoleBadgeLabel(role: SourceRecord["sourceRole"]): string | null {
+  switch (role) {
+    case "background_definition":
+    case "definition_or_concept":
+    case "official_background_explanation":
+      return "背景來源";
+    case "academic_evidence":
+    case "core_scholarly_evidence":
+      return "學術證據";
+    case "official_statistics":
+    case "statistics_or_dataset":
+      return role === "statistics_or_dataset" ? "資料集" : "官方統計";
+    case "professional_guidance":
+    case "teaching_or_public_explainer":
+      return "專業指南";
+    case "case_or_news":
+      return "案例／新聞";
+    case "data_or_dataset":
+      return "資料集";
+    case "weak_or_uncertain":
+      return "待確認";
+    case "rejected":
+      return "已排除";
+    default:
+      return null;
+  }
+}
+
+function sourceRoleBadgeVariant(
+  role: SourceRecord["sourceRole"],
+): "default" | "secondary" | "outline" | "destructive" {
+  switch (role) {
+    case "academic_evidence":
+    case "core_scholarly_evidence":
+      return "default";
+    case "official_statistics":
+    case "professional_guidance":
+    case "data_or_dataset":
+    case "statistics_or_dataset":
+      return "secondary";
+    case "rejected":
+      return "destructive";
+    default:
+      return "outline";
+  }
+}
+
 function retrievalModeLabel(mode: SourceRecord["retrievalMode"]): string {
   switch (mode) {
     case "live_provider":
@@ -2814,6 +2883,7 @@ function SourceReviewCard({
   const evidenceSufficiency = source.evidenceSufficiency ?? null;
   const usageRecommendation = source.usageRecommendation ?? null;
   const bucketLabel = sourceRecommendationBucketLabel(source.recommendationBucket);
+  const roleLabel = sourceRoleBadgeLabel(source.sourceRole);
   const retrievalLabel = retrievalModeLabel(source.retrievalMode);
   const relevanceReasons = source.relevanceReasons ?? [];
   const scoreReasons = source.scoreReasons ?? [];
@@ -2947,6 +3017,11 @@ function SourceReviewCard({
                     {bucketLabel ? (
                       <Badge variant={sourceRecommendationBucketVariant(source.recommendationBucket)}>
                         {bucketLabel}
+                      </Badge>
+                    ) : null}
+                    {roleLabel ? (
+                      <Badge variant={sourceRoleBadgeVariant(source.sourceRole)}>
+                        {roleLabel}
                       </Badge>
                     ) : null}
                     {source.isOpenAccess && <Badge variant="outline">開放全文</Badge>}
@@ -5080,6 +5155,7 @@ function ManageStepPanel({
 
 function GenerateStepPanel({
   acceptedCount,
+  acceptedSources,
   researchDepth,
   recommendedAcceptedSourceCount,
   readiness,
@@ -5098,6 +5174,7 @@ function GenerateStepPanel({
   onBack,
 }: {
   acceptedCount: number;
+  acceptedSources: SourceRecord[];
   researchDepth: ReportInput["researchDepth"];
   recommendedAcceptedSourceCount: number;
   readiness: ReturnType<typeof generationReadiness>;
@@ -5137,6 +5214,19 @@ function GenerateStepPanel({
     llmStatus.provider === "school_llm"
       ? "SCHOOL_LLM"
       : llmStatus.provider || "LLM";
+  const sourceRoleCounts = acceptedSources.reduce<Record<string, number>>((counts, source) => {
+    const role = sourceRoleBadgeLabel(source.sourceRole) ?? "未分類";
+    counts[role] = (counts[role] ?? 0) + 1;
+    return counts;
+  }, {});
+  const sourceDiversityCount = Object.keys(sourceRoleCounts).filter((role) => role !== "未分類").length;
+  const insufficientSections = sectionSufficiency.filter((section) => section.status !== "sufficient");
+  const generationCapability =
+    canGenerateReport && readiness.canGenerateFull && llmStatus.healthOk && llmStatus.smokeOk && llmStatus.modelConfigured
+      ? "可生成完整報告"
+      : canGenerateReport
+        ? "只能生成草稿"
+        : "尚不可生成";
 
   return (
     <section
@@ -5226,9 +5316,33 @@ function GenerateStepPanel({
             可用摘要 {readiness.usableSummaryCount} 筆
           </Badge>
           <Badge variant="outline">涵蓋面 {readiness.coverageCount} 項</Badge>
+          <Badge variant={sourceDiversityCount >= 3 ? "secondary" : "outline"}>
+            來源多樣性 {sourceDiversityCount} 種
+          </Badge>
+          <Badge variant={generationCapability === "可生成完整報告" ? "default" : canGenerateReport ? "secondary" : "outline"}>
+            {generationCapability}
+          </Badge>
+          {insufficientSections.length > 0 ? (
+            <Badge variant="outline">
+              證據不足章節 {insufficientSections.length}
+            </Badge>
+          ) : null}
           {isGenerating && (
             <Badge variant="outline">{readiness.progressLabel}</Badge>
           )}
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+          {Object.entries(sourceRoleCounts).map(([role, count]) => (
+            <span key={role} className="rounded-md border border-border px-2 py-1">
+              {role} {count}
+            </span>
+          ))}
+          {insufficientSections.slice(0, 4).map((section) => (
+            <span key={section.sectionId} className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-amber-800">
+              {section.title} 證據不足
+            </span>
+          ))}
         </div>
 
         {(blockingReason || readiness.warning) && (
@@ -7434,6 +7548,7 @@ export function Generator() {
         selectedResearchPlanId: selectedResearchPayload?.selectedResearchPlanId,
         workflowId: workflowIdForSearch,
         searchProfile: input.researchDepth,
+        sourceMixProfile: sourceMixProfileForGeneratorInput(input),
         reportType: input.reportType,
         audience: input.targetAudience || input.academicLevel,
         sourceMode: input.sourceRequirement,
@@ -7722,6 +7837,7 @@ export function Generator() {
         excludeTerms: ["攝影", "旅遊", "作文", "商業", "購物", "廣告", "SEO"],
         workflowId: workflowIdForSearch,
         searchProfile: input.researchDepth,
+        sourceMixProfile: sourceMixProfileForGeneratorInput(input),
         reportType: input.reportType,
         audience: input.targetAudience || input.academicLevel,
         sourceMode: input.sourceRequirement,
@@ -7842,14 +7958,10 @@ export function Generator() {
           : !llmStatus.modelConfigured
             ? "LLM credentials configured, but model is not explicitly configured. Set SCHOOL_LLM_MODEL or OPENAI_MODEL."
             : `目前模型不可用：${llmStatus.model}`);
-      setGenerateStatus("error");
-      setGenerateErrorMessage(message);
       toast({
-        title: "GPT 連線尚未就緒",
-        description: message,
-        variant: "destructive",
+        title: "將生成保守草稿",
+        description: `${message}；系統會改用 evidence-grounded fallback 草稿並標示證據不足處。`,
       });
-      return;
     }
 
     const effectiveInput: ReportInput = {
@@ -8548,6 +8660,7 @@ export function Generator() {
           ) : (
             <GenerateStepPanel
               acceptedCount={acceptedSources.length}
+              acceptedSources={acceptedSources}
               researchDepth={input.researchDepth}
               recommendedAcceptedSourceCount={recommendedAcceptedSourceCount}
               readiness={readiness}

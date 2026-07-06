@@ -181,6 +181,35 @@ const ACADEMIC_TERM_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bglobal warming\b/gi, "全球暖化"],
   [/\bstudents?\b/gi, "學生"],
   [/\badolescents?\b/gi, "青少年"],
+  [/\bdogs?\b/gi, "狗"],
+  [/\bcanine\b/gi, "犬類"],
+  [/\bresource guarding\b/gi, "護食或資源防衛"],
+  [/\bfood guarding\b/gi, "護食"],
+  [/\bpositive reinforcement\b/gi, "正向增強"],
+  [/\bveterinary behavior\b/gi, "獸醫行為學"],
+  [/\bhumane training\b/gi, "人道訓練"],
+  [/\bjade\b/gi, "玉佩或玉器"],
+  [/\bsymbolic meaning\b/gi, "象徵意義"],
+  [/\bchinese culture\b/gi, "華人文化"],
+  [/\bgeothermal\b/gi, "地熱"],
+  [/\byellowstone\b/gi, "黃石國家公園"],
+  [/\bnational park\b/gi, "國家公園"],
+  [/\bhot springs?\b/gi, "溫泉"],
+  [/\bgeyser(s)?\b/gi, "間歇泉"],
+  [/\bsoft drinks?\b/gi, "含糖飲料"],
+  [/\bcola\b/gi, "可樂"],
+  [/\bcaffeine\b/gi, "咖啡因"],
+  [/\bsugar\b/gi, "糖分"],
+  [/\burban heat island\b/gi, "都市熱島效應"],
+  [/\bcampus\b/gi, "校園"],
+  [/\bthermal comfort\b/gi, "熱舒適"],
+  [/\bmicroclimate\b/gi, "微氣候"],
+  [/\bheat stress\b/gi, "熱壓力"],
+  [/\bstatistics\b/gi, "統計資料"],
+  [/\bguidelines?\b/gi, "指引"],
+  [/\bguidance\b/gi, "指南"],
+  [/\bofficial\b/gi, "官方"],
+  [/\bencyclopedia\b/gi, "百科"],
 ];
 
 function cleanText(value: string | null | undefined): string {
@@ -509,24 +538,8 @@ export function sourceHasUsableAbstract(source: SourceRecord): boolean {
 }
 
 export function sourceSummaryText(source: SourceRecord): string {
-  if (cleanText(source.readableSummaryZhTW)) {
-    return truncateText(cleanText(source.readableSummaryZhTW), 170);
-  }
-  if (
-    shouldUseZhTwFallbackNotice(source) &&
-    !cleanText(source.readableSummaryZhTW) &&
-    !cleanText(source.llmSummaryZhTw) &&
-    /[A-Za-z]/.test(cleanText(source.originalAbstract ?? source.abstract)) &&
-    !/[\u4e00-\u9fff]/u.test(cleanText(source.originalAbstract ?? source.abstract))
-  ) {
-    return ZH_TW_SUMMARY_FALLBACK_NOTICE;
-  }
-  if (cleanText(source.llmSummaryZhTw) && !source.summaryFallbackUsed) {
-    return normalizedUserFacingLlmSummary(source.llmSummaryZhTw, 220);
-  }
   return truncateText(
-    evaluateSourceQuality(source, source.topic ?? source.title ?? "目前主題").summary
-      .readableSummaryZhTW,
+    sourceStructuredSummary(source, source.topic ?? source.title ?? "目前主題").zhTwSummary,
     170,
   );
 }
@@ -536,29 +549,7 @@ export function sourceParagraphSummary(
   topic: string,
   assessment?: SourceRelevanceAssessment,
 ): string {
-  if (cleanText(source.readableSummaryZhTW)) {
-    return truncateText(cleanText(source.readableSummaryZhTW), 260);
-  }
-  if (
-    shouldUseZhTwFallbackNotice(source) &&
-    !cleanText(source.readableSummaryZhTW) &&
-    !cleanText(source.llmSummaryZhTw) &&
-    /[A-Za-z]/.test(cleanText(source.originalAbstract ?? source.abstract)) &&
-    !/[\u4e00-\u9fff]/u.test(cleanText(source.originalAbstract ?? source.abstract))
-  ) {
-    return ZH_TW_SUMMARY_FALLBACK_NOTICE;
-  }
-  if (cleanText(source.llmSummaryZhTw) && !source.summaryFallbackUsed) {
-    return normalizedUserFacingLlmSummary(source.llmSummaryZhTw, 260);
-  }
-  const evidenceProfile = buildSourceEvidenceProfile(source, buildTopicFacets(topic));
-  if (evidenceProfile.evidenceSnippets.length > 0 && cleanText(evidenceProfile.summaryZhTw)) {
-    return truncateText(evidenceProfile.summaryZhTw, 260);
-  }
-  return truncateText(
-    evaluateSourceQuality(source, topic).summary.readableSummaryZhTW,
-    260,
-  );
+  return sourceStructuredSummary(source, topic, assessment).zhTwSummary;
 }
 
 export function sourceRecommendedSections(
@@ -654,6 +645,170 @@ export interface SourceSummaryForUser {
   recommendationReason: string;
   usableSections: WorkflowReportSection[];
   suitableSectionLabels: string[];
+  usableClaims: string[];
+  limitations: string[];
+  structuredSummary: SourceStructuredSummary;
+}
+
+export interface SourceStructuredSummary {
+  sourceRole: NonNullable<SourceRecord["sourceRole"]> | "unknown";
+  zhTwSummary: string;
+  topicRelation: string;
+  usableClaims: string[];
+  limitations: string[];
+  recommendedSections: WorkflowReportSection[];
+  originalSnippets: string[];
+}
+
+function sourceRoleForStructuredSummary(
+  source: SourceRecord,
+): SourceStructuredSummary["sourceRole"] {
+  return source.sourceRole ?? "unknown";
+}
+
+function sourceRoleReaderLabel(role: SourceStructuredSummary["sourceRole"]): string {
+  switch (role) {
+    case "background_definition":
+    case "definition_or_concept":
+      return "背景來源";
+    case "academic_evidence":
+    case "core_scholarly_evidence":
+      return "學術證據";
+    case "official_statistics":
+    case "official_background_explanation":
+      return "官方統計或官方說明";
+    case "professional_guidance":
+    case "teaching_or_public_explainer":
+      return "專業指南";
+    case "case_or_news":
+      return "案例或新聞";
+    case "data_or_dataset":
+    case "statistics_or_dataset":
+      return "資料集";
+    case "weak_or_uncertain":
+      return "待確認來源";
+    case "rejected":
+      return "已排除來源";
+    default:
+      return "來源";
+  }
+}
+
+function originalSnippetsForSource(source: SourceRecord): string[] {
+  return splitSentences(
+    cleanText(source.originalAbstract ?? source.abstractOriginal ?? source.abstract ?? source.snippet),
+  ).slice(0, 3);
+}
+
+function safeZhTwSummaryText(
+  source: SourceRecord,
+  topic: string,
+  facets: string[],
+): string {
+  const existing = cleanText(source.readableSummaryZhTW) || cleanText(source.readableSummaryZhTw);
+  if (existing && !containsHeavyEnglish(existing)) return truncateText(existing, 240);
+  const llmSummary = !source.summaryFallbackUsed ? cleanText(source.llmSummaryZhTw) : "";
+  if (llmSummary && !containsHeavyEnglish(llmSummary)) {
+    return normalizedUserFacingLlmSummary(llmSummary, 240);
+  }
+  const deterministic = readerFacingAbstractSummary(source, topic, facets, 240);
+  if (!containsHeavyEnglish(deterministic)) return deterministic;
+  const roleLabel = sourceRoleReaderLabel(sourceRoleForStructuredSummary(source));
+  const focus = titleOrFacetFocus(source, topicLabel(topic), facets);
+  const sectionText = sourceRecommendedSections(source).slice(0, 2).join("、") || "研究背景";
+  return truncateText(
+    `此${roleLabel}與「${topicLabel(topic)}」相關，主要可協助理解${focus}。因目前沒有穩定繁中摘要，系統先保守整理為可用於「${sectionText}」的線索；英文原文請展開細節查看。`,
+    240,
+  );
+}
+
+function sourceLimitationsForStructuredSummary(
+  source: SourceRecord,
+  summaryWarnings: string[],
+): string[] {
+  const limitations = [
+    ...(source.qualityWarnings ?? []),
+    ...(source.summaryWarnings ?? []),
+    ...summaryWarnings,
+  ].map((item) => normalizeDisplayTextToZhTw(item));
+  if (!sourceHasUsableAbstract(source)) {
+    limitations.push("目前缺少可直接判讀的摘要或原文片段。");
+  }
+  if (
+    source.sourceRole === "background_definition" ||
+    source.sourceRole === "definition_or_concept" ||
+    /wikipedia|britannica|百科/i.test([source.url, source.title, source.publisher].join(" "))
+  ) {
+    limitations.push("百科或背景來源只能用於定義與背景，不能單獨支撐主要發現。");
+  }
+  return Array.from(new Set(limitations.filter(Boolean))).slice(0, 4);
+}
+
+function sourceUsableClaimsForStructuredSummary(
+  source: SourceRecord,
+  topic: string,
+  evidenceProfile: ReturnType<typeof buildSourceEvidenceProfile>,
+  assessment: SourceRelevanceAssessment,
+): string[] {
+  const claims = [
+    source.mainEvidencePointZhTw,
+    source.evidenceSummaryZhTw,
+    ...((source.evidencePoints ?? []) as string[]),
+    ...evidenceProfile.evidenceSnippets.map((snippet) => snippet.snippetZhTw),
+  ]
+    .map((claim) => cleanText(claim))
+    .filter(Boolean)
+    .filter((claim) => !containsHeavyEnglish(claim));
+  if (claims.length > 0) return Array.from(new Set(claims)).slice(0, 3);
+  const matched = readerFacingFacetLabels(assessment.matchedFacets);
+  const roleLabel = sourceRoleReaderLabel(sourceRoleForStructuredSummary(source));
+  if (matched.length > 0) {
+    return [`可作為${roleLabel}，支撐「${matched.slice(0, 2).join("、")}」相關段落的保守說明。`];
+  }
+  return [`可作為${roleLabel}，提供「${topicLabel(topic)}」的背景或補充線索。`];
+}
+
+export function sourceStructuredSummary(
+  source: SourceRecord,
+  topic: string,
+  assessment?: SourceRelevanceAssessment,
+  evidenceProfile?: ReturnType<typeof buildSourceEvidenceProfile>,
+): SourceStructuredSummary {
+  const profile = buildSourceIntentProfile(topic);
+  const effectiveAssessment = assessment ?? metadataBackedAssessment(
+    source,
+    buildSourceRelevanceAssessment(source, profile),
+  );
+  const effectiveEvidence =
+    evidenceProfile ?? buildSourceEvidenceProfile(source, buildTopicFacets(topic));
+  const facets = [
+    ...effectiveAssessment.matchedFacets,
+    effectiveEvidence.mainEvidenceFacet ?? "",
+  ].filter(Boolean);
+  const recommendedSections = sourceRecommendedSections(source);
+  const summaryWarnings = sourceSummaryWarningsForUser(
+    source,
+    [...(source.summaryWarnings ?? []), ...(source.qualityWarnings ?? [])],
+  );
+  const usableClaims = sourceUsableClaimsForStructuredSummary(
+    source,
+    topic,
+    effectiveEvidence,
+    effectiveAssessment,
+  );
+  const topicRelation =
+    cleanText(source.relevanceReasonZhTW) ||
+    cleanText(source.sourceRelevanceReasonZhTw) ||
+    relationFromAssessment(source, topic, profile, effectiveAssessment);
+  return {
+    sourceRole: sourceRoleForStructuredSummary(source),
+    zhTwSummary: safeZhTwSummaryText(source, topic, facets),
+    topicRelation,
+    usableClaims,
+    limitations: sourceLimitationsForStructuredSummary(source, summaryWarnings),
+    recommendedSections,
+    originalSnippets: originalSnippetsForSource(source),
+  };
 }
 
 function topicCoreLabel(profile: SourceIntentProfile): string {
@@ -973,6 +1128,12 @@ export function sourceSummaryForUser(
     source,
     buildTopicFacets(topic),
   );
+  const structuredSummary = sourceStructuredSummary(
+    source,
+    topic,
+    assessment,
+    evidenceProfile,
+  );
   const usableSections = sourceRecommendedSections(source);
   const usageRecommendation: SourceUsageRecommendation =
     source.usageRecommendation ?? quality.usageRecommendation;
@@ -980,7 +1141,7 @@ export function sourceSummaryForUser(
     source.topicalRelevanceLabel ?? quality.topical.topicalRelevanceLabel;
   const evidenceSufficiency =
     source.evidenceSufficiency ?? quality.sufficiency.evidenceSufficiency;
-  const contentSummary = sourceParagraphSummary(source, topic, assessment);
+  const contentSummary = structuredSummary.zhTwSummary;
   const summarySourceType =
     source.summarySourceType ??
     (quality.summary.summarySourceType === "reject"
@@ -1020,8 +1181,7 @@ export function sourceSummaryForUser(
               reason: "目前只有標題或書目資訊，不能視為正式證據。",
             };
   const topicRelation =
-    cleanText(source.relevanceReasonZhTW) ||
-    cleanText(source.sourceRelevanceReasonZhTw) ||
+    structuredSummary.topicRelation ||
     cleanText(quality.topical.relevanceReasonZhTW) ||
     null;
   const recommendationReason = (() => {
@@ -1070,5 +1230,8 @@ export function sourceSummaryForUser(
     recommendationReason,
     usableSections,
     suitableSectionLabels: suitableSectionLabels(source, assessment),
+    usableClaims: structuredSummary.usableClaims,
+    limitations: structuredSummary.limitations,
+    structuredSummary,
   };
 }

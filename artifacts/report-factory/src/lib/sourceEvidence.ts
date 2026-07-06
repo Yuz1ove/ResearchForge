@@ -131,6 +131,28 @@ function matchedFacetLabels(
     .map((facet) => facet.labelZhTw);
 }
 
+function genericEvidenceFocus(text: string, facets: TopicFacets): string[] {
+  const focus: string[] = [];
+  const haystack = lower(text);
+  const add = (pattern: RegExp, label: string) => {
+    if (pattern.test(haystack)) focus.push(label);
+  };
+  add(/dog|canine|resource guarding|food guarding|aggression|training|狗|犬|護食|資源防衛|訓練|攻擊/, "行為與教育方式");
+  add(/veterinary|guideline|guidance|professional|association|獸醫|指引|指南|專業/, "專業指引");
+  add(/jade|symbol|ritual|culture|heritage|玉|玉佩|象徵|文化|儀式/, "文化象徵");
+  add(/yellowstone|geothermal|geyser|hot spring|volcanic|hydrothermal|黃石|地熱|間歇泉|溫泉|火山/, "地質成因");
+  add(/cola|soda|soft drink|sugar|caffeine|adolescent|health|可樂|含糖飲料|糖|咖啡因|青少年|健康/, "健康影響");
+  add(/urban heat island|campus|thermal comfort|microclimate|heat stress|都市熱島|校園|熱舒適|微氣候|熱壓力/, "環境影響");
+  add(/statistics|dataset|survey|indicator|trend|統計|資料集|調查|指標|趨勢/, "統計資料");
+  add(/definition|overview|encyclopedia|background|定義|概述|百科|背景/, "背景定義");
+
+  const facetLabels = unique([
+    ...matchedFacetLabels(text, facets, "required"),
+    ...matchedFacetLabels(text, facets, "secondary"),
+  ]);
+  return unique([...focus, ...facetLabels]).slice(0, 4);
+}
+
 function translateEvidenceSnippet(
   sentence: string,
   facets: TopicFacets,
@@ -177,11 +199,17 @@ function translateEvidenceSnippet(
   if (/algae|algal|cyanobacteria|stromatolite|microfossil|biomarker|藻類|藍綠菌|疊層石|微化石|生物標誌/.test(text))
     pieces.push("藻類或微化石線索");
 
+  pieces.push(...genericEvidenceFocus(sentence, facets));
+
   if (pieces.length > 0) {
     return `此片段指出${unique(pieces).slice(0, 4).join("、")}與${facets.topicCore[0] ?? "主題"}相關。`;
   }
 
-  return truncateText(sentence);
+  const topic = facets.topicCore[0] ?? "研究主題";
+  const terms = facetTerms(facets).slice(0, 3).join("、");
+  return terms
+    ? `此片段提供「${topic}」與${terms}相關的證據線索；英文原文請展開查看。`
+    : `此片段提供「${topic}」的證據線索；英文原文請展開查看。`;
 }
 
 function reasoningForSnippet(
@@ -335,16 +363,13 @@ function buildSummary(snippets: string[], facets: TopicFacets): string {
     focus.push("古環境重建");
   if (/algae|algal|cyanobacteria|stromatolite|microfossil|biomarker|藻類|藍綠菌|疊層石|微化石|生物標誌/.test(combined))
     focus.push("藻類或微化石線索");
+  focus.push(...genericEvidenceFocus(combined, facets));
 
   if (focus.length > 0) {
     return `此來源可用摘要片段涵蓋${unique(focus).slice(0, 5).join("、")}，可用來判斷${facets.topicCore[0] ?? "研究主題"}的核心面向。`;
   }
 
-  return truncateText(
-    snippets
-      .map((snippet) => translateEvidenceSnippet(snippet, facets))
-      .join(" "),
-  );
+  return `此來源提供與${facets.topicCore[0] ?? "研究主題"}相關的摘要線索；目前只能保守判讀，原文片段請在細節中確認。`;
 }
 
 export function classifyEvidenceGrounding(
