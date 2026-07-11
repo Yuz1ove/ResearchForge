@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "pnpm --filter @workspace/report-factory run build",
+  "outputDirectory": "artifacts/report-factory/dist/public",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}
