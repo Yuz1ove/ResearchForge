@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { SearchIntentSummaryDomainProfile } from './searchIntentSummaryDomainProfile';
 import type { SearchIntentSummaryPlannerStatus } from './searchIntentSummaryPlannerStatus';
 
 export interface SearchIntentSummary {
@@ -16,4 +17,5 @@ export interface SearchIntentSummary {
   mustHaveTerms: string[];
   plannerStatus: SearchIntentSummaryPlannerStatus;
   fallbackUsed: boolean;
+  domainProfile: SearchIntentSummaryDomainProfile;
 }

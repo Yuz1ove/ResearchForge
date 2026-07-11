@@ -681,7 +681,7 @@ test("Crossref preserves a planner-validated topic query when short retry is dis
 
 test("returns deduped partial results when one provider succeeds and another fails", async () => {
   const configs = getSourceProviderConfigs();
-  const sources = await searchSources("student sleep quality", {
+  const result = await searchSources("student sleep quality", {
     providerConfigs: {
       Crossref: {
         ...configs.Crossref,
@@ -718,7 +718,101 @@ test("returns deduped partial results when one provider succeeds and another fai
     },
   });
 
-  assert.equal(sources.length, 1);
-  assert.equal(sources[0]?.sourceType, "Crossref");
-  assert.equal(sources[0]?.doi, "10.4000/student-sleep");
+  assert.equal(result.sources.length, 1);
+  assert.equal(result.sources[0]?.sourceType, "Crossref");
+  assert.equal(result.sources[0]?.doi, "10.4000/student-sleep");
+  assert.equal(result.diagnostics.resultTarget, 20);
+  assert.ok(result.diagnostics.warnings.some((warning) => warning.includes("目前取得")));
+});
+
+test("keeps partial results when academic providers fail with 429 or malformed responses", async () => {
+  const configs = getSourceProviderConfigs();
+  const result = await searchSources("BMW electric vehicle strategy", {
+    providerConfigs: {
+      Crossref: {
+        ...configs.Crossref,
+        endpoint: "https://example.test/works",
+        timeoutMs: 50,
+        queryLimit: 1,
+      },
+      OpenAlex: {
+        ...configs.OpenAlex,
+        endpoint: "https://example.test/openalex",
+        timeoutMs: 50,
+        queryLimit: 1,
+      },
+      "Semantic Scholar": {
+        ...configs["Semantic Scholar"],
+        endpoint: "https://example.test/paper/search",
+        timeoutMs: 50,
+        queryLimit: 1,
+      },
+    },
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.includes("paper/search")) {
+        return new Response("{", { status: 200 });
+      }
+      if (url.includes("openalex")) {
+        return new Response(JSON.stringify({ error: "rate limited" }), { status: 429 });
+      }
+      return new Response(JSON.stringify({
+        message: {
+          items: [
+            {
+              title: ["BMW Group electric vehicle transition annual report"],
+              author: [{ given: "Ada", family: "Analyst" }],
+              issued: { "date-parts": [[2024]] },
+              DOI: "10.5000/bmw-annual",
+              URL: "https://doi.org/10.5000/bmw-annual",
+            },
+          ],
+        },
+      }));
+    },
+  });
+
+  assert.equal(result.sources.length, 1);
+  assert.equal(result.diagnostics.status, "insufficient_sources");
+  assert.ok(result.diagnostics.providerFailures.some((failure) => failure.provider !== "Crossref"));
+  assert.ok(result.diagnostics.providerFailures.some((failure) => failure.stage === "academic"));
+  assert.ok(result.diagnostics.warnings.some((warning) => warning.includes("外部學術 API")));
+});
+
+test("merges duplicate source metadata so longer abstracts survive dedupe", () => {
+  const merged = dedupeSources([
+    {
+      id: "crossref-duplicate",
+      title: "Salmonella and food safety",
+      authors: ["A. Author"],
+      year: 2024,
+      abstract: null,
+      doi: "10.5000/salmonella",
+      url: "https://doi.org/10.5000/salmonella",
+      sourceType: "Crossref",
+      reviewState: "pending",
+      publisher: "Example Press",
+      containerTitle: "Example Journal",
+      accessedAt: null,
+    },
+    {
+      id: "openalex-duplicate",
+      title: "Salmonella and food safety",
+      authors: ["A. Author", "B. Researcher"],
+      year: 2024,
+      abstract: "This paper examines Salmonella cross-contamination, food poisoning risk, and storage temperature in food safety practice.",
+      doi: "10.5000/salmonella",
+      url: "https://openalex.org/W123",
+      sourceType: "OpenAlex",
+      reviewState: "pending",
+      publisher: "Example Press",
+      containerTitle: "Example Journal",
+      accessedAt: null,
+    },
+  ]);
+
+  assert.equal(merged.length, 1);
+  assert.match(merged[0]?.abstract ?? "", /cross-contamination/);
+  assert.equal(merged[0]?.url, "https://doi.org/10.5000/salmonella");
+  assert.deepEqual(merged[0]?.authors, ["A. Author", "B. Researcher"]);
 });

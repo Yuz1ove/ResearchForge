@@ -151,6 +151,7 @@ test("search source topic-style route response includes search intent fields", a
         topicHash,
         queryPlanHash,
         searchIntent: {
+          domainProfile: "academic",
           primaryConcepts: ["urban heat island", "thermal comfort"],
           contextConcepts: ["campus"],
           outcomeConcepts: ["student comfort"],
@@ -189,14 +190,16 @@ test("search source topic-style route response includes search intent fields", a
             ok: false,
             provider: "Semantic Scholar",
             query: "urban heat island campus thermal comfort students",
+            stage: "academic",
             results: [],
             error_type: "api-failure",
             error_message: "Semantic Scholar returned HTTP 503",
           },
         ],
-        warnings: ["部分來源提供者暫時無法使用，已顯示可用結果。"],
+        warnings: ["外部學術 API 暫時不可用。", "目前取得 1/20 筆來源。"],
         planner: {
           normalizedTopic: input.topic,
+          domainProfile: "academic",
           primaryConcepts: ["urban heat island", "thermal comfort"],
           contextConcepts: ["campus"],
           outcomeConcepts: ["student comfort"],
@@ -334,7 +337,7 @@ test("search source topic-style route response includes search intent fields", a
   assert.ok(result.searchIntent?.lowWeightTerms.includes("learning"));
   assert.equal(result.searchIntent?.plannerStatus, "rule_fallback");
   assert.ok(result.provider_status?.some((group) => !group.ok));
-  assert.ok(result.warnings?.some((warning) => warning.includes("部分來源提供者")));
+  assert.ok(result.warnings?.some((warning) => warning.includes("學術 API") || warning.includes("可用結果")));
   assert.equal(result.sources?.length, 1);
 });
 

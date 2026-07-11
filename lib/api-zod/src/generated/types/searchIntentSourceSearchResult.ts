@@ -15,6 +15,7 @@ import type { SearchRelevanceDebug } from './searchRelevanceDebug';
 import type { SearchTrace } from './searchTrace';
 import type { SourceSearchPipelineDiagnostics } from './sourceSearchPipelineDiagnostics';
 import type { SourceRecord } from './sourceRecord';
+import type { SourceSearchDiagnostics } from './sourceSearchDiagnostics';
 
 export interface SearchIntentSourceSearchResult {
   ok: boolean;
@@ -35,4 +36,5 @@ export interface SearchIntentSourceSearchResult {
   llm_status: SearchIntentSourceSearchResultLlmStatus;
   keyword_expansion: KeywordExpansionResult;
   groups: KeywordSourceGroup[];
+  diagnostics?: SourceSearchDiagnostics;
 }

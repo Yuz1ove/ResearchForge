@@ -5,10 +5,12 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { SearchIntentPlanDomainProfile } from './searchIntentPlanDomainProfile';
 import type { SearchIntentPlanPlannerStatus } from './searchIntentPlanPlannerStatus';
 
 export interface SearchIntentPlan {
   normalizedTopic: string;
+  domainProfile: SearchIntentPlanDomainProfile;
   primaryConcepts: string[];
   contextConcepts: string[];
   outcomeConcepts: string[];
