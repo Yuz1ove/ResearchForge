@@ -3,18 +3,18 @@
   "framework": null,
   "outputDirectory": "dist",
   "functions": {
-    "api/index.cjs": {
+    "api/index.js": {
       "includeFiles": "dist/**"
     }
   },
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/api/index.cjs"
+      "destination": "/api/index.js"
     },
     {
       "source": "/(.*)",
-      "destination": "/api/index.cjs"
+      "destination": "/api/index.js"
     }
   ]
 }
