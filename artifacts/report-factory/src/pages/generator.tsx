@@ -7251,10 +7251,8 @@ export function Generator() {
       } catch (error) {
         if (cancelled) return;
         if (error instanceof DOMException && error.name === "AbortError") return;
-        const message =
-          error instanceof Error ? error.message : "Research grounding job polling failed.";
         setGroundingRequestState("job_poll_failed");
-        setGroundingError(`搜尋任務狀態讀取失敗：${message}`);
+        setGroundingError("搜尋任務狀態讀取失敗，請稍後再試。");
         setIsSearchingSources(false);
         setSourceSearchStatus("error");
         setSourceSearchMessage("搜尋任務狀態讀取失敗，請稍後再試。");
@@ -7575,8 +7573,8 @@ export function Generator() {
       setGroundingJob(null);
       setGroundingRequestState("job_create_failed");
       setGroundingError(
-        error instanceof ResearchGroundingApiError
-          ? `無法建立搜尋任務：${message}`
+        error instanceof ResearchGroundingApiError && error.code === "GROUNDING_STORE_NOT_CONFIGURED"
+          ? "搜尋服務尚未完成儲存空間設定，請通知系統管理員設定後再試。"
           : "無法建立搜尋任務，請確認 API 連線後重新搜尋。",
       );
       setIsSearchingSources(false);
