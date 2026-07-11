@@ -2,14 +2,19 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "outputDirectory": "dist",
+  "functions": {
+    "api/index.cjs": {
+      "includeFiles": "dist/**"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/api/index"
+      "destination": "/api/index.cjs"
     },
     {
       "source": "/(.*)",
-      "destination": "/api/index"
+      "destination": "/api/index.cjs"
     }
   ]
 }
