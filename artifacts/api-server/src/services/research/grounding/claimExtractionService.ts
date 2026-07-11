@@ -8,6 +8,7 @@ import {
 import { requestLlmText, type LlmServiceSuccess } from "../../llm-service";
 import { stableQueryHash, nowIso } from "../workflow/workflowIds";
 import type { ExtractedChunk } from "./sourceContentExtractor";
+import { cleanExtractedTextChunk, topicOverlapTerms } from "./evidencePipelineGuards";
 
 export const CLAIM_EXTRACTION_SYSTEM_PROMPT = [
   "You extract evidence-grounded research claims from a single source chunk.",
@@ -15,6 +16,9 @@ export const CLAIM_EXTRACTION_SYSTEM_PROMPT = [
   "Each claim must be a single supported claim, not a summary of the whole source.",
   "Never infer beyond the support span. If no supported claim exists, return {\"claims\":[]}.",
   "Reject title restatements, generic topic sentences, and unsupported implications.",
+  "Reject navigation, cookie, menu, moved-notice, publisher-shell, and unrelated-domain text.",
+  "The supportSpanText must be copied exactly from chunkText and must directly support claimTextOriginal.",
+  "Do not use outside knowledge or complete missing facts.",
 ].join(" ");
 
 const CLAIM_TYPES: ClaimType[] = [
@@ -201,6 +205,41 @@ function extractionModeForFallback(source: SourceCandidate): ClaimCandidate["ext
   return "rule_fallback";
 }
 
+function rejectedChunkClaim(input: {
+  input: ExtractClaimsFromChunkInput;
+  reason: string;
+  diagnostics: string[];
+  now: string;
+}): ClaimCandidate {
+  const fallbackText = firstSentence(input.input.chunk.text) || input.reason;
+  const claimId = `claim-${stableQueryHash([
+    input.input.workflowId,
+    input.input.source.sourceId,
+    input.input.chunk.chunk_id,
+    input.reason,
+  ].join("|")).slice(0, 24)}`;
+  return {
+    claimId,
+    sourceId: input.input.source.sourceId,
+    chunkId: input.input.chunk.chunk_id,
+    workflowId: input.input.workflowId,
+    ...(input.input.jobId ? { jobId: input.input.jobId } : {}),
+    claimTextOriginal: fallbackText,
+    claimTextZhTw: fallbackText,
+    claimType: "background",
+    citationMarker: citationMarkerForSource(input.input.source, input.input.sourceIndex),
+    confidence: 0,
+    relevanceToTopic: 0,
+    sourceQualityScore: input.input.source.sourceQualityScore,
+    usableSections: ["background"],
+    limitations: input.diagnostics,
+    extractionMode: extractionModeForFallback(input.input.source),
+    status: "rejected",
+    rejectionReason: input.reason,
+    createdAt: input.now,
+  };
+}
+
 function validateRawClaim(input: {
   raw: RawClaim;
   claimIndex: number;
@@ -385,9 +424,12 @@ function claimExtractionUserPrompt(input: ExtractClaimsFromChunkInput, maxClaims
     },
     hardRules: [
       "No supportSpanText means no accepted claim.",
+      "supportSpanText must be an exact contiguous substring of chunkText.",
       "Do not restate the source title as a claim.",
       "Do not summarize the whole chunk as one claim.",
       "Do not infer causality or mechanism unless the support span states it.",
+      "Reject unrelated chunks; for unrelated chunks return {\"claims\":[]}.",
+      "Reject navigation / moved notice / publisher shell chunks; return {\"claims\":[]}.",
       "If confidence would be below 0.55, still include the claim with confidence below 0.55.",
       "If no supported claim exists, return {\"claims\":[]}.",
     ],
@@ -413,20 +455,94 @@ function claimExtractionUserPrompt(input: ExtractClaimsFromChunkInput, maxClaims
   });
 }
 
-function ruleFallbackRawClaim(chunk: ExtractedChunk, source: SourceCandidate): RawClaim | null {
-  const sentence = firstSentence(chunk.text);
-  if (!sentence || sentence.length < 40) return null;
-  const type = normalizeClaimType(undefined, `${chunk.section_heading ?? ""} ${sentence}`);
-  return {
-    claimTextOriginal: sentence,
-    claimTextZhTw: sentence,
-    claimType: type,
-    supportSpanText: sentence,
-    confidence: source.accessLevel === "full_text" ? 0.58 : 0.55,
-    relevanceToTopic: Math.max(0.45, source.relevanceScore ?? 0.55),
-    usableSections: defaultSectionsForType(type),
-    limitations: ["rule_fallback_claim_extraction"],
-  };
+const FALLBACK_CLAIM_SIGNAL =
+  /顯示|指出|說明|依賴|應用|应用|廣泛|广泛|能量密度|安全性|回收|支持|支撐|影響|相關|發現|結果|方法|限制|because|depend|show|indicate|support|use|application|method|result|finding|limit/i;
+
+function isSubstantiveFallbackSentence(sentence: string): boolean {
+  const cjkChars = Array.from(sentence.matchAll(/[\u3400-\u9fff]/gu)).length;
+  return sentence.length >= 40 || cjkChars >= 18;
+}
+
+function supportSentenceCandidates(text: string): string[] {
+  const normalized = cleanText(text);
+  if (!normalized) return [];
+  const sentences = normalized
+    .split(/(?<=[。！？.!?；;])\s*/u)
+    .map((sentence) => sentence.trim())
+    .filter(isSubstantiveFallbackSentence)
+    .map((sentence) => sentence.length > 420 ? sentence.slice(0, 420).trim() : sentence);
+  if (sentences.length > 0) return uniqueStrings(sentences);
+  const fallback = firstSentence(normalized, 420);
+  return isSubstantiveFallbackSentence(fallback) ? [fallback] : [];
+}
+
+function fallbackSentenceScore(input: {
+  sentence: string;
+  topic: string;
+  source: SourceCandidate;
+  index: number;
+}): number {
+  const sentenceOverlap = topicOverlapTerms(input.topic, input.sentence).length;
+  const titleOverlap = topicOverlapTerms(input.topic, input.source.title ?? "").length;
+  const signalBonus = FALLBACK_CLAIM_SIGNAL.test(input.sentence) ? 1.5 : 0;
+  const numberBonus = /\d|%/u.test(input.sentence) ? 0.5 : 0;
+  return sentenceOverlap * 2 + Math.min(titleOverlap, 3) * 0.25 + signalBonus + numberBonus - input.index * 0.05;
+}
+
+function ruleFallbackRawClaims(
+  chunk: ExtractedChunk,
+  source: SourceCandidate,
+  topic: string,
+  limit: number,
+): RawClaim[] {
+  const candidates = supportSentenceCandidates(chunk.text)
+    .map((sentence, index) => ({
+      sentence,
+      score: fallbackSentenceScore({ sentence, topic, source, index }),
+      overlapCount: topicOverlapTerms(topic, sentence).length,
+      index,
+    }))
+    .filter((candidate, _index, all) =>
+      candidate.overlapCount > 0 ||
+      FALLBACK_CLAIM_SIGNAL.test(candidate.sentence) ||
+      all.every((item) => item.overlapCount === 0),
+    )
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, Math.max(1, limit));
+
+  return candidates.map(({ sentence, overlapCount }) => {
+    const type = normalizeClaimType(undefined, `${chunk.section_heading ?? ""} ${sentence}`);
+    return {
+      claimTextOriginal: sentence,
+      claimTextZhTw: sentence,
+      claimType: type,
+      supportSpanText: sentence,
+      confidence: 0.55,
+      relevanceToTopic: Math.max(
+        0.45,
+        Math.min(0.82, (source.relevanceScore ?? 0.55) + overlapCount * 0.03),
+      ),
+      usableSections: defaultSectionsForType(type),
+      limitations: ["rule_fallback_claim_extraction"],
+    };
+  });
+}
+
+function validateFallbackRawClaims(input: {
+  rawClaims: RawClaim[];
+  mode: ClaimCandidate["extractionMode"];
+  gatedInput: ExtractClaimsFromChunkInput;
+  now: string;
+}): ClaimCandidate[] {
+  return input.rawClaims.map((raw, claimIndex) =>
+    validateRawClaim({
+      ...input.gatedInput,
+      raw,
+      claimIndex,
+      mode: input.mode,
+      now: input.now,
+    }),
+  );
 }
 
 function chunksForSource(source: SourceCandidate, maxChunks: number): ExtractedChunk[] {
@@ -452,36 +568,41 @@ export async function extractClaimsFromChunk(
 ): Promise<ClaimCandidate[]> {
   const now = options.now?.() ?? nowIso();
   const maxClaimsPerChunk = Math.max(1, options.maxClaimsPerChunk ?? DEFAULT_MAX_CLAIMS_PER_CHUNK);
+  const cleaned = cleanExtractedTextChunk({
+    topic: input.topic,
+    chunk: input.chunk,
+    source: input.source,
+  });
+  if (!cleaned.accepted || !cleaned.chunk) {
+    return [
+      rejectedChunkClaim({
+        input,
+        reason: cleaned.diagnostics.find((item) => item.startsWith("rejected:")) ??
+          "rejected:chunk_failed_evidence_gate",
+        diagnostics: cleaned.diagnostics,
+        now,
+      }),
+    ];
+  }
+  const gatedInput = { ...input, chunk: cleaned.chunk };
   const hardFailure = sourceCannotSupportClaims(input.source);
   if (hardFailure) {
-    const fallback = ruleFallbackRawClaim(input.chunk, input.source);
-    return fallback
-      ? [
-          validateRawClaim({
-            ...input,
-            raw: fallback,
-            claimIndex: 0,
-            mode: extractionModeForFallback(input.source),
-            now,
-          }),
-        ]
-      : [];
+    return validateFallbackRawClaims({
+      rawClaims: ruleFallbackRawClaims(gatedInput.chunk, input.source, input.topic, maxClaimsPerChunk),
+      mode: extractionModeForFallback(input.source),
+      gatedInput,
+      now,
+    });
   }
 
   const enableLlm = options.enableLlm ?? process.env.ENABLE_CLAIM_EXTRACTION_LLM !== "false";
   if (!enableLlm) {
-    const fallback = ruleFallbackRawClaim(input.chunk, input.source);
-    return fallback
-      ? [
-          validateRawClaim({
-            ...input,
-            raw: fallback,
-            claimIndex: 0,
-            mode: "rule_fallback",
-            now,
-          }),
-        ]
-      : [];
+    return validateFallbackRawClaims({
+      rawClaims: ruleFallbackRawClaims(gatedInput.chunk, input.source, input.topic, maxClaimsPerChunk),
+      mode: "rule_fallback",
+      gatedInput,
+      now,
+    });
   }
 
   const request = options.requestLlm ?? requestLlmText;
@@ -503,8 +624,8 @@ export async function extractClaimsFromChunk(
             role: "user",
             content:
               attempt === 0
-                ? claimExtractionUserPrompt(input, maxClaimsPerChunk)
-                : `${claimExtractionUserPrompt(input, maxClaimsPerChunk)}\nReturn valid JSON only.`,
+                ? claimExtractionUserPrompt(gatedInput, maxClaimsPerChunk)
+                : `${claimExtractionUserPrompt(gatedInput, maxClaimsPerChunk)}\nReturn valid JSON only.`,
           },
         ],
         temperature: 0,
@@ -518,7 +639,7 @@ export async function extractClaimsFromChunk(
       if (!parsed) continue;
       return parsed.claims.slice(0, maxClaimsPerChunk).map((raw, claimIndex) =>
         validateRawClaim({
-          ...input,
+          ...gatedInput,
           raw,
           claimIndex,
           mode: "llm",
@@ -531,18 +652,12 @@ export async function extractClaimsFromChunk(
     }
   }
 
-  const fallback = ruleFallbackRawClaim(input.chunk, input.source);
-  return fallback
-    ? [
-        validateRawClaim({
-          ...input,
-          raw: fallback,
-          claimIndex: 0,
-          mode: "rule_fallback",
-          now,
-        }),
-      ]
-    : [];
+  return validateFallbackRawClaims({
+    rawClaims: ruleFallbackRawClaims(gatedInput.chunk, input.source, input.topic, maxClaimsPerChunk),
+    mode: "rule_fallback",
+    gatedInput,
+    now,
+  });
 }
 
 async function runLimited<T>(

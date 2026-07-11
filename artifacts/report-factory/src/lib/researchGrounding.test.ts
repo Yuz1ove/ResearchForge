@@ -67,7 +67,7 @@ test("metadata-only review papers are not promoted to primary candidates", () =>
   assert.equal(source.relevanceLevel, "secondary");
 });
 
-test("accepted official background sources without grounding cards still produce limited evidence cards", () => {
+test("accepted official background sources without grounding cards do not become title-only evidence", () => {
   const acceptedSource = sourceCandidateToSourceRecord({
     candidate: candidate({
       sourceId: "official:nasa-sunset",
@@ -106,9 +106,41 @@ test("accepted official background sources without grounding cards still produce
     topic: "夕陽餘暉與光波長的關係",
   });
 
-  assert.equal(cards.length, 1);
-  assert.equal(cards[0]?.sourceId, acceptedSource.id);
-  assert.equal(cards[0]?.sourceType, "official_background");
-  assert.equal(cards[0]?.acceptedByUser, true);
-  assert.match(cards[0]?.limitations.join("；") ?? "", /非同行評審論文/);
+  assert.equal(cards.length, 0);
+});
+
+test("accepted sources with abstracts still require canonical grounding evidence cards", () => {
+  const acceptedSource = sourceCandidateToSourceRecord({
+    candidate: candidate({
+      sourceId: "web:caffeine-attention",
+      provider: "web",
+      title: "Caffeine and attention performance",
+      doi: undefined,
+      url: "https://example.org/caffeine-attention",
+      abstractOriginal:
+        "Caffeine intake can improve vigilance and sustained attention in some experimental tasks.",
+      sourceType: "paper",
+      isPeerReviewed: true,
+      relevanceScore: 0.72,
+      sourceQualityScore: 0.8,
+      recommendationBucket: "scholarly_recommended",
+      sourceRole: "core_scholarly_evidence",
+      reviewStatus: "accepted",
+      acceptedByUser: true,
+      userDecision: "accepted",
+      usableSections: ["literature_review", "analysis"],
+    }),
+    workflowId: "wf-1",
+    topicHash: "topic-1",
+    queryPlanHash: "plan-1",
+    originalTopic: "咖啡因攝取與注意力表現的關係",
+  });
+
+  const cards = groundedEvidenceCardsForAcceptedSources({
+    acceptedSources: [acceptedSource],
+    groundingEvidenceCards: [],
+    topic: "咖啡因攝取與注意力表現的關係",
+  });
+
+  assert.equal(cards.length, 0);
 });

@@ -11,7 +11,9 @@ import {
   reportWorkspacePath,
   reportTopicFingerprint,
   serializeReportWorkspaceForStorageForTests,
+  shouldRunSupplementalCoverageSearch,
   startReportWorkspaceNavigation,
+  workspaceToGeneratedReport,
   workspaceSnapshotIsConsistent,
   workspaceMatchesTopic,
 } from "./reportWorkspace.ts";
@@ -261,11 +263,8 @@ test("official background sources can generate a background report without acade
 
   assert.ok(result);
   assert.equal(result.workspace.generationMode, "background_report_mode");
-  assert.equal(result.workspace.evidenceCards.length >= 3, true);
-  assert.equal(
-    result.workspace.evidenceCards.every((card) => card.sourceType === "official_background"),
-    true,
-  );
+  assert.equal(result.workspace.evidenceCards.length, 0);
+  assert.equal(result.workspace.generationPayload.evidenceCards.length, 0);
 });
 
 test("report generation blocking reason is explicit below three accepted sources and clears at three", () => {
@@ -337,6 +336,41 @@ test("generation readiness requires at least one evidence card when evidence gat
   assert.equal(ready.canGenerate, true);
   assert.equal(ready.reportMode, "short");
   assert.equal(ready.buttonLabel, "生成短版研究報告");
+});
+
+test("supplemental coverage search yields to server-side reviewed evidence derivation", () => {
+  assert.equal(
+    shouldRunSupplementalCoverageSearch({
+      acceptedSourceCount: 10,
+      literatureReviewEvidenceCount: 1,
+      peerReviewedAcceptedSourceCount: 0,
+      canonicalEvidenceCardCount: 1,
+      serverDerivableEvidenceAvailable: false,
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldRunSupplementalCoverageSearch({
+      acceptedSourceCount: 10,
+      literatureReviewEvidenceCount: 0,
+      peerReviewedAcceptedSourceCount: 0,
+      canonicalEvidenceCardCount: 0,
+      serverDerivableEvidenceAvailable: true,
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldRunSupplementalCoverageSearch({
+      acceptedSourceCount: 10,
+      literatureReviewEvidenceCount: 0,
+      peerReviewedAcceptedSourceCount: 0,
+      canonicalEvidenceCardCount: 0,
+      serverDerivableEvidenceAvailable: false,
+    }),
+    true,
+  );
 });
 
 test("report generation blocks when workflow topic hash is missing", () => {
@@ -481,6 +515,92 @@ test("report workspace storage omits heavy extracted chunks after LLM generation
   assert.match(String(stored.acceptedSources[0]?.abstract ?? ""), /Evidence abstract 1/);
 });
 
+test("workspace export replaces verifier-blocked sections with review prompts", () => {
+  const workspace = createReportWorkspace(
+    input(),
+    [source(1), source(2), source(3)],
+    "short_research_report",
+    "rf-export-guard",
+    {
+      evidenceCards: [
+        {
+          id: "evidence-source-1",
+          evidenceId: "evidence-source-1",
+          workflowId: DEFAULT_WORKFLOW_ID,
+          topicHash: DEFAULT_TOPIC_HASH,
+          sourceId: "source-1",
+          claimText: "可直接支撐的句子。",
+          supportSpan: "可直接支撐的句子。",
+          claim: "可直接支撐的句子。",
+          claimTextZhTw: "可直接支撐的句子。",
+          mainClaim: "可直接支撐的句子。",
+          evidence: "可直接支撐的句子。",
+          summary: "可直接支撐的句子。",
+          sourceTitle: "Source 1",
+          sourceProvider: "Crossref",
+          relevance: "finding",
+          citationMarker: "[S1]",
+          citationText: "Source 1",
+          limitations: [],
+          limitationsZhTw: [],
+          sectionTargets: ["findings"],
+          sectionFit: ["findings"],
+          usableSections: ["文獻探討"],
+          sourceType: "Crossref",
+          reliability: "高",
+          sourceUrl: "https://doi.org/10.1000/source-1",
+          sourceDomain: "doi.org",
+          provider: "Crossref",
+          doi: "10.1000/source-1",
+          abstract: "可直接支撐的句子。",
+          relevanceScore: 0.8,
+          sourceQualityScore: 0.8,
+          finalScore: 0.8,
+          year: 2021,
+          confidence: "高",
+          confidenceScore: 0.8,
+          derivation: "abstract-derived",
+          abstractOnly: true,
+          limitation: null,
+          createdAt: "2026-07-06T00:00:00.000Z",
+          notes: "",
+          usableEvidence: "可直接支撐的句子。",
+          quoteOrParaphrase: "可直接支撐的句子。",
+          evidencePointZhTw: "可直接支撐的句子。",
+          sourceExcerptOriginal: "可直接支撐的句子。",
+          sourceSummaryZhTw: "可直接支撐的句子。",
+        } as any,
+      ],
+    },
+  );
+  const blockedWorkspace = {
+    ...workspace,
+    draft: {
+      ...workspace.draft,
+      sections: workspace.draft.sections.map((section) =>
+        section.sectionId === "findings"
+          ? {
+              ...section,
+              body: "這是一句未支撐但看似正式的外推。",
+              synthesizedProseZhTw: "這是一句未支撐但看似正式的外推。",
+              groundingStatus: "unsupported" as const,
+              generationMethod: "grounding_verifier_blocked",
+              unsupportedSentences: ["這是一句未支撐但看似正式的外推。"],
+            }
+          : section,
+      ),
+    },
+  };
+  const exported = workspaceToGeneratedReport(blockedWorkspace, "其他" as any);
+  const exportedText = exported.sections
+    .flatMap((section) => section.blocks)
+    .map((block) => ("text" in block ? block.text : ""))
+    .join("\n");
+
+  assert.match(exportedText, /不輸出正式段落|補查/);
+  assert.doesNotMatch(exportedText, /這是一句未支撐但看似正式的外推。/);
+});
+
 test("generator hides evidence cards unless developer debug is open", () => {
   assert.equal(generatorWorkflowVisibility(false).showEvidenceCards, false);
   assert.equal(generatorWorkflowVisibility(false).showTechnicalLogs, false);
@@ -578,10 +698,7 @@ test("start report workspace navigation saves workspace and calls navigation wit
   assert.equal(workspaceSnapshotIsConsistent(result.workspace), true);
   assert.match(result.workspace.acceptedSourceDigest.summary, /目前已接受 6 筆來源/);
   assert.equal(result.workspace.project.depth, "standard");
-  assert.equal(
-    result.workspace.evidenceCards.length >= acceptedSources.length,
-    true,
-  );
+  assert.equal(result.workspace.evidenceCards.length, 0);
   assert.equal(
     result.workspace.qualityReport.acceptedSourceCount,
     acceptedSources.length,
@@ -598,7 +715,7 @@ test("start report workspace navigation saves workspace and calls navigation wit
   );
 });
 
-test("five accepted sources seed evidence cards and citations in the report workspace", () => {
+test("five accepted sources do not seed frontend evidence cards without canonical cards", () => {
   const acceptedSources = Array.from({ length: 5 }, (_, index) => source(index + 1));
 
   const result = startReportWorkspaceNavigation({
@@ -610,14 +727,16 @@ test("five accepted sources seed evidence cards and citations in the report work
 
   assert.ok(result);
   assert.equal(result.workspace.acceptedSources.length, 5);
-  assert.equal(result.workspace.evidenceCards.length >= 5, true);
+  assert.equal(result.workspace.evidenceCards.length, 0);
   assert.equal(
     result.workspace.draft.sections.some((section) => section.evidenceCardIds.length > 0),
-    true,
+    false,
   );
   assert.equal(
-    result.workspace.draft.sections.some((section) => section.citationIds.length > 0),
-    true,
+    result.workspace.draft.sections
+      .filter((section) => section.sectionId !== "references")
+      .some((section) => section.citationIds.length > 0),
+    false,
   );
 });
 

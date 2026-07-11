@@ -8,10 +8,7 @@ import type {
   SourceCandidate,
 } from "@workspace/api-zod/research-grounding";
 import type { EvidenceDerivation } from "@workspace/api-zod";
-import {
-  buildEvidenceCards,
-  type EvidenceCard,
-} from "./evidenceCards.ts";
+import type { EvidenceCard } from "./evidenceCards.ts";
 import {
   defaultUsableSections,
   normalizeSourceForReview,
@@ -512,6 +509,7 @@ export function groundingEvidenceCardToEvidenceCard(input: {
     safetyNotes: [],
   };
   const supportedByText = cleanText(card.supportedByText) ?? card.claimTextZh;
+  const supportSpan = cleanText(card.supportSpan) ?? supportedByText;
   const safeEvidenceText = safety.redactionApplied ? card.claimTextZh : supportedByText;
   const derivation = derivationFromGroundingCard(card, source);
   const sourceQualityScore = source?.sourceQualityScore ?? null;
@@ -528,8 +526,12 @@ export function groundingEvidenceCardToEvidenceCard(input: {
     sourceId: card.sourceId,
     claimIds: card.claimIds ?? [],
     claimTextOriginal: card.claimTextOriginal,
+    claimText: card.claimText ?? card.claimTextZh,
     claimTextZh: card.claimTextZh,
     supportedByText,
+    supportSpan,
+    supportStart: card.supportStart,
+    supportEnd: card.supportEnd,
     citationMarker: card.citationMarker,
     title: card.sourceTitle,
     sourceType: source?.sourceType ?? "grounded-source",
@@ -538,19 +540,26 @@ export function groundingEvidenceCardToEvidenceCard(input: {
     claimTextZhTw: card.claimTextZh,
     mainClaimZhTw: card.mainClaimZhTw ?? card.claimTextZh,
     mainClaim: card.claimTextZh,
-    evidence: safeEvidenceText,
-    evidencePointZhTw: safeEvidenceText,
-    usableEvidence: safeEvidenceText,
-    quoteOrParaphrase: safeEvidenceText,
+    evidence: safety.redactionApplied ? safeEvidenceText : supportSpan,
+    evidencePointZhTw: safety.redactionApplied ? safeEvidenceText : supportSpan,
+    usableEvidence: safety.redactionApplied ? safeEvidenceText : supportSpan,
+    quoteOrParaphrase: safety.redactionApplied ? safeEvidenceText : supportSpan,
     summary: card.claimTextZh,
     sourceExcerptOriginal: safety.redactionApplied ? "" : supportedByText,
     sourceSummaryZhTw: card.claimTextZh,
     supportingClaims: card.supportingClaims ?? [],
-    supportSpans: card.supportSpans ?? [],
+    supportSpans: card.supportSpans ?? [
+      {
+        text: supportSpan,
+        startOffset: card.supportStart,
+        endOffset: card.supportEnd,
+      },
+    ],
     relevance: "source-grounded",
     limitations: card.limitations,
     limitationsZhTw: card.limitations,
     sectionTargets: card.usableFor,
+    sectionFit: card.sectionFit ?? card.usableFor,
     sourceTitle: card.sourceTitle,
     sourceUrl: source?.url ?? card.sourceUri,
     sourceDomain: sourceDomain(source?.url ?? card.sourceUri),
@@ -560,7 +569,7 @@ export function groundingEvidenceCardToEvidenceCard(input: {
     evidenceType: card.evidence_type ?? null,
     sourceLocation: card.source_location ?? null,
     sectionHeading: card.section_heading ?? null,
-    extractionMethod: card.trace?.extraction_method ?? source?.extractionMethod ?? null,
+    extractionMethod: card.extractionMethod ?? card.trace?.extraction_method ?? source?.extractionMethod ?? null,
     quotedText: card.quoted_text ?? supportedByText,
     trace: card.trace ?? null,
     sourceCategory: source?.sourceCategory ?? null,
@@ -576,13 +585,16 @@ export function groundingEvidenceCardToEvidenceCard(input: {
     doi: source?.doi ?? null,
     abstract: source?.abstract ?? null,
     provider: source?.provider ?? "Research Grounding",
-    relevanceScore,
-    sourceQualityScore,
+    relevanceScore: card.topicRelevance ?? relevanceScore,
+    topicRelevance: card.topicRelevance ?? relevanceScore,
+    sourceQualityScore: card.sourceQuality ?? sourceQualityScore,
+    sourceQuality: card.sourceQuality ?? sourceQualityScore,
     finalScore,
     year: source?.year ?? null,
     usableSections: workflowSectionsFromUsableFor(card.usableFor),
     confidence: confidenceLabel(Math.round(confidenceScore * 100)),
-    confidenceScore,
+    confidenceScore: card.groundingConfidence ?? confidenceScore,
+    groundingConfidence: card.groundingConfidence ?? confidenceScore,
     derivation,
     abstractOnly:
       card.source_access_level === "abstract_only" ||
@@ -598,9 +610,12 @@ export function groundingEvidenceCardToEvidenceCard(input: {
           ? "span"
           : "grounding",
     createdAt: card.createdAt,
+    extractedAt: card.extractedAt ?? card.createdAt,
     notes: safety.safetyNotes.join("；"),
     safety,
     needsManualReview: card.needsManualReview ?? null,
+    needsReview: card.needsReview ?? card.needsManualReview ?? null,
+    rejectionReason: card.rejectionReason ?? null,
     governanceFlags: card.governanceFlags ?? [],
   };
 }
@@ -620,14 +635,7 @@ export function groundedEvidenceCardsForAcceptedSources(input: {
         source: sourceById.get(card.sourceId) ?? null,
       }),
     );
-  const groundedSourceIds = new Set(groundedCards.map((card) => card.sourceId));
-  const fallbackCards = input.acceptedSources.flatMap((source) => {
-    if (!source.id || groundedSourceIds.has(source.id)) return [];
-    return buildEvidenceCards([source], [], {
-      topic: input.topic,
-    });
-  });
-  return [...groundedCards, ...fallbackCards];
+  return groundedCards;
 }
 
 export function academicSafetyBlocksReport(

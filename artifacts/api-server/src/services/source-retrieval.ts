@@ -43,6 +43,11 @@ export interface SourceSearchOptions {
   fetchImpl?: SourceFetch;
   providerConfigs?: Partial<Record<AcademicSourceProvider, SourceProviderConfig>>;
   providers?: AcademicSourceProvider[];
+  /**
+   * A topic-anchored planner owns query repair. Its provider calls must not
+   * silently retry with a shortened query that can discard the topic anchor.
+   */
+  allowShortQueryRetry?: boolean;
 }
 
 export interface SourceProviderSearchResult {
@@ -860,6 +865,7 @@ async function searchCrossref(query: string, config: SourceProviderConfig, optio
   try {
     const initial = await searchCrossrefQuery(query, config, options);
     if (initial.results.length > 1 && initial.rawCount > 1) return initial;
+    if (options?.allowShortQueryRetry === false) return initial;
     const retryQuery = shortCrossrefRetryQuery(query);
     if (retryQuery === query.trim()) return initial;
     const retried = await searchCrossrefQuery(
@@ -882,6 +888,7 @@ async function searchCrossref(query: string, config: SourceProviderConfig, optio
     if (!(error instanceof SourceSearchError) || error.code !== "timeout") {
       throw error;
     }
+    if (options?.allowShortQueryRetry === false) throw error;
     const retryQuery = shortCrossrefRetryQuery(query);
     if (retryQuery === query.trim()) throw error;
     const retried = await searchCrossrefQuery(

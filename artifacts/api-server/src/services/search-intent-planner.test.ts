@@ -738,6 +738,218 @@ test("sodium perchlorate search injects trusted official safety sources", async 
   assert.match(byId.get("trusted:echa-sodium-perchlorate")?.sourceRelevanceReasonZhTw ?? "", /過氯酸鈉|hazard|handling/u);
 });
 
+test("evidence-card acceptance source search anchors provider queries", async () => {
+  const cases = [
+    {
+      topic: "光伏電池表面粗糙度對反射率與效率的影響",
+      canonicalTopicEn: "surface roughness reflectance photovoltaic cell efficiency",
+      querySeedEn: [
+        "photovoltaic cell formation development",
+        "surface roughness reflectance photovoltaic cell efficiency",
+        "surface texturing light trapping silicon solar cells reflectance efficiency",
+      ],
+      querySeedZh: ["太陽能電池 表面粗糙度 反射率 效率"],
+      mustIncludeTerms: ["photovoltaic", "surface roughness", "reflectance"],
+      required: /photovoltaic|solar cell|太陽能|光伏/i,
+      forbidden: /formation|development/i,
+    },
+    {
+      topic: "睡眠不足對青少年注意力與工作記憶的影響",
+      canonicalTopicEn: "sleep restriction adolescent cognition attention working memory",
+      querySeedEn: [
+        "attention",
+        "sleep restriction adolescent cognition attention working memory",
+        "sleep deprivation high school students attention cognitive performance",
+      ],
+      querySeedZh: ["睡眠不足 青少年 注意力 工作記憶"],
+      mustIncludeTerms: ["sleep", "adolescent", "attention"],
+      required: /sleep|睡眠/i,
+      forbidden: /^(attention|working memory|adolescents?)$/im,
+    },
+    {
+      topic: "人工光源對海龜幼龜入海方向的影響",
+      canonicalTopicEn: "artificial light sea turtle hatchling orientation",
+      querySeedEn: [
+        "turtle habitat conservation population monitoring",
+        "artificial light sea turtle hatchling orientation",
+        "light pollution sea turtle hatchlings disorientation nesting beach",
+      ],
+      querySeedZh: ["人工光 海龜幼龜 入海定向"],
+      mustIncludeTerms: ["sea turtle", "hatchling", "artificial light"],
+      required: /sea turtle|marine turtle|hatchling|artificial light|海龜/i,
+      forbidden: /tortoise|habitat conservation|population monitoring|plastic pollution|microplastic/i,
+    },
+    {
+      topic: "同儕回饋對高中生第二語言寫作修訂品質的影響",
+      canonicalTopicEn: "peer feedback second language writing revision quality",
+      querySeedEn: [
+        "education learning outcomes student engagement secondary education",
+        "peer feedback second language writing revision quality",
+        "peer response L2 writing revision high school students",
+      ],
+      querySeedZh: ["同儕回饋 第二語言 寫作修訂 品質"],
+      mustIncludeTerms: ["peer feedback", "second language", "writing revision"],
+      required: /peer feedback|peer response|writing|revision|同儕回饋/i,
+      forbidden: /generative ai|artificial intelligence|student engagement|education learning outcomes/i,
+    },
+    {
+      topic: "活性碳濾材對室內甲醛移除效率的影響因素",
+      canonicalTopicEn: "activated carbon formaldehyde adsorption indoor air removal efficiency",
+      querySeedEn: [
+        "chemical properties reactivity stability",
+        "activated carbon formaldehyde adsorption indoor air removal efficiency",
+        "formaldehyde adsorption activated carbon indoor air filtration",
+      ],
+      querySeedZh: ["活性碳 甲醛 吸附 室內空氣 移除效率"],
+      mustIncludeTerms: ["activated carbon", "formaldehyde", "adsorption"],
+      required: /activated carbon|formaldehyde|活性碳|活性炭|甲醛/i,
+      forbidden: /chemical properties|composition structure|handling conditions|reactivity stability/i,
+    },
+  ];
+
+  for (const item of cases) {
+    const result = await searchIntentSources(
+      {
+        topic: item.topic,
+        originalTopic: item.topic,
+        canonicalTopicZh: item.topic,
+        canonicalTopicEn: item.canonicalTopicEn,
+        querySeedZh: item.querySeedZh,
+        querySeedEn: item.querySeedEn,
+        mustIncludeTerms: item.mustIncludeTerms,
+        reportType: "研究報告",
+        audience: "高中",
+        language: "zh-TW",
+      },
+      {
+        llm: { apiKey: "" },
+        queryLimit: 6,
+        bypassCache: true,
+        includeDebug: true,
+        webFallback: { enabled: false },
+        runtimeBudget: {
+          overallSearchBudgetMs: 1000,
+          perQueryTimeoutMs: 100,
+          maxConcurrentProviderRequests: 1,
+        },
+        sourceSearch: {
+          providers: ["OpenAlex"],
+          providerConfigs: {
+            OpenAlex: {
+              provider: "OpenAlex",
+              endpoint: "https://example.test/openalex/works",
+              timeoutMs: 100,
+              queryLimit: 1,
+              pageLimit: 1,
+              headers: { Accept: "application/json" },
+            },
+          },
+          fetchImpl: async () => new Response(JSON.stringify({ results: [] })),
+        },
+      },
+    );
+
+    const queryText = [
+      ...(result.diagnostics.providerQueries ?? []),
+      ...(result.keyword_expansion.providerQueries ?? []),
+      ...result.keyword_expansion.search_queries,
+      ...result.queries.english,
+      ...result.queries.chinese,
+    ].join("\n");
+    assert.match(queryText, item.required, item.topic);
+    assert.doesNotMatch(queryText, item.forbidden, item.topic);
+  }
+});
+
+test("evidence-card topic anchors downgrade broad same-domain sources missing the selected evidence axis", async () => {
+  const seaTurtlePlan = await planSearchIntent(
+    {
+      topic: "人工光源對海龜幼龜入海方向的影響",
+      canonicalTopicZh: "人工光源對海龜幼龜入海方向的影響",
+      canonicalTopicEn: "artificial light sea turtle hatchling orientation",
+      querySeedZh: ["人工光 海龜幼龜 入海定向"],
+      querySeedEn: [
+        "turtle habitat conservation population monitoring",
+        "artificial light sea turtle hatchling orientation",
+      ],
+      mustIncludeTerms: ["sea turtle", "hatchling", "artificial light"],
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const turtleRanked = rerankSourcesBySearchIntent(
+    [
+      sourceRecord({
+        id: "general-marine-turtle-conservation",
+        title: "Global Conservation Priorities for Marine Turtles",
+        abstract:
+          "This review prioritizes conservation regions for marine turtle populations, habitat protection, monitoring, and management across ocean basins.",
+      }),
+      sourceRecord({
+        id: "sea-turtle-light",
+        title: "Artificial light disrupts sea turtle hatchling orientation on nesting beaches",
+        abstract:
+          "The study measures how coastal artificial light and light pollution disorient sea turtle hatchlings during sea-finding after emergence from nesting beaches.",
+      }),
+    ],
+    seaTurtlePlan,
+  ).sources;
+
+  assert.equal(
+    turtleRanked.find((source) => source.id === "general-marine-turtle-conservation")?.relevanceLevel,
+    "off_topic",
+  );
+  assert.notEqual(
+    turtleRanked.find((source) => source.id === "sea-turtle-light")?.relevanceLevel,
+    "off_topic",
+  );
+
+  const carbonPlan = await planSearchIntent(
+    {
+      topic: "活性碳濾材對室內甲醛移除效率的影響因素",
+      canonicalTopicZh: "活性碳濾材對室內甲醛移除效率的影響因素",
+      canonicalTopicEn: "activated carbon formaldehyde adsorption indoor air removal efficiency",
+      querySeedZh: ["活性碳 甲醛 吸附 室內空氣 移除效率"],
+      querySeedEn: [
+        "chemical properties reactivity stability",
+        "activated carbon formaldehyde adsorption indoor air removal efficiency",
+      ],
+      mustIncludeTerms: ["activated carbon", "formaldehyde", "adsorption"],
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    { llm: { apiKey: "" } },
+  );
+  const carbonRanked = rerankSourcesBySearchIntent(
+    [
+      sourceRecord({
+        id: "tinnitus-factor-analysis",
+        title: "针刺治疗神经性耳鸣的疗效评价及影响因素分析",
+        abstract: null,
+      }),
+      sourceRecord({
+        id: "activated-carbon-formaldehyde",
+        title: "Formaldehyde adsorption by activated carbon filters in indoor air",
+        abstract:
+          "Activated carbon filtration removes formaldehyde from indoor air through adsorption; removal efficiency varies with humidity, flow rate, and carbon surface properties.",
+      }),
+    ],
+    carbonPlan,
+  ).sources;
+
+  assert.equal(
+    carbonRanked.find((source) => source.id === "tinnitus-factor-analysis")?.relevanceLevel,
+    "off_topic",
+  );
+  assert.notEqual(
+    carbonRanked.find((source) => source.id === "activated-carbon-formaldehyde")?.relevanceLevel,
+    "off_topic",
+  );
+});
+
 test("trusted sodium perchlorate safety sources become primary while generic template pages are excluded", async () => {
   const plan = await planSearchIntent(
     {

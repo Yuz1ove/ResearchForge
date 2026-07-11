@@ -97,6 +97,9 @@ export interface ReportDraftSection {
   evidenceCardIds: string[];
   citationIds: string[];
   evidenceCoverageStatus: EvidenceCoverageStatus;
+  groundingStatus?: "grounded" | "partially_grounded" | "unsupported";
+  unsupportedSentences?: string[];
+  generationMethod?: string;
   citationCount: number;
   evidenceCardCount: number;
   warnings: string[];

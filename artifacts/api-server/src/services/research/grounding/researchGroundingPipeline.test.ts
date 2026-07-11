@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SourceRecord } from "@workspace/api-zod";
-import type { SourceCandidate } from "@workspace/api-zod/research-grounding";
+import type { ClaimCandidate, SourceCandidate } from "@workspace/api-zod/research-grounding";
 import {
   analyzeTopicInput,
   academicRetryQueryExpansion,
@@ -280,32 +280,13 @@ test("buildGroundingEvidenceCards keeps accepted source governance and excludes 
     safetyReview: reviewAcademicSafety({ topic: "夕陽顏色與瑞利散射" }),
   });
 
-  assert.equal(cards.some((card) => card.sourceId === "official-1"), true);
+  assert.equal(cards.some((card) => card.sourceId === "official-1"), false);
   assert.equal(cards.some((card) => card.sourceId === "manual-accepted"), true);
   assert.equal(cards.some((card) => card.sourceId === "manual-review-only"), false);
-  assert.equal(
-    cards.find((card) => card.sourceId === "official-1")?.source_access_level,
-    "metadata_only",
-  );
-  assert.equal(
-    cards
-      .find((card) => card.sourceId === "official-1")
-      ?.limitations.some((limitation) => /metadata_only/u.test(limitation)),
-    true,
-  );
-  assert.equal(
-    cards
-      .find((card) => card.sourceId === "official-1")
-      ?.limitations.some((limitation) => /非同行評審/u.test(limitation)),
-    true,
-  );
-  assert.deepEqual(
-    cards.find((card) => card.sourceId === "official-1")?.usableFor,
-    ["introduction", "background", "concept_explanation"],
-  );
+  assert.equal(cards.every((card) => card.source_access_level !== "metadata_only"), true);
 });
 
-test("buildGroundingEvidenceCards marks metadata-only accepted sources as weak context", () => {
+test("buildGroundingEvidenceCards does not turn metadata-only titles into evidence cards", () => {
   const metadataOnly = sourceCandidateFixture({
     sourceId: "metadata-only",
     title: "Rayleigh scattering metadata record",
@@ -326,12 +307,7 @@ test("buildGroundingEvidenceCards marks metadata-only accepted sources as weak c
     safetyReview: reviewAcademicSafety({ topic: "夕陽顏色與瑞利散射" }),
   });
 
-  assert.equal(cards.length, 1);
-  assert.equal(cards[0]?.sourceId, "metadata-only");
-  assert.equal(cards[0]?.source_access_level, "metadata_only");
-  assert.equal(cards[0]?.source_location, "metadata");
-  assert.equal(cards[0]?.confidence, 0.25);
-  assert.equal(cards[0]?.limitations.some((limitation) => /metadata_only/u.test(limitation)), true);
+  assert.equal(cards.length, 0);
 });
 
 test("buildGroundingEvidenceCards caps abstract-only sources at two abstract evidence cards", () => {
@@ -414,6 +390,78 @@ test("buildGroundingEvidenceCards turns extracted full-text chunks into traceabl
   assert.equal(cards[0]?.trace?.content_hash, "content-hash-123");
   assert.equal(cards.some((card) => card.evidence_type === "method"), true);
   assert.equal(cards.some((card) => card.evidence_type === "finding"), true);
+});
+
+test("buildGroundingEvidenceCards augments scarce accepted claims with reviewed support-span cards", () => {
+  const supportSpan =
+    "Rayleigh scattering is a wavelength-dependent mechanism that preferentially removes short-wavelength light from the direct solar beam during long atmospheric paths.";
+  const fullText = sourceCandidateFixture({
+    sourceId: "fulltext-rayleigh-claims",
+    title: "Full text Rayleigh scattering study",
+    accessLevel: "full_text",
+    extractionStatus: "success",
+    extractionMethod: "html_readability",
+    sourceUseLevel: "citable_full_text",
+    extractedChunks: [
+      {
+        chunk_id: "fulltext-rayleigh-claims:chunk:1",
+        text: supportSpan,
+        source_location: "Mechanism",
+        section_heading: "Mechanism",
+        char_start: 0,
+        char_end: supportSpan.length,
+      },
+      {
+        chunk_id: "fulltext-rayleigh-claims:chunk:2",
+        text:
+          "The results show a stronger red-orange component near sunset when shorter wavelengths are scattered out of the observer's direct line of sight.",
+        source_location: "Findings",
+        section_heading: "Findings",
+        char_start: supportSpan.length + 1,
+        char_end: supportSpan.length + 145,
+      },
+    ],
+  });
+  const claim: ClaimCandidate = {
+    claimId: "claim-rayleigh-1",
+    sourceId: fullText.sourceId,
+    chunkId: "fulltext-rayleigh-claims:chunk:1",
+    workflowId: "wf-claim-augment",
+    claimTextOriginal: supportSpan,
+    claimTextZhTw: supportSpan,
+    claimType: "mechanism",
+    supportSpanText: supportSpan,
+    supportSpanStartOffset: 0,
+    supportSpanEndOffset: supportSpan.length,
+    sectionHeading: "Mechanism",
+    citationMarker: "[S1]",
+    confidence: 0.82,
+    relevanceToTopic: 0.84,
+    sourceQualityScore: 0.9,
+    usableSections: ["literature_review", "analysis"],
+    limitations: [],
+    extractionMode: "llm",
+    status: "accepted",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  const cards = buildGroundingEvidenceCards({
+    workflowId: "wf-claim-augment",
+    topicHash: "topic-hash",
+    topic: "Rayleigh scattering sunset color",
+    acceptedSources: [fullText],
+    claimCandidates: [claim],
+    safetyReview: reviewAcademicSafety({ topic: "Rayleigh scattering sunset color" }),
+  });
+
+  assert.equal(cards.length >= 2, true);
+  assert.equal(cards.some((card) => card.extractionMethod === "llm_structured_extract"), true);
+  assert.equal(cards.some((card) => card.extractionMethod === "rule_fallback_claim_extraction"), true);
+  assert.equal(cards.every((card) => Boolean(card.supportSpan)), true);
+  assert.equal(
+    cards.filter((card) => card.extractionMethod === "rule_fallback_claim_extraction").every((card) => card.needsReview),
+    true,
+  );
 });
 
 test("classifySourceCandidate applies CORE adapter contract conservatively", () => {
@@ -1974,6 +2022,232 @@ test("academicRetryQueryExpansion covers requested Chinese topic families", asyn
   }
 });
 
+test("solar-panel roughness query plan preserves photovoltaic evidence concepts", async () => {
+  const topic = "不同表面粗糙度如何影響太陽能板的光反射與發電效率";
+  const parsedInput = parseResearchInput(topic);
+  const topicAnalysis = analyzeTopicInput({
+    topic,
+    workflowId: "wf-solar-panel-roughness",
+    parsedInput,
+  });
+  const titleParse = parseResearchTitleSentence(topic);
+  const seedQueryPlan = buildSeedQueryPlan({
+    topicAnalysis,
+    titleParse,
+    parsedInput,
+    querySeedZh: [
+      "太陽能板 表面粗糙度 光反射 發電效率",
+      "太陽能板 表面結構 抗反射設計 性能比較",
+    ],
+    querySeedEn: [
+      "solar panel surface roughness optical reflectance power conversion efficiency",
+      "photovoltaic surface texture anti-reflection power output",
+    ],
+  });
+  const lexicalSignals = await collectLexicalSignals({
+    topicAnalysis,
+    titleParse,
+    adapters: [],
+  });
+  const queryPlan = buildGroundingQueryPlan({
+    topicAnalysis,
+    seedQueryPlan,
+    lexicalSignals,
+    titleParse,
+  });
+  const queryText = [
+    ...queryPlan.bilingualQueries.en,
+    ...queryPlan.providerQueries.openalex,
+    ...queryPlan.providerQueries.crossref,
+    ...(queryPlan.providerQueries.semanticScholar ?? []),
+  ].join(" ");
+
+  assert.match(queryText, /solar panel|photovoltaic/i);
+  assert.match(queryText, /surface roughness|surface texture/i);
+  assert.match(queryText, /reflectance|anti-reflection/i);
+  assert.match(queryText, /power conversion efficiency|power output/i);
+  assert.equal(queryPlan.domain, "energy / photovoltaic engineering");
+  assert.doesNotMatch(queryText, /data governance|social impact|information retrieval/i);
+  assert.equal(
+    queryPlan.providerQueries.openalex.some((query) =>
+      /^(formation|development|optics|optical|optics formation(?: review| systematic review)?)$/i.test(query),
+    ),
+    false,
+  );
+});
+
+test("evidence-card acceptance topics keep provider and retry queries topic anchored", async () => {
+  const cases: Array<{
+    topic: string;
+    querySeedZh: string[];
+    querySeedEn: string[];
+    expectedDomain: RegExp;
+    expected: RegExp;
+    forbidden: RegExp;
+  }> = [
+    {
+      topic: "不同表面粗糙度如何影響太陽能板的光反射與發電效率",
+      querySeedZh: ["太陽能板 表面粗糙度 光反射 發電效率"],
+      querySeedEn: [
+        "solar panel surface roughness optical reflectance power conversion efficiency",
+        "optics formation",
+        "formation development",
+      ],
+      expectedDomain: /photovoltaic engineering/i,
+      expected: /solar panel|photovoltaic/i,
+      forbidden: /optics formation|formation development|data governance|social impact/i,
+    },
+    {
+      topic: "睡眠不足對青少年工作記憶與注意力表現的影響",
+      querySeedZh: ["睡眠不足 青少年 工作記憶 注意力 認知表現"],
+      querySeedEn: [
+        "sleep deprivation adolescents working memory attention cognitive performance",
+        "sleep deprivation",
+        "working memory",
+      ],
+      expectedDomain: /adolescent cognition/i,
+      expected: /sleep deprivation.*working memory|sleep restriction.*attention/i,
+      forbidden: /dental|oral biofilm|periodontal|^sleep deprivation$|^working memory$/i,
+    },
+    {
+      topic: "海岸人工夜間照明對海龜幼體入海行為的影響",
+      querySeedZh: ["海龜幼體 入海定向 人工夜間照明 光害"],
+      querySeedEn: [
+        "sea turtle hatchling orientation artificial light at night",
+        "sea turtle",
+        "habitat fragmentation",
+      ],
+      expectedDomain: /sea turtle hatchling orientation/i,
+      expected: /sea turtle.*hatchling|artificial light/i,
+      forbidden: /habitat fragmentation|population distribution|conservation corridor|^sea turtle$/i,
+    },
+    {
+      topic: "同儕回饋對高中生第二語言寫作修訂品質的影響",
+      querySeedZh: ["同儕回饋 第二語言寫作 修訂品質 高中生"],
+      querySeedEn: [
+        "peer feedback second language writing revision quality",
+        "peer review",
+        "student engagement",
+      ],
+      expectedDomain: /writing education|applied linguistics/i,
+      expected: /peer feedback.*second language writing|L2 writing.*revision/i,
+      forbidden: /student engagement|generative AI|artificial intelligence|^peer review$/i,
+    },
+    {
+      topic: "活性碳濾材對室內甲醛移除效率的影響因素",
+      querySeedZh: ["活性碳 甲醛 吸附 室內空氣 移除效率"],
+      querySeedEn: [
+        "activated carbon formaldehyde adsorption indoor air removal efficiency",
+        "chemistry experiment analysis peer reviewed",
+      ],
+      expectedDomain: /adsorption engineering|indoor air/i,
+      expected: /activated carbon.*formaldehyde|formaldehyde.*adsorption/i,
+      forbidden: /chemistry experiment analysis|laboratory experiment spectroscopy/i,
+    },
+  ];
+
+  for (const item of cases) {
+    const parsedInput = parseResearchInput(item.topic);
+    const topicAnalysis = analyzeTopicInput({
+      topic: item.topic,
+      workflowId: `wf-anchor-${item.topic.length}`,
+      parsedInput,
+    });
+    const titleParse = parseResearchTitleSentence(item.topic);
+    const seedQueryPlan = buildSeedQueryPlan({
+      topicAnalysis,
+      titleParse,
+      parsedInput,
+      querySeedZh: item.querySeedZh,
+      querySeedEn: item.querySeedEn,
+    });
+    const lexicalSignals = await collectLexicalSignals({
+      topicAnalysis,
+      titleParse,
+      adapters: [],
+    });
+    const queryPlan = buildGroundingQueryPlan({
+      topicAnalysis,
+      seedQueryPlan,
+      lexicalSignals,
+      titleParse,
+    });
+    const normalizedSearchTopic =
+      seedQueryPlan.normalizedResearchTopic ??
+      normalizeResearchTopic(item.topic, topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW");
+    const expansion = academicRetryQueryExpansion({
+      base: {
+        workflowId: topicAnalysis.workflowId,
+        topic: item.topic,
+        reportType: "研究報告",
+        audience: "高中",
+        searchProfile: "standard",
+      },
+      topicAnalysis,
+      normalizedSearchTopic,
+      queryPlan,
+    });
+    const providerText = [
+      ...queryPlan.providerQueries.openalex,
+      ...queryPlan.providerQueries.crossref,
+      ...queryPlan.providerQueries.core,
+      ...(queryPlan.providerQueries.semanticScholar ?? []),
+    ].join("\n");
+    const retryText = expansion.retryQueries.join("\n");
+
+    assert.match(queryPlan.domain ?? "", item.expectedDomain);
+    assert.match(`${providerText}\n${retryText}`, item.expected);
+    assert.doesNotMatch(providerText, item.forbidden);
+    assert.doesNotMatch(retryText, item.forbidden);
+  }
+});
+
+test("initial grounding search seeds use topic anchors for direct Step 1 photovoltaic search", async () => {
+  const capturedInputs: Array<{ querySeedEn?: string[]; querySeedZh?: string[]; canonicalTopicEn?: string }> = [];
+  await runResearchGroundingPipeline(
+    {
+      workflowId: "wf-direct-solar-panel-roughness",
+      topic: "不同表面粗糙度如何影響太陽能板的光反射與發電效率",
+      originalTopic: "不同表面粗糙度如何影響太陽能板的光反射與發電效率",
+      reportType: "研究報告",
+      audience: "高中",
+      searchProfile: "standard",
+      selectedDomain: "technology_engineering_application",
+    },
+    {
+      searchHandler: async (input) => {
+        capturedInputs.push({
+          querySeedEn: input.querySeedEn,
+          querySeedZh: input.querySeedZh,
+          canonicalTopicEn: input.canonicalTopicEn,
+        });
+        return mockedGroundingSearchResult(
+          {
+            topic: input.topic,
+            originalTopic: input.originalTopic,
+            workflowId: input.workflowId,
+            querySeedZh: input.querySeedZh,
+            querySeedEn: input.querySeedEn,
+          },
+          [],
+          {
+            primaryConcepts: input.querySeedEn ?? [],
+            mustHaveTerms: input.mustIncludeTerms ?? [],
+          },
+        );
+      },
+      lexiconAdapters: [],
+    },
+  );
+
+  const firstInput = capturedInputs[0];
+  assert.ok(firstInput, "initial search input should be captured");
+  const enText = (firstInput.querySeedEn ?? []).join("\n");
+  assert.match(enText, /surface roughness.*photovoltaic|photovoltaic.*surface|surface texturing.*solar cells/i);
+  assert.doesNotMatch(enText, /(?:^|\n)(formation|development)(?:\n|$)|optics formation/i);
+  assert.match(firstInput.canonicalTopicEn ?? "", /solar panel|photovoltaic/i);
+});
+
 test("runResearchGroundingPipeline accepts natural-science solar sail normalization and query seeds", async () => {
   const capturedInputs: Array<{
     topic: string;
@@ -3411,6 +3685,14 @@ test("runResearchGroundingPipeline keeps accepted evidence cards source-grounded
     true,
   );
   assert.equal((result.evidenceCards?.length ?? 0) >= 1, true);
+  assert.equal(
+    result.groundingDiagnostics?.claimExtraction?.evidenceCardCount,
+    result.evidenceCards?.length ?? 0,
+  );
+  assert.equal(
+    (result.groundingDiagnostics?.claimExtraction?.evidenceCardsWithSupportSpan ?? 0) >= 1,
+    true,
+  );
   assert.equal(result.evidenceCards?.some((card) => card.sourceId === "openalex-1"), true);
   assert.equal(
     result.evidenceCards?.every((card) =>

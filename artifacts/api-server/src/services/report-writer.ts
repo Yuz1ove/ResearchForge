@@ -54,6 +54,10 @@ export interface ReportWriterSection {
   prose: string;
   evidenceCardIds: string[];
   citationIds: string[];
+  coverageStatus?: "sufficient" | "weak" | "insufficient";
+  groundingStatus?: "grounded" | "partially_grounded" | "unsupported";
+  unsupportedSentences?: string[];
+  generationMethod?: string;
   paragraphClaims?: ReportWriterParagraphClaim[];
   warnings?: string[];
 }
@@ -87,8 +91,12 @@ export interface ReportWriterEvidenceCard {
   workflowId?: string | null;
   topicHash?: string | null;
   claimTextOriginal?: string;
+  claimText?: string;
   claimTextZh?: string;
   supportedByText?: string;
+  supportSpan?: string;
+  supportStart?: number;
+  supportEnd?: number;
   title?: string;
   claim: string;
   claimTextZhTw?: string;
@@ -116,6 +124,7 @@ export interface ReportWriterEvidenceCard {
   limitations?: string[];
   limitationsZhTw?: string[];
   sectionTargets?: string[];
+  sectionFit?: string[];
   sourceTitle: string;
   sourceProvider: string;
   sourceAccessLevel?: string | null;
@@ -151,7 +160,10 @@ export interface ReportWriterEvidenceCard {
   abstract?: string | null;
   provider?: string | null;
   relevanceScore?: number | null;
+  topicRelevance?: number | null;
   sourceQualityScore?: number | null;
+  sourceQuality?: number | null;
+  groundingConfidence?: number | null;
   finalScore?: number | null;
   year: number | null;
   usableSections: string[];
@@ -163,6 +175,10 @@ export interface ReportWriterEvidenceCard {
   llmSummaryStatus?: string | null;
   safety?: EvidenceCardSafety;
   needsManualReview?: boolean | null;
+  needsReview?: boolean | null;
+  extractionMethod?: "llm_structured_extract" | "rule_fallback_claim_extraction" | "manual_review" | string | null;
+  rejectionReason?: string | null;
+  extractedAt?: string | null;
   governanceFlags?: string[];
   sourceMetadata?: Record<string, unknown> | null;
 }

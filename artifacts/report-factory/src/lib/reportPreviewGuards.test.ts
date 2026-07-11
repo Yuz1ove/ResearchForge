@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  exportSafeReportSectionText,
   previewWorkspaceMatchesContext,
   visibleReportSectionText,
 } from "./reportPreviewGuards.ts";
@@ -55,4 +56,34 @@ test("visible section text renders prose or body but not instruction fields", ()
 
   assert.match(text, /正式段落/);
   assert.doesNotMatch(text, /文獻探討應|資料與證據整理應|研究方法可/);
+});
+
+test("export-safe section text replaces verifier-blocked prose with review prompt", () => {
+  const text = exportSafeReportSectionText({
+    sectionId: "findings",
+    title: "主要發現",
+    body: "未經支撐的正式段落不應被匯出。",
+    groundingStatus: "unsupported",
+    generationMethod: "grounding_verifier_blocked",
+    evidenceCardIds: ["evidence-1"],
+    unsupportedSentences: ["未經支撐的正式段落不應被匯出。"],
+  });
+
+  assert.match(text, /不輸出正式段落|重新生成或審查/);
+  assert.doesNotMatch(text, /^未經支撐的正式段落不應被匯出。$/u);
+});
+
+test("export-safe section text blocks manual edits until reverified", () => {
+  const text = exportSafeReportSectionText({
+    sectionId: "discussion",
+    title: "分析與討論",
+    body: "使用者新增的外推句尚未通過 verifier。",
+    groundingStatus: "unsupported",
+    generationMethod: "needs_manual_review",
+    evidenceCardIds: ["evidence-1"],
+    warnings: ["needs_manual_review"],
+  });
+
+  assert.match(text, /手動編輯|尚未重新通過 verifier|不輸出正式段落/);
+  assert.doesNotMatch(text, /^使用者新增的外推句/u);
 });

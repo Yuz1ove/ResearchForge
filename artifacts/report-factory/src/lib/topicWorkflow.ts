@@ -295,6 +295,9 @@ const TOPIC_TERMS: Record<Exclude<TopicType, "general_ambiguous" | "sensitive_re
     "草鴞",
     "櫻花鉤吻鮭",
     "綠蠵龜",
+    "海龜",
+    "海龜幼體",
+    "幼龜",
     "鹿",
     "野生動物",
     "保育",
@@ -327,7 +330,7 @@ const TOPIC_TERMS: Record<Exclude<TopicType, "general_ambiguous" | "sensitive_re
     "dinosaur",
     "stratigraphy",
   ],
-  biology_ecology: ["生物", "生態", "演化", "細胞", "基因", "微生物", "食物鏈", "棲地"],
+  biology_ecology: ["生物", "生態", "演化", "細胞", "基因", "微生物", "食物鏈", "棲地", "行為模式", "幼體"],
   chemical_substance: [
     "乙醇",
     "氯化鈉",
@@ -337,6 +340,12 @@ const TOPIC_TERMS: Record<Exclude<TopicType, "general_ambiguous" | "sensitive_re
     "甲烷",
     "微塑膠",
     "鋰",
+    "甲醛",
+    "formaldehyde",
+    "活性碳",
+    "活性炭",
+    "activated carbon",
+    "吸附",
     "化學",
     "化合物",
     "分子",
@@ -358,6 +367,10 @@ const TOPIC_TERMS: Record<Exclude<TopicType, "general_ambiguous" | "sensitive_re
     "空氣污染",
     "山區步道",
     "河流污染",
+    "海岸",
+    "人工夜間照明",
+    "夜間照明",
+    "光害",
     "海洋",
     "氣候",
     "環境",
@@ -380,8 +393,8 @@ const TOPIC_TERMS: Record<Exclude<TopicType, "general_ambiguous" | "sensitive_re
   ],
   literature_language: ["文學", "語言", "小說", "詩", "修辭", "閱讀", "翻譯", "文本"],
   society_policy: ["社會", "政策", "公共議題", "治理", "法律", "公平", "社區", "人口"],
-  education: ["教育", "學習", "教學", "課程", "學生", "學校", "素養"],
-  psychology: ["心理", "情緒", "動機", "認知", "壓力", "睡眠品質", "行為"],
+  education: ["教育", "學習", "教學", "課程", "學生", "學校", "素養", "同儕回饋", "第二語言", "寫作", "修訂"],
+  psychology: ["心理", "情緒", "動機", "認知", "壓力", "睡眠品質", "睡眠不足", "青少年", "工作記憶", "注意力", "行為"],
   economics: ["經濟", "市場", "價格", "通膨", "供需", "產業", "消費"],
   public_health_drug: ["藥物", "用藥", "藥品安全", "抗藥性", "流行病", "健康政策"],
   technology_ai: [
@@ -400,11 +413,11 @@ const TOPIC_TERMS: Record<Exclude<TopicType, "general_ambiguous" | "sensitive_re
     "半導體",
     "晶片",
   ],
-  engineering: ["工程", "橋梁", "機械", "結構", "製程", "控制系統", "土木"],
+  engineering: ["工程", "橋梁", "機械", "結構", "製程", "控制系統", "土木", "濾材", "移除效率"],
   computer_science: ["資訊", "程式", "資料庫", "網路", "資安", "軟體", "演算法"],
   robotics: ["機器人", "自動化", "感測器", "控制器", "無人機"],
-  energy: ["能源", "太陽能", "風力", "電池", "儲能", "發電", "氫能"],
-  applied_technology: ["應用技術", "產品設計", "技術應用", "智慧製造", "創新應用"],
+  energy: ["能源", "太陽能", "太陽能板", "光伏", "photovoltaic", "風力", "電池", "儲能", "發電", "氫能", "發電效率"],
+  applied_technology: ["應用技術", "產品設計", "技術應用", "智慧製造", "創新應用", "室內環境", "空氣品質"],
   material_object: [
     "玉佩",
     "陶瓷",
@@ -557,6 +570,20 @@ const TOPIC_ENGLISH_HINTS: Record<string, string[]> = {
   輻射壓: ["radiation pressure", "solar radiation pressure", "photon momentum"],
   搜尋引擎: ["search engine", "ranking algorithm", "information retrieval"],
   瀏覽器: ["web browser", "web standards", "privacy governance"],
+  太陽能板: ["solar panel", "photovoltaic module", "surface roughness", "optical reflection", "power conversion efficiency"],
+  表面粗糙度: ["surface roughness", "textured surface", "light trapping"],
+  光反射: ["optical reflectance", "surface reflection", "anti-reflection"],
+  發電效率: ["power conversion efficiency", "photovoltaic performance", "solar cell efficiency"],
+  睡眠不足: ["sleep deprivation", "sleep restriction", "adolescent cognition"],
+  工作記憶: ["working memory", "cognitive performance"],
+  注意力: ["attention", "sustained attention"],
+  同儕回饋: ["peer feedback", "peer review", "writing revision"],
+  第二語言: ["second language", "L2 writing", "second language writing"],
+  海龜: ["sea turtle", "hatchling orientation", "artificial light at night"],
+  夜間照明: ["artificial light at night", "light pollution", "coastal lighting"],
+  活性碳: ["activated carbon", "formaldehyde adsorption", "indoor air quality"],
+  活性炭: ["activated carbon", "formaldehyde adsorption", "indoor air quality"],
+  甲醛: ["formaldehyde", "indoor formaldehyde removal", "adsorption efficiency"],
 };
 
 function compactWhitespace(value: string): string {
@@ -697,6 +724,13 @@ function detectTopicType(topic: string): TopicType {
   if (includesAny(topic, TOPIC_TERMS.general_science)) return "general_science";
   if (includesAny(topic, TOPIC_TERMS.geography_environment)) return "geography_environment";
   if (includesAny(topic, TOPIC_TERMS.history_culture)) return "history_culture";
+  if (
+    includesAny(topic, TOPIC_TERMS.education) &&
+    !/人工智慧|生成式|(^|[^A-Za-z])AI(?=$|[^A-Za-z])|artificial intelligence|generative ai|machine learning/i.test(topic) &&
+    /同儕|回饋|學生|高中|學習|教學|寫作|修訂|第二語言|peer feedback|student|learning|writing|revision|second language/i.test(topic)
+  ) {
+    return "education";
+  }
   if (includesAny(topic, TOPIC_TERMS.literature_language)) return "literature_language";
   if (includesAny(topic, TOPIC_TERMS.society_policy)) return "society_policy";
   if (includesAny(topic, TOPIC_TERMS.education)) return "education";
@@ -895,10 +929,13 @@ function titlesTooSimilar(a: string, b: string): boolean {
 }
 
 function topicEnglishKeywords(topic: string, type: TopicType): string[] {
-  const direct = TOPIC_ENGLISH_HINTS[topic];
-  if (direct) return direct;
-  const matchedKey = Object.keys(TOPIC_ENGLISH_HINTS).find((key) => topic.includes(key));
-  if (matchedKey) return TOPIC_ENGLISH_HINTS[matchedKey] ?? [];
+  const matchedHints = uniqueStrings([
+    ...(TOPIC_ENGLISH_HINTS[topic] ?? []),
+    ...Object.entries(TOPIC_ENGLISH_HINTS)
+      .filter(([key]) => topic.includes(key))
+      .flatMap(([, terms]) => terms),
+  ]);
+  const typeHints = (() => {
   switch (type) {
     case "wildlife_conservation":
       return ["wildlife conservation", "habitat change", "population monitoring"];
@@ -933,24 +970,33 @@ function topicEnglishKeywords(topic: string, type: TopicType): string[] {
       return ["scientific method", "experimental design", "variables"];
     case "geography_environment":
       return ["environmental governance", "ecosystem", "monitoring data"];
+    case "education":
+      return ["education", "student learning", "instructional intervention", "learning outcome"];
+    case "psychology":
+      return ["psychology", "cognitive performance", "working memory", "attention"];
     case "history_culture":
     case "literature_language":
+      return ["cultural history", "textual analysis", "meaning transmission"];
     case "society_policy":
-    case "education":
-    case "psychology":
     case "economics":
-      return ["cultural history", "symbolic meaning", "heritage transmission"];
+      return ["social science", "policy analysis", "institutional context"];
     case "technology_ai":
+      return ["technical principle", "data governance", "social impact"];
     case "engineering":
+      return ["engineering performance", "process variables", "measurement method"];
     case "computer_science":
     case "robotics":
+      return ["technical principle", "system design", "performance evaluation"];
     case "energy":
+      return ["photovoltaic performance", "energy efficiency", "material properties"];
     case "applied_technology":
-      return ["technical principle", "data governance", "social impact"];
+      return ["application performance", "process factors", "removal efficiency"];
     case "general_ambiguous":
     default:
       return ["research scope", "historical background", "research methods"];
   }
+  })();
+  return uniqueStrings([...matchedHints, ...typeHints]);
 }
 
 function makeDirection(
@@ -1156,6 +1202,46 @@ const TITLE_PATTERN_BANK: Partial<Record<TopicType, DirectionPattern[]>> = {
     pattern("社會影響", (topic) => `${topic}發展對產業結構、勞動技能與資訊公平的影響`, (topic) => `從產業採用、職務變化、技能需求與資訊落差資料，分析${topic}對社會與勞動市場的影響。`, "industry_supply_chain", ["產業結構", "勞動技能", "資訊公平"], ["industry structure", "labor skills", "information equity"]),
     pattern("法規倫理", (topic) => `${topic}發展下的資料隱私、法規倫理與社會影響`, (topic) => `可比較監管政策、國際規範、倫理原則與使用者權益資料，討論${topic}治理與社會責任。`, "ethics_welfare", ["資料隱私", "法規倫理", "社會影響"], ["data privacy", "regulation ethics", "social impact"]),
   ],
+  engineering: [
+    pattern("性能變因", (topic) => `${topic}的關鍵性能變因、量測方法與工程機制`, (topic) => `可查材料、幾何、操作條件、量測指標與效率變化，分析${topic}的工程機制與限制。`, "mechanism", ["性能變因", "量測方法", "工程機制"], ["performance factors", "measurement method", "engineering mechanism"]),
+    pattern("材料製程", (topic) => `${topic}的材料特性、製程條件與性能差異`, (topic) => `比較材料表面、孔隙、粗糙度、處理條件或製程參數，說明${topic}如何影響實際性能。`, "comparative_analysis", ["材料特性", "製程條件", "性能差異"], ["material properties", "process conditions", "performance difference"]),
+    pattern("應用限制", (topic) => `${topic}的應用場景、可靠度與限制因素`, (topic) => `整理實驗條件、使用環境、耐久性與尺度化限制，評估${topic}能否支撐實際應用。`, "technology_application", ["應用場景", "可靠度", "限制因素"], ["application context", "reliability", "limiting factors"]),
+    pattern("文獻方法", (topic) => `${topic}相關研究的實驗設計、指標與資料品質`, (topic) => `檢視研究設計、對照組、量測指標與資料完整性，判斷${topic}文獻證據的可用程度。`, "research_methods", ["實驗設計", "量測指標", "資料品質"], ["experimental design", "evaluation metrics", "data quality"]),
+    pattern("效率比較", (topic) => `${topic}在不同條件下的效率比較與最佳化`, (topic) => `比較操作條件、材料配置、環境變因與效率指標，找出${topic}可能的最佳化方向。`, "comparative_analysis", ["效率比較", "不同條件", "最佳化"], ["efficiency comparison", "operating conditions", "optimization"]),
+    pattern("失效風險", (topic) => `${topic}的失效模式、維護需求與安全風險`, (topic) => `分析老化、污染、疲乏、堵塞或環境壓力等因素，說明${topic}在長期使用中的風險。`, "research_methods", ["失效模式", "維護需求", "安全風險"], ["failure mode", "maintenance requirements", "safety risk"]),
+  ],
+  energy: [
+    pattern("效率機制", (topic) => `${topic}的光電轉換效率、反射損失與材料表面機制`, (topic) => `可查光伏元件、表面紋理、反射率、光捕獲與電性輸出資料，分析${topic}如何影響發電效率。`, "mechanism", ["光電轉換效率", "反射損失", "材料表面"], ["photovoltaic efficiency", "optical reflectance", "surface texture"]),
+    pattern("材料設計", (topic) => `${topic}的表面結構、抗反射設計與性能比較`, (topic) => `比較粗糙度、微結構、鍍膜或封裝材料對反射、吸收與輸出功率的影響。`, "comparative_analysis", ["表面結構", "抗反射設計", "性能比較"], ["surface roughness", "anti-reflection coating", "power output"]),
+    pattern("量測方法", (topic) => `${topic}的量測指標、實驗條件與誤差來源`, (topic) => `整理反射率、入射角、照度、溫度、電流電壓曲線與效率計算方式，檢查${topic}研究結果的限制。`, "research_methods", ["量測指標", "實驗條件", "誤差來源"], ["reflectance measurement", "current voltage curve", "efficiency measurement"]),
+    pattern("應用限制", (topic) => `${topic}在實際太陽能板設計與維護中的限制`, (topic) => `評估表面污染、耐久性、製程成本與戶外環境如何改變${topic}的實際效益。`, "technology_application", ["實際設計", "耐久性", "製程成本"], ["solar panel design", "durability", "outdoor performance"]),
+    pattern("環境條件", (topic) => `${topic}在照度、入射角與溫度條件下的性能變化`, (topic) => `比較光照強度、入射角、溫度與表面狀態，分析${topic}在不同環境條件下的效率差異。`, "comparative_analysis", ["照度", "入射角", "溫度條件"], ["irradiance", "incident angle", "temperature effect"]),
+    pattern("長期可靠度", (topic) => `${topic}的戶外老化、污染累積與長期可靠度`, (topic) => `追蹤灰塵、磨耗、清潔方式與戶外曝露時間，評估${topic}效果是否能長期維持。`, "research_methods", ["戶外老化", "污染累積", "長期可靠度"], ["outdoor aging", "soiling", "long-term reliability"]),
+  ],
+  psychology: [
+    pattern("認知表現", (topic) => `${topic}的工作記憶、注意力與認知表現差異`, (topic) => `可查睡眠時長、實驗任務、反應時間與正確率等資料，分析${topic}對認知表現的影響。`, "mechanism", ["工作記憶", "注意力", "認知表現"], ["working memory", "attention", "cognitive performance"]),
+    pattern("族群差異", (topic) => `${topic}在青少年族群中的風險因子與表現差異`, (topic) => `比較年齡、性別、課業壓力、作息與睡眠品質，評估${topic}研究結果的適用範圍。`, "comparative_analysis", ["青少年", "風險因子", "表現差異"], ["adolescents", "risk factors", "performance difference"]),
+    pattern("研究方法", (topic) => `${topic}相關研究的測驗工具、樣本與限制`, (topic) => `檢視工作記憶任務、注意力測驗、睡眠紀錄與樣本設計，判斷${topic}文獻證據的強度。`, "research_methods", ["測驗工具", "樣本設計", "研究限制"], ["cognitive tasks", "sleep measurement", "study limitations"]),
+    pattern("教育影響", (topic) => `${topic}對學習表現與校園介入的啟示`, (topic) => `整理課堂注意力、學習效率、作息介入與健康教育資料，說明${topic}可能帶來的教育意涵。`, "research_methods", ["學習表現", "校園介入", "健康教育"], ["academic performance", "school intervention", "sleep education"]),
+    pattern("睡眠條件", (topic) => `${topic}中的睡眠時長、睡眠品質與作息條件`, (topic) => `比較短睡眠、睡眠限制、晚睡與睡眠品質指標，釐清${topic}研究中的暴露條件。`, "background_context", ["睡眠時長", "睡眠品質", "作息條件"], ["sleep duration", "sleep quality", "sleep restriction"]),
+    pattern("神經認知", (topic) => `${topic}的神經認知機制與執行功能關聯`, (topic) => `整理執行功能、抑制控制、警覺度與神經認知模型，說明${topic}可能的作用路徑。`, "mechanism", ["神經認知", "執行功能", "警覺度"], ["executive function", "vigilance", "neurocognitive mechanism"]),
+  ],
+  education: [
+    pattern("學習成效", (topic) => `${topic}對學習成效、修訂品質與表現差異的影響`, (topic) => `可查介入設計、前後測、評分規準與學生作品，分析${topic}如何影響學習成果。`, "research_methods", ["學習成效", "修訂品質", "表現差異"], ["learning outcome", "revision quality", "student performance"]),
+    pattern("互動機制", (topic) => `${topic}中的互動品質、回饋類型與修訂行為`, (topic) => `整理回饋內容、同儕互動、修訂策略與寫作品質指標，說明${topic}的作用機制。`, "mechanism", ["互動品質", "回饋類型", "修訂行為"], ["peer feedback", "feedback quality", "writing revision"]),
+    pattern("第二語言", (topic) => `${topic}在第二語言寫作教學中的應用與限制`, (topic) => `聚焦第二語言學習者、寫作任務、語言準確度與內容組織，評估${topic}的適用條件。`, "literature_analysis", ["第二語言", "寫作教學", "應用限制"], ["second language writing", "L2 writing", "writing instruction"]),
+    pattern("研究設計", (topic) => `${topic}相關研究的實驗設計、評量工具與資料品質`, (topic) => `檢查樣本、對照組、評量規準、盲評與統計方式，判斷${topic}研究證據是否足夠。`, "research_methods", ["實驗設計", "評量工具", "資料品質"], ["experimental design", "assessment rubric", "data quality"]),
+    pattern("學習者差異", (topic) => `${topic}在不同學生程度與寫作能力中的差異`, (topic) => `比較語言程度、先備寫作能力、動機與合作經驗，分析${topic}效果是否因學生特徵而不同。`, "comparative_analysis", ["學生程度", "寫作能力", "學習者差異"], ["learner proficiency", "writing ability", "student differences"]),
+    pattern("教學設計", (topic) => `${topic}的教學流程、回饋訓練與教師支持`, (topic) => `整理回饋規準、同儕訓練、教師引導與修訂循環，評估${topic}在課堂中的實施條件。`, "research_methods", ["教學流程", "回饋訓練", "教師支持"], ["instructional design", "peer training", "teacher support"]),
+  ],
+  applied_technology: [
+    pattern("效能因素", (topic) => `${topic}的效能因素、操作條件與量測指標`, (topic) => `可查材料、流量、濃度、溫濕度、接觸時間與效率指標，分析${topic}的實際效能。`, "mechanism", ["效能因素", "操作條件", "量測指標"], ["performance factors", "operating conditions", "measurement metrics"]),
+    pattern("材料機制", (topic) => `${topic}的材料特性、吸附機制與限制因素`, (topic) => `整理孔隙結構、表面官能基、污染物濃度與競爭吸附資料，說明${topic}的材料機制。`, "mechanism", ["材料特性", "吸附機制", "限制因素"], ["material properties", "adsorption mechanism", "limiting factors"]),
+    pattern("應用情境", (topic) => `${topic}在實際室內環境中的應用、維護與風險`, (topic) => `評估空氣流通、污染源、濾材壽命、再生方式與安全限制，判斷${topic}是否適合實際使用。`, "technology_application", ["室內環境", "維護", "安全限制"], ["indoor environment", "filter lifetime", "application limitations"]),
+    pattern("文獻方法", (topic) => `${topic}相關研究的實驗設計、對照條件與資料品質`, (topic) => `檢視實驗艙、濃度控制、採樣方法與效率計算方式，判斷${topic}證據能否支持結論。`, "research_methods", ["實驗設計", "對照條件", "資料品質"], ["experimental chamber", "control conditions", "data quality"]),
+    pattern("效率比較", (topic) => `${topic}在不同材料與環境條件下的效率比較`, (topic) => `比較材料種類、粒徑、流速、濕度與污染物濃度，找出${topic}效果差異的主要來源。`, "comparative_analysis", ["材料條件", "環境條件", "效率比較"], ["material comparison", "humidity effect", "removal efficiency"]),
+    pattern("維護壽命", (topic) => `${topic}的濾材壽命、再生方式與性能衰退`, (topic) => `追蹤飽和、再生、污染負荷與使用時間，評估${topic}是否能長期穩定運作。`, "research_methods", ["濾材壽命", "再生方式", "性能衰退"], ["filter lifetime", "regeneration", "performance decay"]),
+  ],
   general_ambiguous: [
     pattern("研究範圍", (topic) => `${topic}的概念界定、研究範圍與當代發展`, (topic) => `先釐清定義、研究邊界、關鍵概念與可查資料來源，建立${topic}後續分析的問題意識與方法選擇。`, "background_context", ["概念界定", "研究範圍", "當代發展"], ["concept definition", "research scope", "contemporary development"]),
     pattern("背景脈絡", (topic) => `${topic}的歷史背景、主要類型與社會影響`, (topic) => `可整理起源、演變、代表案例、類型分類與社會討論資料，分析${topic}形成脈絡與影響範圍。`, "culture_history", ["歷史背景", "主要類型", "社會影響"], ["historical background", "main categories", "social impact"]),
@@ -1172,16 +1258,11 @@ TITLE_PATTERN_BANK.mathematics = TITLE_PATTERN_BANK.general_ambiguous;
 TITLE_PATTERN_BANK.earth_science = TITLE_PATTERN_BANK.geography_environment;
 TITLE_PATTERN_BANK.literature_language = TITLE_PATTERN_BANK.history_culture;
 TITLE_PATTERN_BANK.society_policy = TITLE_PATTERN_BANK.general_ambiguous;
-TITLE_PATTERN_BANK.education = TITLE_PATTERN_BANK.general_ambiguous;
-TITLE_PATTERN_BANK.psychology = TITLE_PATTERN_BANK.general_ambiguous;
 TITLE_PATTERN_BANK.economics = TITLE_PATTERN_BANK.general_ambiguous;
 TITLE_PATTERN_BANK.biology_ecology = TITLE_PATTERN_BANK.geography_environment;
 TITLE_PATTERN_BANK.public_health_drug = TITLE_PATTERN_BANK.medicine_public_health;
-TITLE_PATTERN_BANK.engineering = TITLE_PATTERN_BANK.technology_ai;
 TITLE_PATTERN_BANK.computer_science = TITLE_PATTERN_BANK.technology_ai;
 TITLE_PATTERN_BANK.robotics = TITLE_PATTERN_BANK.technology_ai;
-TITLE_PATTERN_BANK.energy = TITLE_PATTERN_BANK.technology_ai;
-TITLE_PATTERN_BANK.applied_technology = TITLE_PATTERN_BANK.technology_ai;
 TITLE_PATTERN_BANK.sensitive_research_only = TITLE_PATTERN_BANK.illegal_drug_research_safe;
 
 function pattern(
@@ -1259,10 +1340,81 @@ function solarSailDirectionBank(topic: string): DirectionSpec[] {
   ];
 }
 
+function isSeaTurtleArtificialLightTopic(topic: string): boolean {
+  return (
+    /海龜|綠蠵龜|幼龜|幼體|sea turtle|marine turtle|hatchling/i.test(topic) &&
+    /人工夜間照明|夜間照明|光害|光污染|入海|orientation|disorientation|artificial light|light pollution|coastal lighting|beach lighting/i.test(
+      topic,
+    )
+  );
+}
+
+function seaTurtleArtificialLightDirectionBank(topic: string): DirectionSpec[] {
+  return [
+    spec(
+      "入海定向",
+      `${topic}中的人工夜間照明如何影響海龜幼體入海定向？`,
+      `聚焦海龜幼體在孵化後由沙灘移向海面的方向選擇，整理光源強度、波長、距離與錯向移動資料，判斷人工夜間照明是否改變入海行為。`,
+      "environmental_impact",
+      ["sea turtle hatchling orientation", "artificial light at night", "seaward orientation"],
+      "sea turtle hatchling orientation artificial light at night seaward orientation",
+      `${topic} 海龜幼體 入海定向 人工夜間照明`,
+    ),
+    spec(
+      "光害機制",
+      `${topic}中光害強度、波長與海龜幼體錯向行為的關聯`,
+      `比較不同人造光源、月光背景、海灘地形與幼體行動路徑，說明夜間照明干擾海龜幼體定向的可能機制。`,
+      "mechanism",
+      ["light pollution", "hatchling disorientation", "coastal lighting"],
+      "sea turtle hatchling disorientation light pollution coastal lighting",
+      `${topic} 光害 波長 錯向行為`,
+    ),
+    spec(
+      "海岸管理",
+      `${topic}對海岸照明管理與保育措施的啟示`,
+      `整理遮光、低波長照明、季節性管制與巢區管理案例，評估照明管制是否能降低海龜幼體迷失或死亡風險。`,
+      "policy_analysis",
+      ["coastal lighting management", "turtle-friendly lighting", "nesting beach conservation"],
+      "sea turtle coastal lighting management turtle friendly lighting nesting beach conservation",
+      `${topic} 海岸照明管理 保育措施`,
+    ),
+    spec(
+      "研究方法",
+      `${topic}相關研究的觀測設計、行為指標與資料限制`,
+      `檢視實地觀測、實驗光源、追蹤路徑、入海成功率與樣本季節，判斷文獻證據是否能支持因果推論。`,
+      "research_methods",
+      ["field experiment", "hatchling behavior", "orientation measurement"],
+      "sea turtle hatchling behavior field experiment orientation measurement",
+      `${topic} 觀測設計 行為指標 入海成功率`,
+    ),
+    spec(
+      "物種差異",
+      `${topic}在不同海龜物種、海灘條件與孵化季節中的差異`,
+      `比較物種、巢位、沙灘坡度、背景光與孵化時間，分析人工夜間照明影響是否會因環境條件而改變。`,
+      "comparative_analysis",
+      ["marine turtle species", "nesting beach", "seasonal variation"],
+      "marine turtle hatchling orientation nesting beach seasonal variation artificial light",
+      `${topic} 物種差異 海灘條件 季節變化`,
+    ),
+    spec(
+      "風險評估",
+      `${topic}造成幼體迷失、捕食暴露與入海成功率下降的風險`,
+      `彙整迷失距離、滯留時間、捕食暴露與入海成功率資料，評估夜間照明對海龜幼體早期存活的影響程度。`,
+      "environmental_impact",
+      ["hatchling mortality", "predation exposure", "sea-finding success"],
+      "sea turtle hatchling mortality predation exposure sea finding success artificial light",
+      `${topic} 幼體迷失 捕食暴露 入海成功率`,
+    ),
+  ];
+}
+
 function directionBank(validation: TopicValidationResult): DirectionSpec[] {
   const topic = validation.normalizedTopic;
   if (isSolarSailTopic(topic)) {
     return solarSailDirectionBank(topic);
+  }
+  if (validation.topicType === "wildlife_conservation" && isSeaTurtleArtificialLightTopic(topic)) {
+    return seaTurtleArtificialLightDirectionBank(topic);
   }
   const patterns = TITLE_PATTERN_BANK[validation.topicType] ?? TITLE_PATTERN_BANK.general_ambiguous ?? [];
   return patterns.map((item) =>

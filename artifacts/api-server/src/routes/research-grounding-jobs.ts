@@ -9,6 +9,21 @@ import {
   scheduleGroundingJob,
 } from "../services/research/grounding/researchGroundingJobStore";
 
+function normalizeGroundingJobForResponse<T extends Record<string, unknown>>(job: T): T {
+  const diagnostics = job.groundingDiagnostics;
+  if (!diagnostics || typeof diagnostics !== "object") return job;
+  const firstCandidateLatencyMs = (diagnostics as { firstCandidateLatencyMs?: unknown })
+    .firstCandidateLatencyMs;
+  if (typeof firstCandidateLatencyMs !== "number" || firstCandidateLatencyMs >= 0) return job;
+  return {
+    ...job,
+    groundingDiagnostics: {
+      ...diagnostics,
+      firstCandidateLatencyMs: 0,
+    },
+  };
+}
+
 export function createResearchGroundingJobsRouter(): IRouter {
   const router: IRouter = Router();
 
@@ -37,7 +52,7 @@ export function createResearchGroundingJobsRouter(): IRouter {
       return;
     }
 
-    res.json(GroundingJobSchema.parse(job));
+    res.json(GroundingJobSchema.parse(normalizeGroundingJobForResponse(job)));
   });
 
   return router;

@@ -3,7 +3,7 @@ import {
   type SourceFactMetadata,
   type SourceRecord,
 } from "./sourceRecords.ts";
-import { buildEvidenceCards, type EvidenceCard } from "./evidenceCards.ts";
+import type { EvidenceCard } from "./evidenceCards.ts";
 import { buildReportDraft, type ReportDraft } from "./reportDraft.ts";
 import { buildReportOutline, type ReportOutline } from "./reportOutline.ts";
 import type { QualityReport, ResearchProject } from "./qualityJudge.ts";
@@ -32,6 +32,7 @@ import {
   normalizeReportPresentation,
   type ReportPresentationSettings,
 } from "./reportPresentation.ts";
+import { exportSafeReportSectionText } from "./reportPreviewGuards.ts";
 
 export type ReportGenerationMode =
   | "blocked"
@@ -700,6 +701,26 @@ export function generationReadiness(
   };
 }
 
+export function shouldRunSupplementalCoverageSearch(input: {
+  acceptedSourceCount: number;
+  literatureReviewEvidenceCount: number;
+  peerReviewedAcceptedSourceCount: number;
+  canonicalEvidenceCardCount: number;
+  serverDerivableEvidenceAvailable: boolean;
+}): boolean {
+  const hasEvidencePathForReportDrafts =
+    (input.canonicalEvidenceCardCount > 0 || input.serverDerivableEvidenceAvailable) &&
+    input.acceptedSourceCount >= 3;
+
+  if (hasEvidencePathForReportDrafts) return false;
+
+  return (
+    input.acceptedSourceCount < 10 ||
+    input.literatureReviewEvidenceCount < 5 ||
+    input.peerReviewedAcceptedSourceCount < 3
+  );
+}
+
 export function reportModeFromGenerationMode(
   generationMode: Exclude<ReportGenerationMode, "blocked">,
 ): ReportMode {
@@ -747,14 +768,7 @@ function buildWorkspaceParts(
     displayTitle?: string | null;
   } = {},
 ) {
-  const evidenceCards =
-    options.evidenceCards && options.evidenceCards.length > 0
-      ? options.evidenceCards
-      : buildEvidenceCards(acceptedSources, [], {
-          resetText: true,
-          topic: input.topic,
-          createdAt: project.updatedAt,
-        });
+  const evidenceCards = options.evidenceCards ?? [];
   const acceptedSourceDigest = buildAcceptedSourceDigest(acceptedSources, {
     topic: input.topic,
   });
@@ -1351,7 +1365,7 @@ export function workspaceToGeneratedReport(
       blocks: [
         {
           type: "paragraph",
-          text: section.synthesizedProseZhTw || section.body,
+          text: exportSafeReportSectionText(section),
         },
       ],
     })),

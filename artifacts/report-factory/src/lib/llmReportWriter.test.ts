@@ -6,6 +6,7 @@ import {
   type ReportWorkspace,
 } from "./reportWorkspace.ts";
 import type { SourceRecord } from "./sourceRecords.ts";
+import type { EvidenceCard } from "./evidenceCards.ts";
 import {
   mergeLlmReportDraft,
   requestLlmReportDraft,
@@ -73,6 +74,73 @@ function source(index: number, overrides: Partial<SourceRecord> = {}): SourceRec
   };
 }
 
+function evidenceCard(index: number, overrides: Partial<EvidenceCard> = {}): EvidenceCard {
+  const sourceId = `source-${index}`;
+  return {
+    id: `evidence:${sourceId}:1`,
+    evidenceId: `evidence:${sourceId}:1`,
+    workflowId: TEST_WORKFLOW_ID,
+    topicHash: TEST_TOPIC_HASH,
+    sourceId,
+    claimText: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
+    supportSpan: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
+    supportedByText: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
+    claim: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
+    claimTextZhTw: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
+    mainClaim: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
+    evidence: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
+    summary: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
+    sourceTitle: `水餃營養與飲食文化研究 ${index}`,
+    sourceProvider: "Crossref",
+    relevance: "finding",
+    citationMarker: `[S${index}]`,
+    citationText: `Ada Lovelace（2024）`,
+    limitations: [],
+    limitationsZhTw: [],
+    sectionTargets: ["abstract", "introduction", "literature_review"],
+    sectionFit: ["abstract", "introduction", "literature_review"],
+    usableSections: ["研究背景", "文獻探討"],
+    sourceType: "Crossref",
+    reliability: "高",
+    sourceUrl: `https://doi.org/10.1000/dumpling-${index}`,
+    sourceDomain: "doi.org",
+    provider: "Crossref",
+    doi: `10.1000/dumpling-${index}`,
+    abstract: "此來源討論水餃的營養標示、鈉含量與家庭飲食文化。",
+    relevanceScore: 0.8,
+    sourceQualityScore: 0.8,
+    finalScore: 0.8,
+    year: 2024,
+    confidence: "高",
+    confidenceScore: 0.8,
+    groundingConfidence: 0.8,
+    derivation: "abstract-derived",
+    abstractOnly: true,
+    limitation: null,
+    createdAt: "2026-07-06T00:00:00.000Z",
+    notes: "",
+    usableEvidence: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
+    quoteOrParaphrase: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
+    evidencePointZhTw: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
+    sourceExcerptOriginal: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
+    sourceSummaryZhTw: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
+    extractionMethod: "llm_structured_extract",
+    needsReview: false,
+    ...overrides,
+  };
+}
+
+function workspaceWithEvidence(id: string, mode: Parameters<typeof createReportWorkspace>[2] = "complete_research_report"): ReportWorkspace {
+  const acceptedSources = [source(1), source(2), source(3)];
+  return createReportWorkspace(
+    reportInput(),
+    acceptedSources,
+    mode,
+    id,
+    { evidenceCards: acceptedSources.map((_, index) => evidenceCard(index + 1)) },
+  );
+}
+
 test("requestLlmReportDraft posts accepted sources and maps quick draft to academic claim mode", async () => {
   const originalFetch = globalThis.fetch;
   let capturedBody: Record<string, unknown> | null = null;
@@ -99,12 +167,7 @@ test("requestLlmReportDraft posts accepted sources and maps quick draft to acade
   }) as typeof fetch;
 
   try {
-    const workspace = createReportWorkspace(
-      reportInput(),
-      [source(1), source(2), source(3)],
-      "initial_brief",
-      "rf-request-evidence",
-    );
+    const workspace = workspaceWithEvidence("rf-request-evidence", "initial_brief");
     const result = await requestLlmReportDraft({
       reportInput: reportInput(),
       workflowId: TEST_WORKFLOW_ID,
@@ -141,12 +204,7 @@ test("requestLlmReportDraft falls back when the LLM request times out", async ()
   }) as typeof fetch;
 
   try {
-    const workspace = createReportWorkspace(
-      reportInput(),
-      [source(1), source(2), source(3)],
-      "initial_brief",
-      "rf-request-timeout",
-    );
+    const workspace = workspaceWithEvidence("rf-request-timeout", "initial_brief");
     const result = await requestLlmReportDraft({
       reportInput: reportInput(),
       workflowId: TEST_WORKFLOW_ID,
@@ -175,6 +233,7 @@ test("mergeLlmReportDraft replaces matching draft section prose for preview", ()
     [source(1), source(2), source(3), source(4), source(5)],
     "initial_brief",
     "rf-llm-merge",
+    { evidenceCards: [1, 2, 3, 4, 5].map((index) => evidenceCard(index)) },
   );
   const targetSection = workspace.draft.sections[0];
   assert.ok(targetSection);
@@ -221,12 +280,7 @@ test("mergeLlmReportDraft replaces matching draft section prose for preview", ()
 });
 
 test("mergeLlmReportDraft keeps references limited to accepted evidence cards", () => {
-  const workspace: ReportWorkspace = createReportWorkspace(
-    reportInput(),
-    [source(1), source(2), source(3)],
-    "complete_research_report",
-    "rf-accepted-only",
-  );
+  const workspace: ReportWorkspace = workspaceWithEvidence("rf-accepted-only");
   const targetSection = workspace.draft.sections[0];
   const acceptedEvidenceId = workspace.evidenceCards[0]?.id;
   assert.ok(targetSection);
@@ -267,12 +321,7 @@ test("mergeLlmReportDraft keeps references limited to accepted evidence cards", 
 });
 
 test("mergeLlmReportDraft does not backfill citation badges without actual markers", () => {
-  const workspace: ReportWorkspace = createReportWorkspace(
-    reportInput(),
-    [source(1), source(2), source(3)],
-    "complete_research_report",
-    "rf-no-marker-backfill",
-  );
+  const workspace: ReportWorkspace = workspaceWithEvidence("rf-no-marker-backfill");
   const targetSection = workspace.draft.sections.find((section) => section.citationCount > 0);
   assert.ok(targetSection);
 
@@ -308,12 +357,7 @@ test("mergeLlmReportDraft does not backfill citation badges without actual marke
 });
 
 test("mergeLlmReportDraft keeps the existing draft when the LLM call fails", () => {
-  const workspace: ReportWorkspace = createReportWorkspace(
-    reportInput(),
-    [source(1), source(2), source(3)],
-    "complete_research_report",
-    "rf-keep-draft",
-  );
+  const workspace: ReportWorkspace = workspaceWithEvidence("rf-keep-draft");
 
   const merged = mergeLlmReportDraft(workspace, {
     ok: false,
@@ -340,12 +384,7 @@ test("mergeLlmReportDraft keeps the existing draft when the LLM call fails", () 
 });
 
 test("mergeLlmReportDraft still applies constrained fallback sections when sections are returned", () => {
-  const workspace: ReportWorkspace = createReportWorkspace(
-    reportInput(),
-    [source(1), source(2), source(3)],
-    "complete_research_report",
-    "rf-constrained-fallback",
-  );
+  const workspace: ReportWorkspace = workspaceWithEvidence("rf-constrained-fallback");
   const targetSection = workspace.draft.sections[0];
   assert.ok(targetSection);
 

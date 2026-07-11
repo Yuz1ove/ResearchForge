@@ -22,8 +22,12 @@ export interface EvidenceCard {
   sourceId: string;
   claimIds?: string[];
   claimTextOriginal?: string;
+  claimText?: string;
   claimTextZh?: string;
   supportedByText?: string;
+  supportSpan?: string;
+  supportStart?: number;
+  supportEnd?: number;
   citationMarker: string;
   title: string;
   sourceType: string;
@@ -53,6 +57,7 @@ export interface EvidenceCard {
   limitations: string[];
   limitationsZhTw: string[];
   sectionTargets: string[];
+  sectionFit?: string[];
   sourceTitle: string;
   sourceUrl: string | null;
   sourceDomain: string;
@@ -62,7 +67,7 @@ export interface EvidenceCard {
   evidenceType?: string | null;
   sourceLocation?: string | null;
   sectionHeading?: string | null;
-  extractionMethod?: string | null;
+  extractionMethod?: "llm_structured_extract" | "rule_fallback_claim_extraction" | "manual_review" | string | null;
   quotedText?: string | null;
   trace?: {
     provider?: string;
@@ -86,7 +91,9 @@ export interface EvidenceCard {
   abstract: string | null;
   provider: string;
   relevanceScore: number | null;
+  topicRelevance?: number | null;
   sourceQualityScore: number | null;
+  sourceQuality?: number | null;
   finalScore: number | null;
   year: number | null;
   usableSections: WorkflowReportSection[];
@@ -101,6 +108,10 @@ export interface EvidenceCard {
   notes: string;
   safety?: EvidenceCardSafety;
   needsManualReview?: boolean | null;
+  needsReview?: boolean | null;
+  rejectionReason?: string | null;
+  groundingConfidence?: number | null;
+  extractedAt?: string | null;
   governanceFlags?: string[];
 }
 

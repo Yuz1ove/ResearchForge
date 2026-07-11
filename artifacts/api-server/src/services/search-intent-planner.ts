@@ -64,6 +64,18 @@ import {
   enrichSourcesWithResearchPipeline,
   expandBilingualQueries,
 } from "./research-pipeline";
+import {
+  buildContractAnchorQuery,
+  buildTopicAnchorContract,
+  repairTopicTextWithAnchors,
+  validateAndRepairTopicQuery,
+  validateTopicTextAgainstContract,
+  type PlannedResearchQuery,
+  type PlannedResearchQueryRole,
+  type TopicAnchorContract,
+  type TopicAnchorQueryDecision,
+  type TopicAnchorValidationResult,
+} from "./topic-anchor-contract";
 
 export interface SearchIntentPlannerInput {
   topic: string;
@@ -208,6 +220,10 @@ export interface SearchIntentPlan {
   suppliedQuerySeedZh?: string[];
   suppliedQuerySeedEn?: string[];
   subtopics?: PlannerSubtopic[];
+  topicAnchorContract?: TopicAnchorContract;
+  topicAnchorValidation?: TopicAnchorValidationResult;
+  topicAnchorRepairAttempted?: boolean;
+  topicAnchorFailureReason?: string | null;
 }
 
 export interface SearchIntentQueryPhase {
@@ -232,6 +248,8 @@ export interface SearchIntentQuerySet {
   chineseSupplemental: string[];
   fallbackRelaxed: string[];
   phases: SearchIntentQueryPhase[];
+  structuredQueries?: readonly PlannedResearchQuery[];
+  queryAnchorDiagnostics?: readonly TopicAnchorQueryDecision[];
 }
 
 const ROTATIONAL_MECHANICS_CORE_CONCEPTS = [
@@ -339,6 +357,10 @@ export interface SearchTrace {
   topicHash: string;
   queryPlanHash: string;
   providerQueries: string[];
+  rejectedProviderQueries?: string[];
+  topicAnchorContract?: TopicAnchorContract;
+  topicAnchorValidation?: TopicAnchorValidationResult;
+  queryAnchorDiagnostics?: readonly TopicAnchorQueryDecision[];
   candidateCount: number;
   dedupedCount: number;
   acceptedCount: number;
@@ -409,6 +431,7 @@ export interface SourceSearchPipelineDiagnostics {
   fallback_relaxed_queries: string[];
   negativeTerms?: string[];
   providerQueries?: string[];
+  rejectedProviderQueries?: string[];
   implementedProviders?: string[];
   medicalProvidersPending?: string[];
   medicalProviderWarning?: string;
@@ -441,6 +464,15 @@ export interface SourceSearchPipelineDiagnostics {
   foreground_latency_ms?: number;
   first_candidate_latency_ms?: number;
   tried_queries?: string[];
+  topicAnchorContract?: TopicAnchorContract;
+  topicAnchorValidation?: TopicAnchorValidationResult;
+  topicAnchorRepairAttempted?: boolean;
+  topicAnchorFailureReason?: string | null;
+  queryAnchorDiagnostics?: readonly TopicAnchorQueryDecision[];
+  plannedQueryCount?: number;
+  repairedQueryCount?: number;
+  rejectedQueryCount?: number;
+  providerBoundQueryCount?: number;
 }
 
 type SearchIntentRankedSource = SourceRecord & {
@@ -6616,7 +6648,7 @@ function sanitizePlannerPlanQueries(
     ...suppliedSubtopics.flatMap((subtopic) => subtopic.excludeTerms ?? []),
   ]).slice(0, 18);
 
-  return normalizeExclusiveTopicPlan(input, {
+  const normalizedPlan = normalizeExclusiveTopicPlan(input, {
     ...plan,
     topicUnderstanding,
     detectedDomain:
@@ -6768,6 +6800,7 @@ function sanitizePlannerPlanQueries(
     suppliedQuerySeedEn,
     subtopics: suppliedSubtopics,
   });
+  return applyEvidenceCardTopicAnchorToPlan(input, normalizedPlan);
 }
 
 function normalizeExclusiveTopicPlan(
@@ -7910,6 +7943,549 @@ function cleanQueryList(queries: string[], limit = MAX_QUERY_COUNT): string[] {
   ).slice(0, limit);
 }
 
+interface EvidenceCardTopicAnchorProfile {
+  id: string;
+  topicPattern: RegExp;
+  fallbackEnglish: string[];
+  fallbackChinese: string[];
+  sourceSubjectTerms: string[];
+  sourceAxisTerms: string[];
+  sourceDriftTerms: string[];
+  queryAllowed: (query: string) => boolean;
+}
+
+const EVIDENCE_CARD_TOPIC_ANCHORS: EvidenceCardTopicAnchorProfile[] = [
+  {
+    id: "photovoltaic_surface_roughness",
+    topicPattern: /(?:光伏|太陽能|太陽電池|photovoltaic|solar (?:cell|panel)).*(?:粗糙|表面|反射|效率|roughness|surface|reflectance|efficiency)|(?:粗糙|表面|反射|效率|roughness|surface|reflectance|efficiency).*(?:光伏|太陽能|太陽電池|photovoltaic|solar (?:cell|panel))/i,
+    fallbackEnglish: [
+      "surface roughness reflectance photovoltaic cell efficiency",
+      "surface texturing light trapping silicon solar cells reflectance efficiency",
+      "anti reflective textured surface solar cell power conversion efficiency",
+    ],
+    fallbackChinese: [
+      "太陽能電池 表面粗糙度 反射率 轉換效率",
+      "光伏電池 表面紋理 光捕獲 效率",
+    ],
+    sourceSubjectTerms: [
+      "photovoltaic",
+      "solar cell",
+      "solar cells",
+      "solar panel",
+      "PV cell",
+      "silicon solar cell",
+      "光伏",
+      "太陽能電池",
+      "太陽電池",
+    ],
+    sourceAxisTerms: [
+      "surface roughness",
+      "surface texture",
+      "surface texturing",
+      "textured surface",
+      "reflectance",
+      "anti-reflective",
+      "light trapping",
+      "表面粗糙",
+      "表面紋理",
+      "反射率",
+      "抗反射",
+      "光捕獲",
+    ],
+    sourceDriftTerms: ["formation", "development", "形成", "發展"],
+    queryAllowed: (query) => {
+      const text = normalizeText(query);
+      if (/formation|development|形成|發展/.test(text)) return false;
+      return (
+        /photovoltaic|solar cell|solar cells|solar panel|\bpv\b|光伏|太陽能|太陽電池/.test(text) &&
+        /surface|roughness|texture|texturing|reflectance|anti.?reflective|light trapping|efficiency|表面|粗糙|紋理|反射率|抗反射|光捕獲|效率/.test(text)
+      );
+    },
+  },
+  {
+    id: "adolescent_sleep_cognition",
+    topicPattern: /(?:睡眠|sleep).*(?:青少年|高中|注意力|工作記憶|認知|adolescent|high school|attention|working memory|cognition)|(?:青少年|高中|注意力|工作記憶|認知|adolescent|high school|attention|working memory|cognition).*(?:睡眠|sleep)/i,
+    fallbackEnglish: [
+      "sleep restriction adolescent cognition attention working memory",
+      "sleep deprivation high school students attention cognitive performance",
+      "sleep quality adolescents cognitive performance working memory",
+    ],
+    fallbackChinese: [
+      "睡眠不足 青少年 注意力 工作記憶",
+      "睡眠品質 高中生 認知表現",
+    ],
+    sourceSubjectTerms: [
+      "sleep deprivation",
+      "sleep restriction",
+      "sleep duration",
+      "sleep quality",
+      "sleep disruption",
+      "insufficient sleep",
+      "睡眠不足",
+      "睡眠剝奪",
+      "睡眠限制",
+      "睡眠品質",
+    ],
+    sourceAxisTerms: [
+      "attention",
+      "working memory",
+      "cognition",
+      "cognitive performance",
+      "executive function",
+      "注意力",
+      "工作記憶",
+      "認知",
+    ],
+    sourceDriftTerms: ["sleep apnea adult", "shift work", "insomnia treatment"],
+    queryAllowed: (query) => {
+      const text = normalizeText(query);
+      if (/^(attention|working memory|adolescents?|sleep deprivation|sleep quality)$/i.test(text)) {
+        return false;
+      }
+      return (
+        /sleep|睡眠/.test(text) &&
+        /attention|working memory|cognition|cognitive|executive function|sustained attention|注意力|工作記憶|認知/.test(text)
+      );
+    },
+  },
+  {
+    id: "sea_turtle_artificial_light",
+    topicPattern: /(?:海龜|sea turtle|marine turtle).*(?:人工光|光污染|幼龜|孵化|入海|定向|artificial light|light pollution|hatchling|orientation|sea.?finding)|(?:人工光|光污染|幼龜|孵化|入海|定向|artificial light|light pollution|hatchling|orientation|sea.?finding).*(?:海龜|sea turtle|marine turtle)/i,
+    fallbackEnglish: [
+      "artificial light sea turtle hatchling orientation",
+      "light pollution sea turtle hatchlings disorientation nesting beach",
+      "marine turtle hatchling sea finding artificial light nesting beach",
+    ],
+    fallbackChinese: [
+      "人工光 海龜幼龜 入海定向",
+      "光污染 海龜 孵化幼龜 築巢海灘",
+    ],
+    sourceSubjectTerms: [
+      "sea turtle",
+      "sea turtles",
+      "marine turtle",
+      "marine turtles",
+      "loggerhead",
+      "Caretta caretta",
+      "green turtle",
+      "海龜",
+    ],
+    sourceAxisTerms: [
+      "orientation",
+      "disorientation",
+      "sea-finding",
+      "sea finding",
+      "artificial light",
+      "light pollution",
+      "coastal lighting",
+      "定向",
+      "入海",
+      "人工光",
+      "光污染",
+    ],
+    sourceDriftTerms: [
+      "tortoise",
+      "plastic pollution",
+      "microplastic",
+      "fisheries bycatch",
+      "population monitoring",
+      "habitat conservation",
+      "red-eared slider",
+      "陸龜",
+      "塑膠污染",
+      "族群監測",
+    ],
+    queryAllowed: (query) => {
+      const text = normalizeText(query);
+      if (/tortoise|red-eared slider|plastic pollution|microplastic|fisheries|bycatch|population monitoring|habitat conservation|陸龜|塑膠/.test(text)) {
+        return false;
+      }
+      return (
+        /sea turtle|sea turtles|marine turtle|marine turtles|loggerhead|caretta|green turtle|海龜/.test(text) &&
+        /hatchling|orientation|disorientation|sea.?finding|artificial light|light pollution|coastal lighting|nesting beach|幼龜|孵化|定向|入海|人工光|光污染|築巢/.test(text)
+      );
+    },
+  },
+  {
+    id: "peer_feedback_l2_writing",
+    topicPattern: /(?:同儕回饋|同伴互評|朋輩|peer feedback|peer response|peer assessment).*(?:第二語言|外語|寫作|修訂|l2|second language|foreign language|writing|revision)|(?:第二語言|外語|寫作|修訂|l2|second language|foreign language|writing|revision).*(?:同儕回饋|同伴互評|朋輩|peer feedback|peer response|peer assessment)/i,
+    fallbackEnglish: [
+      "peer feedback second language writing revision quality",
+      "peer response L2 writing revision high school students",
+      "peer feedback EFL writing revision quality",
+    ],
+    fallbackChinese: [
+      "同儕回饋 第二語言 寫作修訂 品質",
+      "朋輩回饋 英語寫作 修訂",
+    ],
+    sourceSubjectTerms: [
+      "peer feedback",
+      "peer response",
+      "peer assessment",
+      "peer review",
+      "同儕回饋",
+      "同伴互評",
+      "朋輩回饋",
+      "朋輩輔導",
+    ],
+    sourceAxisTerms: [
+      "second language writing",
+      "L2 writing",
+      "EFL writing",
+      "foreign language writing",
+      "writing revision",
+      "revision quality",
+      "第二語言",
+      "英語寫作",
+      "外語寫作",
+      "寫作修訂",
+      "修訂品質",
+    ],
+    sourceDriftTerms: [
+      "generative AI",
+      "artificial intelligence",
+      "student engagement",
+      "learning outcomes",
+      "mobile DDL",
+      "生成式 AI",
+      "人工智慧",
+      "學習成效",
+      "學生投入",
+    ],
+    queryAllowed: (query) => {
+      const text = normalizeText(query);
+      if (/generative ai|artificial intelligence|student engagement|education learning outcomes|mobile ddl|生成式|人工智慧|學生投入/.test(text)) {
+        return false;
+      }
+      return (
+        /peer feedback|peer response|peer assessment|peer review|同儕回饋|同伴互評|朋輩/.test(text) &&
+        /second language|foreign language|\bl2\b|efl|writing|revision|第二語言|外語|英語寫作|寫作|修訂/.test(text)
+      );
+    },
+  },
+  {
+    id: "activated_carbon_formaldehyde",
+    topicPattern: /(?:活性碳|活性炭|activated carbon|carbon filter).*(?:甲醛|formaldehyde|室內|indoor|adsorption|removal)|(?:甲醛|formaldehyde|室內|indoor|adsorption|removal).*(?:活性碳|活性炭|activated carbon|carbon filter)/i,
+    fallbackEnglish: [
+      "activated carbon formaldehyde adsorption indoor air removal efficiency",
+      "activated carbon filter formaldehyde removal indoor air humidity",
+      "formaldehyde adsorption activated carbon indoor air filtration",
+    ],
+    fallbackChinese: [
+      "活性碳 甲醛 吸附 室內空氣 移除效率",
+      "活性炭濾材 甲醛 移除 濕度",
+    ],
+    sourceSubjectTerms: [
+      "activated carbon",
+      "active carbon",
+      "carbon filter",
+      "activated carbon fiber",
+      "活性碳",
+      "活性炭",
+      "碳濾材",
+    ],
+    sourceAxisTerms: [
+      "formaldehyde",
+      "indoor air",
+      "air filtration",
+      "VOC",
+      "volatile organic compound",
+      "甲醛",
+      "室內空氣",
+      "濾材",
+    ],
+    sourceDriftTerms: [
+      "acupuncture",
+      "tinnitus",
+      "textile color fastness",
+      "construction cost",
+      "exchange rate",
+      "chemical properties reactivity stability",
+      "針刺",
+      "耳鳴",
+      "色牢度",
+      "工程造價",
+      "匯率",
+    ],
+    queryAllowed: (query) => {
+      const text = normalizeText(query);
+      if (/chemical properties reactivity stability|composition structure analysis|handling conditions safety storage|針刺|耳鳴|工程造價|匯率/.test(text)) {
+        return false;
+      }
+      return (
+        /activated carbon|active carbon|carbon filter|activated carbon fiber|活性碳|活性炭|碳濾材/.test(text) &&
+        /formaldehyde|indoor air|adsorption|removal|filtration|甲醛|室內|吸附|移除|濾材/.test(text)
+      );
+    },
+  },
+];
+
+function evidenceCardAnchorTextFromInput(input: SearchIntentPlannerInput): string {
+  return [
+    input.topic,
+    input.originalTopic ?? "",
+    input.refinedTopic ?? "",
+    input.displayTitle ?? "",
+    input.canonicalTopicZh ?? "",
+    input.canonicalTopicEn ?? "",
+    ...(input.querySeedZh ?? []),
+    ...(input.querySeedEn ?? []),
+    ...(input.mustIncludeTerms ?? []),
+    ...(input.domainHints ?? []),
+  ].join(" ");
+}
+
+function evidenceCardAnchorTextFromPlan(plan: SearchIntentPlan): string {
+  return [
+    plan.normalizedTopic,
+    plan.originalTopic ?? "",
+    plan.activeResearchTopic ?? "",
+    plan.displayTitle ?? "",
+    plan.canonicalTopicZh ?? "",
+    plan.canonicalEnglishTopic ?? "",
+    plan.topicType ?? "",
+    plan.detectedDomain ?? "",
+    ...(plan.coreConcepts ?? []),
+    ...plan.primaryConcepts,
+    ...plan.contextConcepts,
+    ...plan.mustHaveTerms,
+    ...plan.shouldHaveTerms,
+    ...plan.chineseQueries,
+    ...plan.englishQueries,
+    ...(plan.suppliedQuerySeedZh ?? []),
+    ...(plan.suppliedQuerySeedEn ?? []),
+  ].join(" ");
+}
+
+function evidenceCardAnchorProfileForText(text: string): EvidenceCardTopicAnchorProfile | null {
+  return EVIDENCE_CARD_TOPIC_ANCHORS.find((profile) => profile.topicPattern.test(text)) ?? null;
+}
+
+function evidenceCardAnchorProfileForInput(
+  input: SearchIntentPlannerInput,
+): EvidenceCardTopicAnchorProfile | null {
+  return evidenceCardAnchorProfileForText(evidenceCardAnchorTextFromInput(input));
+}
+
+function evidenceCardAnchorProfileForPlan(
+  plan: SearchIntentPlan,
+): EvidenceCardTopicAnchorProfile | null {
+  return evidenceCardAnchorProfileForText(evidenceCardAnchorTextFromPlan(plan));
+}
+
+function anchoredQueryList(
+  values: string[],
+  profile: EvidenceCardTopicAnchorProfile,
+  fallback: string[],
+  limit = MAX_QUERY_COUNT,
+): string[] {
+  const filtered = cleanQueryList(
+    values.filter((query) => profile.queryAllowed(query)),
+    limit,
+  );
+  return filtered.length > 0 ? filtered : cleanQueryList(fallback, limit);
+}
+
+function applyEvidenceCardTopicAnchorToPlan(
+  input: SearchIntentPlannerInput,
+  plan: SearchIntentPlan,
+): SearchIntentPlan {
+  const profile =
+    evidenceCardAnchorProfileForInput(input) ?? evidenceCardAnchorProfileForPlan(plan);
+  if (!profile) return plan;
+
+  const englishQueries = anchoredQueryList(
+    [...plan.englishQueries, ...(plan.suppliedQuerySeedEn ?? []), ...profile.fallbackEnglish],
+    profile,
+    profile.fallbackEnglish,
+  );
+  const chineseQueries = anchoredQueryList(
+    [...plan.chineseQueries, ...(plan.suppliedQuerySeedZh ?? []), ...profile.fallbackChinese],
+    profile,
+    profile.fallbackChinese,
+  );
+  const queryGroups = (plan.queryGroups ?? []).filter((group) =>
+    profile.queryAllowed(group.query),
+  );
+
+  return {
+    ...plan,
+    primaryConcepts: cleanConceptList(
+      [...profile.sourceSubjectTerms, ...plan.primaryConcepts],
+      16,
+    ),
+    contextConcepts: cleanConceptList(
+      [...profile.sourceAxisTerms, ...plan.contextConcepts],
+      18,
+    ),
+    mustHaveTerms: cleanConceptList(
+      [
+        ...profile.sourceSubjectTerms,
+        ...profile.sourceAxisTerms,
+        ...plan.mustHaveTerms,
+      ],
+      24,
+    ),
+    shouldHaveTerms: cleanConceptList(
+      [...englishQueries, ...chineseQueries, ...plan.shouldHaveTerms],
+      24,
+    ),
+    penaltyTerms: unique([...profile.sourceDriftTerms, ...plan.penaltyTerms]).slice(0, 24),
+    negativeTerms: unique([...profile.sourceDriftTerms, ...plan.negativeTerms]).slice(0, 24),
+    exclusionTerms: unique([
+      ...profile.sourceDriftTerms,
+      ...(plan.exclusionTerms ?? []),
+    ]).slice(0, 24),
+    englishQueries,
+    chineseQueries,
+    queryGroups,
+    reasoningNotes: unique([
+      ...plan.reasoningNotes,
+      `Evidence-card acceptance topic anchor applied: ${profile.id}.`,
+    ]).slice(0, 10),
+  };
+}
+
+function applyEvidenceCardTopicAnchorToQuerySet(
+  plan: SearchIntentPlan,
+  querySet: SearchIntentQuerySet,
+): SearchIntentQuerySet {
+  const profile = evidenceCardAnchorProfileForPlan(plan);
+  if (!profile) return querySet;
+
+  const coreEnglishAcademic = anchoredQueryList(
+    [...querySet.coreEnglishAcademic, ...profile.fallbackEnglish],
+    profile,
+    profile.fallbackEnglish,
+    6,
+  );
+  const academicSynonyms = anchoredQueryList(
+    [...querySet.academicSynonyms, ...profile.fallbackEnglish],
+    profile,
+    profile.fallbackEnglish,
+    6,
+  );
+  const education = anchoredQueryList(querySet.education, profile, [], 4);
+  const chineseSupplemental = anchoredQueryList(
+    [...querySet.chineseSupplemental, ...profile.fallbackChinese],
+    profile,
+    profile.fallbackChinese,
+    6,
+  );
+  const fallbackRelaxed = anchoredQueryList(
+    [...querySet.fallbackRelaxed, ...profile.fallbackEnglish],
+    profile,
+    profile.fallbackEnglish,
+    6,
+  );
+
+  return {
+    ...querySet,
+    coreConcepts: cleanConceptList(
+      [
+        ...profile.sourceSubjectTerms,
+        ...profile.sourceAxisTerms,
+        ...querySet.coreConcepts,
+      ],
+      18,
+    ),
+    chinese: anchoredQueryList(
+      [...querySet.chinese, ...profile.fallbackChinese],
+      profile,
+      profile.fallbackChinese,
+      MAX_QUERY_COUNT,
+    ),
+    english: anchoredQueryList(
+      [...querySet.english, ...profile.fallbackEnglish],
+      profile,
+      profile.fallbackEnglish,
+      MAX_QUERY_COUNT,
+    ),
+    highPrecision: anchoredQueryList(
+      [...querySet.highPrecision, ...profile.fallbackEnglish],
+      profile,
+      profile.fallbackEnglish,
+      MAX_QUERY_COUNT,
+    ),
+    broad: anchoredQueryList(
+      [...querySet.broad, ...profile.fallbackEnglish],
+      profile,
+      profile.fallbackEnglish,
+      6,
+    ),
+    coreEnglishAcademic,
+    academicSynonyms,
+    education,
+    chineseSupplemental,
+    fallbackRelaxed,
+    phases: ([
+      { stage: "core_english_academic", queries: coreEnglishAcademic },
+      { stage: "academic_synonym", queries: academicSynonyms },
+      { stage: "education_explanation", queries: education },
+      { stage: "chinese_supplemental", queries: chineseSupplemental },
+      { stage: "fallback_relaxed", queries: fallbackRelaxed },
+    ] satisfies SearchIntentQueryPhase[]).filter((phase) => phase.queries.length > 0),
+  };
+}
+
+function evidenceCardAnchoredExpandedQueries(
+  plan: SearchIntentPlan,
+  expandedQueries: ExpandedQuery[],
+): ExpandedQuery[] {
+  const profile = evidenceCardAnchorProfileForPlan(plan);
+  if (!profile) return expandedQueries;
+  return expandedQueries.filter((query) => profile.queryAllowed(query.query));
+}
+
+function evidenceCardAnchoredSourceMixBuckets(
+  plan: SearchIntentPlan,
+  buckets: SourceMixQueryBuckets,
+): SourceMixQueryBuckets {
+  const profile = evidenceCardAnchorProfileForPlan(plan);
+  if (!profile) return buckets;
+  const filter = (values: string[], fallback: string[], limit: number) =>
+    anchoredQueryList(values, profile, fallback, limit);
+  return {
+    academic_evidence: filter(
+      buckets.academic_evidence,
+      profile.fallbackEnglish,
+      8,
+    ),
+    background_definition: filter(
+      buckets.background_definition,
+      profile.fallbackEnglish,
+      6,
+    ),
+    official_statistics: filter(
+      buckets.official_statistics,
+      profile.fallbackEnglish,
+      6,
+    ),
+    professional_guidance: filter(
+      buckets.professional_guidance,
+      profile.fallbackEnglish,
+      6,
+    ),
+    case_or_news: filter(buckets.case_or_news, profile.fallbackEnglish, 5),
+    data_or_dataset: filter(buckets.data_or_dataset, profile.fallbackEnglish, 4),
+  };
+}
+
+function scoreEvidenceCardTopicAnchor(
+  combined: string,
+  profile: EvidenceCardTopicAnchorProfile,
+): {
+  subjectHits: string[];
+  axisHits: string[];
+  driftHits: string[];
+} {
+  return {
+    subjectHits: matchedTerms(combined, profile.sourceSubjectTerms),
+    axisHits: matchedTerms(combined, profile.sourceAxisTerms),
+    driftHits: matchedTerms(combined, profile.sourceDriftTerms),
+  };
+}
+
 function cleanConceptList(concepts: string[], limit = 12): string[] {
   const lowSignalConcepts = new Set([
     "research",
@@ -8544,29 +9120,32 @@ export function buildSearchIntentQueries(
     .filter(Boolean)
     .slice(0, 6);
 
-  return sanitizeExclusiveTopicQuerySet(plan, {
-    coreConcepts: queryBuckets.coreConcepts,
-    chinese: stripTopicLiteralQueries([
-      ...deterministicVariants.chinese,
-      ...queryBuckets.chineseSupplemental,
-    ], plan, MAX_QUERY_COUNT),
-    english: stripTopicLiteralQueries([
-      ...queryBuckets.coreEnglishAcademic,
-      ...queryBuckets.academicSynonyms,
-      ...deterministicVariants.english,
-      ...expandedQueries,
-      ...educationQueries,
-      ...queryBuckets.fallbackRelaxed,
-    ], plan, MAX_QUERY_COUNT),
-    highPrecision: stripTopicLiteralQueries(highPrecision, plan, MAX_QUERY_COUNT),
-    broad: stripTopicLiteralQueries(broad, plan, 6),
-    coreEnglishAcademic: queryBuckets.coreEnglishAcademic,
-    academicSynonyms: queryBuckets.academicSynonyms,
-    education: educationQueries,
-    chineseSupplemental: queryBuckets.chineseSupplemental,
-    fallbackRelaxed: queryBuckets.fallbackRelaxed,
-    phases,
-  });
+  return applyEvidenceCardTopicAnchorToQuerySet(
+    plan,
+    sanitizeExclusiveTopicQuerySet(plan, {
+      coreConcepts: queryBuckets.coreConcepts,
+      chinese: stripTopicLiteralQueries([
+        ...deterministicVariants.chinese,
+        ...queryBuckets.chineseSupplemental,
+      ], plan, MAX_QUERY_COUNT),
+      english: stripTopicLiteralQueries([
+        ...queryBuckets.coreEnglishAcademic,
+        ...queryBuckets.academicSynonyms,
+        ...deterministicVariants.english,
+        ...expandedQueries,
+        ...educationQueries,
+        ...queryBuckets.fallbackRelaxed,
+      ], plan, MAX_QUERY_COUNT),
+      highPrecision: stripTopicLiteralQueries(highPrecision, plan, MAX_QUERY_COUNT),
+      broad: stripTopicLiteralQueries(broad, plan, 6),
+      coreEnglishAcademic: queryBuckets.coreEnglishAcademic,
+      academicSynonyms: queryBuckets.academicSynonyms,
+      education: educationQueries,
+      chineseSupplemental: queryBuckets.chineseSupplemental,
+      fallbackRelaxed: queryBuckets.fallbackRelaxed,
+      phases,
+    }),
+  );
 }
 
 function orderedQueries(
@@ -8587,7 +9166,399 @@ function orderedQueries(
     ]
       .map((query) => query.trim())
     .filter(Boolean),
-  ).slice(0, queryLimit);
+	  ).slice(0, queryLimit);
+}
+
+function planTopicAnchorValidationText(plan: SearchIntentPlan): string {
+  return [
+    plan.normalizedTopic,
+    plan.canonicalTopicZh ?? "",
+    plan.canonicalEnglishTopic ?? "",
+    plan.activeResearchTopic ?? "",
+    plan.originalTopic ?? "",
+    ...plan.primaryConcepts,
+    ...plan.mustHaveTerms,
+    ...plan.chineseQueries,
+    ...plan.englishQueries,
+  ].join(" ");
+}
+
+function requiredContractAnchorCount(contract: TopicAnchorContract | undefined): number {
+  return contract?.anchors.filter((anchor) => anchor.required).length ?? 0;
+}
+
+function buildSearchTopicAnchorContract(
+  input: SearchIntentPlannerInput,
+  plan: SearchIntentPlan,
+): TopicAnchorContract {
+  return buildTopicAnchorContract({
+    topic: input.topic,
+    originalTopic: input.originalTopic ?? plan.originalTopic ?? input.topic,
+    canonicalTopic: input.canonicalTopicZh ?? plan.canonicalTopicZh ?? input.topic,
+    canonicalTopicEn: input.canonicalTopicEn ?? plan.canonicalEnglishTopic,
+    querySeedZh: input.querySeedZh ?? plan.suppliedQuerySeedZh,
+    querySeedEn: input.querySeedEn ?? plan.suppliedQuerySeedEn,
+    mustIncludeTerms: input.mustIncludeTerms,
+    excludeTerms: input.excludeTerms ?? plan.negativeTerms,
+    domainHints: input.domainHints,
+    language: input.language,
+  });
+}
+
+function applyTopicAnchorContractToPlan(
+  input: SearchIntentPlannerInput,
+  plan: SearchIntentPlan,
+): SearchIntentPlan {
+  const contract = buildSearchTopicAnchorContract(input, plan);
+  if (requiredContractAnchorCount(contract) === 0) {
+    return {
+      ...plan,
+      topicAnchorContract: contract,
+      topicAnchorValidation: validateTopicTextAgainstContract(
+        planTopicAnchorValidationText(plan),
+        contract,
+      ),
+      topicAnchorRepairAttempted: false,
+      topicAnchorFailureReason: null,
+    };
+  }
+
+  const initialValidation = validateTopicTextAgainstContract(
+    planTopicAnchorValidationText(plan),
+    contract,
+  );
+  if (initialValidation.valid) {
+    return {
+      ...plan,
+      topicAnchorContract: contract,
+      topicAnchorValidation: initialValidation,
+      topicAnchorRepairAttempted: false,
+      topicAnchorFailureReason: null,
+    };
+  }
+
+  const anchorEnglishQuery = buildContractAnchorQuery(contract, "en");
+  const anchorChineseQuery = buildContractAnchorQuery(contract, "zh");
+  const repairedNormalizedTopic =
+    repairTopicTextWithAnchors(plan.normalizedTopic, contract, {
+      allowFullAnchorRestore: true,
+    }) ??
+    anchorChineseQuery ??
+    plan.normalizedTopic;
+  const repairedCanonicalEnglish =
+    repairTopicTextWithAnchors(plan.canonicalEnglishTopic ?? "", contract, {
+      allowFullAnchorRestore: true,
+    }) ??
+    anchorEnglishQuery ??
+    plan.canonicalEnglishTopic;
+  const requiredAnchorTerms = unique(
+    contract.anchors
+      .filter((anchor) => anchor.required)
+      .flatMap((anchor) => [anchor.sourceText, anchor.canonicalText, ...anchor.aliases])
+      .filter(Boolean),
+  );
+  const removeForbiddenConcepts = (terms: readonly string[]): string[] =>
+    terms.filter((term) =>
+      validateTopicTextAgainstContract(term, contract).forbiddenHits.length === 0,
+    );
+  const repairPlannerQueries = (
+    anchorQuery: string,
+    queries: readonly string[],
+  ): string[] =>
+    cleanQueryList(
+      [
+        anchorQuery,
+        ...queries
+          .map((query) =>
+            repairTopicTextWithAnchors(query, contract, {
+              allowFullAnchorRestore: true,
+            }),
+          )
+          .filter((query): query is string => Boolean(query)),
+      ],
+      MAX_QUERY_COUNT,
+    );
+  const repairedPlan: SearchIntentPlan = {
+    ...plan,
+    normalizedTopic: repairedNormalizedTopic,
+    canonicalTopicZh: plan.canonicalTopicZh ?? contract.canonicalTopic,
+    canonicalEnglishTopic: repairedCanonicalEnglish,
+    primaryConcepts: unique([
+      ...requiredAnchorTerms,
+      ...removeForbiddenConcepts(plan.primaryConcepts),
+    ]).slice(0, 16),
+    coreConcepts: unique([
+      ...requiredAnchorTerms,
+      ...removeForbiddenConcepts(plan.coreConcepts ?? []),
+    ]).slice(0, 18),
+    mustHaveTerms: unique([
+      ...requiredAnchorTerms,
+      ...removeForbiddenConcepts(plan.mustHaveTerms),
+    ]).slice(0, 24),
+    chineseQueries: repairPlannerQueries(anchorChineseQuery, plan.chineseQueries),
+    englishQueries: repairPlannerQueries(anchorEnglishQuery, plan.englishQueries),
+    topicAnchorContract: contract,
+    topicAnchorRepairAttempted: true,
+  };
+  const repairedValidation = validateTopicTextAgainstContract(
+    planTopicAnchorValidationText(repairedPlan),
+    contract,
+  );
+  return {
+    ...repairedPlan,
+    topicAnchorValidation: repairedValidation,
+    topicAnchorFailureReason: repairedValidation.valid
+      ? null
+      : unique([...repairedValidation.reasonCodes]).join(",") || "TOPIC_ANCHOR_CONTRACT_INVALID",
+  };
+}
+
+function queryRoleForBucket(role: SourceRoleBucket): PlannedResearchQueryRole {
+  return role === "academic_evidence" || role === "professional_guidance"
+    ? "primary"
+    : "supporting";
+}
+
+function queryRoleForField(field: keyof SearchIntentQuerySet): PlannedResearchQueryRole {
+  return field === "broad" ||
+    field === "education" ||
+    field === "fallbackRelaxed" ||
+    field === "chineseSupplemental"
+    ? "supporting"
+    : "primary";
+}
+
+function queryRoleForPhase(stage: SearchIntentQueryPhase["stage"]): PlannedResearchQueryRole {
+  return stage === "fallback_relaxed" || stage === "education_explanation"
+    ? "supporting"
+    : "primary";
+}
+
+function guardTopicAnchorQueryList(input: {
+  contract: TopicAnchorContract;
+  field: string;
+  role: PlannedResearchQueryRole;
+  queries: readonly string[];
+  diagnostics: TopicAnchorQueryDecision[];
+  plannedQueries: PlannedResearchQuery[];
+  repair?: boolean;
+}): string[] {
+  const guarded: string[] = [];
+  for (const [index, query] of cleanQueryList([...input.queries], MAX_QUERY_COUNT).entries()) {
+    const decision = validateAndRepairTopicQuery(query, input.contract, {
+      id: `${input.field}:${index}`,
+      role: input.role,
+      repair: input.repair ?? true,
+    });
+    input.diagnostics.push(decision);
+    if (decision.status === "rejected") continue;
+    guarded.push(decision.query);
+    if (decision.plannedQuery) input.plannedQueries.push(decision.plannedQuery);
+  }
+  return cleanQueryList(guarded, MAX_QUERY_COUNT);
+}
+
+function appendDeterministicAnchorQuery(input: {
+  contract: TopicAnchorContract;
+  query: string;
+  id: string;
+  role: PlannedResearchQueryRole;
+  diagnostics: TopicAnchorQueryDecision[];
+  plannedQueries: PlannedResearchQuery[];
+}): string[] {
+  if (!input.query) return [];
+  const decision = validateAndRepairTopicQuery(input.query, input.contract, {
+    id: input.id,
+    role: input.role,
+    repair: false,
+  });
+  input.diagnostics.push(decision);
+  if (decision.status === "rejected") return [];
+  if (decision.plannedQuery) input.plannedQueries.push(decision.plannedQuery);
+  return [decision.query];
+}
+
+function applyTopicAnchorContractToQuerySet(
+  plan: SearchIntentPlan,
+  querySet: SearchIntentQuerySet,
+): SearchIntentQuerySet {
+  const contract = plan.topicAnchorContract;
+  if (!contract || requiredContractAnchorCount(contract) === 0) {
+    return querySet;
+  }
+
+  const diagnostics: TopicAnchorQueryDecision[] = [];
+  const plannedQueries: PlannedResearchQuery[] = [];
+  const deterministicEnglish = appendDeterministicAnchorQuery({
+    contract,
+    query: buildContractAnchorQuery(contract, "en"),
+    id: "contract:english:0",
+    role: "primary",
+    diagnostics,
+    plannedQueries,
+  });
+  const deterministicChinese = appendDeterministicAnchorQuery({
+    contract,
+    query: buildContractAnchorQuery(contract, "zh"),
+    id: "contract:chinese:0",
+    role: "primary",
+    diagnostics,
+    plannedQueries,
+  });
+
+  const guardedCoreConcepts = querySet.coreConcepts;
+  const guardedChinese = cleanQueryList(
+    [
+      ...deterministicChinese,
+      ...guardTopicAnchorQueryList({
+        contract,
+        field: "chinese",
+        role: "primary",
+        queries: querySet.chinese,
+        diagnostics,
+        plannedQueries,
+      }),
+    ],
+    MAX_QUERY_COUNT,
+  );
+  const guardedEnglish = cleanQueryList(
+    [
+      ...deterministicEnglish,
+      ...guardTopicAnchorQueryList({
+        contract,
+        field: "english",
+        role: "primary",
+        queries: querySet.english,
+        diagnostics,
+        plannedQueries,
+      }),
+    ],
+    MAX_QUERY_COUNT,
+  );
+
+  const guardField = (field: keyof SearchIntentQuerySet, queries: readonly string[]): string[] =>
+    guardTopicAnchorQueryList({
+      contract,
+      field,
+      role: queryRoleForField(field),
+      queries,
+      diagnostics,
+      plannedQueries,
+    });
+
+  const guardedCoreEnglishAcademic = cleanQueryList(
+    [
+      ...deterministicEnglish,
+      ...guardField("coreEnglishAcademic", querySet.coreEnglishAcademic),
+    ],
+    MAX_QUERY_COUNT,
+  );
+  const guardedAcademicSynonyms = guardField("academicSynonyms", querySet.academicSynonyms);
+  const guardedEducation = guardField("education", querySet.education);
+  const guardedChineseSupplemental = cleanQueryList(
+    [
+      ...deterministicChinese,
+      ...guardField("chineseSupplemental", querySet.chineseSupplemental),
+    ],
+    MAX_QUERY_COUNT,
+  );
+  const guardedFallbackRelaxed = guardField("fallbackRelaxed", querySet.fallbackRelaxed);
+  const guardedHighPrecision = cleanQueryList(
+    [...deterministicEnglish, ...guardField("highPrecision", querySet.highPrecision)],
+    MAX_QUERY_COUNT,
+  );
+  const guardedBroad = guardField("broad", querySet.broad);
+  const guardedPhases: SearchIntentQueryPhase[] = querySet.phases
+    .map((phase): SearchIntentQueryPhase => ({
+      ...phase,
+      queries: guardTopicAnchorQueryList({
+        contract,
+        field: `phase:${phase.stage}`,
+        role: queryRoleForPhase(phase.stage),
+        queries: phase.queries,
+        diagnostics,
+        plannedQueries,
+      }),
+    }))
+    .filter((phase) => phase.queries.length > 0);
+
+  const coreEnglishPhase: SearchIntentQueryPhase = {
+    stage: "core_english_academic",
+    queries: cleanQueryList(
+      [...deterministicEnglish, ...(guardedPhases.find((phase) => phase.stage === "core_english_academic")?.queries ?? [])],
+      MAX_QUERY_COUNT,
+    ),
+  };
+  const chineseSupplementalPhase: SearchIntentQueryPhase = {
+    stage: "chinese_supplemental",
+    queries: cleanQueryList(
+      [...deterministicChinese, ...(guardedPhases.find((phase) => phase.stage === "chinese_supplemental")?.queries ?? [])],
+      MAX_QUERY_COUNT,
+    ),
+  };
+  const phases: SearchIntentQueryPhase[] = [
+    coreEnglishPhase,
+    chineseSupplementalPhase,
+    ...guardedPhases.filter(
+      (phase) => phase.stage !== "core_english_academic" && phase.stage !== "chinese_supplemental",
+    ),
+  ].filter((phase) => phase.queries.length > 0);
+
+  return {
+    ...querySet,
+    coreConcepts: guardedCoreConcepts,
+    chinese: guardedChinese,
+    english: guardedEnglish,
+    highPrecision: guardedHighPrecision,
+    broad: guardedBroad,
+    coreEnglishAcademic: guardedCoreEnglishAcademic,
+    academicSynonyms: guardedAcademicSynonyms,
+    education: guardedEducation,
+    chineseSupplemental: guardedChineseSupplemental,
+    fallbackRelaxed: guardedFallbackRelaxed,
+    phases,
+    structuredQueries: Object.freeze(plannedQueries),
+    queryAnchorDiagnostics: Object.freeze(diagnostics),
+  };
+}
+
+function providerBoundaryDecision(
+  query: string,
+  plan: SearchIntentPlan | undefined,
+  role: PlannedResearchQueryRole,
+  provider?: string,
+): TopicAnchorQueryDecision | null {
+  const contract = plan?.topicAnchorContract;
+  if (!contract || requiredContractAnchorCount(contract) === 0) return null;
+  return validateAndRepairTopicQuery(query, contract, {
+    id: `provider:${provider ?? "unknown"}:${normalizeText(query).slice(0, 32)}`,
+    role,
+    provider,
+    repair: true,
+  });
+}
+
+function topicAnchorRejectedProviderGroup(
+  provider: FallbackSourceProvider | AcademicSourceProvider,
+  query: string,
+  decision: TopicAnchorQueryDecision,
+): SourceProviderSearchResult {
+  return {
+    ok: false,
+    provider,
+    query,
+    results: [],
+    raw_count: 0,
+    normalize_attempt_count: 0,
+    normalized_valid_count: 0,
+    normalized_invalid_count: 0,
+    error_type: "api-failure",
+    error_message: `TOPIC_ANCHOR_CONTRACT_REJECTED: ${decision.reasonCodes.join(",") || "QUERY_REPAIR_FAILED"}`,
+  };
+}
+
+function isTopicAnchorRejectedProviderGroup(group: SourceProviderSearchResult): boolean {
+  return /^TOPIC_ANCHOR_CONTRACT_REJECTED/.test(group.error_message ?? "");
 }
 
 function mergeExpandedQueriesIntoQuerySet(
@@ -11036,7 +12007,7 @@ export function buildSourceMixQueryBuckets(
               `${labels.en} public institution guide`,
             ];
 
-  return {
+  return evidenceCardAnchoredSourceMixBuckets(plan, {
     academic_evidence: cleanQueryList(
       [
         ...querySet.coreEnglishAcademic,
@@ -11084,7 +12055,7 @@ export function buildSourceMixQueryBuckets(
       ],
       4,
     ),
-  };
+  });
 }
 
 function legacyRoleToSourceRoleBucket(role: string | null | undefined): SourceRoleBucket | null {
@@ -11204,19 +12175,35 @@ async function searchFallbackDirectQueries(
   queries: string[],
   options: SearchIntentSourceSearchOptions | undefined,
   role: SourceRoleBucket,
+  plan?: SearchIntentPlan,
 ): Promise<SourceProviderSearchResult[]> {
   const directQueries = cleanQueryList(queries, DEFAULT_WEB_FALLBACK_QUERY_LIMIT);
   if (directQueries.length === 0) return [];
+  const guardedQueries = directQueries.map((query) => ({
+    query,
+    decision: providerBoundaryDecision(query, plan, queryRoleForBucket(role), provider),
+  }));
+  const blockedGroups = guardedQueries
+    .filter((item) => item.decision?.status === "rejected")
+    .map((item) =>
+      topicAnchorRejectedProviderGroup(provider, item.query, item.decision as TopicAnchorQueryDecision),
+    );
+  const allowedQueries = guardedQueries
+    .filter((item) => item.decision?.status !== "rejected")
+    .map((item) => item.decision?.query ?? item.query);
+  if (allowedQueries.length === 0) return blockedGroups;
   const settled = await Promise.allSettled(
-    directQueries.map((query) => searchFallbackProviderQuery(provider, query, options)),
+    allowedQueries.map((query) => searchFallbackProviderQuery(provider, query, options)),
   );
-  return settled.map((result, index) =>
+  return [
+    ...blockedGroups,
+    ...settled.map((result, index) =>
     result.status === "fulfilled"
       ? withSourceMixRoleForGroup(result.value, role)
       : ({
           ok: false,
           provider,
-          query: directQueries[index] ?? "",
+          query: allowedQueries[index] ?? "",
           results: [],
           raw_count: 0,
           normalize_attempt_count: 0,
@@ -11226,7 +12213,8 @@ async function searchFallbackDirectQueries(
           error_message:
             result.reason instanceof Error ? result.reason.message : "fallback provider failed",
         } satisfies SourceProviderSearchResult),
-  );
+    ),
+  ];
 }
 
 function timeoutGroupForBucket(
@@ -11334,6 +12322,7 @@ async function searchSourceMixBuckets(input: {
           bucketQueries.background_definition,
           input.options,
           "background_definition",
+          input.plan,
         ),
         input.runtime,
       ),
@@ -11345,6 +12334,7 @@ async function searchSourceMixBuckets(input: {
           bucketQueries.official_statistics,
           input.options,
           "official_statistics",
+          input.plan,
         ),
         input.runtime,
       ),
@@ -11356,6 +12346,7 @@ async function searchSourceMixBuckets(input: {
           bucketQueries.professional_guidance,
           input.options,
           "professional_guidance",
+          input.plan,
         ),
         input.runtime,
       ),
@@ -11367,6 +12358,7 @@ async function searchSourceMixBuckets(input: {
           bucketQueries.case_or_news,
           input.options,
           "case_or_news",
+          input.plan,
         ),
         input.runtime,
       ),
@@ -11378,6 +12370,7 @@ async function searchSourceMixBuckets(input: {
           bucketQueries.data_or_dataset,
           input.options,
           "data_or_dataset",
+          input.plan,
         ),
         input.runtime,
       ),
@@ -12926,6 +13919,35 @@ export function scoreSourceRelevance(
     }
   }
 
+  const evidenceCardAnchorProfile = evidenceCardAnchorProfileForPlan(plan);
+  if (evidenceCardAnchorProfile) {
+    const { subjectHits, axisHits, driftHits } = scoreEvidenceCardTopicAnchor(
+      combined,
+      evidenceCardAnchorProfile,
+    );
+    if (subjectHits.length > 0 && axisHits.length > 0) {
+      score += 26 + Math.min(18, (subjectHits.length + axisHits.length) * 3);
+    }
+    if (subjectHits.length === 0) {
+      score = Math.min(score - 95, 18);
+      penalties.push(
+        `evidence_card_anchor_missing_subject:${evidenceCardAnchorProfile.id}`,
+      );
+    }
+    if (axisHits.length === 0) {
+      score = Math.min(score - 75, 24);
+      penalties.push(
+        `evidence_card_anchor_missing_axis:${evidenceCardAnchorProfile.id}`,
+      );
+    }
+    if (driftHits.length > 0 && (subjectHits.length === 0 || axisHits.length === 0)) {
+      score = Math.min(score - 130, 10);
+      penalties.push(
+        `evidence_card_anchor_drift:${evidenceCardAnchorProfile.id}:${driftHits.join(",")}`,
+      );
+    }
+  }
+
   return {
     sourceId: sourceDebugId(source),
     title: source.title,
@@ -12963,6 +13985,9 @@ function relevanceLevelFromDebug(
     hasPenalty(debug, "semiconductor_etching_drift_terms") ||
     hasPenalty(debug, "topic_mismatch_no_hiv_aids_anchor") ||
     hasPenalty(debug, "generic_method_without_hiv_aids_anchor") ||
+    hasPenalty(debug, "evidence_card_anchor_drift") ||
+    hasPenalty(debug, "evidence_card_anchor_missing_subject") ||
+    hasPenalty(debug, "evidence_card_anchor_missing_axis") ||
     hasPenalty(debug, "perchlorate_other_salt_drift") ||
     hasPenalty(debug, "perchlorate_application_drift") ||
     hasPenalty(debug, "perchlorate_astrobiology_drift") ||
@@ -12996,6 +14021,8 @@ function relevanceLevelFromDebug(
     hasPenalty(debug, "perchlorate_missing_core_context") ||
     hasPenalty(debug, "sodium_perchlorate_supporting_medium_only") ||
     hasPenalty(debug, "sodium_perchlorate_missing_selected_angle_context") ||
+    hasPenalty(debug, "evidence_card_anchor_missing_subject") ||
+    hasPenalty(debug, "evidence_card_anchor_missing_axis") ||
     hasPenalty(debug, "missing_must_have_terms")
   ) {
     if (
@@ -13166,7 +14193,10 @@ function sourceDriftTerms(
     .flatMap((penalty) => penalty.split(":").slice(1).join(":").split(","))
     .map((term) => term.trim())
     .filter(Boolean);
-  return unique([...explicitDrift, ...penaltyDrift]);
+  const evidenceAnchorPenaltyKinds = debug.penalties
+    .filter((penalty) => penalty.startsWith("evidence_card_anchor_"))
+    .map((penalty) => penalty.split(":")[0] ?? penalty);
+  return unique([...explicitDrift, ...evidenceAnchorPenaltyKinds, ...penaltyDrift]);
 }
 
 function sourceFinalScore(scores: {
@@ -13659,6 +14689,10 @@ function sourceSearchOptionsForProviderDeadline(
   return {
     ...(options?.sourceSearch ?? {}),
     fetchImpl: options?.sourceSearch?.fetchImpl ?? options?.fetchImpl,
+    // The planner has already repaired and validated the provider query against
+    // the Topic Anchor Contract. A provider-level short-query retry could
+    // remove those anchors after the boundary check.
+    allowShortQueryRetry: false,
     providers: undefined,
     providerConfigs: {
       ...providerConfigs,
@@ -13695,6 +14729,19 @@ async function searchAcademicProviderGroups(
       availableProviders.has(provider),
     );
     if (!providers.length) break;
+    const boundaryDecision = providerBoundaryDecision(query, plan, "primary");
+    if (boundaryDecision?.status === "rejected") {
+      groups.push(
+        ...providers.map((provider) =>
+          topicAnchorRejectedProviderGroup(provider, query, boundaryDecision),
+        ),
+      );
+      budget.warnings.add(
+        `TOPIC_ANCHOR_CONTRACT_REJECTED: query ${queryIndex + 1} 未保留原題必要 anchor，已阻止送往 provider。`,
+      );
+      continue;
+    }
+    const providerQuery = boundaryDecision?.query ?? query;
 
     const queryDeadline = Math.min(
       budget.deadlineMs,
@@ -13708,7 +14755,7 @@ async function searchAcademicProviderGroups(
     for (const providerChunk of chunkProviders(providers, chunkSize)) {
       if (Date.now() >= queryDeadline) {
         budget.warnings.add(
-          `查詢「${query}」已達單次 query time budget，後續 provider 已跳過。`,
+          `查詢「${providerQuery}」已達單次 query time budget，後續 provider 已跳過。`,
         );
         break;
       }
@@ -13716,7 +14763,7 @@ async function searchAcademicProviderGroups(
         providerChunk.map((provider) =>
           searchSourceProvider(
             provider,
-            query,
+            providerQuery,
             sourceSearchOptionsForProviderDeadline(provider, queryDeadline, options),
           ),
         ),
@@ -13727,7 +14774,7 @@ async function searchAcademicProviderGroups(
           : ({
               ok: false,
               provider: providerChunk[index] ?? "OpenAlex",
-              query,
+              query: providerQuery,
               results: [],
               raw_count: 0,
               normalize_attempt_count: 0,
@@ -13762,6 +14809,20 @@ async function searchAcademicProviderGroups(
   }
 
   return groups;
+}
+
+export async function searchAcademicProviderGroupsForTesting(input: {
+  queries: string[];
+  plan: SearchIntentPlan;
+  options?: SearchIntentSourceSearchOptions;
+  activeProviders?: Set<AcademicSourceProvider>;
+}): Promise<SourceProviderSearchResult[]> {
+  return searchAcademicProviderGroups(
+    input.queries,
+    input.plan,
+    input.options,
+    input.activeProviders,
+  );
 }
 
 function sourceDecisionTrace(source: SourceRecord): SourceDecisionTrace {
@@ -13898,7 +14959,8 @@ function lowConfidenceRecallCandidates(
       }
       if (
         source.rejectReason === "topic_mismatch_no_hiv_aids_anchor" ||
-        source.rejectionReason === "topic_mismatch_no_hiv_aids_anchor"
+        source.rejectionReason === "topic_mismatch_no_hiv_aids_anchor" ||
+        source.driftTerms?.some((term) => term.startsWith("evidence_card_anchor_"))
       ) {
         return false;
       }
@@ -14090,10 +15152,14 @@ function recoveryQueriesForPlan(
     ...querySeeds.map((query) => `${query} DOI`),
     ...plan.englishQueries,
   ]);
-  return cleanQueryList(
+  const profile = evidenceCardAnchorProfileForPlan(plan);
+  const recoveryQueries = cleanQueryList(
     expanded.filter((query) => !existing.has(normalizeText(query))),
     maxQueries,
   );
+  return profile
+    ? anchoredQueryList(recoveryQueries, profile, profile.fallbackEnglish, maxQueries)
+    : recoveryQueries;
 }
 
 async function recoverSourcesIfNeeded(
@@ -14316,6 +15382,7 @@ export async function searchIntentSources(
         ? genericUnderstanding.coreConcepts
         : topicUnderstanding.coreConcepts,
   };
+  plan = applyTopicAnchorContractToPlan(input, plan);
   const semanticClassification = classifyTopicSemantically(
     plan.originalTopic ?? input.originalTopic ?? input.topic,
   );
@@ -14332,12 +15399,15 @@ export async function searchIntentSources(
       plan.detectedDomain ?? "",
     ].join(" "),
   });
-  const expandedQueries = expandBilingualQueries(semanticClassification, {
+  const expandedQueries = evidenceCardAnchoredExpandedQueries(
+    plan,
+    expandBilingualQueries(semanticClassification, {
     zh: input.querySeedZh,
     en: input.querySeedEn,
     plannerZh: plan.chineseQueries,
     plannerEn: plan.englishQueries,
-  });
+    }),
+  );
   logger.info(
     {
       marker: "[topic-classification]",
@@ -14514,18 +15584,26 @@ export async function searchIntentSources(
       groundedIntro: "查無足夠可靠資料，請嘗試輸入更明確的研究主題。",
     };
   }
-  const querySet = sanitizeExclusiveTopicQuerySet(
+  const querySet = applyTopicAnchorContractToQuerySet(
     plan,
-    mergeExpandedQueriesIntoQuerySet(
-      sanitizeSearchIntentQuerySet(
+    applyEvidenceCardTopicAnchorToQuerySet(
+      plan,
+      sanitizeExclusiveTopicQuerySet(
         plan,
-        buildSearchIntentQueries(plan),
+        mergeExpandedQueriesIntoQuerySet(
+          sanitizeSearchIntentQuerySet(
+            plan,
+            buildSearchIntentQueries(plan),
+          ),
+          expandedQueries,
+        ),
       ),
-      expandedQueries,
     ),
   );
   const workflowId = cleanString(input.workflowId) ?? randomUUID();
-  const topicHash = topicHashForSearch(plan.normalizedTopic);
+  const topicHash =
+    plan.topicAnchorContract?.originalTopicHash ??
+    topicHashForSearch(plan.originalTopic ?? input.originalTopic ?? input.topic.trim());
   const queryPlanHash = queryPlanHashForSearch(plan, querySet);
   const normalizedEnglishQuery = normalizeText(
     querySet.coreEnglishAcademic[0] ??
@@ -14956,10 +16034,38 @@ export async function searchIntentSources(
     bucketResultCounts,
   );
   const elapsedMs = Date.now() - foregroundStartedAt;
+  const queryAnchorDiagnostics = querySet.queryAnchorDiagnostics ?? [];
+  const rejectedQueryCount = queryAnchorDiagnostics.filter(
+    (decision) => decision.status === "rejected",
+  ).length;
+  const repairedQueryCount = queryAnchorDiagnostics.filter(
+    (decision) => decision.status === "repaired",
+  ).length;
+  const providerBoundQueries = unique(
+    groups
+      .filter((group) => !isTopicAnchorRejectedProviderGroup(group))
+      .map((group) => group.query),
+  );
+  const rejectedProviderQueries = unique(
+    groups
+      .filter(isTopicAnchorRejectedProviderGroup)
+      .map((group) => group.query),
+  );
+  const providerBoundQueryCount = providerBoundQueries.length;
   const warnings = unique([
     ...resultWarnings(groups, sources, plan),
     ...Array.from(runtimeBudget.warnings),
     ...diversityWarnings,
+    ...(plan.topicAnchorFailureReason
+      ? [
+          `TOPIC_ANCHOR_CONTRACT_INVALID: ${plan.topicAnchorFailureReason}`,
+        ]
+      : []),
+    ...(rejectedQueryCount > 0
+      ? [
+          `TOPIC_ANCHOR_CONTRACT_REJECTED: ${rejectedQueryCount} 組漂移 query 已阻止送往 provider。`,
+        ]
+      : []),
     ...(candidateCount < 80
       ? [
           `本次 provider 實際回傳 ${candidateCount} 筆候選，低於 80 筆；已避免用低相關來源湊數。`,
@@ -14993,7 +16099,11 @@ export async function searchIntentSources(
     normalizedTopic: plan.normalizedTopic,
     topicHash,
     queryPlanHash,
-    providerQueries: unique(groups.map((group) => group.query)),
+    providerQueries: providerBoundQueries,
+    rejectedProviderQueries,
+    topicAnchorContract: plan.topicAnchorContract,
+    topicAnchorValidation: plan.topicAnchorValidation,
+    queryAnchorDiagnostics,
     candidateCount,
     dedupedCount: dedupedSources.length,
     acceptedCount: acceptedSourceCount,
@@ -15063,7 +16173,8 @@ export async function searchIntentSources(
       ...(plan.excludedDriftTerms ?? []),
       ...plan.penaltyTerms,
     ]),
-    providerQueries: unique(groups.map((group) => group.query)),
+    providerQueries: providerBoundQueries,
+    rejectedProviderQueries,
     ...((isHivAidsPlan(plan) || isDentalPlaquePlan(plan) || plan.detectedDomain === "medicine" || plan.detectedDomain === "dentistry")
       ? {
           medicalProvidersPending: [...MEDICAL_PROVIDER_STRATEGY.pendingProviders],
@@ -15113,6 +16224,15 @@ export async function searchIntentSources(
       ? { first_candidate_latency_ms: firstCandidateLatencyMs }
       : {}),
     tried_queries: unique(groups.map((group) => group.query)),
+    topicAnchorContract: plan.topicAnchorContract,
+    topicAnchorValidation: plan.topicAnchorValidation,
+    topicAnchorRepairAttempted: plan.topicAnchorRepairAttempted,
+    topicAnchorFailureReason: plan.topicAnchorFailureReason,
+    queryAnchorDiagnostics,
+    plannedQueryCount: querySet.structuredQueries?.length ?? 0,
+    repairedQueryCount,
+    rejectedQueryCount,
+    providerBoundQueryCount,
   };
   logSearchTelemetry({
     originalTopic: plan.originalTopic ?? input.topic.trim(),

@@ -65,6 +65,10 @@ import {
   acceptedClaimCandidates,
   extractClaimsForSources,
 } from "./claimExtractionService";
+import {
+  cleanExtractedTextChunk,
+  scoreEvidenceRelevance,
+} from "./evidencePipelineGuards";
 
 const ACTIONABLE_HARM_PATTERNS = [
   /如何/u,
@@ -245,8 +249,13 @@ const DOMAIN_INTENT_PATTERNS: Array<{
   pattern: RegExp;
 }> = [
   { domain: "animal behavior / veterinary behavior", pattern: /狗|犬|護食|資源防衛|食物攻擊|犬類行為|dog|canine|resource guarding|food aggression|veterinary behavior/i },
+  { domain: "psychology / adolescent cognition", pattern: /睡眠不足|睡眠限制|青少年.*(?:工作記憶|注意力|認知)|sleep deprivation|sleep restriction|adolescent cognition|working memory.*attention/i },
+  { domain: "marine ecology / sea turtle hatchling orientation", pattern: /海龜|綠蠵龜|幼龜|海龜幼體|入海|人工夜間照明|夜間照明|光害|sea turtle|marine turtle|hatchling orientation|artificial light at night|coastal lighting|light pollution/i },
+  { domain: "applied linguistics / writing education", pattern: /同儕回饋|第二語言|寫作修訂|修訂品質|peer feedback|second language writing|L2 writing|writing revision/i },
+  { domain: "indoor air / adsorption engineering", pattern: /活性碳|活性炭|甲醛|室內空氣|移除效率|activated carbon|formaldehyde|indoor air quality|adsorption efficiency/i },
   { domain: "biomedical / oral health / dentistry", pattern: /健康|醫|睡眠|心率|氣喘|咖啡因|抗生素|抗藥性|牙菌斑|牙垢|口腔生物膜|牙周病|health|medical|sleep|heart rate|asthma|caffeine|antibiotic|dental plaque|oral biofilm|periodontal|plaque control/i },
   { domain: "physics / aerospace", pattern: /太陽帆|輻射壓|光壓|航天推進|深空探測|solar sail|solar sailing|radiation pressure|spacecraft propulsion|deep space/i },
+  { domain: "energy / photovoltaic engineering", pattern: /太陽能板|光伏|光電轉換|表面粗糙|反射率|光反射|發電效率|solar panel|photovoltaic|surface roughness|optical reflectance|anti-reflection|power conversion efficiency|solar cell efficiency/i },
   { domain: "physics / aerodynamics", pattern: /風箏|空氣動力|升力|阻力|風速|拉力|kite|aerodynamics|lift|drag|tethered flight|wind tunnel/i },
   { domain: "physics / optics", pattern: /泡泡|肥皂膜|薄膜|干涉|繞射|光學|光波長|soap bubble|soap film|thin film|interference|diffraction|optics|wavelength/i },
   { domain: "chemistry", pattern: /化學|塑膠|材料|受熱|BPA|鄰苯|反應|金屬離子|焰色|火焰顏色|咖啡因|萃取|chemistry|plastic|polymer|thermal|material|metal ion|flame test|caffeine|extraction/i },
@@ -584,9 +593,6 @@ const REPORT_QUESTION_HINT =
 const GENERIC_PROVIDER_QUERY =
   /^(背景|脈絡|類型|特徵|過程|使用|方式|關係|研究|報告|background|context|types|features|process|usage|use|overview|introduction)$/i;
 
-const GENERIC_RESEARCH_METHOD_QUERY =
-  /^(scientific method|experimental design|variables|scientific mechanism|observation evidence|research limitation|research methods?|methodology|evidence limitations?|研究方法|實驗設計|變因|形成機制|觀察證據|研究限制)$/i;
-
 const LOCALE_ONLY_QUERY =
   /^(台灣|臺灣|中國大陸|中國|taiwan|taiwanese|mainland china|china)$/i;
 
@@ -656,15 +662,111 @@ function providerSafeQueries(queries: string[], topicText: string): string[] {
   );
 }
 
-function providerSafeTopicAnchoredQueries(
-  queries: string[],
-  topicText: string,
-  topicAnchorText: string,
-): string[] {
-  return providerSafeQueries(queries, topicText).filter((query) => {
-    if (!GENERIC_RESEARCH_METHOD_QUERY.test(compactWhitespace(query))) return true;
-    return querySharesTopicSignal(query, topicAnchorText);
-  });
+type TopicQueryAnchorProfile = {
+  topicPattern: RegExp;
+  queryAllowed: (query: string) => boolean;
+  fallbackQueries: string[];
+};
+
+const TOPIC_QUERY_ANCHOR_PROFILES: TopicQueryAnchorProfile[] = [
+  {
+    topicPattern: /太陽能板|光伏|光電轉換|發電效率|solar panel|photovoltaic|solar cell|power conversion efficiency/i,
+    queryAllowed: (query) =>
+      !/formation|development/i.test(query) &&
+      (/太陽能板|光伏|光電轉換|solar panel|photovoltaic|solar cell/i.test(query) &&
+        /表面粗糙|反射|發電效率|surface roughness|surface texture|reflectance|reflection|anti-reflection|power conversion efficiency|solar cell efficiency|power output|photovoltaic performance/i.test(
+          query,
+        )),
+    fallbackQueries: [
+      "surface roughness reflectance photovoltaic cell efficiency",
+      "surface texturing light trapping silicon solar cells reflectance efficiency",
+      "anti reflective textured surface solar cell power conversion efficiency",
+    ],
+  },
+  {
+    topicPattern: /睡眠不足|睡眠限制|青少年.*(?:工作記憶|注意力|認知)|sleep deprivation|sleep restriction|adolescent cognition|working memory.*attention/i,
+    queryAllowed: (query) => {
+      const normalized = compactWhitespace(query);
+      if (/^(attention|working memory|cognition|adolescents?|teenagers?|sleep deprivation|sleep restriction|sleep quality)$/i.test(normalized)) {
+        return false;
+      }
+      return (
+        /睡眠不足|睡眠限制|sleep deprivation|sleep restriction|sleep quality|sleep duration|insufficient sleep/i.test(query) &&
+        /工作記憶|注意力|認知|working memory|attention|cognition|cognitive performance|sustained attention|executive function/i.test(query)
+      );
+    },
+    fallbackQueries: [
+      "sleep deprivation adolescents working memory attention cognitive performance",
+      "sleep restriction adolescent cognition attention working memory",
+      "adolescent sleep deprivation sustained attention working memory",
+    ],
+  },
+  {
+    topicPattern: /海龜|綠蠵龜|海龜幼體|幼龜|入海|人工夜間照明|夜間照明|光害|sea turtle|marine turtle|hatchling orientation|artificial light at night|coastal lighting|light pollution/i,
+    queryAllowed: (query) =>
+      ((/海龜|綠蠵龜|幼龜|sea turtle|marine turtle|loggerhead|green turtle/i.test(query) &&
+        /幼體|入海|夜間照明|人工夜間照明|光害|hatchling|orientation|disorientation|artificial light|light pollution|coastal lighting|beach lighting|sea finding|seaward/i.test(query)) ||
+        /海龜幼體|hatchling orientation|hatchling disorientation|marine turtle hatchling/i.test(query)) &&
+      !/habitat fragmentation|population distribution|conservation corridor/i.test(query),
+    fallbackQueries: [
+      "sea turtle hatchling orientation artificial light at night",
+      "sea turtle hatchling disorientation light pollution coastal lighting",
+      "marine turtle hatchling sea finding artificial light nesting beach",
+    ],
+  },
+  {
+    topicPattern: /同儕回饋|第二語言|寫作修訂|修訂品質|peer feedback|second language writing|L2 writing|writing revision/i,
+    queryAllowed: (query) =>
+      /同儕回饋|第二語言|寫作|修訂|peer feedback|peer response|peer assessment|second language writing|L2 writing|EFL writing|ESL writing|writing revision|revision quality/i.test(
+        query,
+      ) &&
+      !/^peer review$/i.test(compactWhitespace(query)),
+    fallbackQueries: [
+      "peer feedback second language writing revision quality",
+      "L2 writing peer feedback revision quality students",
+      "peer response second language writing revision performance",
+    ],
+  },
+  {
+    topicPattern: /活性碳|活性炭|甲醛|室內空氣|移除效率|activated carbon|formaldehyde|indoor air quality|adsorption efficiency/i,
+    queryAllowed: (query) => {
+      const normalized = compactWhitespace(query);
+      if (
+        /chemical properties|reactivity stability|composition structure|handling conditions|safety storage|measurement methods|analytical material|limitations comparison/i.test(
+          normalized,
+        )
+      ) {
+        return false;
+      }
+      return (
+        /活性碳|活性炭|activated carbon|active carbon|carbon filter|activated carbon fiber|碳濾材/i.test(query) &&
+        /甲醛|室內空氣|formaldehyde|indoor air|air filtration|VOC|volatile organic/i.test(query)
+      );
+    },
+    fallbackQueries: [
+      "activated carbon formaldehyde adsorption indoor air removal efficiency",
+      "activated carbon filter formaldehyde removal indoor air quality",
+      "formaldehyde adsorption activated carbon humidity removal efficiency",
+    ],
+  },
+];
+
+function topicQueryAnchorProfile(topicText: string): TopicQueryAnchorProfile | null {
+  return TOPIC_QUERY_ANCHOR_PROFILES.find((profile) => profile.topicPattern.test(topicText)) ?? null;
+}
+
+function providerSafeDomainAnchoredQueries(queries: string[], topicText: string): string[] {
+  const safe = providerSafeQueries(queries, topicText);
+  const profile = topicQueryAnchorProfile(topicText);
+  if (!profile) return safe;
+  return safe.filter((query) => profile.queryAllowed(query));
+}
+
+function topicAnchoredPlanQueries(queries: string[], topicText: string): string[] {
+  const cleaned = uniqueStrings(queries);
+  const profile = topicQueryAnchorProfile(topicText);
+  if (!profile) return cleaned;
+  return providerSafeQueries(cleaned, topicText).filter((query) => profile.queryAllowed(query));
 }
 
 function backgroundRoutedQueries(queries: string[], topicText: string): string[] {
@@ -2212,6 +2314,8 @@ export function buildSeedQueryPlan(input: {
   const topicText = [
     input.topicAnalysis.normalizedTopic,
     titleParse.normalizedText,
+    ...requestZhQueries,
+    ...requestEnQueries,
     ...(input.parsedInput?.mustIncludeTerms ?? []),
     ...parsedZhQueries,
     ...parsedEnQueries,
@@ -2256,21 +2360,40 @@ export function buildSeedQueryPlan(input: {
       ? []
       : understanding.coreConcepts.filter((concept) => containsLatin(concept))),
   ], topicText).filter(Boolean);
+  const topicAnchorProfile = topicQueryAnchorProfile(topicText);
+  const anchoredExactQueries = topicAnchorProfile
+    ? providerSafeDomainAnchoredQueries(exactQueries, topicText)
+    : exactQueries;
+  const anchoredBroadQueries = topicAnchorProfile
+    ? providerSafeDomainAnchoredQueries(broadQueries, topicText)
+    : broadQueries;
+  const anchoredZhQueries = topicAnchorProfile
+    ? uniqueStrings([
+        ...providerSafeDomainAnchoredQueries(zhQueries, topicText),
+        ...topicAnchorProfile.fallbackQueries.filter(containsZh),
+      ])
+    : zhQueries;
+  const anchoredEnQueries = topicAnchorProfile
+    ? uniqueStrings([
+        ...providerSafeDomainAnchoredQueries(enQueries, topicText),
+        ...topicAnchorProfile.fallbackQueries.filter(containsLatin),
+      ])
+    : enQueries;
 
   return {
     workflowId: input.topicAnalysis.workflowId,
     topicHash: input.topicAnalysis.topicHash,
     normalizedResearchTopic,
-    exactQueries,
-    broadQueries,
-    zhQueries,
-    enQueries,
+    exactQueries: anchoredExactQueries,
+    broadQueries: anchoredBroadQueries,
+    zhQueries: anchoredZhQueries,
+    enQueries: anchoredEnQueries,
     providerQueries: {
-      openalex: providerSafeQueries(sanitizeGroundingQueries([...enQueries.slice(0, 5), ...exactQueries], topicText), topicText),
-      crossref: providerSafeQueries(sanitizeGroundingQueries([...enQueries.slice(0, 5), ...exactQueries], topicText), topicText),
-      core: providerSafeQueries(sanitizeGroundingQueries([...enQueries.slice(0, 3), ...exactQueries, ...broadQueries.slice(0, 2)], topicText), topicText),
-      semanticScholar: providerSafeQueries(sanitizeGroundingQueries([...enQueries.slice(0, 3), ...exactQueries.slice(0, 2)], topicText), topicText),
-      web: webSafeQueries(sanitizeGroundingQueries([...broadQueries.slice(0, 2), ...exactQueries.slice(0, 2)], topicText), topicText),
+      openalex: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries([...anchoredEnQueries.slice(0, 5), ...anchoredExactQueries], topicText), topicText),
+      crossref: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries([...anchoredEnQueries.slice(0, 5), ...anchoredExactQueries], topicText), topicText),
+      core: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries([...anchoredEnQueries.slice(0, 3), ...anchoredExactQueries, ...anchoredBroadQueries.slice(0, 2)], topicText), topicText),
+      semanticScholar: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries([...anchoredEnQueries.slice(0, 3), ...anchoredExactQueries.slice(0, 2)], topicText), topicText),
+      web: webSafeQueries(sanitizeGroundingQueries([...anchoredBroadQueries.slice(0, 2), ...anchoredExactQueries.slice(0, 2)], topicText), topicText),
     },
     excludedDriftTerms: uniqueStrings(input.topicAnalysis.warnings.filter((warning) =>
       warning.includes("drift") || warning.includes("preserve original"),
@@ -2475,21 +2598,21 @@ function providerQueriesFromPlan(input: {
 }): GroundingQueryPlan["providerQueries"] {
 	  const combined = uniqueStrings([...input.primaryQueries, ...input.secondaryQueries]);
 	  return {
-	    openalex: providerSafeQueries([
-	      ...combined.slice(0, 4),
+	    openalex: providerSafeDomainAnchoredQueries([
 	      ...input.seedQueryPlan.providerQueries.openalex,
-	    ], input.topicText),
-	    crossref: providerSafeQueries([
 	      ...combined.slice(0, 4),
+	    ], input.topicText),
+	    crossref: providerSafeDomainAnchoredQueries([
 	      ...input.seedQueryPlan.providerQueries.crossref,
-	    ], input.topicText),
-	    core: providerSafeQueries([
 	      ...combined.slice(0, 4),
-	      ...input.seedQueryPlan.providerQueries.core,
 	    ], input.topicText),
-	    semanticScholar: providerSafeQueries([
-	      ...combined.filter((query) => containsLatin(query)).slice(0, 4),
+	    core: providerSafeDomainAnchoredQueries([
+	      ...input.seedQueryPlan.providerQueries.core,
+	      ...combined.slice(0, 4),
+	    ], input.topicText),
+	    semanticScholar: providerSafeDomainAnchoredQueries([
 	      ...(input.seedQueryPlan.providerQueries.semanticScholar ?? []),
+	      ...combined.filter((query) => containsLatin(query)).slice(0, 4),
 	    ], input.topicText),
     web: webSafeQueries([
       ...backgroundRoutedQueries(combined, input.topicText),
@@ -2679,12 +2802,12 @@ export function buildGroundingQueryPlan(input: {
     lexicalSignals: input.lexicalSignals,
   });
   const bridgeQueries = conceptBridgeQueries(conceptGroups);
-  const primaryQueries = sanitizeGroundingQueries([
-    ...bridgeQueries.slice(0, 4),
+  const primaryQueries = topicAnchoredPlanQueries(sanitizeGroundingQueries([
     ...input.seedQueryPlan.exactQueries,
+    ...input.seedQueryPlan.enQueries.slice(0, 4),
+    ...bridgeQueries.slice(0, 4),
     ...input.seedQueryPlan.broadQueries,
-    ...input.seedQueryPlan.enQueries.slice(0, 2),
-  ], topicText);
+  ], topicText), topicText);
   const secondaryQueries = sanitizeGroundingQueries(
     input.lexicalSignals.flatMap((signal) => [
       ...signal.aliases,
@@ -2700,11 +2823,11 @@ export function buildGroundingQueryPlan(input: {
       ...titleParse.subject.filter(containsZh),
       ...titleParse.independentVariables.filter(containsZh),
     ], topicText),
-	  en: sanitizeGroundingQueries([
-      ...bridgeQueries,
+	  en: topicAnchoredPlanQueries(sanitizeGroundingQueries([
 	    ...input.seedQueryPlan.enQueries,
+      ...bridgeQueries,
 	    ...secondaryQueries.filter((query) => containsLatin(query)),
-	  ], topicText),
+	  ], topicText), topicText),
 	};
   const rawProviderQueries = providerQueriesFromPlan({
     seedQueryPlan: input.seedQueryPlan,
@@ -2713,10 +2836,10 @@ export function buildGroundingQueryPlan(input: {
     topicText,
   });
   const providerQueries = {
-    openalex: providerSafeQueries(sanitizeGroundingQueries(rawProviderQueries.openalex, topicText), topicText),
-    crossref: providerSafeQueries(sanitizeGroundingQueries(rawProviderQueries.crossref, topicText), topicText),
-    core: providerSafeQueries(sanitizeGroundingQueries(rawProviderQueries.core, topicText), topicText),
-    semanticScholar: providerSafeQueries(sanitizeGroundingQueries(rawProviderQueries.semanticScholar ?? [], topicText), topicText),
+    openalex: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.openalex, topicText), topicText),
+    crossref: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.crossref, topicText), topicText),
+    core: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.core, topicText), topicText),
+    semanticScholar: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.semanticScholar ?? [], topicText), topicText),
     web: webSafeQueries(sanitizeGroundingQueries(rawProviderQueries.web ?? [], topicText), topicText),
   };
   const domain = inferGroundingDomain(topicText);
@@ -5087,6 +5210,21 @@ function domainSpecificFallbackQueries(queryPlan: GroundingQueryPlan): string[] 
     (queryPlan.conceptGroups ?? []).flatMap((group) => group.enTerms).filter(containsLatin),
   ).slice(0, 5);
   const lead = leadTerms.slice(0, 4).join(" ");
+  const profile = topicQueryAnchorProfile(
+    compactWhitespace([
+      queryPlan.domain,
+      queryPlan.intent,
+      ...queryPlan.primaryQueries,
+      ...queryPlan.bilingualQueries.en,
+      ...leadTerms,
+    ].join(" ")),
+  );
+  if (profile) {
+    return uniqueStrings([
+      ...profile.fallbackQueries,
+      lead && profile.queryAllowed(lead) ? lead : "",
+    ]);
+  }
   const generic = uniqueStrings([
     lead,
     lead ? `${lead} review` : "",
@@ -5193,8 +5331,8 @@ function fallbackSearchInput(input: {
     input.queryPlan.intent,
     ...(input.queryPlan.conceptGroups ?? []).flatMap((group) => [group.name, ...group.zhTerms, ...group.enTerms]),
   ].join(" "));
-  const querySeedEn = providerSafeQueries(input.round === 1 ? roundOneEn : roundTwoEn, routingText);
-  const querySeedZh = providerSafeQueries(input.round === 1 ? roundOneZh : roundTwoZh, routingText);
+  const querySeedEn = providerSafeDomainAnchoredQueries(input.round === 1 ? roundOneEn : roundTwoEn, routingText);
+  const querySeedZh = providerSafeDomainAnchoredQueries(input.round === 1 ? roundOneZh : roundTwoZh, routingText);
   const fallbackTopic =
     querySeedEn[0] ??
     querySeedZh[0] ??
@@ -5299,6 +5437,61 @@ export function academicRetryQueryExpansion(input: {
       "青少年 咖啡因 睡眠 時間 文獻",
     );
   }
+  if (/太陽能板|光伏|表面粗糙|光反射|發電效率|solar panel|photovoltaic|surface roughness|power conversion efficiency/.test(text)) {
+    enSpecific.push(
+      "solar panel surface roughness optical reflectance power conversion efficiency",
+      "photovoltaic surface texture anti-reflection power output",
+      "photovoltaic module surface roughness reflectance efficiency",
+    );
+    zhSpecific.push(
+      "太陽能板 表面粗糙度 光反射 發電效率",
+      "光伏元件 表面紋理 反射率 轉換效率 文獻",
+    );
+  }
+  if (/睡眠不足|睡眠限制|工作記憶|注意力|sleep deprivation|sleep restriction|working memory|sustained attention/.test(text)) {
+    enSpecific.push(
+      "sleep deprivation adolescents working memory attention cognitive performance",
+      "sleep restriction adolescent cognition attention working memory",
+      "adolescent sleep deprivation sustained attention working memory",
+    );
+    zhSpecific.push(
+      "睡眠不足 青少年 工作記憶 注意力 認知表現 文獻",
+      "睡眠限制 青少年 注意力 工作記憶 研究",
+    );
+  }
+  if (/海龜|綠蠵龜|幼龜|入海|人工夜間照明|夜間照明|光害|sea turtle|hatchling orientation|artificial light|light pollution/.test(text)) {
+    enSpecific.push(
+      "sea turtle hatchling orientation artificial light at night",
+      "sea turtle hatchling disorientation light pollution coastal lighting",
+      "marine turtle hatchling sea finding artificial light nesting beach",
+    );
+    zhSpecific.push(
+      "海龜幼體 入海定向 人工夜間照明 光害 文獻",
+      "海龜幼體 錯向行為 夜間照明 海岸光害 研究",
+    );
+  }
+  if (/同儕回饋|第二語言|寫作修訂|修訂品質|peer feedback|second language writing|l2 writing|writing revision/.test(text)) {
+    enSpecific.push(
+      "peer feedback second language writing revision quality",
+      "L2 writing peer feedback revision quality students",
+      "peer response second language writing revision performance",
+    );
+    zhSpecific.push(
+      "同儕回饋 第二語言寫作 修訂品質 高中生 文獻",
+      "同儕回饋 寫作修訂 第二語言 學生 研究",
+    );
+  }
+  if (/活性碳|活性炭|甲醛|室內空氣|移除效率|activated carbon|formaldehyde|indoor air quality|adsorption efficiency/.test(text)) {
+    enSpecific.push(
+      "activated carbon formaldehyde adsorption indoor air removal efficiency",
+      "activated carbon filter formaldehyde removal indoor air quality",
+      "formaldehyde adsorption activated carbon humidity removal efficiency",
+    );
+    zhSpecific.push(
+      "活性碳 甲醛 吸附 室內空氣 移除效率 文獻",
+      "活性炭 濾材 甲醛 去除效率 室內空氣 研究",
+    );
+  }
   if (/太陽帆|solar sail|solar sailing|radiation pressure|spacecraft propulsion|深空探測/.test(text)) {
     enSpecific.push(
       "solar sail propulsion radiation pressure",
@@ -5346,6 +5539,18 @@ export function academicRetryQueryExpansion(input: {
   ).slice(0, 6);
   const leadEn = leadEnTerms.slice(0, 5).join(" ");
   const leadZh = leadZhTerms.slice(0, 5).join(" ");
+  const evidenceFocusedEn = leadEn
+    ? [
+        `${leadEn} mechanism application findings`,
+        `${leadEn} evidence limitations review`,
+      ]
+    : [];
+  const evidenceFocusedZh = leadZh
+    ? [
+        `${leadZh} 原理 應用 發現`,
+        `${leadZh} 證據 限制 文獻`,
+      ]
+    : [];
   const genericEn = uniqueStrings([
     ...(input.normalizedSearchTopic.enAcademicQuery ?? []),
     ...(input.queryPlan.enAcademicQueries ?? []),
@@ -5354,6 +5559,7 @@ export function academicRetryQueryExpansion(input: {
     leadEn ? `${leadEn} peer reviewed journal article` : "",
     leadEn ? `${leadEn} systematic review` : "",
     leadEn ? `${leadEn} academic research DOI` : "",
+    ...evidenceFocusedEn,
   ]);
   const genericZh = uniqueStrings([
     ...(input.normalizedSearchTopic.zhAcademicQuery ?? []),
@@ -5361,6 +5567,7 @@ export function academicRetryQueryExpansion(input: {
     ...(input.queryPlan.bilingualQueries.zh ?? []),
     leadZh ? `${leadZh} 論文 文獻` : "",
     leadZh ? `${leadZh} 期刊 研究` : "",
+    ...evidenceFocusedZh,
   ]);
   const topicIsMythResearch = /月兔|jade rabbit|moon rabbit|神話|folklore|myth/.test(text);
   const excludeTerms = uniqueStrings([
@@ -5370,8 +5577,8 @@ export function academicRetryQueryExpansion(input: {
       (term) => !(topicIsMythResearch && term.toLowerCase() === "myth"),
     ),
   ]);
-  const querySeedEn = uniqueStrings([...enSpecific, ...genericEn]).slice(0, 10);
-  const querySeedZh = uniqueStrings([...zhSpecific, ...genericZh]).slice(0, 8);
+  const querySeedEn = providerSafeDomainAnchoredQueries(uniqueStrings([...enSpecific, ...genericEn]), text).slice(0, 10);
+  const querySeedZh = providerSafeDomainAnchoredQueries(uniqueStrings([...zhSpecific, ...genericZh]), text).slice(0, 8);
   const retryQueries = uniqueStrings([...querySeedEn, ...querySeedZh]);
   return { querySeedEn, querySeedZh, excludeTerms, retryQueries };
 }
@@ -5410,8 +5617,8 @@ function academicRetrySearchInput(input: {
     input.queryPlan.intent,
     ...(input.queryPlan.conceptGroups ?? []).flatMap((group) => [group.name, ...group.zhTerms, ...group.enTerms]),
   ].join(" "));
-  const routedQuerySeedEn = providerSafeQueries(querySeedEn, routingText);
-  const routedQuerySeedZh = providerSafeQueries(querySeedZh, routingText);
+  const routedQuerySeedEn = providerSafeDomainAnchoredQueries(querySeedEn, routingText);
+  const routedQuerySeedZh = providerSafeDomainAnchoredQueries(querySeedZh, routingText);
   const fallbackTopic =
     routedQuerySeedEn[0] ??
     routedQuerySeedZh[0] ??
@@ -5762,6 +5969,8 @@ function makeGroundingEvidenceCard(input: {
   const citationMarker = citationMarkerForSource(input.sourceIndex);
   const evidenceId = `evidence-${input.source.sourceId}-${input.cardIndex + 1}`;
   const usableFor = usableForEvidenceType(input.source, input.evidenceType, input.safetyReview);
+  const confidence = Math.min(0.55, Math.max(0.05, input.confidence));
+  const createdAt = nowIso();
   const contentHash =
     input.source.contentHash ??
     stableQueryHash([input.source.sourceId, input.chunkId ?? "", input.quotedText].join("|"));
@@ -5774,10 +5983,14 @@ function makeGroundingEvidenceCard(input: {
     source_id: input.source.sourceId,
     ...(input.chunkId ? { chunkId: input.chunkId } : {}),
     claimTextOriginal,
+    claimText: safe.text,
     claim_text: claimTextOriginal,
     claimTextZh: safe.text,
     paraphrase_zh: safe.text,
     supportedByText: input.quotedText,
+    supportSpan: input.quotedText,
+    supportStart: 0,
+    supportEnd: input.quotedText.length,
     quoted_text: input.quotedText,
     original_language: input.source.language ?? "unknown",
     source_location: input.sourceLocation,
@@ -5807,12 +6020,16 @@ function makeGroundingEvidenceCard(input: {
     quoteOrSpan: input.quotedText,
     sourceQualityScore: input.source.sourceQualityScore,
     relevanceScore: input.source.relevanceScore,
+    topicRelevance: input.source.relevanceScore,
+    sourceQuality: input.source.sourceQualityScore,
+    groundingConfidence: confidence,
     citationMarker,
     citation_marker: citationMarker,
     usableFor,
+    sectionFit: usableFor,
     supports_sections: usableFor,
     evidence_type: input.evidenceType,
-    confidence: Math.max(0.05, Math.min(1, input.confidence)),
+    confidence,
     limitations: sourceAccessLimitations(input.source, input.accessLevel),
     source_access_level: input.accessLevel,
     trace: {
@@ -5823,11 +6040,16 @@ function makeGroundingEvidenceCard(input: {
       ...(input.source.extractionMethod ? { extraction_method: input.source.extractionMethod } : {}),
       content_hash: contentHash,
     },
-    extractedBy: "rule",
+    needsManualReview: true,
+    needsReview: true,
+    governanceFlags: ["rule_fallback_claim_extraction"],
+    extractedBy: "rule_fallback",
+    extractionMethod: "rule_fallback_claim_extraction",
     safety: safe.safety,
     contentHash,
-    createdAt: nowIso(),
-  };
+    createdAt,
+    extractedAt: createdAt,
+  } as unknown as GroundingEvidenceCard;
 }
 
 function evidenceTypeForClaimType(type: ClaimCandidate["claimType"]): GroundingEvidenceType {
@@ -5916,6 +6138,15 @@ function makeGroundingEvidenceCardFromClaim(input: {
   const citationMarker = input.claim.citationMarker || citationMarkerForSource(input.sourceIndex);
   const evidenceId = `evidence-${input.claim.claimId}`;
   const usableFor = usableForClaim(input.claim, input.source);
+  const extractionMethod =
+    input.claim.extractionMode === "llm"
+      ? "llm_structured_extract"
+      : "rule_fallback_claim_extraction";
+  const confidence =
+    input.claim.extractionMode === "llm"
+      ? Math.max(0.05, Math.min(1, input.claim.confidence))
+      : Math.max(0.05, Math.min(0.55, input.claim.confidence));
+  const createdAt = nowIso();
   const contentHash =
     input.source.contentHash ??
     stableQueryHash([input.claim.claimId, supportSpan, input.source.sourceId].join("|"));
@@ -5936,12 +6167,20 @@ function makeGroundingEvidenceCardFromClaim(input: {
     chunkId: input.claim.chunkId,
     claimIds: [input.claim.claimId],
     claimTextOriginal: input.claim.claimTextOriginal,
+    claimText: safe.text,
     claim_text: input.claim.claimTextOriginal,
     claimTextZh: safe.text,
     mainClaimZhTw: safe.text,
     paraphrase_zh: safe.text,
     supportingClaims: [input.claim],
     supportedByText: evidenceSafe.text,
+    supportSpan,
+    ...(typeof input.claim.supportSpanStartOffset === "number"
+      ? { supportStart: input.claim.supportSpanStartOffset }
+      : {}),
+    ...(typeof input.claim.supportSpanEndOffset === "number"
+      ? { supportEnd: input.claim.supportSpanEndOffset }
+      : {}),
     quoted_text: evidenceSafe.text,
     supportSpans: [
       {
@@ -5996,12 +6235,16 @@ function makeGroundingEvidenceCardFromClaim(input: {
     quoteOrSpan: evidenceSafe.text,
     sourceQualityScore: input.source.sourceQualityScore,
     relevanceScore: input.claim.relevanceToTopic,
+    topicRelevance: input.claim.relevanceToTopic,
+    sourceQuality: input.source.sourceQualityScore,
+    groundingConfidence: confidence,
     citationMarker,
     citation_marker: citationMarker,
     usableFor,
+    sectionFit: usableFor,
     supports_sections: usableFor,
     evidence_type: evidenceType,
-    confidence: Math.max(0.05, Math.min(1, input.claim.confidence)),
+    confidence,
     limitations: uniqueStrings([
       ...input.claim.limitations,
       ...sourceAccessLimitations(input.source, accessLevel),
@@ -6009,6 +6252,10 @@ function makeGroundingEvidenceCardFromClaim(input: {
     extractionStatus: input.source.extractionStatus,
     source_access_level: accessLevel,
     needsManualReview,
+    needsReview:
+      needsManualReview ||
+      input.claim.extractionMode !== "llm" ||
+      confidence < 0.65,
     governanceFlags,
     trace: {
       provider: input.source.provider,
@@ -6024,6 +6271,7 @@ function makeGroundingEvidenceCardFromClaim(input: {
         : input.claim.extractionMode === "metadata_only"
           ? "metadata_only"
           : "rule_fallback",
+    extractionMethod,
     safety: {
       containsActionableHarm:
         safe.safety.containsActionableHarm || evidenceSafe.safety.containsActionableHarm,
@@ -6038,13 +6286,15 @@ function makeGroundingEvidenceCardFromClaim(input: {
       ]),
     },
     contentHash,
-    createdAt: nowIso(),
-  };
+    createdAt,
+    extractedAt: createdAt,
+  } as unknown as GroundingEvidenceCard;
 }
 
 function evidenceCardsFromClaimCandidates(input: {
   workflowId: string;
   topicHash: string;
+  topic?: string;
   acceptedSources: SourceCandidate[];
   claimCandidates: ClaimCandidate[];
   safetyReview: AcademicSafetyReview;
@@ -6066,13 +6316,29 @@ function evidenceCardsFromClaimCandidates(input: {
       topicHash: input.topicHash,
       safetyReview: input.safetyReview,
     });
-    if (card) cards.push(card);
+    if (!card) continue;
+    if (input.topic) {
+      const relevance = scoreEvidenceRelevance({
+        topic: input.topic,
+        title: card.sourceTitle,
+        body: `${card.claimTextZh} ${card.supportedByText}`,
+        source: sourceEntry.source,
+      });
+      if (!relevance.accepted) continue;
+    }
+    cards.push(card);
   }
   return cards;
 }
 
-function selectedFullTextChunks(source: SourceCandidate): ExtractedChunk[] {
-  const chunks = source.extractedChunks ?? [];
+function selectedFullTextChunks(source: SourceCandidate, topic?: string): ExtractedChunk[] {
+  const chunks = (source.extractedChunks ?? [])
+    .map((chunk) =>
+      topic
+        ? cleanExtractedTextChunk({ topic, chunk, source }).chunk
+        : chunk,
+    )
+    .filter((chunk): chunk is ExtractedChunk => Boolean(chunk));
   const seenClaims = new Set<string>();
   const selected: ExtractedChunk[] = [];
   const byType = (type: GroundingEvidenceType, limit: number) => {
@@ -6104,7 +6370,7 @@ function selectedFullTextChunks(source: SourceCandidate): ExtractedChunk[] {
   return selected.slice(0, 8);
 }
 
-function abstractChunksForSource(source: SourceCandidate): ExtractedChunk[] {
+function abstractChunksForSource(source: SourceCandidate, topic?: string): ExtractedChunk[] {
   const abstract =
     compactWhitespace(source.extractedAbstract ?? "") ||
     compactWhitespace(source.abstractOriginal ?? "") ||
@@ -6116,7 +6382,7 @@ function abstractChunksForSource(source: SourceCandidate): ExtractedChunk[] {
     .map((sentence) => sentence.trim())
     .filter((sentence) => sentence.length >= 40);
   const chunks = (sentences.length ? sentences : [abstract]).slice(0, 2);
-  return chunks.map((text, index) => ({
+  const abstractChunks = chunks.map((text, index) => ({
     chunk_id: `${source.sourceId}:abstract:${index + 1}`,
     text,
     source_location: "abstract",
@@ -6124,6 +6390,11 @@ function abstractChunksForSource(source: SourceCandidate): ExtractedChunk[] {
     char_start: 0,
     char_end: text.length,
   }));
+  return topic
+    ? abstractChunks
+        .map((chunk) => cleanExtractedTextChunk({ topic, chunk, source }).chunk)
+        .filter((chunk): chunk is ExtractedChunk => Boolean(chunk))
+    : abstractChunks;
 }
 
 function evidenceCardsForExtractedSource(input: {
@@ -6131,6 +6402,7 @@ function evidenceCardsForExtractedSource(input: {
   sourceIndex: number;
   workflowId: string;
   topicHash: string;
+  topic?: string;
   safetyReview: AcademicSafetyReview;
 }): GroundingEvidenceCard[] {
   const accessLevel = accessLevelForSource(input.source);
@@ -6139,7 +6411,7 @@ function evidenceCardsForExtractedSource(input: {
   }
 
   if (accessLevel === "full_text" && (input.source.extractedChunks?.length ?? 0) > 0) {
-    return selectedFullTextChunks(input.source).map((chunk, index) =>
+    return selectedFullTextChunks(input.source, input.topic).map((chunk, index) =>
       makeGroundingEvidenceCard({
         ...input,
         cardIndex: index,
@@ -6161,7 +6433,7 @@ function evidenceCardsForExtractedSource(input: {
   }
 
   if (accessLevel === "abstract_only") {
-    const chunks = abstractChunksForSource(input.source).slice(0, 2);
+    const chunks = abstractChunksForSource(input.source, input.topic).slice(0, 2);
     return chunks.map((chunk, index) =>
       makeGroundingEvidenceCard({
         ...input,
@@ -6177,21 +6449,51 @@ function evidenceCardsForExtractedSource(input: {
     );
   }
 
-  const metadataText = compactWhitespace(input.source.title);
-  if (!metadataText) return [];
-  return [
-    makeGroundingEvidenceCard({
-      ...input,
-      cardIndex: 0,
-      evidenceType: "background",
-      quotedText: metadataText,
-      sourceLocation: "metadata",
-      sectionHeading: "Metadata",
-      chunkId: `${input.source.sourceId}:metadata:1`,
-      accessLevel,
-      confidence: 0.25,
-    }),
-  ];
+  return [];
+}
+
+function evidenceSupportKey(card: GroundingEvidenceCard): string {
+  const support = compactWhitespace(
+    card.supportSpan ??
+      card.supportedByText ??
+      card.quoted_text ??
+      card.quoteOrSpan ??
+      "",
+  ).toLowerCase();
+  return `${card.sourceId}:${support}`;
+}
+
+function appendExtractedSpanReviewCards(input: {
+  cards: GroundingEvidenceCard[];
+  evidenceSources: SourceCandidate[];
+  workflowId: string;
+  topicHash: string;
+  topic?: string;
+  safetyReview: AcademicSafetyReview;
+}): GroundingEvidenceCard[] {
+  const targetCount = Math.min(8, Math.max(3, Math.ceil(input.evidenceSources.length * 1.5)));
+  if (input.cards.length >= targetCount) return input.cards;
+
+  const cards = [...input.cards];
+  const seen = new Set(cards.map(evidenceSupportKey));
+  input.evidenceSources.slice(0, 12).forEach((source, sourceIndex) => {
+    if (cards.length >= targetCount) return;
+    for (const card of evidenceCardsForExtractedSource({
+      source,
+      sourceIndex,
+      workflowId: input.workflowId,
+      topicHash: input.topicHash,
+      topic: input.topic,
+      safetyReview: input.safetyReview,
+    })) {
+      if (cards.length >= targetCount) break;
+      const key = evidenceSupportKey(card);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      cards.push(card);
+    }
+  });
+  return cards;
 }
 
 export function buildGroundingEvidenceCards(input: {
@@ -6200,6 +6502,7 @@ export function buildGroundingEvidenceCards(input: {
   acceptedSources: SourceCandidate[];
   claimCandidates?: ClaimCandidate[];
   reviewSources?: SourceCandidate[];
+  topic?: string;
   safetyReview: AcademicSafetyReview;
 }): GroundingEvidenceCard[] {
   const userAccepted = (source: SourceCandidate) =>
@@ -6223,11 +6526,20 @@ export function buildGroundingEvidenceCards(input: {
     return true;
   });
   if (input.claimCandidates && input.claimCandidates.length > 0) {
-    return evidenceCardsFromClaimCandidates({
+    const claimCards = evidenceCardsFromClaimCandidates({
       workflowId: input.workflowId,
       topicHash: input.topicHash,
+      topic: input.topic,
       acceptedSources: evidenceSources,
       claimCandidates: input.claimCandidates,
+      safetyReview: input.safetyReview,
+    });
+    return appendExtractedSpanReviewCards({
+      cards: claimCards,
+      evidenceSources,
+      workflowId: input.workflowId,
+      topicHash: input.topicHash,
+      topic: input.topic,
       safetyReview: input.safetyReview,
     });
   }
@@ -6238,6 +6550,7 @@ export function buildGroundingEvidenceCards(input: {
       sourceIndex,
       workflowId: input.workflowId,
       topicHash: input.topicHash,
+      topic: input.topic,
       safetyReview: input.safetyReview,
     });
     cards.push(...sourceCards);
@@ -6770,15 +7083,19 @@ export async function runResearchGroundingPipeline(
     queryPlan.intent,
     ...(queryPlan.conceptGroups ?? []).flatMap((group) => [group.name, ...group.zhTerms, ...group.enTerms]),
   ].join(" "));
-  const providerQueryAnchorText = compactWhitespace([
-    effectiveTopic,
-    originalTopic,
-    normalizedSearchTopic.displayTitle,
+  const initialQuerySeedZh = providerSafeDomainAnchoredQueries([
+    ...requestQuerySeedZh,
     ...normalizedSearchTopic.zhAcademicQuery,
+    ...queryPlan.bilingualQueries.zh,
+  ], queryRoutingTopicText);
+  const initialAnchorProfile = topicQueryAnchorProfile(queryRoutingTopicText);
+  const initialQuerySeedEn = providerSafeDomainAnchoredQueries([
     ...normalizedSearchTopic.enAcademicQuery,
-    ...normalizedSearchTopic.keywordSet,
+    ...(initialAnchorProfile?.fallbackQueries ?? []),
     ...normalizedSearchTopic.broaderAcademicQueries,
-  ].join(" "));
+    ...queryPlan.bilingualQueries.en,
+    ...requestQuerySeedEn,
+  ], queryRoutingTopicText);
   await progress(dependencies, {
     status: "searching_initial",
     progress: 68,
@@ -6803,19 +7120,10 @@ export async function runResearchGroundingPipeline(
     refinedTopic: topicAnalysis.normalizedTopic,
     canonicalTopicZh: topicAnalysis.normalizedTopic,
     canonicalTopicEn:
-      normalizedSearchTopic.enAcademicQuery[0] ?? queryPlan.bilingualQueries.en[0],
+      initialQuerySeedEn[0] ?? normalizedSearchTopic.enAcademicQuery[0],
     displayTitle: normalizedSearchTopic.displayTitle,
-    querySeedZh: providerSafeQueries([
-      ...requestQuerySeedZh,
-      ...normalizedSearchTopic.zhAcademicQuery,
-      ...queryPlan.bilingualQueries.zh,
-    ], queryRoutingTopicText),
-    querySeedEn: providerSafeTopicAnchoredQueries([
-      ...normalizedSearchTopic.enAcademicQuery,
-      ...normalizedSearchTopic.broaderAcademicQueries,
-      ...queryPlan.bilingualQueries.en,
-      ...requestQuerySeedEn,
-    ], queryRoutingTopicText, providerQueryAnchorText),
+    querySeedZh: initialQuerySeedZh,
+    querySeedEn: initialQuerySeedEn,
     mustIncludeTerms: normalizedSearchTopic.keywordSet,
     excludeTerms: uniqueStrings([...normalizedSearchTopic.negativeKeywords, ...requestExcludeTerms]),
     domainHints: uniqueStrings([input.selectedDomain ?? "", ...(input.bilingualQueries ? ["frontend_bilingual_queries"] : [])]),
@@ -7251,6 +7559,7 @@ export async function runResearchGroundingPipeline(
   const evidenceCards = buildGroundingEvidenceCards({
     workflowId: input.workflowId,
     topicHash: topicAnalysis.topicHash,
+    topic: effectiveTopic,
     acceptedSources,
     claimCandidates,
     reviewSources,
@@ -7274,6 +7583,31 @@ export async function runResearchGroundingPipeline(
   officialBackgroundSources = officialBackgroundSources.map(annotateEvidenceStats);
   rejectedSources = rejectedSources.map(annotateEvidenceStats);
   acceptedSources = acceptedSources.map(annotateEvidenceStats);
+
+  const claimRejectedReasonCounts = claimCandidates.reduce<Record<string, number>>((counts, claim) => {
+    if (claim.status === "accepted") return counts;
+    const reason = claim.rejectionReason ?? claim.status;
+    counts[reason] = (counts[reason] ?? 0) + 1;
+    return counts;
+  }, {});
+  const claimExtractionDiagnostics: NonNullable<GroundingPipelineDiagnostics["claimExtraction"]> = {
+    totalClaims: claimCandidates.length,
+    acceptedClaims: claimCandidates.filter((claim) => claim.status === "accepted").length,
+    needsReviewClaims: claimCandidates.filter((claim) => claim.status === "needs_review").length,
+    rejectedClaims: claimCandidates.filter((claim) => claim.status === "rejected").length,
+    evidenceCardCount: evidenceCards.length,
+    evidenceCardsWithSupportSpan: evidenceCards.filter((card) =>
+      Boolean(compactWhitespace(card.supportSpan ?? card.supportedByText ?? card.quoted_text ?? "")),
+    ).length,
+    llmEvidenceCardCount: evidenceCards.filter((card) =>
+      card.extractionMethod === "llm_structured_extract" || card.extractedBy === "llm",
+    ).length,
+    ruleFallbackEvidenceCardCount: evidenceCards.filter((card) =>
+      card.extractionMethod === "rule_fallback_claim_extraction" ||
+      card.extractedBy === "rule_fallback",
+    ).length,
+    rejectedReasonCounts: claimRejectedReasonCounts,
+  };
 
   const reportArtifacts = buildReportArtifacts({
     topic: effectiveTopic,
@@ -7316,8 +7650,8 @@ export async function runResearchGroundingPipeline(
       })
     : undefined;
   const finalGroundingDiagnostics: GroundingPipelineDiagnostics = diagnosticTrace
-    ? { ...groundingDiagnostics, diagnosticTrace }
-    : groundingDiagnostics;
+    ? { ...groundingDiagnostics, claimExtraction: claimExtractionDiagnostics, diagnosticTrace }
+    : { ...groundingDiagnostics, claimExtraction: claimExtractionDiagnostics };
 
   return {
     jobId: "pending-assignment",

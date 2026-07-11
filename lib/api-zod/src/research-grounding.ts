@@ -795,6 +795,19 @@ export const GroundingPipelineDiagnosticsSchema = z.object({
   fallbackReviewCount: z.number().int().min(0).optional(),
   rejectedCount: z.number().int().min(0),
   acceptedCount: z.number().int().min(0).optional(),
+  claimExtraction: z
+    .object({
+      totalClaims: z.number().int().min(0),
+      acceptedClaims: z.number().int().min(0),
+      needsReviewClaims: z.number().int().min(0),
+      rejectedClaims: z.number().int().min(0),
+      evidenceCardCount: z.number().int().min(0),
+      evidenceCardsWithSupportSpan: z.number().int().min(0),
+      llmEvidenceCardCount: z.number().int().min(0),
+      ruleFallbackEvidenceCardCount: z.number().int().min(0),
+      rejectedReasonCounts: z.record(z.string(), z.number().int().min(0)),
+    })
+    .optional(),
   canProceedToSourceReview: z.boolean().optional(),
   canProceedToAcademicDraft: z.boolean().optional(),
   canProceedToBackgroundDraft: z.boolean().optional(),
@@ -942,6 +955,13 @@ export const EvidenceCardSafetySchema = z.object({
 });
 export type EvidenceCardSafety = z.infer<typeof EvidenceCardSafetySchema>;
 
+export const EvidenceExtractionMethodSchema = z.enum([
+  "llm_structured_extract",
+  "rule_fallback_claim_extraction",
+  "manual_review",
+]);
+export type EvidenceExtractionMethod = z.infer<typeof EvidenceExtractionMethodSchema>;
+
 export const GroundingEvidenceCardSchema = z.object({
   evidenceId: z.string().trim().min(1),
   evidence_id: z.string().trim().min(1).optional(),
@@ -953,12 +973,16 @@ export const GroundingEvidenceCardSchema = z.object({
   chunkId: z.string().trim().min(1).optional(),
   claimIds: z.array(z.string().trim().min(1)).optional(),
   claimTextOriginal: z.string().trim().min(1),
+  claimText: z.string().trim().min(1).optional(),
   claim_text: z.string().trim().min(1).optional(),
   claimTextZh: z.string().trim().min(1),
   mainClaimZhTw: z.string().trim().min(1).optional(),
   paraphrase_zh: z.string().trim().min(1).optional(),
   supportingClaims: z.array(ClaimCandidateSchema).optional(),
   supportedByText: z.string().trim().min(1),
+  supportSpan: z.string().trim().min(1).optional(),
+  supportStart: z.number().int().min(0).optional(),
+  supportEnd: z.number().int().min(0).optional(),
   quoted_text: z.string().trim().min(1).optional(),
   supportSpans: z
     .array(
@@ -1005,6 +1029,9 @@ export const GroundingEvidenceCardSchema = z.object({
   quoteOrSpan: z.string().trim().min(1).optional(),
   sourceQualityScore: z.number().min(0).max(1).optional(),
   relevanceScore: z.number().min(0).max(1).optional(),
+  topicRelevance: z.number().min(0).max(1).optional(),
+  sourceQuality: z.number().min(0).max(1).optional(),
+  groundingConfidence: z.number().min(0).max(1).optional(),
   citationMarker: z.string().trim().min(1),
   citation_marker: z.string().trim().min(1).optional(),
   span: z
@@ -1015,6 +1042,7 @@ export const GroundingEvidenceCardSchema = z.object({
     })
     .optional(),
   usableFor: z.array(z.string().trim().min(1)),
+  sectionFit: z.array(z.string().trim().min(1)).optional(),
   supports_sections: z.array(z.string().trim().min(1)).optional(),
   evidence_type: z
     .enum([
@@ -1041,6 +1069,8 @@ export const GroundingEvidenceCardSchema = z.object({
     ])
     .optional(),
   needsManualReview: z.boolean().optional(),
+  needsReview: z.boolean().optional(),
+  rejectionReason: z.string().trim().min(1).optional(),
   governanceFlags: z.array(z.string().trim().min(1)).optional(),
   trace: z
     .object({
@@ -1053,11 +1083,25 @@ export const GroundingEvidenceCardSchema = z.object({
     })
     .optional(),
   extractedBy: z.enum(["rule", "llm", "rule_fallback", "metadata_only"]),
+  extractionMethod: EvidenceExtractionMethodSchema.optional(),
   safety: EvidenceCardSafetySchema.optional(),
   contentHash: z.string().trim().min(1).optional(),
   createdAt: z.string().trim().min(1),
+  extractedAt: z.string().trim().min(1).optional(),
 });
 export type GroundingEvidenceCard = z.infer<typeof GroundingEvidenceCardSchema>;
+
+export const SectionEvidenceBundleSchema = z.object({
+  sectionId: z.string().trim().min(1),
+  sectionTitle: z.string().trim().min(1),
+  requiredAspects: z.array(z.string().trim().min(1)),
+  evidenceCards: z.array(GroundingEvidenceCardSchema),
+  coverageStatus: z.enum(["sufficient", "weak", "insufficient"]),
+  missingAspects: z.array(z.string().trim().min(1)),
+  canGenerate: z.boolean(),
+  diagnostics: z.array(z.string().trim().min(1)),
+});
+export type SectionEvidenceBundle = z.infer<typeof SectionEvidenceBundleSchema>;
 
 export const SectionSufficiencyGateSchema = z.object({
   sectionId: z.string().trim().min(1),
@@ -1095,8 +1139,13 @@ export const GroundingReportSectionSchema = z.object({
   sectionId: z.string().trim().min(1),
   title: z.string().trim().min(1),
   synthesizedProse: z.string().trim().min(1),
+  body: z.string().trim().min(1).optional(),
+  citations: z.array(z.string().trim().min(1)).optional(),
   citationMarkers: z.array(z.string().trim().min(1)),
   evidenceCardIds: z.array(z.string().trim().min(1)),
+  groundingStatus: z.enum(["grounded", "partially_grounded", "unsupported"]).optional(),
+  unsupportedSentences: z.array(z.string().trim().min(1)).optional(),
+  generationMethod: z.string().trim().min(1).optional(),
   evidenceGaps: z.array(z.string().trim().min(1)),
   sufficiency: SectionSufficiencyGateSchema.optional(),
 });
@@ -1165,6 +1214,7 @@ export const GroundingJobSchema = z.object({
   diagnosticTrace: ResearchGroundingDiagnosticTraceSchema.optional(),
   claimCandidates: z.array(ClaimCandidateSchema).optional(),
   evidenceCards: z.array(GroundingEvidenceCardSchema).optional(),
+  sectionEvidenceBundles: z.array(SectionEvidenceBundleSchema).optional(),
   reportPlan: ReportPlanSchema.optional(),
   reportSections: z.array(GroundingReportSectionSchema).optional(),
   reportSectionSufficiency: z.array(SectionSufficiencyGateSchema).optional(),

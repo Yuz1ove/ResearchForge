@@ -124,6 +124,7 @@ import {
   reportTopicFingerprint,
   reportWorkspacePath,
   saveReportWorkspace,
+  shouldRunSupplementalCoverageSearch,
   workspaceMatchesTopic,
 } from "@/lib/reportWorkspace";
 import {
@@ -1093,6 +1094,61 @@ function domainFocusedResearchTopic(topic: string, domain: ResearchDomain): stri
   return domainFocusedResearchPlan(topic, domain).researchTopic;
 }
 
+type SeedAnchorProfile = {
+  topicPattern: RegExp;
+  queryAllowed: (query: string) => boolean;
+};
+
+const SEED_ANCHOR_PROFILES: SeedAnchorProfile[] = [
+  {
+    topicPattern: /太陽能板|光伏|發電效率|solar panel|photovoltaic|power conversion efficiency/i,
+    queryAllowed: (query) =>
+      !/formation|development/i.test(query) &&
+      /solar panel|photovoltaic|solar cell/i.test(query) &&
+      /surface roughness|surface texture|reflectance|reflection|anti-reflection|power conversion efficiency|solar cell efficiency|power output|photovoltaic performance/i.test(
+        query,
+      ),
+  },
+  {
+    topicPattern: /睡眠不足|睡眠限制|工作記憶|注意力|sleep deprivation|sleep restriction|working memory|attention/i,
+    queryAllowed: (query) =>
+      (/sleep deprivation|sleep restriction/i.test(query) &&
+        /adolescen|teenager|working memory|attention|cognitive performance|sustained attention/i.test(query)) ||
+      (/adolescen|teenager/i.test(query) &&
+        /working memory|attention|cognitive performance|sustained attention/i.test(query)),
+  },
+  {
+    topicPattern: /海龜|海龜幼體|幼龜|夜間照明|光害|sea turtle|marine turtle|hatchling orientation|artificial light|light pollution/i,
+    queryAllowed: (query) =>
+      ((/sea turtle|marine turtle|loggerhead|green turtle/i.test(query) &&
+        /hatchling|orientation|disorientation|artificial light|light pollution|coastal lighting|beach lighting|sea finding|seaward/i.test(
+          query,
+        )) ||
+        /hatchling orientation|hatchling disorientation|marine turtle hatchling/i.test(query)) &&
+      !/habitat fragmentation|population distribution|conservation corridor/i.test(query),
+  },
+  {
+    topicPattern: /同儕回饋|第二語言|寫作修訂|peer feedback|second language writing|L2 writing|writing revision/i,
+    queryAllowed: (query) =>
+      /peer feedback|peer response|peer assessment|second language writing|L2 writing|EFL writing|ESL writing|writing revision|revision quality/i.test(
+        query,
+      ) &&
+      !/^peer review$/i.test(query.trim()),
+  },
+  {
+    topicPattern: /活性碳|活性炭|甲醛|activated carbon|formaldehyde|indoor air quality/i,
+    queryAllowed: (query) =>
+      /activated carbon|formaldehyde|adsorption|indoor air|removal efficiency|filter media|air filtration/i.test(query),
+  },
+];
+
+function topicAnchoredEnglishSeeds(topic: string, seeds: string[]): string[] {
+  const profile = SEED_ANCHOR_PROFILES.find((item) => item.topicPattern.test(topic));
+  const uniqueSeeds = Array.from(new Set(seeds.map((seed) => seed.trim()).filter(Boolean)));
+  if (!profile) return uniqueSeeds;
+  return uniqueSeeds.filter((seed) => profile.queryAllowed(seed));
+}
+
 function groundingPlanFromDirection(
   direction: ResearchDirection,
   selectedDomain: ResearchDomain | null,
@@ -1115,7 +1171,10 @@ function groundingPlanFromDirection(
     normalizedTopic: direction.researchQuestionZh,
     researchQuestion: direction.researchQuestionZh,
     querySeedZh: Array.from(new Set([direction.searchQueryZh, ...split.zh])),
-    querySeedEn: Array.from(new Set([...direction.englishKeywords, ...split.en])),
+    querySeedEn: topicAnchoredEnglishSeeds(direction.researchQuestionZh, [
+      ...split.en,
+      ...direction.englishKeywords,
+    ]),
     excludeTerms: [],
   };
 }
@@ -2608,6 +2667,19 @@ function abstractSnippet(source: SourceRecord): string | null {
   const text = source.abstract?.trim() || source.snippet?.trim();
   if (!text) return null;
   return compactSourceLine(text, 180);
+}
+
+function sourceHasServerDerivableSupport(source: SourceRecord): boolean {
+  const record = source as SourceRecord & Record<string, unknown>;
+  if (Array.isArray(record.extractedChunks) && record.extractedChunks.length > 0) {
+    return true;
+  }
+  return Boolean(
+    (typeof record.extractedAbstract === "string" && record.extractedAbstract.trim()) ||
+      (typeof record.abstractOriginal === "string" && record.abstractOriginal.trim()) ||
+      (typeof record.originalAbstract === "string" && record.originalAbstract.trim()) ||
+      (typeof source.abstract === "string" && source.abstract.trim()),
+  );
 }
 
 function parseAuthorsInput(value: string): string[] {
@@ -6095,10 +6167,18 @@ export function Generator() {
       }),
     [acceptedSources, activeReportTopic, groundingJob?.evidenceCards],
   );
+  const serverDerivableEvidenceAvailable = useMemo(
+    () => acceptedSources.some(sourceHasServerDerivableSupport),
+    [acceptedSources],
+  );
+  const readinessEvidenceCards =
+    acceptedEvidenceCards.length > 0 || !serverDerivableEvidenceAvailable
+      ? acceptedEvidenceCards
+      : null;
   const readiness = generationReadiness(
     acceptedSources,
     input.researchDepth,
-    acceptedEvidenceCards,
+    readinessEvidenceCards,
   );
   const literatureReviewEvidenceCount = useMemo(
     () =>
@@ -6145,15 +6225,23 @@ export function Generator() {
       ).length,
     [acceptedSources],
   );
-  const needsSupplementalCoverage =
-    acceptedSources.length < 10 ||
-    literatureReviewEvidenceCount < 5 ||
-    peerReviewedAcceptedSourceCount < 3;
+  const needsSupplementalCoverage = shouldRunSupplementalCoverageSearch({
+    acceptedSourceCount: acceptedSources.length,
+    literatureReviewEvidenceCount,
+    peerReviewedAcceptedSourceCount,
+    canonicalEvidenceCardCount: acceptedEvidenceCards.length,
+    serverDerivableEvidenceAvailable,
+  });
   const blockingReason = reportGenerationBlockingReason({
     topic: activeReportTopic,
     acceptedSources,
     hasWorkspaceTopicMismatch,
-    evidenceCardCount: acceptedEvidenceCards.length,
+    evidenceCardCount:
+      acceptedEvidenceCards.length > 0
+        ? acceptedEvidenceCards.length
+        : serverDerivableEvidenceAvailable
+          ? 1
+          : 0,
     workflowId: sourceWorkflowLock?.workflowId ?? null,
     topicHash: sourceWorkflowLock?.topicHash ?? null,
   });
@@ -7929,7 +8017,7 @@ export function Generator() {
     const currentReadiness = generationReadiness(
       acceptedSources,
       input.researchDepth,
-      acceptedEvidenceCards,
+      readinessEvidenceCards,
     );
     const currentBlockingReason = academicSafetyBlocksReport(academicSafetyReview)
       ? "此主題已被標記為不可輸出操作性內容，因此不會進入一般報告生成。"
@@ -7937,7 +8025,12 @@ export function Generator() {
           topic: activeReportTopic,
           acceptedSources,
           hasWorkspaceTopicMismatch,
-          evidenceCardCount: acceptedEvidenceCards.length,
+          evidenceCardCount:
+            acceptedEvidenceCards.length > 0
+              ? acceptedEvidenceCards.length
+              : serverDerivableEvidenceAvailable
+                ? 1
+                : 0,
           workflowId: sourceWorkflowLock?.workflowId ?? null,
           topicHash: sourceWorkflowLock?.topicHash ?? null,
         });
@@ -7990,7 +8083,7 @@ export function Generator() {
           const readinessForWorkspace = generationReadiness(
             acceptedSources,
             effectiveInput.researchDepth,
-            acceptedEvidenceCards,
+            readinessEvidenceCards,
           );
           if (!readinessForWorkspace.canGenerate) {
             setGenerateStatus("error");

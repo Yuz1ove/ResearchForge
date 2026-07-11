@@ -23,6 +23,10 @@ export interface LlmReportSection {
   prose: string;
   evidenceCardIds: string[];
   citationIds: string[];
+  coverageStatus?: "sufficient" | "weak" | "insufficient";
+  groundingStatus?: "grounded" | "partially_grounded" | "unsupported";
+  unsupportedSentences?: string[];
+  generationMethod?: string;
   warnings?: string[];
 }
 
@@ -65,6 +69,7 @@ export interface LlmReportWriterResult {
   requestedModel?: string | null;
   actualModel?: string | null;
   generationMode?: "llm_evidence_grounded" | "fallback_conservative_draft" | string;
+  evidenceCards?: EvidenceCard[];
   missingEvidence?: Array<{
     sectionId: string;
     title: string;
@@ -121,10 +126,37 @@ function sanitizeSection(value: unknown): LlmReportSection | null {
   const warnings = Array.isArray(data.warnings)
     ? data.warnings
         .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter(Boolean)
+    : [];
+  const unsupportedSentences = Array.isArray(data.unsupportedSentences)
+    ? data.unsupportedSentences
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
         .filter(Boolean)
     : [];
   if (!sectionId || !title || !prose) return null;
-  return { sectionId, title, prose, evidenceCardIds, citationIds, ...(warnings.length ? { warnings } : {}) };
+  return {
+    sectionId,
+    title,
+    prose,
+    evidenceCardIds,
+    citationIds,
+    coverageStatus:
+      data.coverageStatus === "sufficient" ||
+      data.coverageStatus === "weak" ||
+      data.coverageStatus === "insufficient"
+        ? data.coverageStatus
+        : undefined,
+    groundingStatus:
+      data.groundingStatus === "grounded" ||
+      data.groundingStatus === "partially_grounded" ||
+      data.groundingStatus === "unsupported"
+        ? data.groundingStatus
+        : undefined,
+    unsupportedSentences,
+    generationMethod:
+      typeof data.generationMethod === "string" ? data.generationMethod : undefined,
+    ...(warnings.length ? { warnings } : {}),
+  };
 }
 
 function sanitizeSectionPlan(value: unknown): LlmReportSectionPlan | null {
@@ -172,6 +204,16 @@ function normalizeResult(value: unknown): LlmReportWriterResult {
     ? data.sectionPlan
         .map(sanitizeSectionPlan)
         .filter((section): section is LlmReportSectionPlan => Boolean(section))
+    : [];
+  const evidenceCards = Array.isArray(data.evidenceCards)
+    ? data.evidenceCards.filter((item): item is EvidenceCard => {
+        if (!item || typeof item !== "object") return false;
+        const card = item as Record<string, unknown>;
+        return typeof card.id === "string" &&
+          typeof card.sourceId === "string" &&
+          typeof card.claimText === "string" &&
+          typeof card.supportSpan === "string";
+      })
     : [];
   return {
     ok: data.ok === true,
@@ -244,6 +286,7 @@ function normalizeResult(value: unknown): LlmReportWriterResult {
       typeof data.actualModel === "string" ? data.actualModel : null,
     generationMode:
       typeof data.generationMode === "string" ? data.generationMode : undefined,
+    evidenceCards,
     missingEvidence: Array.isArray(data.missingEvidence)
       ? data.missingEvidence
           .map((item): NonNullable<LlmReportWriterResult["missingEvidence"]>[number] | null => {
@@ -451,13 +494,19 @@ export function mergeLlmReportDraft(
       },
     };
   }
+  const mergedEvidenceCards = [
+    ...workspace.evidenceCards,
+    ...(llmResult.evidenceCards ?? []).filter(
+      (card) => !workspace.evidenceCards.some((existing) => existing.id === card.id),
+    ),
+  ];
   const sectionsById = new Map(
     llmResult.sections.map((section) => [section.sectionId, section]),
   );
-  const allowedEvidenceIds = new Set(workspace.evidenceCards.map((card) => card.id));
+  const allowedEvidenceIds = new Set(mergedEvidenceCards.map((card) => card.id));
   const allowedSourceIds = new Set(workspace.sourceIds);
   const evidenceToSource = new Map(
-    workspace.evidenceCards.map((card) => [card.id, card.sourceId]),
+    mergedEvidenceCards.map((card) => [card.id, card.sourceId]),
   );
   const sourceMarkerMap = buildStableCitationMarkerMap(workspace.acceptedSources);
   const acceptedMarkers = new Set(sourceMarkerMap.values());
@@ -517,7 +566,10 @@ export function mergeLlmReportDraft(
         evidenceCardIds: effectiveEvidenceCardIds,
         citationIds: actualCitationIds,
         citationMarkers: actualMarkers,
-        evidenceCoverageStatus: coverage.status,
+        evidenceCoverageStatus: llmSection.coverageStatus ?? coverage.status,
+        groundingStatus: llmSection.groundingStatus,
+        unsupportedSentences: llmSection.unsupportedSentences,
+        generationMethod: llmSection.generationMethod,
         citationCount: coverage.citationCount,
         evidenceCardCount: coverage.evidenceCardCount,
         writerNote: "LLM report writer generated this section from accepted evidence cards.",
@@ -535,7 +587,7 @@ export function mergeLlmReportDraft(
     topic: workspace.input.topic,
     depth: workspace.project.depth,
     acceptedSources: workspace.acceptedSources,
-    evidenceCards: workspace.evidenceCards,
+    evidenceCards: mergedEvidenceCards,
     sections: nextDraft.sections.map((section) => ({
       id: section.sectionId,
       key: section.sectionId as ResearchSectionKey,
@@ -550,12 +602,18 @@ export function mergeLlmReportDraft(
   return {
     ...workspace,
     llmDiagnostics,
+    evidenceCards: mergedEvidenceCards,
+    generationPayload: {
+      ...workspace.generationPayload,
+      evidenceCards: mergedEvidenceCards,
+    },
     draft: nextDraft,
     report: {
       ...workspace.report,
       meta: {
         ...workspace.report.meta,
         researchDraft: nextDraft,
+        evidenceCards: mergedEvidenceCards,
       },
     },
     qualityReport: nextQualityReport,

@@ -173,12 +173,12 @@ test("evaluateSourceAgainstIntent rejects topic drift sources", () => {
   assert.equal(drifted.excludeHits.includes("sea turtle"), true);
 });
 
-test("groundedEvidenceCardsForAcceptedSources builds limited fallback cards for accepted metadata-only sources", () => {
+test("groundedEvidenceCardsForAcceptedSources does not synthesize frontend fallback cards", () => {
   const acceptedWithAbstract = source({
     id: "accepted-1",
     title: "Accepted source with abstract",
     abstract:
-      "This accepted source includes enough abstract evidence to derive one fallback evidence card.",
+      "This accepted source includes enough abstract evidence for the API to derive a reviewed evidence card.",
   });
   const acceptedMetadataOnly = source({
     id: "accepted-2",
@@ -193,9 +193,7 @@ test("groundedEvidenceCardsForAcceptedSources builds limited fallback cards for 
     topic: "短影音使用對高中生注意力與睡眠品質之影響",
   });
 
-  assert.equal(cards.some((card) => card.sourceId === "accepted-1"), true);
+  assert.equal(cards.some((card) => card.sourceId === "accepted-1"), false);
   const metadataOnlyCard = cards.find((card) => card.sourceId === "accepted-2");
-  assert.equal(Boolean(metadataOnlyCard), true);
-  assert.equal(metadataOnlyCard?.derivation, "metadata-derived");
-  assert.match(metadataOnlyCard?.limitation ?? "", /書目線索|具體研究結論/);
+  assert.equal(Boolean(metadataOnlyCard), false);
 });

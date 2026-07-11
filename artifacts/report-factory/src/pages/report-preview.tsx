@@ -267,6 +267,41 @@ function evidenceCoverageBadgeVariant(
   return "outline";
 }
 
+function groundingStatusLabel(
+  status: ReportWorkspace["draft"]["sections"][number]["groundingStatus"] | undefined,
+  generationMethod?: string,
+  warnings: string[] = [],
+): string {
+  if (generationMethod === "grounding_verifier_blocked") return "grounding_verifier_blocked";
+  if (generationMethod === "insufficient_evidence_notice") return "insufficient_evidence";
+  if (generationMethod === "needs_manual_review" || warnings.includes("needs_manual_review")) return "needs_manual_review";
+  if (generationMethod === "extraction_failed") return "extraction_failed";
+  if (status === "grounded") return "fully_grounded";
+  if (status === "partially_grounded") return "partially_grounded";
+  return "insufficient_evidence";
+}
+
+function groundingStatusBadgeVariant(
+  status: ReportWorkspace["draft"]["sections"][number]["groundingStatus"] | undefined,
+  generationMethod?: string,
+  warnings: string[] = [],
+): "default" | "secondary" | "outline" {
+  if (generationMethod === "grounding_verifier_blocked" || generationMethod === "insufficient_evidence_notice") return "outline";
+  if (generationMethod === "needs_manual_review" || warnings.includes("needs_manual_review")) return "secondary";
+  if (status === "grounded") return "default";
+  if (status === "partially_grounded") return "secondary";
+  return "outline";
+}
+
+function evidenceSupportSpan(card: ReportWorkspace["evidenceCards"][number]): string {
+  return card.supportSpan ??
+    card.supportSpans?.[0]?.text ??
+    card.supportedByText ??
+    card.usableEvidence ??
+    card.evidence ??
+    "";
+}
+
 function sourceStatusLabels(source: ReportWorkspace["acceptedSources"][number]): string[] {
   const labels = ["已接受", sourceCategoryLabel(source.sourceCategory), sourceReadableStatusLabel(source)];
   if (source.topicalRelevanceLabel === "high") labels.push("高相關");
@@ -462,6 +497,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
       initialWorkspace.draft.sections[0]?.sectionId ??
       "",
   );
+  const [activeEvidenceId, setActiveEvidenceId] = useState<string | null>(null);
   const category = useMemo(
     () => detectTopicCategory(workspace.input.topic, workspace.input.reportType, workspace.input.purpose),
     [workspace.input.purpose, workspace.input.reportType, workspace.input.topic],
@@ -582,7 +618,17 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
   const updateDraftSectionBody = (sectionId: string, body: string) => {
     persistWorkspace((current) => {
       const sections = current.draft.sections.map((section) =>
-        section.sectionId === sectionId ? { ...section, body } : section,
+        section.sectionId === sectionId
+          ? {
+              ...section,
+              body,
+              synthesizedProseZhTw: body,
+              groundingStatus: "unsupported" as const,
+              generationMethod: "needs_manual_review",
+              unsupportedSentences: section.unsupportedSentences ?? [],
+              warnings: Array.from(new Set([...(section.warnings ?? []), "needs_manual_review"])),
+            }
+          : section,
       );
       return {
         ...current,
@@ -594,6 +640,15 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
             .join("\n\n"),
         },
       };
+    });
+  };
+
+  const focusEvidenceCard = (cardId: string) => {
+    setActiveEvidenceId(cardId);
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById(`evidence-card-${cardId}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   };
 
@@ -918,21 +973,41 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                 </div>
                 {activeEvidenceCards.length > 0 ? (
                   activeEvidenceCards.map((card, index) => (
-                    <article key={card.id} className="rounded-md border border-border bg-background px-3 py-3">
+                    <article
+                      key={card.id}
+                      id={`evidence-card-${card.id}`}
+                      className={`rounded-md border bg-background px-3 py-3 transition-colors ${
+                        activeEvidenceId === card.id ? "border-primary shadow-sm" : "border-border"
+                      }`}
+                    >
                       <div className="mb-2 flex flex-wrap items-center gap-2">
                         <Badge variant="outline">語句依據 {index + 1}</Badge>
+                        <Badge variant="outline">{card.citationMarker || card.citationText}</Badge>
                         <Badge variant={card.derivation === "metadata-derived" ? "outline" : "secondary"}>
                           {evidenceCardStatusLabel(card)}
                         </Badge>
+                        {card.extractionMethod ? (
+                          <Badge variant={card.extractionMethod === "rule_fallback_claim_extraction" ? "outline" : "secondary"}>
+                            {card.extractionMethod}
+                          </Badge>
+                        ) : null}
+                        {card.needsReview || card.needsManualReview || card.extractionMethod === "rule_fallback_claim_extraction" ? (
+                          <Badge variant="outline">需人工複核</Badge>
+                        ) : null}
                       </div>
                       <p className="text-xs font-medium leading-5 text-foreground">{card.sourceTitle}</p>
                       <p className="mt-2 text-xs font-medium leading-5 text-foreground">主要主張</p>
-                      <p className="mt-1 text-sm leading-6 text-foreground/90">{card.mainClaimZhTw || card.mainClaim || card.summary}</p>
-                      {card.supportSpans?.[0]?.text ? (
+                      <p className="mt-1 text-sm leading-6 text-foreground/90">{card.claimText || card.mainClaimZhTw || card.mainClaim || card.summary}</p>
+                      {evidenceSupportSpan(card) ? (
                         <>
                           <p className="mt-2 text-xs font-medium leading-5 text-foreground">support span</p>
-                          <p className="mt-1 text-sm leading-6 text-foreground/90">{card.supportSpans[0].text}</p>
+                          <p className="mt-1 text-sm leading-6 text-foreground/90">{evidenceSupportSpan(card)}</p>
                         </>
+                      ) : null}
+                      {(card.sectionFit?.length || card.sectionTargets?.length) ? (
+                        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                          sectionFit：{(card.sectionFit ?? card.sectionTargets).join("、")}
+                        </p>
                       ) : null}
                       <p className="mt-2 text-xs font-medium leading-5 text-foreground">可用證據</p>
                       <p className="mt-1 text-sm leading-6 text-foreground/90">
@@ -942,11 +1017,16 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                         {card.citationText}・{card.sourceLocation || card.pageOrLocation || "摘要整理"}
                         {card.extractionMethod ? `・${card.extractionMethod}` : ""}
                         {card.extractionStatus ? `・${card.extractionStatus}` : ""}
-                        {card.needsManualReview ? "・needs review" : ""}
+                        {card.needsReview || card.needsManualReview ? "・needs review" : ""}
                       </p>
-                      {card.limitation ? (
+                      {card.limitation || card.rejectionReason ? (
                         <p className="mt-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-5 text-muted-foreground">
-                          限制：{card.limitation}
+                          {card.rejectionReason ? `rejection：${card.rejectionReason}` : `限制：${card.limitation}`}
+                        </p>
+                      ) : null}
+                      {card.limitations.length > 0 ? (
+                        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                          limitations：{card.limitations.slice(0, 2).join("；")}
                         </p>
                       ) : null}
                     </article>
@@ -1004,8 +1084,12 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                           <Badge variant={evidenceCoverageBadgeVariant(section.evidenceCoverageStatus)}>
                             {evidenceCoverageLabel(section.evidenceCoverageStatus)}
                           </Badge>
+                          <Badge variant={groundingStatusBadgeVariant(section.groundingStatus, section.generationMethod, section.warnings)}>
+                            {groundingStatusLabel(section.groundingStatus, section.generationMethod, section.warnings)}
+                          </Badge>
                           <Badge variant="outline">{section.evidenceCardCount ?? section.evidenceCardIds.length} 張證據</Badge>
                           <Badge variant="outline">{section.citationCount ?? section.citationMarkers.length} 個 citation</Badge>
+                          <Badge variant="outline">{section.unsupportedSentences?.length ?? 0} unsupported</Badge>
                         </div>
                       </div>
                       {section.evidenceCoverageStatus === "insufficient" ? (
@@ -1025,6 +1109,38 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                         }}
                         data-testid={`draft-editor-${section.sectionId}`}
                       />
+                      {section.citationMarkers.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                          {section.citationMarkers.map((marker, markerIndex) => {
+                            const targetCard =
+                              workspace.evidenceCards.find((card) =>
+                                section.evidenceCardIds.includes(card.id) &&
+                                (card.citationMarker === marker || card.citationText === marker),
+                              ) ??
+                              workspace.evidenceCards.find((card) =>
+                                section.evidenceCardIds.includes(card.id),
+                              );
+                            return (
+                              <button
+                                key={`${section.sectionId}-${marker}-${markerIndex}`}
+                                type="button"
+                                className="rounded-md border border-border bg-muted/30 px-2 py-1 text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+                                onClick={() => {
+                                  setActiveSectionId(section.sectionId);
+                                  if (targetCard) focusEvidenceCard(targetCard.id);
+                                }}
+                              >
+                                {marker}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                      {(section.unsupportedSentences?.length ?? 0) > 0 ? (
+                        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                          unsupported：{section.unsupportedSentences?.slice(0, 2).join(" ")}
+                        </div>
+                      ) : null}
                     </article>
                   );
                 })}
@@ -1038,6 +1154,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                 <div className="space-y-2.5">
                   {workspace.outline.sections.map((section) => {
                     const isActive = section.sectionId === activeSection?.sectionId;
+                    const draftSection = workspace.draft.sections.find((item) => item.sectionId === section.sectionId);
                     return (
                       <button
                         key={section.sectionId}
@@ -1049,7 +1166,19 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                             : "border-border bg-background hover:border-primary/40"
                         }`}
                       >
-                        <p className="text-sm font-semibold text-foreground">{section.title}</p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-foreground">{section.title}</p>
+                          {draftSection ? (
+                            <>
+                              <Badge variant={evidenceCoverageBadgeVariant(draftSection.evidenceCoverageStatus)}>
+                                {evidenceCoverageLabel(draftSection.evidenceCoverageStatus)}
+                              </Badge>
+                              <Badge variant={groundingStatusBadgeVariant(draftSection.groundingStatus, draftSection.generationMethod, draftSection.warnings)}>
+                                {groundingStatusLabel(draftSection.groundingStatus, draftSection.generationMethod, draftSection.warnings)}
+                              </Badge>
+                            </>
+                          ) : null}
+                        </div>
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">{section.purpose}</p>
                       </button>
                     );

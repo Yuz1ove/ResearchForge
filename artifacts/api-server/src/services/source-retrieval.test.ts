@@ -647,6 +647,38 @@ test("Crossref low-result responses use short query retry and record low-results
   assert.equal(result.results[0]?.doi, "10.1000/dental-plaque-biofilm");
 });
 
+test("Crossref preserves a planner-validated topic query when short retry is disabled", async () => {
+  const configs = getSourceProviderConfigs();
+  const providerConfigs = {
+    Crossref: {
+      ...configs.Crossref,
+      endpoint: "https://example.test/works",
+      timeoutMs: 50,
+      queryLimit: 2,
+      pageLimit: 1,
+    },
+  };
+  const seenQueries: string[] = [];
+
+  const result = await searchSourceProvider(
+    "Crossref",
+    "giant panda red panda taxonomy classification",
+    {
+      providerConfigs,
+      allowShortQueryRetry: false,
+      fetchImpl: async (input) => {
+        const query = new URL(String(input)).searchParams.get("query") ?? "";
+        seenQueries.push(query);
+        return new Response(JSON.stringify({ message: { items: [] } }));
+      },
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(seenQueries, ["giant panda red panda taxonomy classification"]);
+  assert.equal(result.retry_mode, undefined);
+});
+
 test("returns deduped partial results when one provider succeeds and another fails", async () => {
   const configs = getSourceProviderConfigs();
   const sources = await searchSources("student sleep quality", {

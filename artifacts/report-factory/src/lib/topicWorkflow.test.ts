@@ -536,3 +536,55 @@ test("multilingual inputs keep a usable language signal", () => {
   assert.equal(validation.status, "ready");
   assertDirectionShape(directions, "AI 對高中生寫作學習的影響");
 });
+
+test("cross-domain evidence-card acceptance topics keep focused query directions", () => {
+  const cases: Array<{
+    topic: string;
+    expectedType: TopicType;
+    expected: RegExp;
+    forbidden: RegExp;
+  }> = [
+    {
+      topic: "不同表面粗糙度如何影響太陽能板的光反射與發電效率",
+      expectedType: "energy",
+      expected: /photovoltaic|surface roughness|optical reflectance|power conversion efficiency|太陽能板|表面粗糙|光反射|發電效率/i,
+      forbidden: /data governance|social impact|information retrieval/i,
+    },
+    {
+      topic: "睡眠不足對青少年工作記憶與注意力表現的影響",
+      expectedType: "psychology",
+      expected: /sleep deprivation|working memory|attention|adolescents|睡眠不足|工作記憶|注意力/i,
+      forbidden: /cultural history|symbolic meaning|heritage transmission/i,
+    },
+    {
+      topic: "海岸人工夜間照明對海龜幼體入海行為的影響",
+      expectedType: "wildlife_conservation",
+      expected: /sea turtle|hatchling orientation|artificial light at night|coastal lighting|海龜|夜間照明|幼體/i,
+      forbidden: /habitat fragmentation|population distribution|conservation corridor|棲地破碎化|族群分布|保育廊道|data governance|technical principle|social impact/i,
+    },
+    {
+      topic: "同儕回饋對高中生第二語言寫作修訂品質的影響",
+      expectedType: "education",
+      expected: /peer feedback|second language writing|L2 writing|writing revision|同儕回饋|第二語言|修訂品質/i,
+      forbidden: /student engagement|generative AI|artificial intelligence|cultural history|symbolic meaning|heritage transmission/i,
+    },
+    {
+      topic: "活性碳濾材對室內甲醛移除效率的影響因素",
+      expectedType: "chemical_substance",
+      expected: /activated carbon|formaldehyde|adsorption|indoor air quality|活性碳|甲醛|移除效率/i,
+      forbidden: /data governance|social impact|information retrieval/i,
+    },
+  ];
+
+  for (const item of cases) {
+    const validation = validateTopicForWorkflow(item.topic);
+    const directions = generateResearchDirections(validation);
+    const text = visibleText(directions);
+
+    assert.equal(validation.topicType, item.expectedType);
+    assertDirectionShape(directions, item.topic);
+    assert.match(text, item.expected);
+    assert.doesNotMatch(text, item.forbidden);
+    assert.equal(directions.every((direction) => direction.rawTopic === item.topic), true);
+  }
+});
