@@ -714,6 +714,69 @@ export function buildSourceIntentProfile(topic: string): SourceIntentProfile {
   const normalized = cleanText(topic);
   const conceptTerms = conceptTermsForTopic(topic);
 
+  if (/壽司|生魚片|sushi|sashimi/.test(normalized)) {
+    return {
+      coreConcepts: [
+        "sushi",
+        "壽司",
+        "sashimi",
+        "生魚片",
+        "food safety",
+        "食品安全",
+        "nutrition",
+        "營養",
+      ],
+      researchVariables: [
+        "restaurant",
+        "餐飲",
+        "raw fish",
+        "生食",
+        "foodborne illness",
+        "食源性疾病",
+        "consumer behavior",
+        "消費者行為",
+      ],
+      requiredConceptGroups: [
+        ["sushi", "壽司"],
+        ["sashimi", "生魚片", "food safety", "食品安全", "nutrition", "營養"],
+      ],
+      usefulContextTerms: ["restaurant", "餐飲", "review", "研究", "衛生", "衛生管理"],
+      excludeTerms: ["觀光行程", "旅遊", "料理教學", "購物", "廣告", "SEO"],
+    };
+  }
+
+  if (/\bbmw\b|寶馬/.test(normalized)) {
+    return {
+      coreConcepts: [
+        "BMW",
+        "BMW Group",
+        "寶馬",
+        "electric vehicle",
+        "電動車",
+        "luxury vehicle",
+        "豪華車",
+        "annual report",
+        "年報",
+      ],
+      researchVariables: [
+        "electrification",
+        "電動化",
+        "transition",
+        "轉型",
+        "competition",
+        "競爭",
+        "supply chain",
+        "供應鏈",
+      ],
+      requiredConceptGroups: [
+        ["BMW", "BMW Group", "寶馬"],
+        ["electric vehicle", "電動車", "electrification", "電動化", "annual report", "年報"],
+      ],
+      usefulContextTerms: ["strategy", "策略", "market", "市場", "sustainability", "永續"],
+      excludeTerms: ["dealer", "used car", "經銷商", "中古車", "二手車", "維修", "租車", "購車"],
+    };
+  }
+
   if (conceptTerms.concepts.length > 0) {
     return {
       coreConcepts: [
@@ -825,6 +888,8 @@ export function buildSourceIntentProfile(topic: string): SourceIntentProfile {
         "sugar",
         "caffeine",
         "health",
+        "public health",
+        "公共衛生",
       ],
       researchVariables: [
         "consumption",
@@ -836,6 +901,7 @@ export function buildSourceIntentProfile(topic: string): SourceIntentProfile {
         "caffeine",
         "obesity",
         "metabolic health",
+        "public health",
         "dental caries",
       ],
       requiredConceptGroups: [

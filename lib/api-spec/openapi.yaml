@@ -140,6 +140,78 @@ components:
         topic:
           type: string
           minLength: 1
+        originalTopic:
+          type: string
+        activeResearchTopic:
+          type: string
+        refinedTopic:
+          type: string
+        displayTitle:
+          type: string
+        canonicalTopicZh:
+          type: string
+        canonicalTopicEn:
+          type: string
+        querySeedZh:
+          type: array
+          items:
+            type: string
+        querySeedEn:
+          type: array
+          items:
+            type: string
+        subtopics:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              titleZh:
+                type: string
+              titleEn:
+                type: string
+              queryZh:
+                type: array
+                items:
+                  type: string
+              queryEn:
+                type: array
+                items:
+                  type: string
+              mustIncludeTerms:
+                type: array
+                items:
+                  type: string
+              excludeTerms:
+                type: array
+                items:
+                  type: string
+              expectedSourceTypes:
+                type: array
+                items:
+                  type: string
+        mustIncludeTerms:
+          type: array
+          items:
+            type: string
+        excludeTerms:
+          type: array
+          items:
+            type: string
+        domainHints:
+          type: array
+          items:
+            type: string
+        selectedResearchPlanId:
+          type: string
+        workflowId:
+          type: string
+        sourceMixProfile:
+          type: string
+        searchProfile:
+          type: string
+          enum: [quick, standard, deep]
         reportType:
           type: string
         audience:

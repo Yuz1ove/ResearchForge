@@ -5,26 +5,15 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { SourceSearchPipelineDiagnosticsProviderStatusItem } from './sourceSearchPipelineDiagnosticsProviderStatusItem';
 
 export interface SourceSearchPipelineDiagnostics {
-  sourceMixProfile?: string;
-  bucketResultCounts?: Record<string, number>;
-  timedOutProviders?: string[];
-  elapsedMs?: number;
-  diversityWarnings?: string[];
   retrieved_count: number;
   deduped_count: number;
   rejected_count: number;
   candidate_count: number;
   displayed_count: number;
   primary_candidate_count: number;
-  provider_status: Array<{
-    provider: string;
-    query: string;
-    ok: boolean;
-    result_count: number;
-    error_type: string | null;
-    error_message: string | null;
-  }>;
+  provider_status: SourceSearchPipelineDiagnosticsProviderStatusItem[];
   warnings: string[];
 }

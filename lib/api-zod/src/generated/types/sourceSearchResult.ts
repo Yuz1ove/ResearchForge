@@ -12,8 +12,8 @@ import type { SearchIntentQuerySet } from './searchIntentQuerySet';
 import type { SearchIntentSummary } from './searchIntentSummary';
 import type { SearchRelevanceDebug } from './searchRelevanceDebug';
 import type { SearchTrace } from './searchTrace';
-import type { SourceSearchPipelineDiagnostics } from './sourceSearchPipelineDiagnostics';
 import type { SourceRecord } from './sourceRecord';
+import type { SourceSearchPipelineDiagnostics } from './sourceSearchPipelineDiagnostics';
 import type { SourceSearchResultLlmStatus } from './sourceSearchResultLlmStatus';
 
 export interface SourceSearchResult {

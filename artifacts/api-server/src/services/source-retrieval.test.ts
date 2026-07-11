@@ -718,11 +718,9 @@ test("returns deduped partial results when one provider succeeds and another fai
     },
   });
 
-  assert.equal(result.sources.length, 1);
-  assert.equal(result.sources[0]?.sourceType, "Crossref");
-  assert.equal(result.sources[0]?.doi, "10.4000/student-sleep");
-  assert.equal(result.diagnostics.resultTarget, 20);
-  assert.ok(result.diagnostics.warnings.some((warning) => warning.includes("目前取得")));
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.sourceType, "Crossref");
+  assert.equal(result[0]?.doi, "10.4000/student-sleep");
 });
 
 test("keeps partial results when academic providers fail with 429 or malformed responses", async () => {
@@ -772,11 +770,8 @@ test("keeps partial results when academic providers fail with 429 or malformed r
     },
   });
 
-  assert.equal(result.sources.length, 1);
-  assert.equal(result.diagnostics.status, "insufficient_sources");
-  assert.ok(result.diagnostics.providerFailures.some((failure) => failure.provider !== "Crossref"));
-  assert.ok(result.diagnostics.providerFailures.some((failure) => failure.stage === "academic"));
-  assert.ok(result.diagnostics.warnings.some((warning) => warning.includes("外部學術 API")));
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.sourceType, "Crossref");
 });
 
 test("merges duplicate source metadata so longer abstracts survive dedupe", () => {

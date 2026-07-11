@@ -13,9 +13,8 @@ import type { SearchIntentSourceSearchResultLlmStatus } from './searchIntentSour
 import type { SearchIntentSummary } from './searchIntentSummary';
 import type { SearchRelevanceDebug } from './searchRelevanceDebug';
 import type { SearchTrace } from './searchTrace';
-import type { SourceSearchPipelineDiagnostics } from './sourceSearchPipelineDiagnostics';
 import type { SourceRecord } from './sourceRecord';
-import type { SourceSearchDiagnostics } from './sourceSearchDiagnostics';
+import type { SourceSearchPipelineDiagnostics } from './sourceSearchPipelineDiagnostics';
 
 export interface SearchIntentSourceSearchResult {
   ok: boolean;
@@ -32,9 +31,8 @@ export interface SearchIntentSourceSearchResult {
   planner: SearchIntentPlan;
   relevance_debug?: SearchRelevanceDebug[];
   searchTrace: SearchTrace;
-  diagnostics: SourceSearchPipelineDiagnostics;
+  diagnostics?: SourceSearchPipelineDiagnostics;
   llm_status: SearchIntentSourceSearchResultLlmStatus;
   keyword_expansion: KeywordExpansionResult;
   groups: KeywordSourceGroup[];
-  diagnostics?: SourceSearchDiagnostics;
 }

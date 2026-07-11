@@ -6,14 +6,12 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { KeywordSourceGroupProvider } from './keywordSourceGroupProvider';
-import type { KeywordSourceGroupStage } from './keywordSourceGroupStage';
 import type { SourceRecord } from './sourceRecord';
 
 export interface KeywordSourceGroup {
   ok: boolean;
   provider: KeywordSourceGroupProvider;
   query: string;
-  stage: KeywordSourceGroupStage;
   results: SourceRecord[];
   error_type: string | null;
   error_message: string | null;

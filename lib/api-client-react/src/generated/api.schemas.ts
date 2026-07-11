@@ -9,6 +9,26 @@ export interface HealthStatus {
   status: string;
 }
 
+export type SearchSourcesRequestSubtopicsItem = {
+  id?: string;
+  titleZh?: string;
+  titleEn?: string;
+  queryZh?: string[];
+  queryEn?: string[];
+  mustIncludeTerms?: string[];
+  excludeTerms?: string[];
+  expectedSourceTypes?: string[];
+};
+
+export type SearchSourcesRequestSearchProfile = typeof SearchSourcesRequestSearchProfile[keyof typeof SearchSourcesRequestSearchProfile];
+
+
+export const SearchSourcesRequestSearchProfile = {
+  quick: 'quick',
+  standard: 'standard',
+  deep: 'deep',
+} as const;
+
 /**
  * Provide either `query` for direct keyword search or `topic` with generator context.
  */
@@ -17,35 +37,22 @@ export interface SearchSourcesRequest {
   query?: string;
   /** @minLength 1 */
   topic?: string;
-  /** @minLength 1 */
   originalTopic?: string;
-  /** @minLength 1 */
+  activeResearchTopic?: string;
   refinedTopic?: string;
-  /** @minLength 1 */
   displayTitle?: string;
-  /** @minLength 1 */
   canonicalTopicZh?: string;
-  /** @minLength 1 */
   canonicalTopicEn?: string;
   querySeedZh?: string[];
   querySeedEn?: string[];
-  subtopics?: Array<{
-    id: string;
-    titleZh: string;
-    titleEn?: string;
-    queryZh?: string[];
-    queryEn?: string[];
-    mustIncludeTerms?: string[];
-    excludeTerms?: string[];
-    expectedSourceTypes?: string[];
-  }>;
+  subtopics?: SearchSourcesRequestSubtopicsItem[];
   mustIncludeTerms?: string[];
   excludeTerms?: string[];
   domainHints?: string[];
   selectedResearchPlanId?: string;
   workflowId?: string;
-  searchProfile?: 'quick' | 'standard' | 'deep';
   sourceMixProfile?: string;
+  searchProfile?: SearchSourcesRequestSearchProfile;
   reportType?: string;
   audience?: string;
   sourceMode?: string;
@@ -185,74 +192,8 @@ export interface SourceRecord {
   missingRequiredFacets?: string[] | null;
   evidenceGrounding?: SourceRecordEvidenceGrounding;
   sourceRelevanceReasonZhTw?: string | null;
-  llmSummaryZhTw?: string | null;
-  readableSummaryZhTW?: string | null;
-  summarySourceType?: 'abstract' | 'snippet' | 'fulltext' | 'metadataFallback' | null;
-  summaryConfidence?: 'high' | 'medium' | 'low' | null;
-  relevanceReasonZhTW?: string | null;
-  summaryWarnings?: string[] | null;
-  originalAbstract?: string | null;
-  originalSnippet?: string | null;
-  extractedText?: string | null;
-  llmSummaryStatus?:
-    | 'success'
-    | 'timeout'
-    | 'quota_exceeded'
-    | 'failed'
-    | 'skipped'
-    | 'metadata-only'
-    | 'fetch-failed'
-    | 'llm-failed'
-    | 'fallback'
-    | null;
-  summaryStructuredStatus?:
-    | 'success'
-    | 'unavailable'
-    | 'invalid_input'
-    | 'insufficient_sources'
-    | 'error'
-    | null;
-  summaryProvider?: string | null;
-  summaryModel?: string | null;
-  summaryStatus?:
-    | 'success'
-    | 'timeout'
-    | 'quota_exceeded'
-    | 'failed'
-    | 'skipped'
-    | 'metadata-only'
-    | 'fetch-failed'
-    | 'llm-failed'
-    | 'fallback'
-    | null;
-  summaryFallbackUsed?: boolean | null;
-  summaryReason?: string | null;
-  summaryMessage?: string | null;
   shouldShowInMainList?: boolean | null;
   shouldRecommendAccept?: boolean | null;
-  workflowId?: string | null;
-  topic?: string | null;
-  normalizedTopic?: string | null;
-  topicHash?: string | null;
-  queryPlanHash?: string | null;
-  authorityScore?: number | null;
-  summaryUsabilityScore?: number | null;
-  metadataCompletenessScore?: number | null;
-  recencyScore?: number | null;
-  languageFitScore?: number | null;
-  finalScore?: number | null;
-  classification?:
-    | 'primary'
-    | 'review'
-    | 'low_quality'
-    | 'off_topic'
-    | 'trusted_but_off_topic'
-    | 'stale_topic'
-    | 'stale_workflow'
-    | null;
-  rejectReason?: string | null;
-  matchedTerms?: string[] | null;
-  driftTerms?: string[] | null;
   topicRelevance?: number | null;
   evidenceQuality?: number | null;
   metadataCompleteness?: number | null;
@@ -262,8 +203,6 @@ export interface SourceRecord {
   isPrimaryEvidence?: boolean | null;
   rejectionReason?: string | null;
   recommendation?: string | null;
-  lowConfidence?: boolean | null;
-  needsReview?: boolean | null;
 }
 
 export type SourceSearchResultLlmStatus = typeof SourceSearchResultLlmStatus[keyof typeof SourceSearchResultLlmStatus];
@@ -417,26 +356,23 @@ export interface SearchTrace {
   sourceDecisions: SourceDecisionTrace[];
 }
 
+export type SourceSearchPipelineDiagnosticsProviderStatusItem = {
+  provider: string;
+  query: string;
+  ok: boolean;
+  result_count: number;
+  error_type: string | null;
+  error_message: string | null;
+};
+
 export interface SourceSearchPipelineDiagnostics {
-  sourceMixProfile?: string;
-  bucketResultCounts?: Record<string, number>;
-  timedOutProviders?: string[];
-  elapsedMs?: number;
-  diversityWarnings?: string[];
   retrieved_count: number;
   deduped_count: number;
   rejected_count: number;
   candidate_count: number;
   displayed_count: number;
   primary_candidate_count: number;
-  provider_status: Array<{
-    provider: string;
-    query: string;
-    ok: boolean;
-    result_count: number;
-    error_type: string | null;
-    error_message: string | null;
-  }>;
+  provider_status: SourceSearchPipelineDiagnosticsProviderStatusItem[];
   warnings: string[];
 }
 
@@ -487,7 +423,7 @@ export interface SearchIntentSourceSearchResult {
   planner: SearchIntentPlan;
   relevance_debug?: SearchRelevanceDebug[];
   searchTrace: SearchTrace;
-  diagnostics: SourceSearchPipelineDiagnostics;
+  diagnostics?: SourceSearchPipelineDiagnostics;
   llm_status: SearchIntentSourceSearchResultLlmStatus;
   keyword_expansion: KeywordExpansionResult;
   groups: KeywordSourceGroup[];
