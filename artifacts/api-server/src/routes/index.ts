@@ -24,5 +24,11 @@ router.use(researchToolsRouter);
 router.use(researchRouter);
 router.use(researchGroundingJobsRouter);
 router.use(llmRouter);
+router.use((_req, res) => {
+  res.status(404).json({
+    code: "NOT_FOUND",
+    message: "API route not found.",
+  });
+});
 
 export default router;

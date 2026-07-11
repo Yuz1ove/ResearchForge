@@ -10,6 +10,7 @@ import {
   type SourceProviderConfig,
   type SourceProviderName,
 } from "./source-provider-config";
+import { logger } from "../lib/logger";
 
 const MAX_RESULTS = 120;
 const PROVIDER_RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
@@ -39,10 +40,18 @@ export type SourceSearchErrorCode =
 
 export type SourceFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
+export interface SourceSearchTelemetryContext {
+  requestId: string;
+  workflowId: string;
+  jobId: string;
+  topicHash: string;
+}
+
 export interface SourceSearchOptions {
   fetchImpl?: SourceFetch;
   providerConfigs?: Partial<Record<AcademicSourceProvider, SourceProviderConfig>>;
   providers?: AcademicSourceProvider[];
+  telemetry?: SourceSearchTelemetryContext;
   /**
    * A topic-anchored planner owns query repair. Its provider calls must not
    * silently retry with a shortened query that can discard the topic anchor.
@@ -982,6 +991,68 @@ function providerErrorResult(
   };
 }
 
+function safeProviderErrorMessage(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return value
+    .replace(/(api[_-]?key|authorization|bearer)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+}
+
+function providerHttpStatus(result: SourceProviderSearchResult): number | null {
+  if (result.ok) return 200;
+  const match = result.error_message?.match(/HTTP\s+(\d{3})/i);
+  return match ? Number(match[1]) : null;
+}
+
+function logProviderAttempt(
+  startedAt: number,
+  result: SourceProviderSearchResult,
+  telemetry: SourceSearchTelemetryContext | undefined,
+): void {
+  if (!telemetry) return;
+  const durationMs = Math.max(0, Date.now() - startedAt);
+  const status = result.ok
+    ? result.results.length > 0
+      ? "success"
+      : "empty"
+    : result.error_type === "timeout"
+      ? "timeout"
+      : "error";
+  const errorCode = result.error_type
+    ? result.error_type === "timeout"
+      ? "PROVIDER_TIMEOUT"
+      : result.error_type === "schema_error"
+        ? "PROVIDER_PARSE_ERROR"
+        : "PROVIDER_HTTP_ERROR"
+    : null;
+  logger.info(
+    {
+      event: "research_grounding.provider_attempt",
+      route: "/api/research-grounding-jobs",
+      stage: "provider_search",
+      ...telemetry,
+      provider: result.provider,
+      providerAttempt: 1,
+      queryUsed: result.query,
+      startedAt: new Date(startedAt).toISOString(),
+      completedAt: new Date().toISOString(),
+      durationMs,
+      status,
+      httpStatus: providerHttpStatus(result),
+      resultCount: result.results.length,
+      retryable: Boolean(
+        result.error_type &&
+          ["timeout", "rate_limited", "server_error", "api-failure"].includes(result.error_type),
+      ),
+      errorCode,
+      errorMessage: safeProviderErrorMessage(result.error_message),
+    },
+    "Research grounding provider attempt completed",
+  );
+}
+
 export async function searchSourceProvider(
   provider: AcademicSourceProvider,
   query: string,
@@ -993,10 +1064,12 @@ export async function searchSourceProvider(
   const cacheKey = normalizedProviderCacheKey(provider, trimmedQuery, config);
   const cached = providerSearchCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
-    return cloneProviderResult(cached.result);
+    const result = cloneProviderResult(cached.result);
+    logProviderAttempt(startedAt, result, options?.telemetry);
+    return result;
   }
   if (!trimmedQuery) {
-    return {
+    const result: SourceProviderSearchResult = {
       ok: true,
       provider,
       query: trimmedQuery,
@@ -1010,11 +1083,13 @@ export async function searchSourceProvider(
       latency_ms: 0,
       provider_health: providerHealthSnapshot(provider),
     };
+    logProviderAttempt(startedAt, result, options?.telemetry);
+    return result;
   }
 
   const health = await providerHealthStore.get(provider);
   if (health.status === "down") {
-    return {
+    const result: SourceProviderSearchResult = {
       ok: false,
       provider,
       query: trimmedQuery,
@@ -1028,6 +1103,8 @@ export async function searchSourceProvider(
       latency_ms: Date.now() - startedAt,
       provider_health: health,
     };
+    logProviderAttempt(startedAt, result, options?.telemetry);
+    return result;
   }
 
   try {
@@ -1057,6 +1134,7 @@ export async function searchSourceProvider(
       expiresAt: Date.now() + PROVIDER_CACHE_TTL_MS,
       result: cloneProviderResult(result),
     });
+    logProviderAttempt(startedAt, result, options?.telemetry);
     return result;
   } catch (error) {
     const latencyMs = Date.now() - startedAt;
@@ -1072,6 +1150,7 @@ export async function searchSourceProvider(
         result: cloneProviderResult(result),
       });
     }
+    logProviderAttempt(startedAt, result, options?.telemetry);
     return result;
   }
 }

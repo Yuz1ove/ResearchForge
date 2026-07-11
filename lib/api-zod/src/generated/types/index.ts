@@ -7,6 +7,10 @@
  */
 
 export * from './errorResponse';
+export * from './groundingJob';
+export * from './groundingJobErrorResponse';
+export * from './groundingJobErrorResponseCode';
+export * from './groundingJobErrorResponseStage';
 export * from './healthStatus';
 export * from './keywordExpansionResult';
 export * from './keywordExpansionResultLlmStatus';
@@ -14,6 +18,10 @@ export * from './keywordSourceGroup';
 export * from './keywordSourceGroupProvider';
 export * from './keywordSourceSearchResult';
 export * from './keywordSourceSearchResultLlmStatus';
+export * from './researchGroundingJobCreateRequest';
+export * from './researchGroundingJobCreateRequestBilingualQueries';
+export * from './researchGroundingJobCreateRequestSearchProfile';
+export * from './researchGroundingJobCreateResponse';
 export * from './searchIntentPlan';
 export * from './searchIntentPlanPlannerStatus';
 export * from './searchIntentQuerySet';

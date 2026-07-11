@@ -137,6 +137,7 @@ import {
   fetchResearchGroundingJob,
   groundedEvidenceCardsForAcceptedSources,
   GROUNDING_STATUS_LABELS,
+  ResearchGroundingApiError,
   groundingJobSourceContractMismatch,
   groundingJobToSourceRecords,
   queryPlanHashFromJob,
@@ -543,10 +544,54 @@ type SourceWorkflowLock = {
 type GroundingRequestState =
   | "idle"
   | "debouncing"
-  | "creating"
-  | "polling"
-  | "done"
-  | "error";
+  | "creating_job"
+  | "polling_job"
+  | "searching_providers"
+  | "showing_partial_candidates"
+  | "ready_for_review"
+  | "no_results_after_expansion"
+  | "provider_partial_failure"
+  | "all_providers_failed"
+  | "pipeline_failed"
+  | "job_create_failed"
+  | "job_poll_failed"
+  | "cancelled";
+
+function groundingRequestIsLoading(state: GroundingRequestState): boolean {
+  return (
+    state === "creating_job" ||
+    state === "polling_job" ||
+    state === "searching_providers" ||
+    state === "showing_partial_candidates"
+  );
+}
+
+function groundingRequestStateForJob(job: GroundingJob): GroundingRequestState {
+  const providerProgress = job.groundingDiagnostics?.providerProgress ?? [];
+  const providerSucceeded = providerProgress.some((provider) =>
+    ["success", "returned", "empty", "background"].includes(provider.status),
+  );
+  const providerFailed = providerProgress.some((provider) =>
+    ["timeout", "error"].includes(provider.status),
+  );
+  const allProvidersFailed =
+    providerProgress.length > 0 &&
+    !providerSucceeded &&
+    providerProgress.every((provider) => ["timeout", "error"].includes(provider.status));
+
+  if (allProvidersFailed) return "all_providers_failed";
+  if (job.status === "failed") return "pipeline_failed";
+  if (
+    job.status === "no_results_after_expansion" ||
+    job.status === "no_sources_after_fallback"
+  ) {
+    return "no_results_after_expansion";
+  }
+  if (providerSucceeded && providerFailed) return "provider_partial_failure";
+  if (job.status === "showing_partial_candidates") return "showing_partial_candidates";
+  if (groundingJobIsTerminal(job)) return "ready_for_review";
+  return "searching_providers";
+}
 
 type GroundingJobMeta = {
   jobId: string;
@@ -1167,7 +1212,9 @@ function groundingPlanFromDirection(
   const split = splitQueriesByLanguage(direction.bilingualQueries);
   return {
     researchTopic: direction.researchQuestionZh,
-    displayTitle: direction.displayTitleZh,
+    // A direction label (for example, "地理特徵") is a search aid, not the
+    // report title. Preserve the user's topic in every downstream UI surface.
+    displayTitle: rawTopic.trim(),
     normalizedTopic: direction.researchQuestionZh,
     researchQuestion: direction.researchQuestionZh,
     querySeedZh: Array.from(new Set([direction.searchQueryZh, ...split.zh])),
@@ -2025,6 +2072,9 @@ function buildGroundingJobFromSnapshot(
     jobId: snapshot.groundingJobId,
     workflowId: snapshot.workflowId,
     topicHash: snapshot.topicHash,
+    requestId: `snapshot-${snapshot.workflowId}`,
+    attemptId: `snapshot-${snapshot.runId}`,
+    revision: 1,
     originalTopic: snapshot.researchTopic,
     normalizedTopic: snapshot.researchTopic,
     status:
@@ -2041,6 +2091,9 @@ function buildGroundingJobFromSnapshot(
     warnings: snapshot.warnings,
     createdAt: snapshot.updatedAt,
     updatedAt: snapshot.updatedAt,
+    expiresAt: new Date(
+      Date.parse(snapshot.updatedAt) + 24 * 60 * 60 * 1_000,
+    ).toISOString(),
   };
 }
 
@@ -3909,15 +3962,23 @@ function SearchStepPanel({
   onBack: () => void;
 }) {
   const status = groundingJob?.status ?? "queued";
+  const isCreateFailure = groundingRequestState === "job_create_failed";
+  const isPollFailure = groundingRequestState === "job_poll_failed";
+  const isProviderFailure = groundingRequestState === "all_providers_failed";
+  const isPipelineFailure = groundingRequestState === "pipeline_failed";
   const backendStatusLabel =
-    groundingRequestState === "creating"
+    groundingRequestState === "creating_job"
         ? GROUNDING_STATUS_LABELS.queued
-        : groundingRequestState === "error"
-          ? "資料搜尋失敗"
+        : isCreateFailure
+          ? "無法建立搜尋任務"
+          : isPollFailure
+            ? "搜尋任務狀態讀取失敗"
+            : isProviderFailure
+              ? "所有已嘗試的來源服務均失敗"
+              : isPipelineFailure
+                ? "資料搜尋任務執行失敗"
           : GROUNDING_STATUS_LABELS[status];
-  const isLoading =
-    groundingRequestState === "creating" ||
-    groundingRequestState === "polling";
+  const isLoading = groundingRequestIsLoading(groundingRequestState);
   const groundingDiagnostics = groundingJob?.groundingDiagnostics as
     | GroundingPipelineDiagnosticsState
     | undefined;
@@ -3997,7 +4058,7 @@ function SearchStepPanel({
   const uiWorkflowStatus =
     isLoading
       ? "searching"
-      : groundingRequestState === "error" || groundingJob?.status === "failed"
+      : isCreateFailure || isPollFailure || isProviderFailure || isPipelineFailure
         ? "failed"
         : canReview
           ? reviewableSourceCount >= 8
@@ -4013,7 +4074,7 @@ function SearchStepPanel({
     ready_for_review: "已找到可審查來源",
     partial: "來源偏少但可審查",
     needs_query_revision: "有結果但不足",
-    failed: "所有 provider 失敗或 0 結果",
+    failed: "資料搜尋失敗",
   };
   const statusLabel =
     statusLabelMap[uiWorkflowStatus] ??
@@ -4029,8 +4090,14 @@ function SearchStepPanel({
     groundingJob?.status === "no_sources_after_fallback" ||
     groundingDiagnostics?.finalUiState === "no_sources_after_fallback";
   const userFacingStatusMessage =
-    groundingRequestState === "error"
-      ? "資料搜尋任務建立失敗，請稍後再試或調整主題後重新搜尋。"
+    isCreateFailure
+      ? "無法建立搜尋任務；尚未開始呼叫 OpenAlex 或 Crossref。請確認 API 連線後重新搜尋。"
+      : isPollFailure
+        ? "搜尋任務狀態讀取失敗；任務可能仍在執行，請稍後重新讀取或重新搜尋。"
+        : isProviderFailure
+          ? "所有已嘗試的來源服務均失敗，請查看 provider diagnostics 後重試；逾時不會被視為 0 筆結果。"
+          : isPipelineFailure
+            ? groundingError ?? "搜尋任務執行失敗，請稍後重試。"
       : isAcademicRetrying
         ? "正在延伸學術查詢，重新搜尋期刊、論文與 DOI 來源..."
       : isSearchingFallback
@@ -4081,7 +4148,13 @@ function SearchStepPanel({
             return `${provider.provider}：${providerStatusLabel(provider.status)}，${queryCount} queries，raw ${rawCount} / normalized ${provider.normalizedCount ?? provider.resultCount}`;
           })
           .join(" / ")
-      : "OpenAlex / Crossref 搜尋中，CORE 背景補強";
+      : isCreateFailure
+        ? "尚未開始 provider 搜尋（任務建立失敗）"
+        : isPollFailure
+          ? "尚未取得 provider 狀態（輪詢失敗）"
+          : groundingRequestState === "creating_job"
+            ? "正在建立搜尋任務，provider 尚未開始"
+            : "尚未取得 provider 執行紀錄";
   const providerHealthLabel =
     groundingDiagnostics?.providerHealth
       ?.filter((health) => health.status !== "healthy")
@@ -5995,6 +6068,14 @@ export function Generator() {
     workflowId: null,
     topicHash: null,
   });
+  const groundingCreateAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(
+    () => () => {
+      groundingCreateAbortRef.current?.abort();
+    },
+    [],
+  );
 
   const updateInput = (key: ReportInputStringKey, value: string) => {
     setInput((prev) => {
@@ -6392,6 +6473,13 @@ export function Generator() {
     isSearchingSources,
     sourceCount: currentWorkflowSources.length,
     sourceSearchStatus,
+    groundingRequestState:
+      groundingRequestState === "job_create_failed" ||
+      groundingRequestState === "job_poll_failed" ||
+      groundingRequestState === "all_providers_failed" ||
+      groundingRequestState === "no_results_after_expansion"
+        ? groundingRequestState
+        : undefined,
     sourceSearchMessage,
     backendMessage: searchRequestDebug?.backendMessage ?? "",
   });
@@ -6488,7 +6576,7 @@ export function Generator() {
     setTopicExpansionMessage(message);
     setGroundingJobMeta(null);
     setGroundingJob(result);
-    setGroundingRequestState("done");
+    setGroundingRequestState(groundingRequestStateForJob(result));
     setGroundingError(null);
     setSources([]);
     setSourceWorkflowId(null);
@@ -6802,7 +6890,7 @@ export function Generator() {
           ? ["topic_input"]
           : [],
     );
-    setGroundingRequestState("done");
+    setGroundingRequestState("ready_for_review");
     setSourceWorkflowId(resumeLock.workflowId);
     setSourceWorkspaceFingerprint(resumeLock.topicHash);
     setSourceQueryPlanHash(resumeLock.queryPlanHash);
@@ -6866,7 +6954,9 @@ export function Generator() {
         topicHash: snapshot.topicHash,
       });
       setGroundingJob(snapshotJob);
-      setGroundingRequestState(snapshotTerminal ? "done" : "polling");
+      setGroundingRequestState(
+        snapshotTerminal ? groundingRequestStateForJob(snapshotJob) : "polling_job",
+      );
       setGroundingError(null);
       setGeneratorRunId(snapshot.runId);
       setStepHistory(snapshot.stepHistory);
@@ -6948,7 +7038,7 @@ export function Generator() {
         }
         const resultTerminal = groundingJobIsTerminal(result);
         setGroundingRequestState(
-          result.status === "failed" ? "error" : resultTerminal ? "done" : "polling",
+          resultTerminal ? groundingRequestStateForJob(result) : "polling_job",
         );
         setGroundingError(
           result.status === "failed"
@@ -7039,10 +7129,14 @@ export function Generator() {
 
     let cancelled = false;
     let timeoutId: number | null = null;
+    const pollAbortController = new AbortController();
 
     const poll = async () => {
       try {
-        const result = await fetchResearchGroundingJob(groundingJobMeta.jobId);
+        const result = await fetchResearchGroundingJob(
+          groundingJobMeta.jobId,
+          pollAbortController.signal,
+        );
         if (cancelled) return;
         const expectedWorkflowIds = new Set(
           [activeRunContextRef.current.workflowId, groundingJobMeta.workflowId].filter(
@@ -7095,7 +7189,7 @@ export function Generator() {
 
         const terminal = groundingJobIsTerminal(result);
         if (terminal) {
-          setGroundingRequestState(result.status === "failed" ? "error" : "done");
+          setGroundingRequestState(groundingRequestStateForJob(result));
           setIsSearchingSources(false);
           if (result.status === "failed") {
             setSourceSearchStatus("error");
@@ -7148,7 +7242,7 @@ export function Generator() {
           return;
         }
 
-        setGroundingRequestState("polling");
+        setGroundingRequestState(groundingRequestStateForJob(result));
         setSourceSearchStatus("loading");
         setSourceSearchMessage(GROUNDING_STATUS_LABELS[result.status]);
         timeoutId = window.setTimeout(() => {
@@ -7156,13 +7250,14 @@ export function Generator() {
         }, 1200);
       } catch (error) {
         if (cancelled) return;
+        if (error instanceof DOMException && error.name === "AbortError") return;
         const message =
           error instanceof Error ? error.message : "Research grounding job polling failed.";
-        setGroundingRequestState("error");
-        setGroundingError(message);
+        setGroundingRequestState("job_poll_failed");
+        setGroundingError(`搜尋任務狀態讀取失敗：${message}`);
         setIsSearchingSources(false);
         setSourceSearchStatus("error");
-        setSourceSearchMessage("輪詢 research grounding job 失敗，請稍後再試。");
+        setSourceSearchMessage("搜尋任務狀態讀取失敗，請稍後再試。");
       }
     };
 
@@ -7170,13 +7265,14 @@ export function Generator() {
 
     return () => {
       cancelled = true;
+      pollAbortController.abort();
       if (timeoutId !== null) window.clearTimeout(timeoutId);
     };
   }, [generatorRunId, groundingJobMeta, sources.length, workspaceResume?.loaded]);
 
   useEffect(() => {
     if (!groundingJobMeta?.jobId || !generatorRunId) return;
-    if (groundingRequestState !== "creating" && groundingRequestState !== "polling") return;
+    if (!groundingRequestIsLoading(groundingRequestState)) return;
     if (activeStep === "topic") {
       setActiveStep("search");
     }
@@ -7360,7 +7456,12 @@ export function Generator() {
 
     const workflowId = createClientWorkflowId();
     const runId = createClientRunId();
+    const requestId = createClientWorkflowId();
+    const attemptId = createClientRunId();
     const topicHash = reportTopicFingerprint(nextSubmittedTopic);
+    groundingCreateAbortRef.current?.abort();
+    const createAbortController = new AbortController();
+    groundingCreateAbortRef.current = createAbortController;
     clearStaleGeneratorSessionStorage(workflowId);
 
     clearStepTransition();
@@ -7387,7 +7488,7 @@ export function Generator() {
     setActiveStep("search");
     setGroundingJobMeta(null);
     setGroundingJob(null);
-    setGroundingRequestState("creating");
+    setGroundingRequestState("creating_job");
     setGroundingError(null);
     setSources([]);
     setSourceWorkflowId(workflowId);
@@ -7396,7 +7497,7 @@ export function Generator() {
     setSearchRequestDebug(null);
     setKeywordSearchDebug(null);
     setSourceSearchStatus("loading");
-    setSourceSearchMessage(GROUNDING_STATUS_LABELS.queued);
+    setSourceSearchMessage("正在建立搜尋任務，provider 尚未開始。");
     setGenerateStatus("idle");
     setGenerateErrorMessage(null);
     setIsGenerating(false);
@@ -7421,6 +7522,8 @@ export function Generator() {
     try {
       const response = await createResearchGroundingJob({
         workflowId,
+        requestId,
+        attemptId,
         rawUserTopic: nextSubmittedTopic,
         originalTopic: nextSubmittedTopic,
         topic: nextSubmittedTopic,
@@ -7438,12 +7541,15 @@ export function Generator() {
         audience: input.targetAudience || input.academicLevel,
         searchProfile: input.researchDepth,
         debugTrace: true,
-      });
+      }, createAbortController.signal);
+      if (groundingCreateAbortRef.current === createAbortController) {
+        groundingCreateAbortRef.current = null;
+      }
       if (runId !== activeRunContextRef.current.runId) return;
       if (workflowId !== activeRunContextRef.current.workflowId) return;
       if (topicHash !== activeRunContextRef.current.topicHash) return;
       setGroundingJobMeta(response);
-      setGroundingRequestState("polling");
+      setGroundingRequestState("polling_job");
       setSourceWorkflowId(response.workflowId);
       setSourceWorkspaceFingerprint(response.topicHash);
       setSourceQueryPlanHash(response.topicHash);
@@ -7461,17 +7567,21 @@ export function Generator() {
         mode: "replace",
       });
     } catch (error) {
+      if (createAbortController.signal.aborted) return;
       if (runId !== activeRunContextRef.current.runId) return;
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Research grounding job 建立失敗。";
+      const message = error instanceof Error ? error.message : "無法建立搜尋任務。";
       console.warn("[ResearchForge] research grounding job creation failed", message);
-      setGroundingRequestState("error");
-      setGroundingError("資料搜尋任務建立失敗，請稍後再試或調整主題後重新搜尋。");
+      setGroundingJobMeta(null);
+      setGroundingJob(null);
+      setGroundingRequestState("job_create_failed");
+      setGroundingError(
+        error instanceof ResearchGroundingApiError
+          ? `無法建立搜尋任務：${message}`
+          : "無法建立搜尋任務，請確認 API 連線後重新搜尋。",
+      );
       setIsSearchingSources(false);
       setSourceSearchStatus("error");
-      setSourceSearchMessage("無法建立資料搜尋任務，請稍後再試。");
+      setSourceSearchMessage("無法建立搜尋任務；provider 尚未開始。");
     }
   };
 
@@ -8292,7 +8402,7 @@ export function Generator() {
     }
     const selected = Object.freeze({ ...direction });
     setSelectedDirection(selected);
-    setDisplayTitle(selected.displayTitleZh);
+    setDisplayTitle(draftTopicValue);
     setTopicWorkflowStatus("ready");
     setTopicExpansionMessage(`已選擇查詢輔助方向：${selected.researchQuestionZh}`);
     setTitleSemanticComparison(null);
@@ -8333,10 +8443,10 @@ export function Generator() {
       setSelectedDirection(Object.freeze({ ...card.researchDirection }));
       setTopicWorkflowStatus("ready");
     }
-    setDisplayTitle(card.researchDirection?.displayTitleZh ?? refinedTopic);
+    setDisplayTitle(draftTopicValue);
     void submitGroundingTopic({
       researchTopicOverride: refinedTopic,
-      displayTitleOverride: card.researchDirection?.displayTitleZh ?? refinedTopic,
+      displayTitleOverride: draftTopicValue,
       forceRerun: true,
     });
   };

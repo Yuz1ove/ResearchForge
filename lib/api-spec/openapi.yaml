@@ -14,6 +14,8 @@ tags:
     description: Source retrieval operations
   - name: topics
     description: Topic understanding operations
+  - name: grounding
+    description: Durable research grounding job operations
 paths:
   /healthz:
     get:
@@ -121,6 +123,79 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /research-grounding-jobs:
+    post:
+      operationId: createResearchGroundingJob
+      tags: [grounding]
+      summary: Create and complete a durable research grounding job
+      description: Persists the job before executing the bounded grounding pipeline. The response contains the durable job identity and final or in-progress status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResearchGroundingJobCreateRequest"
+      responses:
+        "200":
+          description: Durable grounding job created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResearchGroundingJobCreateResponse"
+        "400":
+          description: Invalid grounding request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJobErrorResponse"
+        "500":
+          description: Grounding job creation failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJobErrorResponse"
+        "503":
+          description: Durable store is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJobErrorResponse"
+  /research-grounding-jobs/{jobId}:
+    get:
+      operationId: getResearchGroundingJob
+      tags: [grounding]
+      summary: Read a durable research grounding job
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Grounding job state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJob"
+        "404":
+          description: Grounding job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJobErrorResponse"
+        "500":
+          description: Grounding job polling failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJobErrorResponse"
+        "503":
+          description: Durable store is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJobErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -1086,6 +1161,148 @@ components:
         - keyword_expansion
         - groups
         - sources
+    ResearchGroundingJobCreateRequest:
+      type: object
+      properties:
+        workflowId:
+          type: string
+          minLength: 1
+        requestId:
+          type: string
+        attemptId:
+          type: string
+        topic:
+          type: string
+          minLength: 1
+        rawUserTopic:
+          type: string
+        originalTopic:
+          type: string
+        normalizedTopic:
+          type: string
+        selectedDomain:
+          type: string
+        researchQuestion:
+          type: string
+        bilingualQueries:
+          type: object
+          properties:
+            zh:
+              type: array
+              items:
+                type: string
+            en:
+              type: array
+              items:
+                type: string
+          required: [zh, en]
+        querySeedZh:
+          type: array
+          items:
+            type: string
+        querySeedEn:
+          type: array
+          items:
+            type: string
+        excludeTerms:
+          type: array
+          items:
+            type: string
+        reportType:
+          type: string
+        audience:
+          type: string
+        searchProfile:
+          type: string
+          enum: [standard, deep]
+        debugTrace:
+          type: boolean
+      required: [workflowId, topic]
+    ResearchGroundingJobCreateResponse:
+      type: object
+      properties:
+        jobId:
+          type: string
+        workflowId:
+          type: string
+        topicHash:
+          type: string
+        requestId:
+          type: string
+        attemptId:
+          type: string
+        status:
+          type: string
+      required: [jobId, workflowId, topicHash, requestId, attemptId, status]
+    GroundingJob:
+      type: object
+      additionalProperties: true
+      properties:
+        jobId:
+          type: string
+        workflowId:
+          type: string
+        topicHash:
+          type: string
+        requestId:
+          type: string
+        attemptId:
+          type: string
+        revision:
+          type: integer
+          minimum: 1
+        originalTopic:
+          type: string
+        normalizedTopic:
+          type: string
+        status:
+          type: string
+        progress:
+          type: number
+          minimum: 0
+          maximum: 100
+        warnings:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+      required: [jobId, workflowId, topicHash, requestId, attemptId, revision, originalTopic, normalizedTopic, status, progress, warnings, createdAt, updatedAt, expiresAt]
+    GroundingJobErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+          enum:
+            - INVALID_GROUNDING_REQUEST
+            - GROUNDING_STORE_NOT_CONFIGURED
+            - GROUNDING_JOB_CREATE_FAILED
+            - GROUNDING_JOB_NOT_FOUND
+            - GROUNDING_JOB_POLL_FAILED
+            - PROVIDER_TIMEOUT
+            - PROVIDER_HTTP_ERROR
+            - PROVIDER_PARSE_ERROR
+            - ALL_PROVIDERS_FAILED
+            - NO_RESULTS_AFTER_EXPANSION
+            - GROUNDING_PIPELINE_FAILED
+            - GROUNDING_RESPONSE_SCHEMA_INVALID
+        message:
+          type: string
+        stage:
+          type: string
+          enum: [creation, polling, pipeline]
+        retryable:
+          type: boolean
+        requestId:
+          type: string
+      required: [code, message, stage, retryable, requestId]
     ErrorResponse:
       type: object
       properties:

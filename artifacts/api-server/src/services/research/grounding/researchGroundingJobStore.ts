@@ -7,163 +7,220 @@ import {
   resolveSourceSearchProfile,
   searchIntentSources,
 } from "../../search-intent-planner";
+import { getSourceProviderConfigs } from "../../source-provider-config";
+import { logger } from "../../../lib/logger";
 import {
   runResearchGroundingPipeline,
   type GroundingPipelineDependencies,
+  type GroundingPipelineResult,
 } from "./researchGroundingPipeline";
 import { topicHashForWorkflow } from "../workflow/workflowIds";
+import {
+  createGroundingJobTimestamps,
+  defaultGroundingJobRepository,
+  patchGroundingJobWithRetry,
+  type GroundingJobRepository,
+} from "./groundingJobRepository";
 
-const groundingJobStore = new Map<string, GroundingJob>();
+export type GroundingJobRunDependencies = Partial<GroundingPipelineDependencies> & {
+  runPipeline?: typeof runResearchGroundingPipeline;
+};
 
-function replaceJob(jobId: string, patch: Partial<GroundingJob>): GroundingJob {
-  const existing = groundingJobStore.get(jobId);
-  if (!existing) {
-    throw new Error(`grounding job ${jobId} is missing`);
+function safeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : "unexpected grounding pipeline failure";
+  return message
+    .replace(/(api[_-]?key|authorization|bearer)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+}
+
+function providerErrorCode(message: string | null | undefined): string | null {
+  if (!message) return null;
+  if (/timeout|timed out/i.test(message)) return "PROVIDER_TIMEOUT";
+  if (/parse|json|schema/i.test(message)) return "PROVIDER_PARSE_ERROR";
+  if (/http\s+\d{3}|rate.limit|server error/i.test(message)) {
+    return "PROVIDER_HTTP_ERROR";
   }
-  const next: GroundingJob = {
-    ...existing,
-    ...patch,
-    jobId,
-    updatedAt: new Date().toISOString(),
-  };
-  groundingJobStore.set(jobId, next);
-  return next;
+  return "ALL_PROVIDERS_FAILED";
 }
 
-export function readGroundingJob(jobId: string): GroundingJob | null {
-  return groundingJobStore.get(jobId) ?? null;
+function logGroundingEvent(input: {
+  requestId: string;
+  workflowId: string;
+  jobId: string;
+  topicHash: string;
+  stage: string;
+  status: GroundingJob["status"];
+  durationMs?: number;
+  resultCount?: number;
+  retryable?: boolean;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+}): void {
+  logger.info(
+    {
+      event: "research_grounding.job",
+      route: "/api/research-grounding-jobs",
+      ...input,
+      durationMs: input.durationMs ?? null,
+      resultCount: input.resultCount ?? null,
+      retryable: input.retryable ?? false,
+      errorCode: input.errorCode ?? null,
+      errorMessage: input.errorMessage ? safeErrorMessage(input.errorMessage) : null,
+    },
+    "Research grounding job state persisted",
+  );
 }
 
-export function createGroundingJob(
+function defaultSearchHandler(
   input: ResearchGroundingJobCreateRequest,
-): GroundingJob {
-  const createdAt = new Date().toISOString();
-  const jobId = randomUUID();
+  job: GroundingJob,
+): GroundingPipelineDependencies["searchHandler"] {
+  return (searchInput) => {
+    const activeProfile = resolveSourceSearchProfile(
+      searchInput.searchProfile ?? input.searchProfile,
+    );
+    return searchIntentSources(searchInput, {
+      queryLimit: activeProfile.maxQueries,
+      runtimeBudget: {
+        overallSearchBudgetMs: activeProfile.overallTimeoutMs,
+        perQueryTimeoutMs: activeProfile.providerTimeoutMs,
+        maxConcurrentProviderRequests: 3,
+      },
+      sourceSummaries: {
+        maxSources: activeProfile.name === "deep" ? activeProfile.maxCandidates : 0,
+      },
+      sourceSearch: {
+        providers:
+          activeProfile.name === "deep"
+            ? ["OpenAlex", "Crossref", "Semantic Scholar"]
+            : ["OpenAlex", "Crossref"],
+        providerConfigs: getSourceProviderConfigs(),
+        telemetry: {
+          requestId: job.requestId,
+          workflowId: job.workflowId,
+          jobId: job.jobId,
+          topicHash: job.topicHash,
+        },
+      },
+    });
+  };
+}
+
+export async function createGroundingJob(
+  input: ResearchGroundingJobCreateRequest,
+  options: {
+    repository?: GroundingJobRepository;
+    requestId?: string;
+    attemptId?: string;
+  } = {},
+): Promise<GroundingJob> {
+  const repository = options.repository ?? defaultGroundingJobRepository();
+  const { createdAt, expiresAt } = createGroundingJobTimestamps();
   const effectiveTopic = (input.normalizedTopic ?? input.topic).trim();
+  const requestId = options.requestId ?? input.requestId ?? randomUUID();
+  const attemptId = options.attemptId ?? input.attemptId ?? randomUUID();
   const job: GroundingJob = {
-    jobId,
+    jobId: randomUUID(),
     workflowId: input.workflowId,
     topicHash: topicHashForWorkflow(effectiveTopic),
-    originalTopic: (input.originalTopic ?? input.topic).trim(),
+    requestId,
+    attemptId,
+    revision: 1,
+    originalTopic: (input.originalTopic ?? input.rawUserTopic ?? input.topic).trim(),
     normalizedTopic: effectiveTopic,
     status: "queued",
     progress: 0,
     warnings: [],
     createdAt,
     updatedAt: createdAt,
+    expiresAt,
   };
-  groundingJobStore.set(jobId, job);
-  return job;
+  const persisted = await repository.create(job);
+  logGroundingEvent({
+    requestId,
+    workflowId: persisted.workflowId,
+    jobId: persisted.jobId,
+    topicHash: persisted.topicHash,
+    stage: "creation",
+    status: persisted.status,
+  });
+  return persisted;
 }
 
-export function scheduleGroundingJob(
+export async function readGroundingJob(
+  jobId: string,
+  repository: GroundingJobRepository = defaultGroundingJobRepository(),
+): Promise<GroundingJob | null> {
+  return repository.get(jobId);
+}
+
+function resultPatch(result: GroundingPipelineResult): Partial<GroundingJob> {
+  const {
+    jobId: _jobId,
+    createdAt: _createdAt,
+    updatedAt: _updatedAt,
+    ...patch
+  } = result;
+  return patch;
+}
+
+export async function runGroundingJob(
   input: ResearchGroundingJobCreateRequest,
-  overrides: Partial<GroundingPipelineDependencies> = {},
-): GroundingJob {
-  const job = createGroundingJob(input);
+  job: GroundingJob,
+  options: {
+    repository?: GroundingJobRepository;
+    dependencies?: GroundingJobRunDependencies;
+  } = {},
+): Promise<GroundingJob> {
+  const repository = options.repository ?? defaultGroundingJobRepository();
+  const startedAt = Date.now();
+  let currentJob = job;
+  const persist = async (patch: Partial<GroundingJob>, stage: string) => {
+    currentJob = await patchGroundingJobWithRetry(repository, currentJob.jobId, patch);
+    logGroundingEvent({
+      requestId: currentJob.requestId,
+      workflowId: currentJob.workflowId,
+      jobId: currentJob.jobId,
+      topicHash: currentJob.topicHash,
+      stage,
+      status: currentJob.status,
+      durationMs: Date.now() - startedAt,
+      resultCount: currentJob.sourceCandidates?.length ?? 0,
+    });
+    return currentJob;
+  };
+
   const dependencies: GroundingPipelineDependencies = {
     searchHandler:
-      overrides.searchHandler ??
-      ((searchInput) => {
-        const activeProfile = resolveSourceSearchProfile(searchInput.searchProfile ?? input.searchProfile);
-        return searchIntentSources(searchInput, {
-          queryLimit: activeProfile.maxQueries,
-          runtimeBudget: {
-            overallSearchBudgetMs: activeProfile.overallTimeoutMs,
-            perQueryTimeoutMs: activeProfile.providerTimeoutMs,
-            maxConcurrentProviderRequests: 3,
-          },
-          sourceSummaries: {
-            maxSources: activeProfile.name === "deep" ? activeProfile.maxCandidates : 0,
-          },
-          sourceSearch: {
-            providers:
-              activeProfile.name === "deep"
-                ? ["OpenAlex", "Crossref", "Semantic Scholar"]
-                : ["OpenAlex", "Crossref"],
-            providerConfigs: {
-              OpenAlex: {
-                provider: "OpenAlex",
-                endpoint: process.env.OPENALEX_WORKS_URL?.trim() || "https://api.openalex.org/works",
-                timeoutMs: Number(process.env.OPENALEX_TIMEOUT_MS) || 4000,
-                queryLimit: Math.min(Number(process.env.OPENALEX_QUERY_LIMIT) || activeProfile.maxCandidates, activeProfile.maxCandidates),
-                pageLimit: 1,
-                headers: {
-                  Accept: "application/json",
-                  "User-Agent":
-                    process.env.SOURCE_SEARCH_USER_AGENT?.trim() || "ReportFactoryAI/1.0",
-                },
-                mailto:
-                  process.env.OPENALEX_MAILTO?.trim() ||
-                  process.env.CROSSREF_MAILTO?.trim() ||
-                  undefined,
-              },
-              Crossref: {
-                provider: "Crossref",
-                endpoint: process.env.CROSSREF_WORKS_URL?.trim() || "https://api.crossref.org/works",
-                timeoutMs: Number(process.env.CROSSREF_TIMEOUT_MS) || 4000,
-                queryLimit: Math.min(Number(process.env.CROSSREF_QUERY_LIMIT) || activeProfile.maxCandidates, activeProfile.maxCandidates),
-                pageLimit: 1,
-                headers: {
-                  Accept: "application/json",
-                  "User-Agent":
-                    process.env.SOURCE_SEARCH_USER_AGENT?.trim() || "ReportFactoryAI/1.0",
-                },
-                mailto: process.env.CROSSREF_MAILTO?.trim() || undefined,
-              },
-              "Semantic Scholar": {
-                provider: "Semantic Scholar",
-                endpoint:
-                  process.env.SEMANTIC_SCHOLAR_SEARCH_URL?.trim() ||
-                  "https://api.semanticscholar.org/graph/v1/paper/search",
-                timeoutMs: Number(process.env.SEMANTIC_SCHOLAR_TIMEOUT_MS) || 6000,
-                queryLimit: Math.min(Number(process.env.SEMANTIC_SCHOLAR_QUERY_LIMIT) || activeProfile.maxCandidates, activeProfile.maxCandidates),
-                pageLimit: 1,
-                headers: {
-                  Accept: "application/json",
-                  "User-Agent":
-                    process.env.SOURCE_SEARCH_USER_AGENT?.trim() || "ReportFactoryAI/1.0",
-                  ...(process.env.SEMANTIC_SCHOLAR_API_KEY?.trim()
-                    ? { "x-api-key": process.env.SEMANTIC_SCHOLAR_API_KEY.trim() }
-                    : {}),
-                },
-              },
-            },
-          },
-        });
-      }),
-    lexiconAdapters: overrides.lexiconAdapters,
+      options.dependencies?.searchHandler ?? defaultSearchHandler(input, currentJob),
+    lexiconAdapters: options.dependencies?.lexiconAdapters,
     onProgress: async (update) => {
-      replaceJob(job.jobId, {
-        ...(update.patch ?? {}),
-        status: update.status,
-        progress: update.progress,
-      });
+      await persist(
+        {
+          ...(update.patch ?? {}),
+          status: update.status,
+          progress: update.progress,
+        },
+        "pipeline_progress",
+      );
     },
   };
 
-  queueMicrotask(async () => {
-    try {
-      const result = await runResearchGroundingPipeline(input, dependencies);
-      replaceJob(job.jobId, {
-        ...result,
-        topicHash: result.topicHash,
-        normalizedTopic: result.normalizedTopic,
-        status: result.status,
-        progress: result.progress,
-      });
-    } catch (error) {
-      replaceJob(job.jobId, {
+  try {
+    const runPipeline = options.dependencies?.runPipeline ?? runResearchGroundingPipeline;
+    const result = await runPipeline(input, dependencies);
+    return await persist(resultPatch(result), "pipeline_complete");
+  } catch (error) {
+    const message = safeErrorMessage(error);
+    return persist(
+      {
         status: "failed",
         progress: 100,
-        warnings: [
-          error instanceof Error
-            ? error.message
-            : "research grounding pipeline failed unexpectedly",
-        ],
-      });
-    }
-  });
-
-  return job;
+        warnings: [`GROUNDING_PIPELINE_FAILED: ${message}`],
+      },
+      "pipeline_failed",
+    );
+  }
 }

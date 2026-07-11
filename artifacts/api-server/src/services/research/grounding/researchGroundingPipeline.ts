@@ -526,6 +526,15 @@ export interface GroundingPipelineDependencies {
   onProgress?: (update: GroundingPipelineProgress) => void | Promise<void>;
 }
 
+/**
+ * The pipeline owns research progress and result fields. Identity, revision,
+ * request metadata, and expiry are assigned by the durable job repository.
+ */
+export type GroundingPipelineResult = Omit<
+  GroundingJob,
+  "requestId" | "attemptId" | "revision" | "expiresAt"
+>;
+
 type GroundingFallbackAttempt = NonNullable<GroundingPipelineDiagnostics["fallbackAttempts"]>[number];
 type SourceCandidateBuildResult = ReturnType<typeof buildSourceCandidates>;
 
@@ -3978,13 +3987,12 @@ function buildGroundingDiagnostics(input: {
       officialBackgroundMinimumMet,
       warnings: readinessWarnings,
     },
+    // A provider may only be shown after it has actually been scheduled.  In
+    // particular, an early topic-refinement return is terminal and must not
+    // leave the UI claiming that OpenAlex/Crossref are still searching.
     providerProgress: input.searchResult
       ? providerProgressForDiagnostics(input.searchResult, sourceCandidates)
-      : [
-        { provider: "OpenAlex", status: "searching", resultCount: 0 },
-        { provider: "Crossref", status: "searching", resultCount: 0 },
-        { provider: "CORE", status: "background", resultCount: 0 },
-      ],
+      : [],
     fallbackAttempts: input.fallbackAttempts,
     fallbackCompleted: input.fallbackCompleted,
     maxFallbackRounds: input.maxFallbackRounds,
@@ -6873,7 +6881,7 @@ async function progress(
 export async function runResearchGroundingPipeline(
   input: ResearchGroundingJobCreateRequest,
   dependencies: GroundingPipelineDependencies,
-): Promise<GroundingJob> {
+): Promise<GroundingPipelineResult> {
   const createdAt = nowIso();
   const pipelineStartedAt = Date.now();
   const originalTopic = compactWhitespace(input.rawUserTopic ?? input.originalTopic ?? input.topic);

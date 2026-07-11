@@ -1,6 +1,7 @@
 import pino from "pino";
 
 const isProduction = process.env.NODE_ENV === "production";
+const isNodeTest = Boolean(process.env.NODE_TEST_CONTEXT);
 
 export const logger = pino({
   level: process.env.LOG_LEVEL ?? "info",
@@ -17,7 +18,7 @@ export const logger = pino({
     "SCHOOL_LLM_API_KEY",
     "*.SCHOOL_LLM_API_KEY",
   ],
-  ...(isProduction
+  ...(isProduction || isNodeTest
     ? {}
     : {
         transport: {

@@ -1188,6 +1188,9 @@ export const GroundingJobSchema = z.object({
   jobId: z.string().trim().min(1),
   workflowId: z.string().trim().min(1),
   topicHash: z.string().trim().min(1),
+  requestId: z.string().trim().min(1),
+  attemptId: z.string().trim().min(1),
+  revision: z.number().int().min(1),
   originalTopic: z.string().trim().min(1),
   normalizedTopic: z.string().trim().min(1),
   status: GroundingJobStatusSchema,
@@ -1223,11 +1226,14 @@ export const GroundingJobSchema = z.object({
   warnings: z.array(z.string().trim().min(1)),
   createdAt: z.string().trim().min(1),
   updatedAt: z.string().trim().min(1),
+  expiresAt: z.string().trim().min(1),
 });
 export type GroundingJob = z.infer<typeof GroundingJobSchema>;
 
 export const ResearchGroundingJobCreateRequestSchema = z.object({
   workflowId: z.string().trim().min(1),
+  requestId: z.string().trim().min(1).optional(),
+  attemptId: z.string().trim().min(1).optional(),
   topic: z.string().trim().min(1),
   rawUserTopic: z.string().trim().min(1).optional(),
   originalTopic: z.string().trim().min(1).optional(),
@@ -1256,8 +1262,37 @@ export const ResearchGroundingJobCreateResponseSchema = z.object({
   jobId: z.string().trim().min(1),
   workflowId: z.string().trim().min(1),
   topicHash: z.string().trim().min(1),
-  status: z.literal("queued"),
+  requestId: z.string().trim().min(1),
+  attemptId: z.string().trim().min(1),
+  status: GroundingJobStatusSchema,
 });
 export type ResearchGroundingJobCreateResponse = z.infer<
   typeof ResearchGroundingJobCreateResponseSchema
+>;
+
+export const GroundingJobErrorCodeSchema = z.enum([
+  "INVALID_GROUNDING_REQUEST",
+  "GROUNDING_STORE_NOT_CONFIGURED",
+  "GROUNDING_JOB_CREATE_FAILED",
+  "GROUNDING_JOB_NOT_FOUND",
+  "GROUNDING_JOB_POLL_FAILED",
+  "PROVIDER_TIMEOUT",
+  "PROVIDER_HTTP_ERROR",
+  "PROVIDER_PARSE_ERROR",
+  "ALL_PROVIDERS_FAILED",
+  "NO_RESULTS_AFTER_EXPANSION",
+  "GROUNDING_PIPELINE_FAILED",
+  "GROUNDING_RESPONSE_SCHEMA_INVALID",
+]);
+export type GroundingJobErrorCode = z.infer<typeof GroundingJobErrorCodeSchema>;
+
+export const GroundingJobErrorResponseSchema = z.object({
+  code: GroundingJobErrorCodeSchema,
+  message: z.string().trim().min(1),
+  stage: z.enum(["creation", "polling", "pipeline"]),
+  retryable: z.boolean(),
+  requestId: z.string().trim().min(1),
+});
+export type GroundingJobErrorResponse = z.infer<
+  typeof GroundingJobErrorResponseSchema
 >;

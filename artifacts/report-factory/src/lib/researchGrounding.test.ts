@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { SourceCandidate } from "@workspace/api-zod/research-grounding";
 import {
+  createResearchGroundingJob,
+  fetchResearchGroundingJob,
   groundedEvidenceCardsForAcceptedSources,
+  ResearchGroundingApiError,
   sourceCandidateToSourceRecord,
 } from "./researchGrounding.ts";
 
@@ -143,4 +146,71 @@ test("accepted sources with abstracts still require canonical grounding evidence
   });
 
   assert.equal(cards.length, 0);
+});
+
+test("grounding create response is schema-validated and distinguishes a non-JSON route failure", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response("method not allowed", {
+      status: 405,
+      headers: { "content-type": "text/html" },
+    })) as typeof fetch;
+  try {
+    await assert.rejects(
+      createResearchGroundingJob({ workflowId: "wf-client", topic: "魚油的製作及其營養成分" }),
+      (error: unknown) =>
+        error instanceof ResearchGroundingApiError &&
+        error.code === "GROUNDING_JOB_CREATE_FAILED" &&
+        error.stage === "creation" &&
+        error.status === 405,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("grounding polling response uses its own error classification", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        code: "GROUNDING_JOB_NOT_FOUND",
+        message: "Research grounding job not found.",
+        stage: "polling",
+        retryable: false,
+        requestId: "request-polling",
+      }),
+      { status: 404, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+  try {
+    await assert.rejects(
+      fetchResearchGroundingJob("missing-job"),
+      (error: unknown) =>
+        error instanceof ResearchGroundingApiError &&
+        error.code === "GROUNDING_JOB_NOT_FOUND" &&
+        error.stage === "polling" &&
+        error.status === 404,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("grounding client rejects malformed successful responses", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ jobId: "missing-required-fields" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+  try {
+    await assert.rejects(
+      createResearchGroundingJob({ workflowId: "wf-client", topic: "魚油的製作及其營養成分" }),
+      (error: unknown) =>
+        error instanceof ResearchGroundingApiError &&
+        error.code === "GROUNDING_RESPONSE_SCHEMA_INVALID",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

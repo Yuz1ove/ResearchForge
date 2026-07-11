@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 const baseUrl = process.env.RESEARCHFORGE_E2E_URL ?? "http://127.0.0.1:22067";
 const now = "2026-07-05T00:00:00.000Z";
+const expiresAt = "2026-07-06T00:00:00.000Z";
 
 function candidate(input: {
   sourceId: string;
@@ -323,13 +324,13 @@ const groundingJob = {
   jobId: "job-e2e-panda",
   workflowId: "wf-e2e-panda",
   topicHash: "topic-e2e-panda",
+  requestId: "request-e2e-panda",
+  attemptId: "attempt-e2e-panda",
+  revision: 3,
   originalTopic: "熊貓與貓熊的關係",
   normalizedTopic: "熊貓與貓熊名稱差異、大熊貓與小熊貓分類關係",
   status: "source_review_ready",
   progress: 100,
-  queryPlan: {
-    queryPlanHash: "query-plan-e2e-panda",
-  },
   sourceCandidates: allSources,
   highConfidenceCandidateSources: acceptedSources,
   candidateSources: acceptedSources,
@@ -395,6 +396,7 @@ const groundingJob = {
   warnings: [],
   createdAt: now,
   updatedAt: now,
+  expiresAt,
 };
 
 test("panda Step 2 shows bucket-aware source routing and enters source review", async ({ page }) => {
@@ -407,6 +409,8 @@ test("panda Step 2 shows bucket-aware source routing and enters source review", 
         jobId: "job-e2e-panda",
         workflowId: "wf-e2e-panda",
         topicHash: "topic-e2e-panda",
+        requestId: "request-e2e-panda",
+        attemptId: "attempt-e2e-panda",
         status: "queued",
       }),
     });
@@ -741,14 +745,13 @@ function reviewableGroundingJob(fixture: ReviewableFixture) {
     jobId: fixture.jobId,
     workflowId: fixture.workflowId,
     topicHash: fixture.topicHash,
+    requestId: `request-${fixture.jobId}`,
+    attemptId: `attempt-${fixture.jobId}`,
+    revision: 3,
     originalTopic: fixture.topic,
     normalizedTopic: fixture.topic,
     status: "source_review_ready",
     progress: 100,
-    queryPlan: {
-      primaryQueries: [fixture.enQuery, fixture.zhQuery],
-      secondaryQueries: [],
-    },
     sourceCandidates: sources,
     highConfidenceCandidateSources: [],
     candidateSources: [],
@@ -857,6 +860,7 @@ function reviewableGroundingJob(fixture: ReviewableFixture) {
     warnings: [],
     createdAt: now,
     updatedAt: now,
+    expiresAt,
   };
 }
 
@@ -894,6 +898,8 @@ test("Chinese Step 2 topics with zero accepted sources still enter source review
         jobId: fixture?.jobId,
         workflowId: fixture?.workflowId,
         topicHash: fixture?.topicHash,
+        requestId: `request-${fixture?.jobId ?? "missing"}`,
+        attemptId: `attempt-${fixture?.jobId ?? "missing"}`,
         status: "queued",
       }),
     });

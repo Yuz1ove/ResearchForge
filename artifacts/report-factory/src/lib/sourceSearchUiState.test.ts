@@ -54,6 +54,41 @@ test("deriveSourceSearchUiState returns failed for explicit error states", () =>
   );
 });
 
+test("create and polling errors clear a stale loading indicator", () => {
+  for (const groundingRequestState of ["job_create_failed", "job_poll_failed"] as const) {
+    assert.equal(
+      deriveSourceSearchUiState({
+        isSearchingSources: true,
+        sourceCount: 0,
+        sourceSearchStatus: "loading",
+        groundingRequestState,
+      }),
+      "failed",
+    );
+  }
+});
+
+test("provider failure and successful zero-result search have different UI states", () => {
+  assert.equal(
+    deriveSourceSearchUiState({
+      isSearchingSources: false,
+      sourceCount: 0,
+      sourceSearchStatus: "empty",
+      groundingRequestState: "all_providers_failed",
+    }),
+    "failed",
+  );
+  assert.equal(
+    deriveSourceSearchUiState({
+      isSearchingSources: false,
+      sourceCount: 0,
+      sourceSearchStatus: "empty",
+      groundingRequestState: "no_results_after_expansion",
+    }),
+    "empty",
+  );
+});
+
 test("deriveSourceSearchUiState returns success when sources exist", () => {
   assert.equal(
     deriveSourceSearchUiState({

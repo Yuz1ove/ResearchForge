@@ -791,6 +791,21 @@ test("normalizeResearchTopic rewrites panda terminology topic into bilingual tax
   assert.ok(normalized.keywordSet.some((term) => /分類學/u.test(term)));
 });
 
+test("normalizeResearchTopic expands fish oil production and nutrition topics before provider search", () => {
+  const normalized = normalizeResearchTopic("魚油的製作及其營養成分", "zh-TW");
+
+  assert.equal(normalized.originalQuery, "魚油的製作及其營養成分");
+  assert.equal(normalized.displayTitle, "魚油的製作及其營養成分");
+  assert.match(normalized.normalizedTopicZh ?? "", /魚油的製作、精製流程與營養成分/u);
+  assert.ok(normalized.zhAcademicQuery.includes("魚油 製作 加工 精製 營養成分"));
+  assert.ok(normalized.zhAcademicQuery.includes("魚油 萃取 製程 EPA DHA 脂肪酸組成"));
+  assert.ok(normalized.enAcademicQuery.includes("fish oil production and nutritional composition"));
+  assert.ok(normalized.enAcademicQuery.includes("fish oil processing and refining"));
+  assert.ok(normalized.enAcademicQuery.includes("fish oil extraction methods"));
+  assert.ok(normalized.enAcademicQuery.includes("EPA DHA composition in fish oil"));
+  assert.ok(normalized.keywordSet.length >= 4);
+});
+
 test("normalizeResearchTopic expands common Chinese Step 2 topics into bilingual academic queries", () => {
   const cases: Array<{
     topic: string;
@@ -3360,6 +3375,7 @@ test("runResearchGroundingPipeline returns topic options for ambiguous short inp
     result.warnings.some((warning) => warning.includes("主題仍偏短或多義")),
     true,
   );
+  assert.deepEqual(result.groundingDiagnostics?.providerProgress, []);
 });
 
 test("runResearchGroundingPipeline searches generic meaningful topics without forcing topic options", async () => {

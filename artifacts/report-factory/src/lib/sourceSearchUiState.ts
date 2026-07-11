@@ -9,6 +9,11 @@ export type SourceSearchUiStateInput = {
   isSearchingSources: boolean;
   sourceCount: number;
   sourceSearchStatus: "idle" | "loading" | "done" | "empty" | "error";
+  groundingRequestState?:
+    | "job_create_failed"
+    | "job_poll_failed"
+    | "all_providers_failed"
+    | "no_results_after_expansion";
   sourceSearchMessage?: string;
   backendMessage?: string;
 };
@@ -21,6 +26,14 @@ function hasProviderTimeoutMessage(value: string | null | undefined): boolean {
 export function deriveSourceSearchUiState(
   input: SourceSearchUiStateInput,
 ): SourceSearchUiState {
+  if (
+    input.groundingRequestState === "job_create_failed" ||
+    input.groundingRequestState === "job_poll_failed" ||
+    input.groundingRequestState === "all_providers_failed"
+  ) {
+    return "failed";
+  }
+
   if (input.isSearchingSources || input.sourceSearchStatus === "loading") {
     return "loading";
   }

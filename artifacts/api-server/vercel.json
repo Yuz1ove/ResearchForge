@@ -1,10 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "outputDirectory": "dist",
   "functions": {
     "api/index.js": {
-      "includeFiles": "dist/**"
+      "includeFiles": "dist/**",
+      "maxDuration": 60
     }
   },
   "rewrites": [

@@ -9,7 +9,7 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "smoke:providers": "tsx src/cli/smoke-providers.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "TMPDIR=/private/tmp tsx --test src/lib/load-env.test.ts src/config/llm-provider-config.test.ts src/services/provider-smoke.test.ts src/services/llm-adapter.test.ts src/services/topic-expansion.test.ts src/services/source-retrieval.test.ts src/services/keyword-expansion.test.ts src/services/research-pipeline.test.ts src/services/topic-anchor-contract.test.ts src/services/search-intent-planner.test.ts src/services/source-summarizer.test.ts src/services/report-writer.test.ts src/services/research/grounding/sourceContentExtractor.test.ts src/services/research/grounding/claimExtractionService.test.ts src/services/research/grounding/researchGroundingPipeline.test.ts src/routes/search-keywords.test.ts src/routes/search-sources.test.ts src/routes/generate-report.test.ts src/routes/report-drafts.test.ts src/routes/llm.test.ts"
+    "test": "TMPDIR=/private/tmp tsx --test src/app.test.ts src/vercel-deployment.test.ts src/lib/load-env.test.ts src/config/llm-provider-config.test.ts src/services/provider-smoke.test.ts src/services/llm-adapter.test.ts src/services/topic-expansion.test.ts src/services/source-retrieval.test.ts src/services/keyword-expansion.test.ts src/services/research-pipeline.test.ts src/services/topic-anchor-contract.test.ts src/services/search-intent-planner.test.ts src/services/source-summarizer.test.ts src/services/report-writer.test.ts src/services/research/grounding/sourceContentExtractor.test.ts src/services/research/grounding/claimExtractionService.test.ts src/services/research/grounding/researchGroundingJobStore.test.ts src/services/research/grounding/researchGroundingPipeline.test.ts src/routes/research-grounding-jobs.test.ts src/routes/search-keywords.test.ts src/routes/search-sources.test.ts src/routes/generate-report.test.ts src/routes/report-drafts.test.ts src/routes/llm.test.ts"
   },
   "dependencies": {
     "@workspace/api-zod": "workspace:*",
@@ -19,13 +19,15 @@
     "drizzle-orm": "catalog:",
     "express": "^5.2.1",
     "pino": "^9.14.0",
-    "pino-http": "^10.5.0"
+    "pino-http": "^10.5.0",
+    "pg": "^8.20.0"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "catalog:",
+    "@types/pg": "^8.20.0",
     "esbuild": "0.27.3",
     "esbuild-plugin-pino": "^2.3.3",
     "pino-pretty": "^13.1.3",

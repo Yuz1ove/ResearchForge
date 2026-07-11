@@ -3,9 +3,15 @@ import type {
   GroundingEvidenceCard,
   GroundingJob,
   GroundingJobStatus,
+  GroundingJobErrorCode,
   ResearchGroundingJobCreateRequest,
   ResearchGroundingJobCreateResponse,
   SourceCandidate,
+} from "@workspace/api-zod/research-grounding";
+import {
+  GroundingJobErrorResponseSchema,
+  GroundingJobSchema,
+  ResearchGroundingJobCreateResponseSchema,
 } from "@workspace/api-zod/research-grounding";
 import type { EvidenceDerivation } from "@workspace/api-zod";
 import type { EvidenceCard } from "./evidenceCards.ts";
@@ -19,9 +25,100 @@ import {
 } from "./sourceRecords.ts";
 
 function apiUrl(path: string): string {
-  const base = import.meta.env.VITE_API_BASE_URL?.trim();
+  const frontendEnv = import.meta.env ?? {};
+  const base = frontendEnv.VITE_API_BASE_URL?.trim();
+  if (!base && frontendEnv.PROD) {
+    throw new ResearchGroundingApiError({
+      code: "GROUNDING_JOB_CREATE_FAILED",
+      message: "VITE_API_BASE_URL is not configured for this Preview deployment.",
+      stage: "creation",
+      retryable: false,
+      status: 0,
+    });
+  }
   if (!base) return path;
   return `${base.replace(/\/+$/, "")}${path}`;
+}
+
+export class ResearchGroundingApiError extends Error {
+  readonly code: GroundingJobErrorCode | "GROUNDING_RESPONSE_SCHEMA_INVALID";
+  readonly stage: "creation" | "polling";
+  readonly retryable: boolean;
+  readonly status: number;
+
+  constructor(input: {
+    code: GroundingJobErrorCode | "GROUNDING_RESPONSE_SCHEMA_INVALID";
+    message: string;
+    stage: "creation" | "polling";
+    retryable: boolean;
+    status: number;
+  }) {
+    super(input.message);
+    this.name = "ResearchGroundingApiError";
+    this.code = input.code;
+    this.stage = input.stage;
+    this.retryable = input.retryable;
+    this.status = input.status;
+  }
+}
+
+async function errorFromResponse(
+  response: Response,
+  stage: "creation" | "polling",
+): Promise<ResearchGroundingApiError> {
+  const body = await response.text();
+  try {
+    const parsed = GroundingJobErrorResponseSchema.safeParse(JSON.parse(body));
+    if (parsed.success) {
+      return new ResearchGroundingApiError({
+        code: parsed.data.code,
+        message: parsed.data.message,
+        stage: parsed.data.stage === "pipeline" ? stage : parsed.data.stage,
+        retryable: parsed.data.retryable,
+        status: response.status,
+      });
+    }
+  } catch {
+    // A wrong Vercel rewrite can return HTML or an empty body. Keep the error
+    // explicit instead of pretending that providers returned zero records.
+  }
+  return new ResearchGroundingApiError({
+    code: stage === "creation" ? "GROUNDING_JOB_CREATE_FAILED" : "GROUNDING_JOB_POLL_FAILED",
+    message: `Research grounding job ${stage === "creation" ? "creation" : "polling"} failed with HTTP ${response.status}.`,
+    stage,
+    retryable: response.status >= 500 || response.status === 429,
+    status: response.status,
+  });
+}
+
+async function parsedJsonResponse<T>(input: {
+  response: Response;
+  stage: "creation" | "polling";
+  parse: (value: unknown) => { success: boolean; data?: T };
+}): Promise<T> {
+  let payload: unknown;
+  try {
+    payload = await input.response.json();
+  } catch {
+    throw new ResearchGroundingApiError({
+      code: "GROUNDING_RESPONSE_SCHEMA_INVALID",
+      message: "Research grounding API returned a non-JSON response.",
+      stage: input.stage,
+      retryable: false,
+      status: input.response.status,
+    });
+  }
+  const parsed = input.parse(payload);
+  if (!parsed.success || parsed.data === undefined) {
+    throw new ResearchGroundingApiError({
+      code: "GROUNDING_RESPONSE_SCHEMA_INVALID",
+      message: "Research grounding API returned an invalid response schema.",
+      stage: input.stage,
+      retryable: false,
+      status: input.response.status,
+    });
+  }
+  return parsed.data;
 }
 
 function cleanText(value: string | null | undefined): string | null {
@@ -245,24 +342,39 @@ export const GROUNDING_STATUS_LABELS: Record<GroundingJobStatus, string> = {
 
 export async function createResearchGroundingJob(
   request: ResearchGroundingJobCreateRequest,
+  signal?: AbortSignal,
 ): Promise<ResearchGroundingJobCreateResponse> {
   const response = await fetch(apiUrl("/api/research-grounding-jobs"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
+    signal,
   });
   if (!response.ok) {
-    throw new Error(`Research grounding job creation failed with HTTP ${response.status}.`);
+    throw await errorFromResponse(response, "creation");
   }
-  return (await response.json()) as ResearchGroundingJobCreateResponse;
+  return parsedJsonResponse({
+    response,
+    stage: "creation",
+    parse: ResearchGroundingJobCreateResponseSchema.safeParse,
+  });
 }
 
-export async function fetchResearchGroundingJob(jobId: string): Promise<GroundingJob> {
-  const response = await fetch(apiUrl(`/api/research-grounding-jobs/${encodeURIComponent(jobId)}`));
+export async function fetchResearchGroundingJob(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<GroundingJob> {
+  const response = await fetch(apiUrl(`/api/research-grounding-jobs/${encodeURIComponent(jobId)}`), {
+    signal,
+  });
   if (!response.ok) {
-    throw new Error(`Research grounding job polling failed with HTTP ${response.status}.`);
+    throw await errorFromResponse(response, "polling");
   }
-  return (await response.json()) as GroundingJob;
+  return parsedJsonResponse({
+    response,
+    stage: "polling",
+    parse: GroundingJobSchema.safeParse,
+  });
 }
 
 export function sourceCandidateToSourceRecord(input: {

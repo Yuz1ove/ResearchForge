@@ -28,6 +28,8 @@ node_modules
 !.vscode/extensions.json
 
 # misc
+/.vercel
+**/.vercel
 /.env
 /.env.local
 /.env.*.local

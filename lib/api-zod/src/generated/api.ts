@@ -16,6 +16,7 @@ export const HealthCheckResponse = zod.object({
   "status": zod.string()
 })
 
+
 /**
  * Searches OpenAlex, Semantic Scholar, and Crossref for academic/web sources related to a research topic.
  * @summary Search sources
@@ -537,4 +538,76 @@ export const TopicUnderstandingResponse = zod.object({
   "model": zod.string().nullish(),
   "latencyMs": zod.number().nullish()
 })
+})
+
+
+/**
+ * Persists the job before executing the bounded grounding pipeline. The response contains the durable job identity and final or in-progress status.
+ * @summary Create and complete a durable research grounding job
+ */
+
+
+
+
+export const CreateResearchGroundingJobBody = zod.object({
+  "workflowId": zod.string().min(1),
+  "requestId": zod.string().optional(),
+  "attemptId": zod.string().optional(),
+  "topic": zod.string().min(1),
+  "rawUserTopic": zod.string().optional(),
+  "originalTopic": zod.string().optional(),
+  "normalizedTopic": zod.string().optional(),
+  "selectedDomain": zod.string().optional(),
+  "researchQuestion": zod.string().optional(),
+  "bilingualQueries": zod.object({
+  "zh": zod.array(zod.string()),
+  "en": zod.array(zod.string())
+}).optional(),
+  "querySeedZh": zod.array(zod.string()).optional(),
+  "querySeedEn": zod.array(zod.string()).optional(),
+  "excludeTerms": zod.array(zod.string()).optional(),
+  "reportType": zod.string().optional(),
+  "audience": zod.string().optional(),
+  "searchProfile": zod.enum(['standard', 'deep']).optional(),
+  "debugTrace": zod.boolean().optional()
+})
+
+export const CreateResearchGroundingJobResponse = zod.object({
+  "jobId": zod.string(),
+  "workflowId": zod.string(),
+  "topicHash": zod.string(),
+  "requestId": zod.string(),
+  "attemptId": zod.string(),
+  "status": zod.string()
+})
+
+
+/**
+ * @summary Read a durable research grounding job
+ */
+export const GetResearchGroundingJobParams = zod.object({
+  "jobId": zod.coerce.string()
+})
+
+
+export const getResearchGroundingJobResponseProgressMin = 0;
+export const getResearchGroundingJobResponseProgressMax = 100;
+
+
+
+export const GetResearchGroundingJobResponse = zod.object({
+  "jobId": zod.string(),
+  "workflowId": zod.string(),
+  "topicHash": zod.string(),
+  "requestId": zod.string(),
+  "attemptId": zod.string(),
+  "revision": zod.number().min(1),
+  "originalTopic": zod.string(),
+  "normalizedTopic": zod.string(),
+  "status": zod.string(),
+  "progress": zod.number().min(getResearchGroundingJobResponseProgressMin).max(getResearchGroundingJobResponseProgressMax),
+  "warnings": zod.array(zod.string()),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date(),
+  "expiresAt": zod.coerce.date()
 })

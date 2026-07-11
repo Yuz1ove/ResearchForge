@@ -907,6 +907,68 @@ function pandaTerminologyRewrite(topic: string, locale: string): NormalizedResea
   };
 }
 
+function fishOilProductionRewrite(topic: string, locale: string): NormalizedResearchTopic {
+  const originalQuery = compactWhitespace(topic);
+  return {
+    originalQuery,
+    displayTitle: originalQuery,
+    normalizedTitle: "魚油的製作、精製流程與營養成分",
+    normalizedTopicZh: "魚油的製作、精製流程與營養成分",
+    zhAcademicQuery: [
+      "魚油 製作 加工 精製 營養成分",
+      "魚油 萃取 製程 EPA DHA 脂肪酸組成",
+      "魚油 脫臭 冬化 純化 氧化穩定性",
+      "魚油 生產 製程 品質控制 營養價值",
+    ],
+    enAcademicQuery: [
+      "fish oil production and nutritional composition",
+      "fish oil processing and refining",
+      "fish oil extraction methods",
+      "omega-3 fatty acid extraction from fish oil",
+      "chemical composition of fish oil",
+      "EPA DHA composition in fish oil",
+      "fish oil purification deodorization winterization",
+    ],
+    keywordSet: [
+      "魚油",
+      "製作",
+      "加工",
+      "精製",
+      "萃取",
+      "EPA",
+      "DHA",
+      "脂肪酸組成",
+      "脫臭",
+      "冬化",
+      "純化",
+      "氧化穩定性",
+      "fish oil",
+      "fish oil production",
+      "fish oil processing",
+      "fish oil refining",
+      "fish oil extraction",
+      "omega-3 fatty acids",
+      "chemical composition",
+      "EPA DHA",
+      "deodorization",
+      "winterization",
+      "purification",
+    ],
+    negativeKeywords: [
+      "fish oil supplement advertisement",
+      "product shopping",
+      "fish meal",
+      "pet food",
+    ],
+    broaderAcademicQueries: [
+      "fish oil refining quality oxidation stability",
+      "marine oil processing omega-3 fatty acid composition",
+      "fish oil production quality control review",
+    ],
+    locale,
+  };
+}
+
 function genericRewrite(topic: string, locale: string): NormalizedResearchTopic {
   const originalQuery = compactWhitespace(topic);
   const words = uniqueStrings(
@@ -1071,6 +1133,9 @@ export function normalizeResearchTopic(
     )
   ) {
     return dogResourceGuardingRewrite(normalized, locale);
+  }
+  if (/魚油|fish oil|omega-?3.*(?:EPA|DHA)|(?:EPA|DHA).*omega-?3/i.test(normalized)) {
+    return fishOilProductionRewrite(normalized, locale);
   }
   if (/熊貓|貓熊|大熊貓|小熊貓|小貓熊|giant panda|red panda|Ailuropoda|Ailurus/i.test(normalized)) {
     return pandaTerminologyRewrite(normalized, locale);

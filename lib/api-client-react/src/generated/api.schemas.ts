@@ -448,6 +448,108 @@ export interface KeywordSourceSearchResult {
   sources: SourceRecord[];
 }
 
+export type ResearchGroundingJobCreateRequestBilingualQueries = {
+  zh: string[];
+  en: string[];
+};
+
+export type ResearchGroundingJobCreateRequestSearchProfile = typeof ResearchGroundingJobCreateRequestSearchProfile[keyof typeof ResearchGroundingJobCreateRequestSearchProfile];
+
+
+export const ResearchGroundingJobCreateRequestSearchProfile = {
+  standard: 'standard',
+  deep: 'deep',
+} as const;
+
+export interface ResearchGroundingJobCreateRequest {
+  /** @minLength 1 */
+  workflowId: string;
+  requestId?: string;
+  attemptId?: string;
+  /** @minLength 1 */
+  topic: string;
+  rawUserTopic?: string;
+  originalTopic?: string;
+  normalizedTopic?: string;
+  selectedDomain?: string;
+  researchQuestion?: string;
+  bilingualQueries?: ResearchGroundingJobCreateRequestBilingualQueries;
+  querySeedZh?: string[];
+  querySeedEn?: string[];
+  excludeTerms?: string[];
+  reportType?: string;
+  audience?: string;
+  searchProfile?: ResearchGroundingJobCreateRequestSearchProfile;
+  debugTrace?: boolean;
+}
+
+export interface ResearchGroundingJobCreateResponse {
+  jobId: string;
+  workflowId: string;
+  topicHash: string;
+  requestId: string;
+  attemptId: string;
+  status: string;
+}
+
+export interface GroundingJob {
+  jobId: string;
+  workflowId: string;
+  topicHash: string;
+  requestId: string;
+  attemptId: string;
+  /** @minimum 1 */
+  revision: number;
+  originalTopic: string;
+  normalizedTopic: string;
+  status: string;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  progress: number;
+  warnings: string[];
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  [key: string]: unknown;
+ }
+
+export type GroundingJobErrorResponseCode = typeof GroundingJobErrorResponseCode[keyof typeof GroundingJobErrorResponseCode];
+
+
+export const GroundingJobErrorResponseCode = {
+  INVALID_GROUNDING_REQUEST: 'INVALID_GROUNDING_REQUEST',
+  GROUNDING_STORE_NOT_CONFIGURED: 'GROUNDING_STORE_NOT_CONFIGURED',
+  GROUNDING_JOB_CREATE_FAILED: 'GROUNDING_JOB_CREATE_FAILED',
+  GROUNDING_JOB_NOT_FOUND: 'GROUNDING_JOB_NOT_FOUND',
+  GROUNDING_JOB_POLL_FAILED: 'GROUNDING_JOB_POLL_FAILED',
+  PROVIDER_TIMEOUT: 'PROVIDER_TIMEOUT',
+  PROVIDER_HTTP_ERROR: 'PROVIDER_HTTP_ERROR',
+  PROVIDER_PARSE_ERROR: 'PROVIDER_PARSE_ERROR',
+  ALL_PROVIDERS_FAILED: 'ALL_PROVIDERS_FAILED',
+  NO_RESULTS_AFTER_EXPANSION: 'NO_RESULTS_AFTER_EXPANSION',
+  GROUNDING_PIPELINE_FAILED: 'GROUNDING_PIPELINE_FAILED',
+  GROUNDING_RESPONSE_SCHEMA_INVALID: 'GROUNDING_RESPONSE_SCHEMA_INVALID',
+} as const;
+
+export type GroundingJobErrorResponseStage = typeof GroundingJobErrorResponseStage[keyof typeof GroundingJobErrorResponseStage];
+
+
+export const GroundingJobErrorResponseStage = {
+  creation: 'creation',
+  polling: 'polling',
+  pipeline: 'pipeline',
+} as const;
+
+export interface GroundingJobErrorResponse {
+  code: GroundingJobErrorResponseCode;
+  message: string;
+  stage: GroundingJobErrorResponseStage;
+  retryable: boolean;
+  requestId: string;
+}
+
 export interface ErrorResponse {
   message: string;
 }
