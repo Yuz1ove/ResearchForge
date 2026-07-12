@@ -5,6 +5,9 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { SourceRecordEvidenceGrounding } from './sourceRecordEvidenceGrounding';
+import type { SourceRecordRelevanceLevel } from './sourceRecordRelevanceLevel';
+import type { SourceRecordSourceKind } from './sourceRecordSourceKind';
 import type { SourceRecordSourceType } from './sourceRecordSourceType';
 import type { SourceReviewState } from './sourceReviewState';
 
@@ -14,6 +17,9 @@ export interface SourceRecord {
   authors: string[];
   year: number | null;
   abstract: string | null;
+  snippet?: string | null;
+  language?: string | null;
+  abstractMissing?: boolean | null;
   doi: string | null;
   url: string | null;
   sourceType: SourceRecordSourceType;
@@ -21,4 +27,34 @@ export interface SourceRecord {
   publisher: string | null;
   containerTitle: string | null;
   accessedAt: string | null;
+  provider?: string | null;
+  queryUsed?: string | null;
+  retrievedAt?: string | null;
+  dedupeKey?: string | null;
+  sourceKind?: SourceRecordSourceKind;
+  citationCount?: number | null;
+  isOpenAccess?: boolean | null;
+  isPeerReviewed?: boolean | null;
+  sourceQualityScore?: number | null;
+  scoreReasons?: string[] | null;
+  relevanceLevel?: SourceRecordRelevanceLevel;
+  relevanceScore?: number | null;
+  relevanceReasons?: string[] | null;
+  matchedCoreConcepts?: string[] | null;
+  missingCoreConcepts?: string[] | null;
+  matchedFacets?: string[] | null;
+  missingRequiredFacets?: string[] | null;
+  evidenceGrounding?: SourceRecordEvidenceGrounding;
+  sourceRelevanceReasonZhTw?: string | null;
+  shouldShowInMainList?: boolean | null;
+  shouldRecommendAccept?: boolean | null;
+  topicRelevance?: number | null;
+  evidenceQuality?: number | null;
+  metadataCompleteness?: number | null;
+  abstractQuality?: number | null;
+  sourceTrust?: number | null;
+  isMetadataOnly?: boolean | null;
+  isPrimaryEvidence?: boolean | null;
+  rejectionReason?: string | null;
+  recommendation?: string | null;
 }

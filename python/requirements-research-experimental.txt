@@ -1,0 +1,10 @@
+unstructured
+docling
+marker-pdf
+crawl4ai
+scrapy
+playwright
+trafilatura
+readability-lxml
+sentence-transformers
+fasttext-wheel

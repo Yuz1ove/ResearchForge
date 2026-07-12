@@ -1,34 +1,61 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useRoute } from "wouter";
 import { Navbar } from "@/components/layout/navbar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { detectTopicCategory } from "@/lib/generateReport";
-import { buildAcceptedSourceDigest } from "@/lib/sourceDigest";
+import {
+  mergeLlmReportDraft,
+  requestLlmReportDraft,
+} from "@/lib/llmReportWriter";
+import {
+  ACCEPTED_SOURCE_DIGEST_VERSION,
+  buildAcceptedSourceDigest,
+} from "@/lib/sourceDigest";
 import {
   buildExportReadinessWarnings,
+  dedupeSourceRecords,
   formatSourceAuthors,
+  normalizeSourceForReview,
   SOURCE_CATEGORY_LABELS,
   type SourceCategory,
 } from "@/lib/sourceRecords";
+import { applySourceAuthorityAndLanguage } from "@/lib/sourceAuthority";
+import { applySourceRelevanceAssessments } from "@/lib/sourceRelevance";
 import {
   loadReportWorkspace,
   regenerateReportWorkspace,
-  reportWorkspacePath,
   saveReportWorkspace,
+  workspaceSnapshotIsConsistent,
   workspaceToGeneratedReport,
   type ReportWorkspace,
 } from "@/lib/reportWorkspace";
 import {
+  REPORT_FONT_INSTALL_NOTE,
+  REPORT_FONT_OPTIONS,
+  normalizeReportPresentation,
+  reportFontOptionById,
+  type ReportPresentationSettings,
+} from "@/lib/reportPresentation";
+import {
+  previewWorkspaceMatchesContext,
+  visibleReportSectionText,
+} from "@/lib/reportPreviewGuards";
+import {
   buildPlainText,
-  downloadBlueprint,
   downloadDocx,
-  downloadJson,
   downloadMarkdown,
-  downloadPromptPackage,
-  downloadTxt,
   printPdf,
 } from "@/lib/exportReport";
 import {
@@ -36,14 +63,13 @@ import {
   ArrowLeft,
   BookOpen,
   Copy,
-  Download,
   FileDown,
-  FileJson,
-  FileText,
   FileType,
+  FileText,
   Printer,
   RefreshCw,
   Search,
+  Shapes,
 } from "lucide-react";
 
 function sourceCategoryLabel(value: string | null | undefined): string {
@@ -73,25 +99,558 @@ function formatWorkspaceTime(value: string): string {
   }).format(date);
 }
 
+function paragraphRows(text: string, minimum = 5): number {
+  const lines = text.split("\n").length;
+  const estimated = Math.ceil(text.length / 36);
+  return Math.max(minimum, Math.min(18, Math.max(lines, estimated)));
+}
+
+function digestSummaryNeedsRefresh(
+  summary: string | null | undefined,
+  version: number | null | undefined,
+): boolean {
+  const text = summary?.trim() ?? "";
+  if (!text) return true;
+  if (version !== ACCEPTED_SOURCE_DIGEST_VERSION) return true;
+  return /資料類型主要包含|只能作為草稿前的資料基礎判斷|不適合被視為完整結論/u.test(text);
+}
+
+function evidenceCardsForSection(
+  workspace: ReportWorkspace,
+  section: ReportWorkspace["draft"]["sections"][number] | undefined,
+) {
+  if (!section) return [];
+  const cardIds = new Set(section.evidenceCardIds);
+  const cards = workspace.evidenceCards.filter((card) => cardIds.has(card.id));
+  if (cards.length > 0) return cards;
+
+  const sourceIds = new Set(section.citationIds);
+  return workspace.evidenceCards.filter((card) => sourceIds.has(card.sourceId)).slice(0, 4);
+}
+
+function acceptedSourcesForSection(
+  workspace: ReportWorkspace,
+  section: ReportWorkspace["draft"]["sections"][number] | undefined,
+) {
+  if (!section) return [];
+  const sourceIds = new Set(section.citationIds);
+  return workspace.acceptedSources.filter((source) => source.id && sourceIds.has(source.id));
+}
+
+function readinessLabel(readiness: ReportWorkspace["qualityReport"]["readiness"]): string {
+  switch (readiness) {
+    case "strong":
+      return "可輸出正式草稿";
+    case "usable":
+      return "可用草稿";
+    case "preliminary":
+      return "初步草稿";
+    case "insufficient":
+    default:
+      return "證據不足";
+  }
+}
+
+function readinessBadgeVariant(readiness: ReportWorkspace["qualityReport"]["readiness"]): "default" | "secondary" | "outline" {
+  if (readiness === "strong") return "default";
+  if (readiness === "usable" || readiness === "preliminary") return "secondary";
+  return "outline";
+}
+
+function llmStatusLabel(
+  diagnostics: NonNullable<ReportWorkspace["llmDiagnostics"]>,
+): string {
+  if (!diagnostics.fallbackUsed) return "AI 強化完成";
+  if (diagnostics.reportGenerationStatus === "timeout") return "已保留草稿";
+  if (diagnostics.reportGenerationStatus === "quota_exceeded") return "稍後再試";
+  if (diagnostics.reportGenerationStatus === "skipped") return "沿用現有草稿";
+  return "已保留草稿";
+}
+
+function llmStatusMessage(
+  diagnostics: NonNullable<ReportWorkspace["llmDiagnostics"]>,
+): string {
+  if (!diagnostics.fallbackUsed) {
+    return "已使用 server-side Ollama 依已接受來源生成自然段落。";
+  }
+  const reason = diagnostics.message ?? diagnostics.fallbackReason ?? diagnostics.warning ?? "";
+  if (diagnostics.reportGenerationStatus === "timeout") {
+    return `本次 AI 強化逾時，但可編修草稿與來源依據都已保留。${reason}`.trim();
+  }
+  if (diagnostics.reportGenerationStatus === "quota_exceeded") {
+    return `本次 AI 強化暫時不可用，但草稿已保留，可先直接編修。${reason}`.trim();
+  }
+  if (diagnostics.reportGenerationStatus === "skipped") {
+    return `目前沿用可編修草稿，尚未額外套用 AI 強化。${reason}`.trim();
+  }
+  return `本次 AI 強化未完成，但草稿與來源依據已保留，可直接編修。${reason}`.trim();
+}
+
+function evidenceCardStatusLabel(card: ReportWorkspace["evidenceCards"][number]): string {
+  if (card.sourceAccessLevel === "full_text") return "全文片段";
+  if (card.sourceAccessLevel === "abstract_only") return "僅摘要";
+  if (card.sourceAccessLevel === "metadata_only") return "metadata only";
+  if (card.sourceAccessLevel === "failed_extraction") return "抽取失敗";
+  if (card.abstractOnly) return "僅摘要";
+  if (card.derivation === "metadata-derived") return "摘要不足";
+  if (card.derivation === "fulltext-derived") return "片段可驗證";
+  return "摘要可用";
+}
+
+function sourceReadableStatusLabel(source: ReportWorkspace["acceptedSources"][number]): string {
+  switch (source.accessLevel) {
+    case "full_text":
+      return "full text";
+    case "abstract_only":
+      return "abstract only";
+    case "metadata_only":
+      return "metadata only";
+    case "blocked_or_paywalled":
+      return "manual review required";
+    case "failed_extraction":
+      return "extraction failed";
+    default:
+      return source.abstract ? "abstract only" : "metadata only";
+  }
+}
+
+function sourceExtractionDetails(source: ReportWorkspace["acceptedSources"][number]): string[] {
+  const details: string[] = [];
+  if (source.extractionStatus) details.push(`抽取狀態：${source.extractionStatus}`);
+  if (source.extractionMode) details.push(`抽取模式：${source.extractionMode}`);
+  if (source.extractionMethod) details.push(`抽取方法：${source.extractionMethod}`);
+  if (typeof source.fullTextCharCount === "number" && source.fullTextCharCount > 0) {
+    details.push(`全文字數：${source.fullTextCharCount.toLocaleString()}`);
+  }
+  const sectionCount = source.extractedSections?.length ?? 0;
+  const chunkCount = source.extractedChunks?.length ?? 0;
+  if (sectionCount > 0 || chunkCount > 0) {
+    details.push(`usable sections：${sectionCount}；evidence chunks：${chunkCount}`);
+  }
+  if (typeof source.claimCount === "number") {
+    details.push(`claims：${source.acceptedClaimCount ?? 0}/${source.claimCount}`);
+  }
+  if (typeof source.acceptedEvidenceCardCount === "number") {
+    details.push(`evidence cards：${source.acceptedEvidenceCardCount}`);
+  }
+  return details;
+}
+
+function sourceExtractionWarnings(source: ReportWorkspace["acceptedSources"][number]): string {
+  return [
+    ...(source.extractionWarnings ?? []),
+    ...(source.claimExtractionWarnings ?? []),
+    source.userFacingMessage ?? "",
+    source.failureReason ?? "",
+  ].filter(Boolean).join("；");
+}
+
+function evidenceCoverageLabel(
+  status: ReportWorkspace["draft"]["sections"][number]["evidenceCoverageStatus"] | undefined,
+): string {
+  switch (status) {
+    case "sufficient":
+      return "sufficient";
+    case "weak":
+      return "weak";
+    case "insufficient":
+    default:
+      return "insufficient";
+  }
+}
+
+function evidenceCoverageBadgeVariant(
+  status: ReportWorkspace["draft"]["sections"][number]["evidenceCoverageStatus"] | undefined,
+): "default" | "secondary" | "outline" {
+  if (status === "sufficient") return "default";
+  if (status === "weak") return "secondary";
+  return "outline";
+}
+
+function groundingStatusLabel(
+  status: ReportWorkspace["draft"]["sections"][number]["groundingStatus"] | undefined,
+  generationMethod?: string,
+  warnings: string[] = [],
+): string {
+  if (generationMethod === "grounding_verifier_blocked") return "grounding_verifier_blocked";
+  if (generationMethod === "insufficient_evidence_notice") return "insufficient_evidence";
+  if (generationMethod === "needs_manual_review" || warnings.includes("needs_manual_review")) return "needs_manual_review";
+  if (generationMethod === "extraction_failed") return "extraction_failed";
+  if (status === "grounded") return "fully_grounded";
+  if (status === "partially_grounded") return "partially_grounded";
+  return "insufficient_evidence";
+}
+
+function groundingStatusBadgeVariant(
+  status: ReportWorkspace["draft"]["sections"][number]["groundingStatus"] | undefined,
+  generationMethod?: string,
+  warnings: string[] = [],
+): "default" | "secondary" | "outline" {
+  if (generationMethod === "grounding_verifier_blocked" || generationMethod === "insufficient_evidence_notice") return "outline";
+  if (generationMethod === "needs_manual_review" || warnings.includes("needs_manual_review")) return "secondary";
+  if (status === "grounded") return "default";
+  if (status === "partially_grounded") return "secondary";
+  return "outline";
+}
+
+function evidenceSupportSpan(card: ReportWorkspace["evidenceCards"][number]): string {
+  return card.supportSpan ??
+    card.supportSpans?.[0]?.text ??
+    card.supportedByText ??
+    card.usableEvidence ??
+    card.evidence ??
+    "";
+}
+
+function sourceStatusLabels(source: ReportWorkspace["acceptedSources"][number]): string[] {
+  const labels = ["已接受", sourceCategoryLabel(source.sourceCategory), sourceReadableStatusLabel(source)];
+  if (source.topicalRelevanceLabel === "high") labels.push("高相關");
+  if (source.topicalRelevanceLabel === "medium") labels.push("中相關");
+  if (source.topicalRelevanceLabel === "low") labels.push("低相關");
+  if (source.topicalRelevanceLabel === "irrelevant") labels.push("建議排除");
+  if (source.evidenceSufficiency === "strong") labels.push("內容充足");
+  if (source.evidenceSufficiency === "moderate") labels.push("有摘要可用");
+  if (
+    source.evidenceSufficiency === "weak" ||
+    source.evidenceGrounding === "metadata_only" ||
+    source.evidenceGrounding === "insufficient" ||
+    !source.abstract
+  ) {
+    labels.push("證據不足");
+  }
+  if (source.usageRecommendation === "primary") labels.push("可作主要證據");
+  if (source.usageRecommendation === "secondary") labels.push("可作補充來源");
+  if (source.usageRecommendation === "reference") labels.push("僅供參考");
+  if (source.usageRecommendation === "exclude") labels.push("建議排除");
+  return Array.from(new Set(labels));
+}
+
+function sourceAbstractOnly(source: ReportWorkspace["acceptedSources"][number]): boolean {
+  return !source.evidenceSnippets?.length;
+}
+
+function sourceMainClaim(source: ReportWorkspace["acceptedSources"][number]): string {
+  return source.evidenceSnippets?.[0]?.reasoningZhTw
+    ?? source.sourceRelevanceReasonZhTw
+    ?? source.evidenceSummaryZhTw
+    ?? source.llmSummaryZhTw
+    ?? source.abstract
+    ?? "目前尚未抽出可直接使用的主要主張。";
+}
+
+function sourceUsableEvidence(source: ReportWorkspace["acceptedSources"][number]): string {
+  return source.evidenceSnippets?.[0]?.snippetZhTw
+    ?? source.evidenceSummaryZhTw
+    ?? source.llmSummaryZhTw
+    ?? source.abstract
+    ?? "目前只有書目或來源位置，尚不足以支撐正式論點。";
+}
+
+function sourceLimitations(source: ReportWorkspace["acceptedSources"][number]): string {
+  if (sourceAbstractOnly(source)) {
+    return "此來源目前多半只取得摘要或書目層級資訊，不能視為已完整閱讀全文。";
+  }
+  return source.reviewNotes?.trim() || "此來源已有可用片段，但仍需依正文需要確認引用邊界。";
+}
+
+type PreviewTopicUnderstanding = {
+  normalizedTopic: string;
+  entities: string[];
+  likelyMeanings: string[];
+  researchAngles: Array<{
+    title: string;
+    angle: string;
+    reason: string;
+    searchQueries: string[];
+  }>;
+};
+
+function supplementalQueriesForGap(
+  understanding: PreviewTopicUnderstanding,
+  gap: string,
+): string[] {
+  const normalizedTopic = understanding.normalizedTopic.trim();
+  const base = Array.from(
+    new Set([
+      ...understanding.researchAngles.flatMap((angle) => angle.searchQueries.slice(0, 2)),
+      ...understanding.entities,
+      ...understanding.likelyMeanings,
+      normalizedTopic,
+    ]),
+  ).filter(Boolean);
+
+  if (gap.includes("台灣")) {
+    return base
+      .slice(0, 4)
+      .flatMap((query) => [`台灣 ${query}`.trim(), `${query} Taiwan`.trim()]);
+  }
+  if (gap.includes("統計")) {
+    return base
+      .slice(0, 4)
+      .flatMap((query) => [`${query} 統計 調查`.trim(), `${query} dataset review`.trim()]);
+  }
+  if (gap.includes("反方")) {
+    return base
+      .slice(0, 4)
+      .flatMap((query) => [`${query} limitation review`.trim(), `${query} 爭議 限制`.trim()]);
+  }
+  if (gap.includes("全文") || gap.includes("摘要")) {
+    return base
+      .slice(0, 4)
+      .flatMap((query) => [`${query} systematic review`.trim(), `${query} academic article`.trim()]);
+  }
+  return base.slice(0, 8);
+}
+
+function workspaceMatchesRouteContext(workspace: ReportWorkspace): boolean {
+  const params = new URLSearchParams(window.location.search);
+  return previewWorkspaceMatchesContext(
+    {
+      workflowId: workspace.workflowId,
+      topicHash: workspace.topicHash,
+      isConsistent: workspaceSnapshotIsConsistent(workspace),
+    },
+    {
+      workflowId: params.get("workflowId"),
+      topicHash: params.get("topicHash"),
+    },
+  );
+}
+
+async function runSupplementalSearch(
+  topic: string,
+  gaps: string[],
+): Promise<ReportWorkspace["supplementalSearchDiagnostics"]> {
+  if (gaps.length === 0) {
+    return {
+      attempted: false,
+      gaps: [],
+      queries: [],
+      rawResultCount: 0,
+      filteredResultCount: 0,
+      status: "skipped",
+    };
+  }
+
+  let understanding: PreviewTopicUnderstanding = {
+    normalizedTopic: topic.trim(),
+    entities: [topic.trim()].filter(Boolean),
+    likelyMeanings: [],
+    researchAngles: [],
+  };
+  try {
+    const understandingResponse = await fetch("/api/topic-understanding", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic }),
+    });
+    if (understandingResponse.ok) {
+      understanding = await understandingResponse.json() as PreviewTopicUnderstanding;
+    }
+  } catch {
+    // Keep generic fallback understanding.
+  }
+
+  const queries = Array.from(
+    new Set(gaps.flatMap((gap) => supplementalQueriesForGap(understanding, gap))),
+  ).slice(0, 8);
+  const rawSources: ReportWorkspace["acceptedSources"] = [];
+
+  for (const query of queries) {
+    try {
+      const response = await fetch("/api/search-sources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+      if (!response.ok) continue;
+      const payload = await response.json() as { sources?: ReportWorkspace["acceptedSources"] };
+      rawSources.push(...(payload.sources ?? []));
+    } catch {
+      continue;
+    }
+  }
+
+  const filtered = applySourceRelevanceAssessments(
+    applySourceAuthorityAndLanguage(
+      dedupeSourceRecords(rawSources.map((source) => normalizeSourceForReview(source))),
+    ),
+    topic,
+  ).filter((source) => source.relevanceLevel !== "off_topic");
+
+  return {
+    attempted: true,
+    gaps,
+    queries,
+    rawResultCount: rawSources.length,
+    filteredResultCount: filtered.length,
+    status: filtered.length > 0 ? "attempted" : "insufficient",
+  };
+}
+
 function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWorkspace }) {
   const { toast } = useToast();
   const [workspace, setWorkspace] = useState(initialWorkspace);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [activeSectionId, setActiveSectionId] = useState(
+    initialWorkspace.draft.sections.find((section) => section.sectionId !== "title")?.sectionId ??
+      initialWorkspace.draft.sections[0]?.sectionId ??
+      "",
+  );
+  const [activeEvidenceId, setActiveEvidenceId] = useState<string | null>(null);
   const category = useMemo(
     () => detectTopicCategory(workspace.input.topic, workspace.input.reportType, workspace.input.purpose),
     [workspace.input.purpose, workspace.input.reportType, workspace.input.topic],
   );
   const exportReport = useMemo(() => workspaceToGeneratedReport(workspace, category), [category, workspace]);
   const exportWarnings = buildExportReadinessWarnings(exportReport);
-  const acceptedSourceDigest = useMemo(
+  const generatedAcceptedSourceDigest = useMemo(
     () =>
-      workspace.acceptedSourceDigest ??
       buildAcceptedSourceDigest(workspace.acceptedSources, {
         topic: workspace.input.topic,
       }),
-    [workspace.acceptedSourceDigest, workspace.acceptedSources, workspace.input.topic],
+    [workspace.acceptedSources, workspace.input.topic],
+  );
+  const acceptedSourceDigest = useMemo(
+    () =>
+      !workspace.acceptedSourceDigest ||
+      digestSummaryNeedsRefresh(
+        workspace.acceptedSourceDigest.summary,
+        workspace.acceptedSourceDigest.version,
+      )
+        ? generatedAcceptedSourceDigest
+        : workspace.acceptedSourceDigest,
+    [generatedAcceptedSourceDigest, workspace.acceptedSourceDigest],
   );
   const editPath = `/generator?reportId=${encodeURIComponent(workspace.id)}`;
+  const reportPreviewStyle = useMemo(
+    () => ({
+      fontFamily: workspace.presentation.fontFamily,
+      fontSize: `${workspace.presentation.fontSizePx}px`,
+      lineHeight: String(workspace.presentation.lineHeight),
+    }),
+    [workspace.presentation],
+  );
+  const activeSection = useMemo(
+    () => workspace.draft.sections.find((section) => section.sectionId === activeSectionId) ?? workspace.draft.sections[0],
+    [activeSectionId, workspace.draft.sections],
+  );
+  const activeEvidenceCards = useMemo(
+    () => evidenceCardsForSection(workspace, activeSection),
+    [activeSection, workspace],
+  );
+  const activeSources = useMemo(
+    () => acceptedSourcesForSection(workspace, activeSection),
+    [activeSection, workspace],
+  );
+
+  useEffect(() => {
+    if (!workspace.draft.sections.some((section) => section.sectionId === activeSectionId)) {
+      setActiveSectionId(
+        workspace.draft.sections.find((section) => section.sectionId !== "title")?.sectionId ??
+          workspace.draft.sections[0]?.sectionId ??
+          "",
+      );
+    }
+  }, [activeSectionId, workspace.draft.sections]);
+
+  useEffect(() => {
+    if (
+      !workspace.acceptedSourceDigest ||
+      digestSummaryNeedsRefresh(
+        workspace.acceptedSourceDigest.summary,
+        workspace.acceptedSourceDigest.version,
+      )
+    ) {
+      persistWorkspace((current) => ({
+        ...current,
+        acceptedSourceDigest: generatedAcceptedSourceDigest,
+      }));
+    }
+  }, [generatedAcceptedSourceDigest, workspace.acceptedSourceDigest]);
+
+  const persistWorkspace = (updater: (current: ReportWorkspace) => ReportWorkspace) => {
+    setWorkspace((current) => {
+      const nextWorkspace = {
+        ...updater(current),
+        updatedAt: new Date().toISOString(),
+      };
+      saveReportWorkspace(nextWorkspace);
+      return nextWorkspace;
+    });
+  };
+
+  useEffect(() => {
+    console.info("ResearchForge report pipeline diagnostics", {
+      reportId: workspace.id,
+      acceptedSources: workspace.acceptedSources.length,
+      evidenceCards: workspace.evidenceCards.length,
+      evidenceCardAbstractOnly: workspace.draft.debug?.evidenceCardAbstractOnly ?? [],
+      sectionEvidenceMap: workspace.draft.sectionEvidenceMap ?? [],
+      evidenceGaps: workspace.draft.debug?.evidenceGaps ?? [],
+      supplementalSearch: workspace.supplementalSearchDiagnostics ?? null,
+      paragraphPlans: workspace.draft.paragraphPlans ?? [],
+      reportDraftGeneratedFromPlans:
+        workspace.draft.debug?.reportDraftGeneratedFromPlans ?? false,
+    });
+  }, [workspace]);
+
+  const updateDigestSummary = (summary: string) => {
+    persistWorkspace((current) => ({
+      ...current,
+      acceptedSourceDigest: {
+        ...current.acceptedSourceDigest,
+        summary,
+      },
+    }));
+  };
+
+  const updatePresentation = (patch: Partial<ReportPresentationSettings>) => {
+    persistWorkspace((current) => ({
+      ...current,
+      presentation: normalizeReportPresentation({
+        ...current.presentation,
+        ...patch,
+      }),
+    }));
+  };
+
+  const updateDraftSectionBody = (sectionId: string, body: string) => {
+    persistWorkspace((current) => {
+      const sections = current.draft.sections.map((section) =>
+        section.sectionId === sectionId
+          ? {
+              ...section,
+              body,
+              synthesizedProseZhTw: body,
+              groundingStatus: "unsupported" as const,
+              generationMethod: "needs_manual_review",
+              unsupportedSentences: section.unsupportedSentences ?? [],
+              warnings: Array.from(new Set([...(section.warnings ?? []), "needs_manual_review"])),
+            }
+          : section,
+      );
+      return {
+        ...current,
+        draft: {
+          ...current.draft,
+          sections,
+          text: sections
+            .map((section) => `${section.title}\n${visibleReportSectionText(section)}`)
+            .join("\n\n"),
+        },
+      };
+    });
+  };
+
+  const focusEvidenceCard = (cardId: string) => {
+    setActiveEvidenceId(cardId);
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById(`evidence-card-${cardId}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  };
 
   const warnExportReadiness = () => {
     if (exportWarnings.length === 0) return;
@@ -101,15 +660,66 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
     });
   };
 
-  const handleRegenerate = () => {
+  const handleRegenerate = async () => {
     setIsRegenerating(true);
-    setTimeout(() => {
-      const nextWorkspace = regenerateReportWorkspace(workspace);
-      saveReportWorkspace(nextWorkspace);
-      setWorkspace(nextWorkspace);
+    try {
+      const rebuiltWorkspace = regenerateReportWorkspace(workspace);
+      const supplementalSearchDiagnostics = await runSupplementalSearch(
+        rebuiltWorkspace.input.topic,
+        rebuiltWorkspace.draft.debug?.evidenceGaps ?? rebuiltWorkspace.acceptedSourceDigest.gaps,
+      );
+      console.info("ResearchForge supplemental search diagnostics", supplementalSearchDiagnostics);
+      const rebuiltWithSupplemental = {
+        ...rebuiltWorkspace,
+        supplementalSearchDiagnostics,
+      };
+      saveReportWorkspace(rebuiltWithSupplemental);
+      setWorkspace(rebuiltWithSupplemental);
+
+      const llmDraft = await requestLlmReportDraft({
+        reportInput: rebuiltWithSupplemental.input,
+        workflowId: rebuiltWithSupplemental.workflowId,
+        topicHash: rebuiltWithSupplemental.topicHash,
+        originalTopic:
+          rebuiltWithSupplemental.generationPayload?.originalTopic ??
+          rebuiltWithSupplemental.input.topic,
+        displayTitle:
+          rebuiltWithSupplemental.generationPayload?.displayTitle ??
+          rebuiltWithSupplemental.draft.title,
+        acceptedSources: rebuiltWithSupplemental.acceptedSources,
+        evidenceCards: rebuiltWithSupplemental.evidenceCards,
+        academicSafetyReview:
+          rebuiltWithSupplemental.generationPayload?.academicSafetyReview ?? null,
+        generationMode: rebuiltWithSupplemental.generationMode,
+      });
+
+      const mergedWorkspace = {
+        ...mergeLlmReportDraft(rebuiltWithSupplemental, llmDraft),
+        updatedAt: new Date().toISOString(),
+      };
+
+      saveReportWorkspace(mergedWorkspace);
+      setWorkspace(mergedWorkspace);
+      toast(
+        llmDraft.ok
+          ? {
+              title: "已重新生成",
+              description: "已使用本地 LLM 重新整理草稿與 diagnostics。",
+            }
+          : {
+              title: "已重新整理草稿",
+              description: "本次 AI 強化未完成，但可編修草稿與來源依據都已更新。",
+            },
+      );
+    } catch {
+      toast({
+        title: "重新生成失敗",
+        description: "請稍後再試一次。",
+        variant: "destructive",
+      });
+    } finally {
       setIsRegenerating(false);
-      toast({ title: "已重新生成", description: "大綱、草稿與引用標記已依目前來源重新整理。" });
-    }, 900);
+    }
   };
 
   const handleCopy = () => {
@@ -120,7 +730,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
   const handleDownloadDocx = async () => {
     warnExportReadiness();
     try {
-      await downloadDocx(exportReport, workspace.input);
+      await downloadDocx(exportReport, workspace.input, workspace.presentation);
       toast({ title: "已下載 Word（DOCX）", description: "Word 檔已儲存到你的裝置。" });
     } catch {
       toast({ title: "DOCX 產生失敗", description: "請稍後再試一次。", variant: "destructive" });
@@ -129,7 +739,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
 
   const handlePrintPdf = () => {
     warnExportReadiness();
-    const ok = printPdf(exportReport, workspace.input);
+    const ok = printPdf(exportReport, workspace.input, workspace.presentation);
     toast(
       ok
         ? { title: "正在開啟列印視窗", description: "請在列印對話框選擇「另存為 PDF」。" }
@@ -143,18 +753,6 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
     toast({ title: "已下載 Markdown", description: "Markdown 檔已儲存。" });
   };
 
-  const handleTxt = () => {
-    warnExportReadiness();
-    downloadTxt(exportReport, workspace.input);
-    toast({ title: "已下載 TXT", description: "純文字檔已儲存。" });
-  };
-
-  const handleJson = () => {
-    warnExportReadiness();
-    downloadJson(exportReport, workspace.input);
-    toast({ title: "已下載 JSON", description: "工作區資料已匯出。" });
-  };
-
   return (
     <div className="min-h-screen bg-muted/20">
       <Navbar />
@@ -163,8 +761,16 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="mb-2 flex flex-wrap items-center gap-2">
-                <Badge variant={workspace.generationMode === "full_report" ? "default" : "secondary"}>
-                  {workspace.generationMode === "full_report" ? "完整報告" : "快速草稿"}
+                <Badge variant={workspace.generationMode === "complete_research_report" ? "default" : "secondary"}>
+                  {workspace.generationMode === "complete_research_report"
+                    ? "完整研究報告"
+                    : workspace.generationMode === "standard_research_report"
+                      ? "標準研究報告"
+                      : workspace.generationMode === "short_research_report"
+                        ? "短版研究報告"
+                        : workspace.generationMode === "single_source_review"
+                          ? "單篇文獻整理"
+                          : "初步資料整理"}
                 </Badge>
                 <Badge variant="outline">{workspace.acceptedSources.length} 筆已接受來源</Badge>
                 <Badge variant="outline">工作區 {workspace.id}</Badge>
@@ -173,8 +779,12 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                 {workspace.draft.title}
               </h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                大綱、草稿、來源與匯出集中在此頁；來源審查可返回生成器調整。
+                第三工作區先整理正式草稿與來源依據，第四工作區再調整字體、行距與匯出格式；來源審查可返回生成器調整。
               </p>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                <Badge variant="outline">第三工作區：正式草稿</Badge>
+                <Badge variant="outline">第四工作區：報告格式</Badge>
+              </div>
               <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-md border border-border bg-background px-3 py-2">
                   <span className="block font-medium text-foreground">報告類型</span>
@@ -232,15 +842,68 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
           </section>
         )}
 
+        <section className="mb-5 rounded-lg border border-border bg-card p-4 shadow-sm sm:p-5" data-testid="preview-quality-report">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-base font-semibold text-foreground">品質檢查</h2>
+              <p className="mt-1 text-xs text-muted-foreground">來源、證據卡與章節 grounding 的規則檢查結果。</p>
+            </div>
+            <Badge variant={readinessBadgeVariant(workspace.qualityReport.readiness)}>
+              {readinessLabel(workspace.qualityReport.readiness)}
+            </Badge>
+          </div>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <p className="text-xs text-muted-foreground">已接受來源</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{workspace.qualityReport.acceptedSourceCount} 筆</p>
+            </div>
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <p className="text-xs text-muted-foreground">證據卡</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{workspace.qualityReport.evidenceCardCount} 張</p>
+            </div>
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <p className="text-xs text-muted-foreground">citation 警告</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{workspace.qualityReport.missingCitationWarnings.length} 項</p>
+            </div>
+            <div className="rounded-md border border-border bg-background px-3 py-3">
+              <p className="text-xs text-muted-foreground">過度推論</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{workspace.qualityReport.overclaimWarnings.length + workspace.qualityReport.unsupportedClaimWarnings.length} 項</p>
+            </div>
+          </div>
+          {[
+            ...workspace.qualityReport.missingCitationWarnings,
+            ...workspace.qualityReport.unsupportedClaimWarnings,
+            ...workspace.qualityReport.overclaimWarnings,
+            ...workspace.qualityReport.topicDriftWarnings,
+          ].length > 0 && (
+            <ul className="mt-4 space-y-1.5 rounded-md border border-border bg-muted/20 px-3 py-3 text-xs leading-5 text-muted-foreground">
+              {[
+                ...workspace.qualityReport.missingCitationWarnings,
+                ...workspace.qualityReport.unsupportedClaimWarnings,
+                ...workspace.qualityReport.overclaimWarnings,
+                ...workspace.qualityReport.topicDriftWarnings,
+              ].map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          )}
+        </section>
+
         <section className="mb-5 rounded-lg border border-primary/20 bg-card p-4 shadow-sm sm:p-5" data-testid="preview-source-digest">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="text-base font-semibold text-foreground">資料基礎摘要</h2>
-              <p className="mt-1 text-xs text-muted-foreground">由已接受來源彙整，作為正式草稿前的資料理解基礎。</p>
+              <h2 className="text-base font-semibold text-foreground">摘要</h2>
+              <p className="mt-1 text-xs text-muted-foreground">先把已接受來源整合成可修改的工作摘要，再往下編修正式草稿。</p>
             </div>
             <Badge variant="secondary">{workspace.acceptedSources.length} 筆來源</Badge>
           </div>
-          <p className="text-sm leading-7 text-foreground/90">{acceptedSourceDigest.summary}</p>
+          <Textarea
+            value={acceptedSourceDigest.summary}
+            onChange={(event) => updateDigestSummary(event.target.value)}
+            rows={paragraphRows(acceptedSourceDigest.summary, 4)}
+            className="resize-y border-border bg-background text-sm leading-7 text-foreground/90"
+            data-testid="preview-source-digest-editor"
+          />
           <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
             <div className="rounded-md border border-border bg-background px-3 py-3">
               <h3 className="text-sm font-semibold text-foreground">涵蓋面</h3>
@@ -269,48 +932,412 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
               <p className="mt-2 text-xs leading-5 text-muted-foreground">{acceptedSourceDigest.recommendedNextStep}</p>
             </div>
           </div>
+          {workspace.supplementalSearchDiagnostics?.attempted ? (
+            <div className="mt-4 rounded-md border border-border bg-background px-3 py-3 text-xs leading-5 text-muted-foreground">
+              <p className="font-medium text-foreground">補充來源檢查</p>
+              <p className="mt-1">
+                已針對 {workspace.supplementalSearchDiagnostics.gaps.length} 個缺口補查，
+                並整理出 {workspace.supplementalSearchDiagnostics.filteredResultCount} 筆可能可用的補充來源線索。
+              </p>
+              <p className="mt-1">
+                {workspace.supplementalSearchDiagnostics.status === "insufficient"
+                  ? "已補查但資料不足，缺口仍需保留。"
+                  : "補查結果已重新進入 scoring，待你回到來源區決定是否接受。"}
+              </p>
+            </div>
+          ) : null}
         </section>
 
-        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(280px,0.82fr)_minmax(0,1.35fr)] xl:items-start">
-          <div className="space-y-5">
-            <section className="rounded-lg border border-border bg-card p-4" data-testid="preview-outline">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <h2 className="text-base font-semibold text-foreground">報告大綱</h2>
-                <Badge variant="outline">{workspace.outline.sections.length} 節</Badge>
+        <section className="rounded-lg border border-border bg-card p-4 shadow-sm sm:p-5" data-testid="preview-draft">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <BookOpen className="h-4 w-4 text-primary" />
+                  <h2 className="text-base font-semibold text-foreground">生成草稿</h2>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">左側查看本段落由哪些來源語句構成，中間直接改字，右側對照整體骨架。</p>
               </div>
-              <div className="space-y-2.5">
-                {workspace.outline.sections.map((section) => (
-                  <div key={section.sectionId} className="rounded-md border border-border bg-background px-3 py-3">
-                    <p className="text-sm font-semibold text-foreground">{section.title}</p>
-                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{section.purpose}</p>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="rounded-lg border border-border bg-card p-4" data-testid="preview-accepted-sources">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <h2 className="text-base font-semibold text-foreground">已接受來源</h2>
-                <Badge variant="outline">{workspace.acceptedSources.length} 筆</Badge>
-              </div>
-              <div className="space-y-3">
-                {workspace.acceptedSources.map((source, index) => {
-                  const title = source.title || "標題待確認";
-                  return (
-                    <article key={source.id || `${source.sourceType}-${index}`} className="rounded-md border border-border bg-background p-3.5">
+              <Badge variant="outline">{workspace.draft.sections.length} 段</Badge>
+            </div>
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(260px,0.9fr)_minmax(0,1.45fr)_minmax(230px,0.8fr)] xl:items-start">
+              <aside className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <FileText className="h-4 w-4 text-primary" />
+                  <h3 className="text-sm font-semibold text-foreground">段落依據</h3>
+                </div>
+                <div className="rounded-md border border-border bg-background px-3 py-3">
+                  <p className="text-sm font-semibold text-foreground">{activeSection?.title ?? "尚未選取段落"}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    {activeSection?.sectionGoal ?? "點選中間段落或右側骨架，即可查看這一段的來源構成。"}
+                  </p>
+                </div>
+                {activeEvidenceCards.length > 0 ? (
+                  activeEvidenceCards.map((card, index) => (
+                    <article
+                      key={card.id}
+                      id={`evidence-card-${card.id}`}
+                      className={`rounded-md border bg-background px-3 py-3 transition-colors ${
+                        activeEvidenceId === card.id ? "border-primary shadow-sm" : "border-border"
+                      }`}
+                    >
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <Badge variant="outline">語句依據 {index + 1}</Badge>
+                        <Badge variant="outline">{card.citationMarker || card.citationText}</Badge>
+                        <Badge variant={card.derivation === "metadata-derived" ? "outline" : "secondary"}>
+                          {evidenceCardStatusLabel(card)}
+                        </Badge>
+                        {card.extractionMethod ? (
+                          <Badge variant={card.extractionMethod === "rule_fallback_claim_extraction" ? "outline" : "secondary"}>
+                            {card.extractionMethod}
+                          </Badge>
+                        ) : null}
+                        {card.needsReview || card.needsManualReview || card.extractionMethod === "rule_fallback_claim_extraction" ? (
+                          <Badge variant="outline">需人工複核</Badge>
+                        ) : null}
+                      </div>
+                      <p className="text-xs font-medium leading-5 text-foreground">{card.sourceTitle}</p>
+                      <p className="mt-2 text-xs font-medium leading-5 text-foreground">主要主張</p>
+                      <p className="mt-1 text-sm leading-6 text-foreground/90">{card.claimText || card.mainClaimZhTw || card.mainClaim || card.summary}</p>
+                      {evidenceSupportSpan(card) ? (
+                        <>
+                          <p className="mt-2 text-xs font-medium leading-5 text-foreground">support span</p>
+                          <p className="mt-1 text-sm leading-6 text-foreground/90">{evidenceSupportSpan(card)}</p>
+                        </>
+                      ) : null}
+                      {(card.sectionFit?.length || card.sectionTargets?.length) ? (
+                        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                          sectionFit：{(card.sectionFit ?? card.sectionTargets).join("、")}
+                        </p>
+                      ) : null}
+                      <p className="mt-2 text-xs font-medium leading-5 text-foreground">可用證據</p>
+                      <p className="mt-1 text-sm leading-6 text-foreground/90">
+                        {card.usableEvidence || card.quoteOrParaphrase || card.summary || card.evidence}
+                      </p>
+                      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                        {card.citationText}・{card.sourceLocation || card.pageOrLocation || "摘要整理"}
+                        {card.extractionMethod ? `・${card.extractionMethod}` : ""}
+                        {card.extractionStatus ? `・${card.extractionStatus}` : ""}
+                        {card.needsReview || card.needsManualReview ? "・needs review" : ""}
+                      </p>
+                      {card.limitation || card.rejectionReason ? (
+                        <p className="mt-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-5 text-muted-foreground">
+                          {card.rejectionReason ? `rejection：${card.rejectionReason}` : `限制：${card.limitation}`}
+                        </p>
+                      ) : null}
+                      {card.limitations.length > 0 ? (
+                        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                          limitations：{card.limitations.slice(0, 2).join("；")}
+                        </p>
+                      ) : null}
+                    </article>
+                  ))
+                ) : activeSources.length > 0 ? (
+                  activeSources.map((source, index) => (
+                    <article key={source.id || `${source.sourceType}-${index}`} className="rounded-md border border-border bg-background px-3 py-3">
                       <div className="mb-2 flex flex-wrap items-center gap-2">
                         <Badge variant="outline">來源 {index + 1}</Badge>
-                        <Badge variant="secondary">{sourceCategoryLabel(source.sourceCategory)}</Badge>
-                        <Badge variant="outline">可信度 {source.confidence ?? "中"}</Badge>
+                        {sourceStatusLabels(source).slice(0, 2).map((label) => (
+                          <Badge key={label} variant={label === "已接受" ? "secondary" : "outline"}>
+                            {label}
+                          </Badge>
+                        ))}
                       </div>
-                      <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-foreground" title={title}>{title}</h3>
-                      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                        {formatSourceAuthors(source.authors)}・{source.year ?? "年份待確認"}・{sourceLocator(source)}
+                      <p className="text-sm font-medium leading-6 text-foreground">{source.title || "標題待確認"}</p>
+                      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                        {source.evidenceSummaryZhTw || source.abstract || "目前只有書目線索，尚未抽出可驗證摘錄。"}
                       </p>
-                      {source.reviewNotes && <p className="mt-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-relaxed text-muted-foreground">筆記：{source.reviewNotes}</p>}
+                    </article>
+                  ))
+                ) : (
+                  <div className="rounded-md border border-dashed border-border bg-background px-3 py-4 text-sm leading-6 text-muted-foreground">
+                    這一段目前還沒有對應的證據卡。若要讓內容更穩，建議先回到生成區補來源或重新生成。
+                  </div>
+                )}
+                {activeSection?.warnings.length ? (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-xs leading-5 text-amber-800">
+                    {activeSection.warnings.join(" ")}
+                  </div>
+                ) : null}
+              </aside>
+
+              <div className="space-y-5" style={reportPreviewStyle}>
+                {workspace.draft.sections.map((section) => {
+                  const isActive = section.sectionId === activeSection?.sectionId;
+                  return (
+                    <article
+                      key={section.sectionId}
+                      className={`rounded-md border bg-background px-4 py-4 transition-colors sm:px-5 ${
+                        isActive ? "border-primary shadow-sm" : "border-border"
+                      }`}
+                      onClick={() => setActiveSectionId(section.sectionId)}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h3
+                            className={`text-foreground ${workspace.presentation.headingStyle === "modern" ? "text-[15px] font-semibold tracking-[0.02em] uppercase" : "text-base font-semibold leading-6"}`}
+                          >
+                            {section.title}
+                          </h3>
+                          <p className="mt-1 text-xs leading-5 text-muted-foreground">{section.sectionGoal}</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Badge variant={evidenceCoverageBadgeVariant(section.evidenceCoverageStatus)}>
+                            {evidenceCoverageLabel(section.evidenceCoverageStatus)}
+                          </Badge>
+                          <Badge variant={groundingStatusBadgeVariant(section.groundingStatus, section.generationMethod, section.warnings)}>
+                            {groundingStatusLabel(section.groundingStatus, section.generationMethod, section.warnings)}
+                          </Badge>
+                          <Badge variant="outline">{section.evidenceCardCount ?? section.evidenceCardIds.length} 張證據</Badge>
+                          <Badge variant="outline">{section.citationCount ?? section.citationMarkers.length} 個 citation</Badge>
+                          <Badge variant="outline">{section.unsupportedSentences?.length ?? 0} unsupported</Badge>
+                        </div>
+                      </div>
+                      {section.evidenceCoverageStatus === "insufficient" ? (
+                        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                          目前此段來源不足，建議補充來源或改為保守敘述。
+                        </div>
+                      ) : null}
+                      <Textarea
+                        value={visibleReportSectionText(section)}
+                        onFocus={() => setActiveSectionId(section.sectionId)}
+                        onChange={(event) => updateDraftSectionBody(section.sectionId, event.target.value)}
+                        rows={paragraphRows(visibleReportSectionText(section), 6)}
+                        className="mt-3 resize-y border-border bg-background text-sm text-foreground/90"
+                        style={{
+                          marginBottom: `${workspace.presentation.paragraphSpacingPx}px`,
+                          lineHeight: workspace.presentation.lineHeight,
+                        }}
+                        data-testid={`draft-editor-${section.sectionId}`}
+                      />
+                      {section.citationMarkers.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                          {section.citationMarkers.map((marker, markerIndex) => {
+                            const targetCard =
+                              workspace.evidenceCards.find((card) =>
+                                section.evidenceCardIds.includes(card.id) &&
+                                (card.citationMarker === marker || card.citationText === marker),
+                              ) ??
+                              workspace.evidenceCards.find((card) =>
+                                section.evidenceCardIds.includes(card.id),
+                              );
+                            return (
+                              <button
+                                key={`${section.sectionId}-${marker}-${markerIndex}`}
+                                type="button"
+                                className="rounded-md border border-border bg-muted/30 px-2 py-1 text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+                                onClick={() => {
+                                  setActiveSectionId(section.sectionId);
+                                  if (targetCard) focusEvidenceCard(targetCard.id);
+                                }}
+                              >
+                                {marker}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                      {(section.unsupportedSentences?.length ?? 0) > 0 ? (
+                        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                          unsupported：{section.unsupportedSentences?.slice(0, 2).join(" ")}
+                        </div>
+                      ) : null}
                     </article>
                   );
                 })}
+              </div>
+
+              <aside className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Shapes className="h-4 w-4 text-primary" />
+                  <h3 className="text-sm font-semibold text-foreground">整體骨架</h3>
+                </div>
+                <div className="space-y-2.5">
+                  {workspace.outline.sections.map((section) => {
+                    const isActive = section.sectionId === activeSection?.sectionId;
+                    const draftSection = workspace.draft.sections.find((item) => item.sectionId === section.sectionId);
+                    return (
+                      <button
+                        key={section.sectionId}
+                        type="button"
+                        onClick={() => setActiveSectionId(section.sectionId)}
+                        className={`w-full rounded-md border px-3 py-3 text-left transition-colors ${
+                          isActive
+                            ? "border-primary bg-primary/5"
+                            : "border-border bg-background hover:border-primary/40"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-foreground">{section.title}</p>
+                          {draftSection ? (
+                            <>
+                              <Badge variant={evidenceCoverageBadgeVariant(draftSection.evidenceCoverageStatus)}>
+                                {evidenceCoverageLabel(draftSection.evidenceCoverageStatus)}
+                              </Badge>
+                              <Badge variant={groundingStatusBadgeVariant(draftSection.groundingStatus, draftSection.generationMethod, draftSection.warnings)}>
+                                {groundingStatusLabel(draftSection.groundingStatus, draftSection.generationMethod, draftSection.warnings)}
+                              </Badge>
+                            </>
+                          ) : null}
+                        </div>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">{section.purpose}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </aside>
+            </div>
+          </section>
+
+        <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.82fr)] xl:items-start">
+          <section className="rounded-lg border border-border bg-card p-4" data-testid="preview-accepted-sources">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h2 className="text-base font-semibold text-foreground">已接受來源</h2>
+              <Badge variant="outline">{workspace.acceptedSources.length} 筆</Badge>
+            </div>
+            <div className="space-y-3">
+              {workspace.acceptedSources.map((source, index) => {
+                const title = source.title || "標題待確認";
+                return (
+                  <article key={source.id || `${source.sourceType}-${index}`} className="rounded-md border border-border bg-background p-3.5">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">來源 {index + 1}</Badge>
+                      {sourceStatusLabels(source).map((label) => (
+                        <Badge key={label} variant={label === "已接受" ? "secondary" : "outline"}>
+                          {label}
+                        </Badge>
+                      ))}
+                    </div>
+                    <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-foreground" title={title}>{title}</h3>
+                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                      {formatSourceAuthors(source.authors)}・{source.year ?? "年份待確認"}・{sourceLocator(source)}
+                    </p>
+                    <div className="mt-3 space-y-2 text-xs leading-5">
+                      <div>
+                        <p className="font-medium text-foreground">摘要</p>
+                        <p className="mt-1 text-muted-foreground">
+                          {source.llmSummaryZhTw || source.evidenceSummaryZhTw || source.abstract || "目前尚未整理出可用摘要。"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="font-medium text-foreground">主要主張</p>
+                        <p className="mt-1 text-muted-foreground">{sourceMainClaim(source)}</p>
+                      </div>
+                      <div>
+                        <p className="font-medium text-foreground">可用證據</p>
+                        <p className="mt-1 text-muted-foreground">{sourceUsableEvidence(source)}</p>
+                      </div>
+                      <div>
+                        <p className="font-medium text-foreground">限制</p>
+                        <p className="mt-1 text-muted-foreground">{sourceLimitations(source)}</p>
+                      </div>
+                      {sourceExtractionDetails(source).length > 0 ? (
+                        <div>
+                          <p className="font-medium text-foreground">全文抽取</p>
+                          <p className="mt-1 text-muted-foreground">{sourceExtractionDetails(source).join("｜")}</p>
+                        </div>
+                      ) : null}
+                      {sourceExtractionWarnings(source) ? (
+                        <div>
+                          <p className="font-medium text-foreground">抽取警告</p>
+                          <p className="mt-1 text-muted-foreground">{sourceExtractionWarnings(source)}</p>
+                        </div>
+                      ) : null}
+                      <p className="text-muted-foreground">
+                        abstractOnly: {sourceAbstractOnly(source) ? "true" : "false"}
+                      </p>
+                    </div>
+                    {source.reviewNotes ? (
+                      <p className="mt-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-relaxed text-muted-foreground">
+                        筆記：{source.reviewNotes}
+                      </p>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+          <div className="space-y-5">
+            <section className="rounded-lg border border-border bg-card p-4 shadow-sm" data-testid="preview-format-settings">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-base font-semibold text-foreground">第四工作區：報告格式</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {REPORT_FONT_INSTALL_NOTE} 草稿完成後，再在這裡調整字體、標題樣式與段落密度。
+                  </p>
+                </div>
+                <Badge variant="outline">{reportFontOptionById(workspace.presentation.fontId).label}</Badge>
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>字體</Label>
+                  <Select
+                    value={workspace.presentation.fontId}
+                    onValueChange={(value) => {
+                      const option = reportFontOptionById(value as ReportPresentationSettings["fontId"]);
+                      updatePresentation({ fontId: option.id, fontFamily: option.fontFamily });
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {REPORT_FONT_OPTIONS.map((option) => (
+                        <SelectItem key={option.id} value={option.id}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>標題樣式</Label>
+                  <Select
+                    value={workspace.presentation.headingStyle}
+                    onValueChange={(value) =>
+                      updatePresentation({
+                        headingStyle: value as ReportPresentationSettings["headingStyle"],
+                      })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="classic">正式經典</SelectItem>
+                      <SelectItem value="modern">簡潔現代</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <label className="space-y-2">
+                  <span className="flex items-center justify-between text-sm text-muted-foreground">
+                    <span>字級</span>
+                    <span>{workspace.presentation.fontSizePx}px</span>
+                  </span>
+                  <input
+                    type="range"
+                    min={14}
+                    max={22}
+                    step={1}
+                    value={workspace.presentation.fontSizePx}
+                    onChange={(event) => updatePresentation({ fontSizePx: Number(event.target.value) })}
+                    className="w-full"
+                  />
+                </label>
+                <label className="space-y-2">
+                  <span className="flex items-center justify-between text-sm text-muted-foreground">
+                    <span>行距</span>
+                    <span>{workspace.presentation.lineHeight.toFixed(2)}</span>
+                  </span>
+                  <input
+                    type="range"
+                    min={1.4}
+                    max={2}
+                    step={0.05}
+                    value={workspace.presentation.lineHeight}
+                    onChange={(event) => updatePresentation({ lineHeight: Number(event.target.value) })}
+                    className="w-full"
+                  />
+                </label>
               </div>
             </section>
 
@@ -318,11 +1345,11 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h2 className="text-base font-semibold text-foreground">匯出與下載</h2>
-                  <p className="mt-1 text-xs text-muted-foreground">輸出正式交付檔，或複製純文字再自行排版。</p>
+                  <p className="mt-1 text-xs text-muted-foreground">匯出會帶入目前頁面上已修改的摘要、草稿與格式設定。</p>
                 </div>
                 <Badge variant="secondary">可匯出</Badge>
               </div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-2">
                 <Button size="sm" className="min-h-[42px] justify-start" onClick={handleDownloadDocx} data-testid="button-preview-export-docx">
                   <FileType className="mr-2 h-4 w-4" /> DOCX
                 </Button>
@@ -338,27 +1365,6 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
               </div>
             </section>
           </div>
-
-          <section className="rounded-lg border border-border bg-card p-4 shadow-sm sm:p-5" data-testid="preview-draft">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <BookOpen className="h-4 w-4 text-primary" />
-                  <h2 className="text-base font-semibold text-foreground">生成草稿</h2>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">內文中的（來源 N）為 inline citation markers。</p>
-              </div>
-              <Badge variant="outline">{workspace.draft.sections.length} 段</Badge>
-            </div>
-            <div className="mx-auto max-w-3xl space-y-5">
-              {workspace.draft.sections.map((section) => (
-                <article key={section.sectionId} className="rounded-md border border-border bg-background px-4 py-4 sm:px-5">
-                  <h3 className="text-base font-semibold leading-6 text-foreground">{section.title}</h3>
-                  <p className="mt-3 whitespace-pre-line text-sm leading-7 text-foreground/90 sm:text-[15px] sm:leading-8">{section.body}</p>
-                </article>
-              ))}
-            </div>
-          </section>
         </div>
       </main>
     </div>
@@ -370,6 +1376,25 @@ export function ReportPreview() {
   const [, previewMatch] = useRoute("/preview/:reportId");
   const reportId = reportMatch?.reportId ?? previewMatch?.reportId;
   const workspace = reportId ? loadReportWorkspace(reportId) : null;
+
+  if (workspace && !workspaceMatchesRouteContext(workspace)) {
+    return (
+      <div className="min-h-screen bg-muted/20">
+        <Navbar />
+        <main className="container mx-auto max-w-3xl px-4 pb-12 pt-24">
+          <section className="rounded-lg border border-border bg-card p-6 text-center">
+            <h1 className="text-xl font-semibold text-foreground">此報告不屬於目前工作流程</h1>
+            <p className="mt-2 text-sm text-muted-foreground">工作流程、主題或來源快照不一致。請回到生成器重新搜尋並接受目前主題的來源後，再建立新的報告工作區。</p>
+            <Link href="/generator">
+              <Button className="mt-4">
+                <ArrowLeft className="mr-2 h-4 w-4" /> 回到生成器
+              </Button>
+            </Link>
+          </section>
+        </main>
+      </div>
+    );
+  }
 
   if (!workspace || !reportId) {
     return (

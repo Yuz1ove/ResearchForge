@@ -53,7 +53,9 @@ test("accepted source digest summarizes multiple sources without listing source 
     { topic: "短影音與注意力", currentYear: 2026 },
   );
 
-  assert.match(digest.summary, /目前已接受 2 筆來源/);
+  assert.match(digest.summary, /短影音與注意力/u);
+  assert.match(digest.summary, /目前已接受 2 筆來源/u);
+  assert.doesNotMatch(digest.summary, /目前可先從/u);
   assert.doesNotMatch(digest.summary, /來源 1|來源 2|Source 1|Source 2/);
   assert.ok(digest.coverage.length > 0);
 });
@@ -77,7 +79,7 @@ test("accepted source digest creates metadata-driven gap reminders", () => {
     { currentYear: 2026 },
   );
 
-  assert.ok(digest.gaps.includes("部分來源摘要不足，建議開啟原文確認"));
+  assert.ok(digest.gaps.includes("部分來源摘要不足，已降為保守證據"));
   assert.ok(digest.gaps.includes("缺少近三年研究"));
   assert.ok(digest.gaps.includes("缺少官方資料"));
 });

@@ -108,6 +108,13 @@ test("keyword source search returns grouped provider errors without crashing", a
       queryLimit: 1,
       sourceSearch: {
         providerConfigs: {
+          OpenAlex: {
+            provider: "OpenAlex",
+            endpoint: "https://example.test/openalex/works",
+            timeoutMs: 50,
+            queryLimit: 1,
+            headers: { Accept: "application/json", "User-Agent": "ReportFactoryAI/Test" },
+          },
           Crossref: {
             provider: "Crossref",
             endpoint: "https://example.test/works",
@@ -131,8 +138,8 @@ test("keyword source search returns grouped provider errors without crashing", a
   assert.equal(result.ok, true);
   assert.equal(result.llm_status, "skipped");
   assert.equal(result.keyword_expansion.fallback_used, true);
-  assert.ok(result.groups.length >= 2);
+  assert.equal(result.groups.length, 3);
   assert.ok(result.groups.every((group) => group.ok === false));
-  assert.ok(result.groups.every((group) => group.error_type === "api-failure"));
+  assert.ok(result.groups.every((group) => group.error_type === "server_error"));
   assert.deepEqual(result.sources, []);
 });

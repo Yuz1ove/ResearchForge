@@ -16,33 +16,33 @@ export function Features() {
   const features = [
     {
       icon: <FileText className="h-6 w-6" />,
-      title: "多樣報告類型",
-      description: "生成執行摘要、市場分析、風險評估、競爭分析與財務報告，每種類型均依其專業領域提供量身訂製的結構。"
+      title: "多用途內容架構",
+      description: "生成報告、總結、摘要、知識庫條目、研究計畫與簡報大綱等不同內容骨架。"
     },
     {
       icon: <Target className="h-6 w-6" />,
-      title: "目標讀者精準設定",
-      description: "根據讀者對象（董事會、投資人或一般大眾）自動調整詞彙選用、指標重點與摘要深度。"
+      title: "主題問題收斂",
+      description: "把模糊題目拆成核心問題、子題、關鍵詞與可查證方向。"
     },
     {
       icon: <Layers className="h-6 w-6" />,
-      title: "精確語氣控制",
-      description: "精準設定您需要的語氣：正式專業、分析數據導向、說服策略型，或中立客觀，四種風格自由切換。"
+      title: "資料脈絡整理",
+      description: "將來源、摘要、重點、限制與待補資料整理成清楚可追溯的內容流程。"
     },
     {
       icon: <BarChart3 className="h-6 w-6" />,
-      title: "智慧圖表建議",
-      description: "引擎分析您的數據後，自動推薦最適合的圖表類型（長條圖、折線圖、散點圖、圓餅圖），讓關鍵發現一目瞭然。"
+      title: "圖表與數據建議",
+      description: "依照主題推薦適合的表格、比較圖、時間軸或重點矩陣，讓內容更容易閱讀。"
     },
     {
       icon: <Download className="h-6 w-6" />,
       title: "多格式匯出",
-      description: "即時匯出為 PDF 最終版本、DOCX 供進一步編輯，或複製為 Markdown 無縫貼入 Notion、Roam 或公司 Wiki。"
+      description: "匯出或複製草稿內容，方便貼入 Word、Google Docs、Notion 或報告說明書繼續修改。"
     },
     {
       icon: <Zap className="h-6 w-6" />,
-      title: "動態參考資料整合",
-      description: "貼入大量非結構化的背景資訊、會議記錄或原始數據，引擎將自動整合並轉化為結構清晰的敘事內容。"
+      title: "參考資料整合",
+      description: "整理可信來源、摘要與資料缺口，避免內容只有想法而缺少可追溯的證據。"
     }
   ];
 
@@ -54,8 +54,8 @@ export function Features() {
         {/* Header */}
         <section className="py-20 bg-muted/30 border-b border-border">
           <div className="container mx-auto px-4 max-w-4xl text-center">
-            <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-6">強大功能，<br />輸出專業成果</h1>
-            <p className="text-xl text-muted-foreground">一切您所需要的工具，讓您在極短時間內產出董事會級別的文件。</p>
+            <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-6">知識整理工具，<br />從主題到內容</h1>
+            <p className="text-xl text-muted-foreground">協助把研究構想、零散素材與來源資料整理成可閱讀、可追溯、可再利用的內容草稿。</p>
           </div>
         </section>
 
@@ -81,13 +81,13 @@ export function Features() {
         {/* Quality Guarantees */}
         <section className="py-20 bg-sidebar text-sidebar-foreground">
           <div className="container mx-auto px-4 max-w-4xl">
-            <h2 className="text-3xl font-bold text-center mb-12 text-sidebar-foreground">企業級可靠性保證</h2>
+            <h2 className="text-3xl font-bold text-center mb-12 text-sidebar-foreground">內容準備檢查</h2>
             <div className="space-y-6">
               {[
-                "零數據留存——您的專有資料絕不用於模型訓練。",
-                "確定性輸出——每次均保證一致的格式與結構。",
-                "SOC2 Type II 合規認證（Q4 即將推出）。",
-                "企業方案享有 99.99% 正常運行時間 SLA。"
+                "主題是否能形成清楚的核心問題。",
+                "內容是否具備背景、重點、證據與結論。",
+                "資料來源是否可追溯，並標示仍需補查的部分。",
+                "輸出是否適合報告、摘要、總結或知識庫使用。"
               ].map((item, i) => (
                 <div key={i} className="flex items-center gap-4 bg-sidebar-accent/50 p-4 rounded-lg">
                   <CheckCircle className="h-6 w-6 text-primary shrink-0" />
@@ -99,7 +99,7 @@ export function Features() {
             <div className="mt-16 text-center">
               <Link href="/generator" data-testid="button-features-try">
                 <Button size="lg" className="h-14 px-8 text-base bg-primary text-primary-foreground">
-                  立即試用生成器
+                  開始整理內容
                 </Button>
               </Link>
             </div>

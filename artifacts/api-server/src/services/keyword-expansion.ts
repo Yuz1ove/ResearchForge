@@ -2,7 +2,12 @@ import {
   dedupeSourceRecords,
   type SourceRecord,
 } from "@workspace/api-zod";
-import { getReportModelConfig } from "./report-model-config";
+import {
+  LlmAdapterError,
+  requestOpenAICompatibleChatCompletion,
+  safeJsonParse,
+  type OpenAICompatibleLlmConfig,
+} from "./llm-adapter";
 import {
   searchSourceProviders,
   type SourceFetch,
@@ -41,16 +46,9 @@ export interface KeywordSourceSearchResult {
   sources: SourceRecord[];
 }
 
-export interface KeywordLlmConfig {
-  baseUrl?: string;
-  apiKey?: string;
-  model?: string;
-  timeoutMs: number;
-}
-
 export interface KeywordExpansionOptions {
   fetchImpl?: SourceFetch;
-  llm?: Partial<KeywordLlmConfig>;
+  llm?: Partial<OpenAICompatibleLlmConfig>;
 }
 
 export interface KeywordSourceSearchOptions extends KeywordExpansionOptions {
@@ -60,6 +58,7 @@ export interface KeywordSourceSearchOptions extends KeywordExpansionOptions {
 
 type KeywordExpansionErrorCode =
   | "provider-unconfigured"
+  | "model-missing"
   | "provider-quota"
   | "provider-timeout"
   | "provider-failure"
@@ -76,7 +75,6 @@ class KeywordExpansionError extends Error {
   }
 }
 
-const DEFAULT_KEYWORD_LLM_TIMEOUT_MS = 10000;
 const DEFAULT_KEYWORD_QUERY_LIMIT = 4;
 
 const CONTROLLED_DOMAINS = [
@@ -274,35 +272,11 @@ export function buildFallbackKeywordExpansion(
   };
 }
 
-function keywordLlmConfig(options?: KeywordExpansionOptions): KeywordLlmConfig {
-  const reportModelConfig = getReportModelConfig();
-  return {
-    baseUrl: options?.llm?.baseUrl
-      ?? process.env.KEYWORD_LLM_BASE_URL
-      ?? process.env.LLM_BASE_URL
-      ?? process.env.OPENAI_BASE_URL
-      ?? "https://api.openai.com/v1",
-    apiKey: options?.llm?.apiKey
-      ?? process.env.KEYWORD_LLM_API_KEY
-      ?? process.env.LLM_API_KEY
-      ?? process.env.OPENAI_API_KEY,
-    model: options?.llm?.model
-      ?? process.env.KEYWORD_LLM_MODEL
-      ?? process.env.LLM_MODEL
-      ?? process.env.OPENAI_MODEL
-      ?? reportModelConfig.cheapModel,
-    timeoutMs: options?.llm?.timeoutMs
-      ?? (Number(process.env.KEYWORD_LLM_TIMEOUT_MS) || DEFAULT_KEYWORD_LLM_TIMEOUT_MS),
-  };
-}
-
-function chatCompletionsUrl(baseUrl: string): URL {
-  const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-  return new URL("chat/completions", normalizedBase);
-}
-
 function fallbackReason(error: unknown): string {
   if (error instanceof KeywordExpansionError) {
+    return `LLM keyword expansion fallback (${error.code}): ${error.message}`;
+  }
+  if (error instanceof LlmAdapterError) {
     return `LLM keyword expansion fallback (${error.code}): ${error.message}`;
   }
   if (error instanceof Error) {
@@ -312,6 +286,12 @@ function fallbackReason(error: unknown): string {
 }
 
 function llmStatusFromError(error: unknown): KeywordLlmStatus {
+  if (error instanceof LlmAdapterError) {
+    if (error.code === "provider-unconfigured") return "skipped";
+    if (error.code === "provider-quota") return "quota_exceeded";
+    if (error.code === "provider-timeout") return "timeout";
+    return "failed";
+  }
   if (error instanceof KeywordExpansionError) {
     if (error.code === "provider-unconfigured") return "skipped";
     if (error.code === "provider-quota") return "quota_exceeded";
@@ -322,30 +302,14 @@ function llmStatusFromError(error: unknown): KeywordLlmStatus {
   return "failed";
 }
 
-function isQuotaOrAuthFailure(status: number, body: string): boolean {
-  return status === 403
-    || status === 429
-    || body.includes("DAILY_LIMIT_EXCEEDED")
-    || body.includes("quota")
-    || body.includes("rate limit");
-}
-
-function llmHttpErrorMessage(status: number): string {
-  if (status === 401) return "LLM provider returned HTTP 401.";
-  if (status === 403 || status === 429) return `LLM provider quota or access limit returned HTTP ${status}.`;
-  return `LLM provider returned HTTP ${status}.`;
-}
-
 function extractJsonObject(text: string): unknown {
   try {
-    return JSON.parse(text);
-  } catch {
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      return JSON.parse(text.slice(start, end + 1));
+    return safeJsonParse(text);
+  } catch (error) {
+    if (error instanceof LlmAdapterError) {
+      throw new KeywordExpansionError("invalid-json", error.message, error);
     }
-    throw new KeywordExpansionError("invalid-json", "LLM response did not contain valid JSON.");
+    throw error;
   }
 }
 
@@ -396,86 +360,55 @@ async function requestLlmKeywordExpansion(
   input: KeywordExpansionRequest,
   options?: KeywordExpansionOptions,
 ): Promise<KeywordExpansionResult> {
-  const config = keywordLlmConfig(options);
-  if (!config.apiKey?.trim()) {
-    throw new KeywordExpansionError("provider-unconfigured", "No LLM API key is configured.");
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
-
   try {
-    const response = await (options?.fetchImpl ?? fetch)(chatCompletionsUrl(config.baseUrl ?? ""), {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        temperature: 0.1,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: [
-              "You expand academic source-search keywords for ResearchForge.",
-              "Return strict JSON only, with no markdown.",
-              `Allowed domains: ${CONTROLLED_DOMAINS.join(", ")}.`,
-              "Do not include urban_studies, transportation, public_policy, or community_development unless the topic explicitly mentions city, traffic, policy, community, government, or similar cues.",
-            ].join(" "),
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              topic: input.topic,
-              reportType: input.reportType ?? "研究報告",
-              audience: input.audience ?? "",
-              sourceMode: input.sourceMode ?? "",
-              language: input.language ?? "zh-TW",
-              required_schema: {
-                normalized_topic: "string",
-                domains: "string[]",
-                search_queries: "string[]",
-                english_queries: "string[]",
-                chinese_queries: "string[]",
-                preferred_source_types: "string[]",
-                avoid_source_types: "string[]",
-                reasoning_notes: "string[]",
-                fallback_used: "boolean",
-              },
-            }),
-          },
-        ],
-      }),
+    const content = await requestOpenAICompatibleChatCompletion({
+      purpose: "planner",
+      featureName: "topic_keyword_expansion",
+      temperature: 0.1,
+      maxTokens: 1_200,
+      responseFormat: "json_object",
+      llm: options?.llm,
+      fetchImpl: options?.fetchImpl,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You expand academic source-search keywords for ResearchForge.",
+            "Return strict JSON only, with no markdown.",
+            `Allowed domains: ${CONTROLLED_DOMAINS.join(", ")}.`,
+            "Do not include urban_studies, transportation, public_policy, or community_development unless the topic explicitly mentions city, traffic, policy, community, government, or similar cues.",
+          ].join(" "),
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            topic: input.topic,
+            reportType: input.reportType ?? "研究報告",
+            audience: input.audience ?? "",
+            sourceMode: input.sourceMode ?? "",
+            language: input.language ?? "zh-TW",
+            required_schema: {
+              normalized_topic: "string",
+              domains: "string[]",
+              search_queries: "string[]",
+              english_queries: "string[]",
+              chinese_queries: "string[]",
+              preferred_source_types: "string[]",
+              avoid_source_types: "string[]",
+              reasoning_notes: "string[]",
+              fallback_used: "boolean",
+            },
+          }),
+        },
+      ],
     });
-
-    const body = await response.text();
-    if (!response.ok) {
-      throw new KeywordExpansionError(
-        isQuotaOrAuthFailure(response.status, body) ? "provider-quota" : "provider-failure",
-        llmHttpErrorMessage(response.status),
-      );
-    }
-
-    const payload = extractJsonObject(body) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = payload.choices?.[0]?.message?.content;
-    if (!content) {
-      throw new KeywordExpansionError("invalid-json", "LLM response did not include message content.");
-    }
-
     return coerceKeywordExpansion(extractJsonObject(content), input, false);
   } catch (error) {
     if (error instanceof KeywordExpansionError) throw error;
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new KeywordExpansionError("provider-timeout", "LLM keyword expansion timed out.", error);
+    if (error instanceof LlmAdapterError) {
+      throw new KeywordExpansionError(error.code, error.message, error);
     }
     throw new KeywordExpansionError("provider-failure", "LLM keyword expansion request failed.", error);
-  } finally {
-    clearTimeout(timeout);
   }
 }
 

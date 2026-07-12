@@ -12,6 +12,10 @@ tags:
     description: Health operations
   - name: sources
     description: Source retrieval operations
+  - name: topics
+    description: Topic understanding operations
+  - name: grounding
+    description: Durable research grounding job operations
 paths:
   /healthz:
     get:
@@ -31,7 +35,7 @@ paths:
       operationId: searchSources
       tags: [sources]
       summary: Search sources
-      description: Searches Crossref and Semantic Scholar for academic/web sources related to a research topic.
+      description: Searches OpenAlex, Semantic Scholar, and Crossref for academic/web sources related to a research topic.
       requestBody:
         required: true
         content:
@@ -88,6 +92,110 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /topic-understanding:
+    post:
+      operationId: topicUnderstanding
+      tags: [topics]
+      summary: Understand a research topic
+      description: Expands a topic into structured research angles with deterministic fallback when local LLM is unavailable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TopicUnderstandingRequest"
+      responses:
+        "200":
+          description: Topic understanding result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicUnderstandingResult"
+        "400":
+          description: Invalid topic request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Topic understanding failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /research-grounding-jobs:
+    post:
+      operationId: createResearchGroundingJob
+      tags: [grounding]
+      summary: Create and complete a durable research grounding job
+      description: Persists the job before executing the bounded grounding pipeline. The response contains the durable job identity and final or in-progress status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResearchGroundingJobCreateRequest"
+      responses:
+        "200":
+          description: Durable grounding job created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResearchGroundingJobCreateResponse"
+        "400":
+          description: Invalid grounding request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJobErrorResponse"
+        "500":
+          description: Grounding job creation failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJobErrorResponse"
+        "503":
+          description: Durable store is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJobErrorResponse"
+  /research-grounding-jobs/{jobId}:
+    get:
+      operationId: getResearchGroundingJob
+      tags: [grounding]
+      summary: Read a durable research grounding job
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Grounding job state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJob"
+        "404":
+          description: Grounding job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJobErrorResponse"
+        "500":
+          description: Grounding job polling failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJobErrorResponse"
+        "503":
+          description: Durable store is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroundingJobErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -107,6 +215,78 @@ components:
         topic:
           type: string
           minLength: 1
+        originalTopic:
+          type: string
+        activeResearchTopic:
+          type: string
+        refinedTopic:
+          type: string
+        displayTitle:
+          type: string
+        canonicalTopicZh:
+          type: string
+        canonicalTopicEn:
+          type: string
+        querySeedZh:
+          type: array
+          items:
+            type: string
+        querySeedEn:
+          type: array
+          items:
+            type: string
+        subtopics:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              titleZh:
+                type: string
+              titleEn:
+                type: string
+              queryZh:
+                type: array
+                items:
+                  type: string
+              queryEn:
+                type: array
+                items:
+                  type: string
+              mustIncludeTerms:
+                type: array
+                items:
+                  type: string
+              excludeTerms:
+                type: array
+                items:
+                  type: string
+              expectedSourceTypes:
+                type: array
+                items:
+                  type: string
+        mustIncludeTerms:
+          type: array
+          items:
+            type: string
+        excludeTerms:
+          type: array
+          items:
+            type: string
+        domainHints:
+          type: array
+          items:
+            type: string
+        selectedResearchPlanId:
+          type: string
+        workflowId:
+          type: string
+        sourceMixProfile:
+          type: string
+        searchProfile:
+          type: string
+          enum: [quick, standard, deep]
         reportType:
           type: string
         audience:
@@ -131,6 +311,93 @@ components:
           type: string
       required:
         - topic
+    TopicUnderstandingRequest:
+      type: object
+      properties:
+        topic:
+          type: string
+          minLength: 1
+        reportType:
+          type: string
+        audience:
+          type: string
+        sourceMode:
+          type: string
+        language:
+          type: string
+      required:
+        - topic
+    TopicUnderstandingDiagnostics:
+      type: object
+      properties:
+        usedLocalLlm:
+          type: boolean
+        fallbackReason:
+          type: string
+          nullable: true
+        confidence:
+          type: number
+        model:
+          type: string
+          nullable: true
+        latencyMs:
+          type: number
+          nullable: true
+      required:
+        - usedLocalLlm
+        - confidence
+    TopicUnderstandingResult:
+      type: object
+      properties:
+        normalizedTopic:
+          type: string
+        domain:
+          type: string
+        subdomain:
+          type: string
+        entities:
+          type: array
+          items:
+            type: string
+        likelyMeanings:
+          type: array
+          items:
+            type: string
+        ambiguityWarnings:
+          type: array
+          items:
+            type: string
+        researchAngles:
+          type: array
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              angle:
+                type: string
+              reason:
+                type: string
+              searchQueries:
+                type: array
+                items:
+                  type: string
+            required:
+              - title
+              - angle
+              - reason
+              - searchQueries
+        diagnostics:
+          $ref: "#/components/schemas/TopicUnderstandingDiagnostics"
+      required:
+        - normalizedTopic
+        - domain
+        - subdomain
+        - entities
+        - likelyMeanings
+        - ambiguityWarnings
+        - researchAngles
+        - diagnostics
     SourceReviewState:
       type: string
       enum:
@@ -154,6 +421,15 @@ components:
         abstract:
           type: string
           nullable: true
+        snippet:
+          type: string
+          nullable: true
+        language:
+          type: string
+          nullable: true
+        abstractMissing:
+          type: boolean
+          nullable: true
         doi:
           type: string
           nullable: true
@@ -163,10 +439,12 @@ components:
         sourceType:
           type: string
           enum:
-            - Crossref
             - OpenAlex
+            - Crossref
             - Semantic Scholar
-            - Web
+            - Official Source
+            - Institutional Source
+            - Authoritative Media
         reviewState:
           $ref: "#/components/schemas/SourceReviewState"
         publisher:
@@ -176,6 +454,126 @@ components:
           type: string
           nullable: true
         accessedAt:
+          type: string
+          nullable: true
+        provider:
+          type: string
+          nullable: true
+        queryUsed:
+          type: string
+          nullable: true
+        retrievedAt:
+          type: string
+          nullable: true
+        dedupeKey:
+          type: string
+          nullable: true
+        sourceKind:
+          type: string
+          nullable: true
+          enum:
+            - journal
+            - conference
+            - book
+            - dataset
+            - web
+            - unknown
+        citationCount:
+          type: integer
+          nullable: true
+        isOpenAccess:
+          type: boolean
+          nullable: true
+        isPeerReviewed:
+          type: boolean
+          nullable: true
+        sourceQualityScore:
+          type: number
+          nullable: true
+        scoreReasons:
+          type: array
+          nullable: true
+          items:
+            type: string
+        relevanceLevel:
+          type: string
+          nullable: true
+          enum:
+            - primary
+            - secondary
+            - clue
+            - low
+            - off_topic
+        relevanceScore:
+          type: number
+          nullable: true
+        relevanceReasons:
+          type: array
+          nullable: true
+          items:
+            type: string
+        matchedCoreConcepts:
+          type: array
+          nullable: true
+          items:
+            type: string
+        missingCoreConcepts:
+          type: array
+          nullable: true
+          items:
+            type: string
+        matchedFacets:
+          type: array
+          nullable: true
+          items:
+            type: string
+        missingRequiredFacets:
+          type: array
+          nullable: true
+          items:
+            type: string
+        evidenceGrounding:
+          type: string
+          nullable: true
+          enum:
+            - abstract_grounded
+            - snippet_grounded
+            - metadata_only
+            - insufficient
+        sourceRelevanceReasonZhTw:
+          type: string
+          nullable: true
+        shouldShowInMainList:
+          type: boolean
+          nullable: true
+        shouldRecommendAccept:
+          type: boolean
+          nullable: true
+        topicRelevance:
+          type: number
+          nullable: true
+        evidenceQuality:
+          type: number
+          nullable: true
+        metadataCompleteness:
+          type: number
+          nullable: true
+        abstractQuality:
+          type: number
+          nullable: true
+        sourceTrust:
+          type: number
+          nullable: true
+        isMetadataOnly:
+          type: boolean
+          nullable: true
+        isPrimaryEvidence:
+          type: boolean
+          nullable: true
+        rejectionReason:
+          type: string
+          nullable: true
+        recommendation:
           type: string
           nullable: true
       required:
@@ -197,6 +595,12 @@ components:
         ok:
           type: boolean
         topic:
+          type: string
+        workflowId:
+          type: string
+        topicHash:
+          type: string
+        queryPlanHash:
           type: string
         searchIntent:
           $ref: "#/components/schemas/SearchIntentSummary"
@@ -238,8 +642,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SearchRelevanceDebug"
+        searchTrace:
+          $ref: "#/components/schemas/SearchTrace"
         diagnostics:
-          $ref: "#/components/schemas/SourceSearchDiagnostics"
+          $ref: "#/components/schemas/SourceSearchPipelineDiagnostics"
       required:
         - sources
     KeywordExpansionResult:
@@ -332,12 +738,6 @@ components:
             - failed
         fallbackUsed:
           type: boolean
-        domainProfile:
-          type: string
-          enum:
-            - academic
-            - business-industry
-            - automotive-industry
       required:
         - primaryConcepts
         - contextConcepts
@@ -347,7 +747,6 @@ components:
         - mustHaveTerms
         - plannerStatus
         - fallbackUsed
-        - domainProfile
     SearchIntentQuerySet:
       type: object
       properties:
@@ -379,6 +778,12 @@ components:
           type: boolean
         topic:
           type: string
+        workflowId:
+          type: string
+        topicHash:
+          type: string
+        queryPlanHash:
+          type: string
         searchIntent:
           $ref: "#/components/schemas/SearchIntentSummary"
         queries:
@@ -405,6 +810,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SearchRelevanceDebug"
+        searchTrace:
+          $ref: "#/components/schemas/SearchTrace"
+        diagnostics:
+          $ref: "#/components/schemas/SourceSearchPipelineDiagnostics"
         llm_status:
           type: string
           enum:
@@ -419,11 +828,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/KeywordSourceGroup"
-        diagnostics:
-          $ref: "#/components/schemas/SourceSearchDiagnostics"
       required:
         - ok
         - topic
+        - workflowId
+        - topicHash
+        - queryPlanHash
         - searchIntent
         - queries
         - results
@@ -431,6 +841,7 @@ components:
         - provider_status
         - warnings
         - planner
+        - searchTrace
         - llm_status
         - keyword_expansion
         - groups
@@ -439,12 +850,6 @@ components:
       properties:
         normalizedTopic:
           type: string
-        domainProfile:
-          type: string
-          enum:
-            - academic
-            - business-industry
-            - automotive-industry
         primaryConcepts:
           type: array
           items:
@@ -504,7 +909,6 @@ components:
           type: boolean
       required:
         - normalizedTopic
-        - domainProfile
         - primaryConcepts
         - contextConcepts
         - outcomeConcepts
@@ -557,6 +961,144 @@ components:
         - matchedContextConcepts
         - matchedOutcomeConcepts
         - penalties
+    SourceDecisionTrace:
+      type: object
+      properties:
+        title:
+          type: string
+        provider:
+          type: string
+        url:
+          type: string
+          nullable: true
+        relevanceScore:
+          type: number
+        authorityScore:
+          type: number
+        summaryUsabilityScore:
+          type: number
+        finalScore:
+          type: number
+        classification:
+          type: string
+        rejectReason:
+          type: string
+          nullable: true
+        matchedTerms:
+          type: array
+          items:
+            type: string
+        driftTerms:
+          type: array
+          items:
+            type: string
+      required:
+        - title
+        - provider
+        - url
+        - relevanceScore
+        - authorityScore
+        - summaryUsabilityScore
+        - finalScore
+        - classification
+        - rejectReason
+        - matchedTerms
+        - driftTerms
+    SearchTrace:
+      type: object
+      properties:
+        workflowId:
+          type: string
+        topic:
+          type: string
+        normalizedTopic:
+          type: string
+        topicHash:
+          type: string
+        queryPlanHash:
+          type: string
+        providerQueries:
+          type: array
+          items:
+            type: string
+        candidateCount:
+          type: integer
+        dedupedCount:
+          type: integer
+        acceptedCount:
+          type: integer
+        rejectedCount:
+          type: integer
+        sourceDecisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceDecisionTrace"
+      required:
+        - workflowId
+        - topic
+        - normalizedTopic
+        - topicHash
+        - queryPlanHash
+        - providerQueries
+        - candidateCount
+        - dedupedCount
+        - acceptedCount
+        - rejectedCount
+        - sourceDecisions
+    SourceSearchPipelineDiagnostics:
+      type: object
+      properties:
+        retrieved_count:
+          type: integer
+        deduped_count:
+          type: integer
+        rejected_count:
+          type: integer
+        candidate_count:
+          type: integer
+        displayed_count:
+          type: integer
+        primary_candidate_count:
+          type: integer
+        provider_status:
+          type: array
+          items:
+            type: object
+            properties:
+              provider:
+                type: string
+              query:
+                type: string
+              ok:
+                type: boolean
+              result_count:
+                type: integer
+              error_type:
+                type: string
+                nullable: true
+              error_message:
+                type: string
+                nullable: true
+            required:
+              - provider
+              - query
+              - ok
+              - result_count
+              - error_type
+              - error_message
+        warnings:
+          type: array
+          items:
+            type: string
+      required:
+        - retrieved_count
+        - deduped_count
+        - rejected_count
+        - candidate_count
+        - displayed_count
+        - primary_candidate_count
+        - provider_status
+        - warnings
     KeywordSourceGroup:
       type: object
       properties:
@@ -565,18 +1107,14 @@ components:
         provider:
           type: string
           enum:
-            - Crossref
             - OpenAlex
+            - Crossref
             - Semantic Scholar
-            - Web
+            - Official Source
+            - Institutional Source
+            - Authoritative Media
         query:
           type: string
-        stage:
-          type: string
-          enum:
-            - academic
-            - official
-            - media
         results:
           type: array
           items:
@@ -591,111 +1129,9 @@ components:
         - ok
         - provider
         - query
-        - stage
         - results
         - error_type
         - error_message
-    SourceSearchDiagnostics:
-      type: object
-      properties:
-        resultCount:
-          type: integer
-        resultTarget:
-          type: integer
-        minSources:
-          type: integer
-        targetSources:
-          type: integer
-        queryCount:
-          type: integer
-        providerCount:
-          type: integer
-        fallbackUsed:
-          type: boolean
-        status:
-          type: string
-          enum:
-            - success
-            - partial_success
-            - insufficient_sources
-            - empty
-            - failed
-        providerFailures:
-          type: array
-          items:
-            type: object
-            properties:
-              provider:
-                type: string
-                enum:
-                  - Crossref
-                  - OpenAlex
-                  - Semantic Scholar
-                  - Web
-              query:
-                type: string
-              stage:
-                type: string
-                enum:
-                  - academic
-                  - official
-                  - media
-              error_type:
-                type: string
-              error_message:
-                type: string
-            required:
-              - provider
-              - query
-              - stage
-              - error_type
-              - error_message
-        providerResultCounts:
-          type: array
-          items:
-            type: object
-            properties:
-              provider:
-                type: string
-                enum:
-                  - Crossref
-                  - OpenAlex
-                  - Semantic Scholar
-                  - Web
-              query:
-                type: string
-              stage:
-                type: string
-                enum:
-                  - academic
-                  - official
-                  - media
-              resultCount:
-                type: integer
-              ok:
-                type: boolean
-            required:
-              - provider
-              - query
-              - stage
-              - resultCount
-              - ok
-        warnings:
-          type: array
-          items:
-            type: string
-      required:
-        - resultCount
-        - resultTarget
-        - minSources
-        - targetSources
-        - queryCount
-        - providerCount
-        - fallbackUsed
-        - status
-        - providerFailures
-        - providerResultCounts
-        - warnings
     KeywordSourceSearchResult:
       type: object
       properties:
@@ -725,6 +1161,148 @@ components:
         - keyword_expansion
         - groups
         - sources
+    ResearchGroundingJobCreateRequest:
+      type: object
+      properties:
+        workflowId:
+          type: string
+          minLength: 1
+        requestId:
+          type: string
+        attemptId:
+          type: string
+        topic:
+          type: string
+          minLength: 1
+        rawUserTopic:
+          type: string
+        originalTopic:
+          type: string
+        normalizedTopic:
+          type: string
+        selectedDomain:
+          type: string
+        researchQuestion:
+          type: string
+        bilingualQueries:
+          type: object
+          properties:
+            zh:
+              type: array
+              items:
+                type: string
+            en:
+              type: array
+              items:
+                type: string
+          required: [zh, en]
+        querySeedZh:
+          type: array
+          items:
+            type: string
+        querySeedEn:
+          type: array
+          items:
+            type: string
+        excludeTerms:
+          type: array
+          items:
+            type: string
+        reportType:
+          type: string
+        audience:
+          type: string
+        searchProfile:
+          type: string
+          enum: [standard, deep]
+        debugTrace:
+          type: boolean
+      required: [workflowId, topic]
+    ResearchGroundingJobCreateResponse:
+      type: object
+      properties:
+        jobId:
+          type: string
+        workflowId:
+          type: string
+        topicHash:
+          type: string
+        requestId:
+          type: string
+        attemptId:
+          type: string
+        status:
+          type: string
+      required: [jobId, workflowId, topicHash, requestId, attemptId, status]
+    GroundingJob:
+      type: object
+      additionalProperties: true
+      properties:
+        jobId:
+          type: string
+        workflowId:
+          type: string
+        topicHash:
+          type: string
+        requestId:
+          type: string
+        attemptId:
+          type: string
+        revision:
+          type: integer
+          minimum: 1
+        originalTopic:
+          type: string
+        normalizedTopic:
+          type: string
+        status:
+          type: string
+        progress:
+          type: number
+          minimum: 0
+          maximum: 100
+        warnings:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+      required: [jobId, workflowId, topicHash, requestId, attemptId, revision, originalTopic, normalizedTopic, status, progress, warnings, createdAt, updatedAt, expiresAt]
+    GroundingJobErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+          enum:
+            - INVALID_GROUNDING_REQUEST
+            - GROUNDING_STORE_NOT_CONFIGURED
+            - GROUNDING_JOB_CREATE_FAILED
+            - GROUNDING_JOB_NOT_FOUND
+            - GROUNDING_JOB_POLL_FAILED
+            - PROVIDER_TIMEOUT
+            - PROVIDER_HTTP_ERROR
+            - PROVIDER_PARSE_ERROR
+            - ALL_PROVIDERS_FAILED
+            - NO_RESULTS_AFTER_EXPANSION
+            - GROUNDING_PIPELINE_FAILED
+            - GROUNDING_RESPONSE_SCHEMA_INVALID
+        message:
+          type: string
+        stage:
+          type: string
+          enum: [creation, polling, pipeline]
+        retryable:
+          type: boolean
+        requestId:
+          type: string
+      required: [code, message, stage, retryable, requestId]
     ErrorResponse:
       type: object
       properties:

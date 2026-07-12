@@ -18,7 +18,7 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
- * Searches Crossref and Semantic Scholar for academic/web sources related to a research topic.
+ * Searches OpenAlex, Semantic Scholar, and Crossref for academic/web sources related to a research topic.
  * @summary Search sources
  */
 
@@ -28,6 +28,31 @@ export const HealthCheckResponse = zod.object({
 export const SearchSourcesBody = zod.object({
   "query": zod.string().min(1).optional(),
   "topic": zod.string().min(1).optional(),
+  "originalTopic": zod.string().optional(),
+  "activeResearchTopic": zod.string().optional(),
+  "refinedTopic": zod.string().optional(),
+  "displayTitle": zod.string().optional(),
+  "canonicalTopicZh": zod.string().optional(),
+  "canonicalTopicEn": zod.string().optional(),
+  "querySeedZh": zod.array(zod.string()).optional(),
+  "querySeedEn": zod.array(zod.string()).optional(),
+  "subtopics": zod.array(zod.object({
+  "id": zod.string().optional(),
+  "titleZh": zod.string().optional(),
+  "titleEn": zod.string().optional(),
+  "queryZh": zod.array(zod.string()).optional(),
+  "queryEn": zod.array(zod.string()).optional(),
+  "mustIncludeTerms": zod.array(zod.string()).optional(),
+  "excludeTerms": zod.array(zod.string()).optional(),
+  "expectedSourceTypes": zod.array(zod.string()).optional()
+})).optional(),
+  "mustIncludeTerms": zod.array(zod.string()).optional(),
+  "excludeTerms": zod.array(zod.string()).optional(),
+  "domainHints": zod.array(zod.string()).optional(),
+  "selectedResearchPlanId": zod.string().optional(),
+  "workflowId": zod.string().optional(),
+  "sourceMixProfile": zod.string().optional(),
+  "searchProfile": zod.enum(['quick', 'standard', 'deep']).optional(),
   "reportType": zod.string().optional(),
   "audience": zod.string().optional(),
   "sourceMode": zod.string().optional(),
@@ -37,6 +62,9 @@ export const SearchSourcesBody = zod.object({
 export const SearchSourcesResponse = zod.object({
   "ok": zod.boolean().optional(),
   "topic": zod.string().optional(),
+  "workflowId": zod.string().optional(),
+  "topicHash": zod.string().optional(),
+  "queryPlanHash": zod.string().optional(),
   "searchIntent": zod.object({
   "primaryConcepts": zod.array(zod.string()),
   "contextConcepts": zod.array(zod.string()),
@@ -45,8 +73,7 @@ export const SearchSourcesResponse = zod.object({
   "lowWeightTerms": zod.array(zod.string()),
   "mustHaveTerms": zod.array(zod.string()),
   "plannerStatus": zod.enum(['llm', 'rule_fallback', 'skipped', 'failed']),
-  "fallbackUsed": zod.boolean(),
-  "domainProfile": zod.enum(['academic', 'business-industry', 'automotive-industry'])
+  "fallbackUsed": zod.boolean()
 }).optional(),
   "queries": zod.object({
   "chinese": zod.array(zod.string()),
@@ -60,32 +87,97 @@ export const SearchSourcesResponse = zod.object({
   "authors": zod.array(zod.string()),
   "year": zod.number().nullable(),
   "abstract": zod.string().nullable(),
+  "snippet": zod.string().nullish(),
+  "language": zod.string().nullish(),
+  "abstractMissing": zod.boolean().nullish(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
+  "sourceType": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar', 'Official Source', 'Institutional Source', 'Authoritative Media']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
+  "accessedAt": zod.string().nullable(),
+  "provider": zod.string().nullish(),
+  "queryUsed": zod.string().nullish(),
+  "retrievedAt": zod.string().nullish(),
+  "dedupeKey": zod.string().nullish(),
+  "sourceKind": zod.enum(['journal', 'conference', 'book', 'dataset', 'web', 'unknown']).nullish(),
+  "citationCount": zod.number().nullish(),
+  "isOpenAccess": zod.boolean().nullish(),
+  "isPeerReviewed": zod.boolean().nullish(),
+  "sourceQualityScore": zod.number().nullish(),
+  "scoreReasons": zod.array(zod.string()).nullish(),
+  "relevanceLevel": zod.enum(['primary', 'secondary', 'clue', 'low', 'off_topic']).nullish(),
+  "relevanceScore": zod.number().nullish(),
+  "relevanceReasons": zod.array(zod.string()).nullish(),
+  "matchedCoreConcepts": zod.array(zod.string()).nullish(),
+  "missingCoreConcepts": zod.array(zod.string()).nullish(),
+  "matchedFacets": zod.array(zod.string()).nullish(),
+  "missingRequiredFacets": zod.array(zod.string()).nullish(),
+  "evidenceGrounding": zod.enum(['abstract_grounded', 'snippet_grounded', 'metadata_only', 'insufficient']).nullish(),
+  "sourceRelevanceReasonZhTw": zod.string().nullish(),
+  "shouldShowInMainList": zod.boolean().nullish(),
+  "shouldRecommendAccept": zod.boolean().nullish(),
+  "topicRelevance": zod.number().nullish(),
+  "evidenceQuality": zod.number().nullish(),
+  "metadataCompleteness": zod.number().nullish(),
+  "abstractQuality": zod.number().nullish(),
+  "sourceTrust": zod.number().nullish(),
+  "isMetadataOnly": zod.boolean().nullish(),
+  "isPrimaryEvidence": zod.boolean().nullish(),
+  "rejectionReason": zod.string().nullish(),
+  "recommendation": zod.string().nullish()
 })).optional(),
   "provider_status": zod.array(zod.object({
   "ok": zod.boolean(),
-  "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
+  "provider": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar', 'Official Source', 'Institutional Source', 'Authoritative Media']),
   "query": zod.string(),
-  "stage": zod.enum(['academic', 'official', 'media']),
   "results": zod.array(zod.object({
   "id": zod.string(),
   "title": zod.string(),
   "authors": zod.array(zod.string()),
   "year": zod.number().nullable(),
   "abstract": zod.string().nullable(),
+  "snippet": zod.string().nullish(),
+  "language": zod.string().nullish(),
+  "abstractMissing": zod.boolean().nullish(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
+  "sourceType": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar', 'Official Source', 'Institutional Source', 'Authoritative Media']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
+  "accessedAt": zod.string().nullable(),
+  "provider": zod.string().nullish(),
+  "queryUsed": zod.string().nullish(),
+  "retrievedAt": zod.string().nullish(),
+  "dedupeKey": zod.string().nullish(),
+  "sourceKind": zod.enum(['journal', 'conference', 'book', 'dataset', 'web', 'unknown']).nullish(),
+  "citationCount": zod.number().nullish(),
+  "isOpenAccess": zod.boolean().nullish(),
+  "isPeerReviewed": zod.boolean().nullish(),
+  "sourceQualityScore": zod.number().nullish(),
+  "scoreReasons": zod.array(zod.string()).nullish(),
+  "relevanceLevel": zod.enum(['primary', 'secondary', 'clue', 'low', 'off_topic']).nullish(),
+  "relevanceScore": zod.number().nullish(),
+  "relevanceReasons": zod.array(zod.string()).nullish(),
+  "matchedCoreConcepts": zod.array(zod.string()).nullish(),
+  "missingCoreConcepts": zod.array(zod.string()).nullish(),
+  "matchedFacets": zod.array(zod.string()).nullish(),
+  "missingRequiredFacets": zod.array(zod.string()).nullish(),
+  "evidenceGrounding": zod.enum(['abstract_grounded', 'snippet_grounded', 'metadata_only', 'insufficient']).nullish(),
+  "sourceRelevanceReasonZhTw": zod.string().nullish(),
+  "shouldShowInMainList": zod.boolean().nullish(),
+  "shouldRecommendAccept": zod.boolean().nullish(),
+  "topicRelevance": zod.number().nullish(),
+  "evidenceQuality": zod.number().nullish(),
+  "metadataCompleteness": zod.number().nullish(),
+  "abstractQuality": zod.number().nullish(),
+  "sourceTrust": zod.number().nullish(),
+  "isMetadataOnly": zod.boolean().nullish(),
+  "isPrimaryEvidence": zod.boolean().nullish(),
+  "rejectionReason": zod.string().nullish(),
+  "recommendation": zod.string().nullish()
 })),
   "error_type": zod.string().nullable(),
   "error_message": zod.string().nullable()
@@ -106,22 +198,54 @@ export const SearchSourcesResponse = zod.object({
 }).optional(),
   "groups": zod.array(zod.object({
   "ok": zod.boolean(),
-  "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
+  "provider": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar', 'Official Source', 'Institutional Source', 'Authoritative Media']),
   "query": zod.string(),
-  "stage": zod.enum(['academic', 'official', 'media']),
   "results": zod.array(zod.object({
   "id": zod.string(),
   "title": zod.string(),
   "authors": zod.array(zod.string()),
   "year": zod.number().nullable(),
   "abstract": zod.string().nullable(),
+  "snippet": zod.string().nullish(),
+  "language": zod.string().nullish(),
+  "abstractMissing": zod.boolean().nullish(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
+  "sourceType": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar', 'Official Source', 'Institutional Source', 'Authoritative Media']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
+  "accessedAt": zod.string().nullable(),
+  "provider": zod.string().nullish(),
+  "queryUsed": zod.string().nullish(),
+  "retrievedAt": zod.string().nullish(),
+  "dedupeKey": zod.string().nullish(),
+  "sourceKind": zod.enum(['journal', 'conference', 'book', 'dataset', 'web', 'unknown']).nullish(),
+  "citationCount": zod.number().nullish(),
+  "isOpenAccess": zod.boolean().nullish(),
+  "isPeerReviewed": zod.boolean().nullish(),
+  "sourceQualityScore": zod.number().nullish(),
+  "scoreReasons": zod.array(zod.string()).nullish(),
+  "relevanceLevel": zod.enum(['primary', 'secondary', 'clue', 'low', 'off_topic']).nullish(),
+  "relevanceScore": zod.number().nullish(),
+  "relevanceReasons": zod.array(zod.string()).nullish(),
+  "matchedCoreConcepts": zod.array(zod.string()).nullish(),
+  "missingCoreConcepts": zod.array(zod.string()).nullish(),
+  "matchedFacets": zod.array(zod.string()).nullish(),
+  "missingRequiredFacets": zod.array(zod.string()).nullish(),
+  "evidenceGrounding": zod.enum(['abstract_grounded', 'snippet_grounded', 'metadata_only', 'insufficient']).nullish(),
+  "sourceRelevanceReasonZhTw": zod.string().nullish(),
+  "shouldShowInMainList": zod.boolean().nullish(),
+  "shouldRecommendAccept": zod.boolean().nullish(),
+  "topicRelevance": zod.number().nullish(),
+  "evidenceQuality": zod.number().nullish(),
+  "metadataCompleteness": zod.number().nullish(),
+  "abstractQuality": zod.number().nullish(),
+  "sourceTrust": zod.number().nullish(),
+  "isMetadataOnly": zod.boolean().nullish(),
+  "isPrimaryEvidence": zod.boolean().nullish(),
+  "rejectionReason": zod.string().nullish(),
+  "recommendation": zod.string().nullish()
 })),
   "error_type": zod.string().nullable(),
   "error_message": zod.string().nullable()
@@ -132,17 +256,49 @@ export const SearchSourcesResponse = zod.object({
   "authors": zod.array(zod.string()),
   "year": zod.number().nullable(),
   "abstract": zod.string().nullable(),
+  "snippet": zod.string().nullish(),
+  "language": zod.string().nullish(),
+  "abstractMissing": zod.boolean().nullish(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
+  "sourceType": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar', 'Official Source', 'Institutional Source', 'Authoritative Media']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
+  "accessedAt": zod.string().nullable(),
+  "provider": zod.string().nullish(),
+  "queryUsed": zod.string().nullish(),
+  "retrievedAt": zod.string().nullish(),
+  "dedupeKey": zod.string().nullish(),
+  "sourceKind": zod.enum(['journal', 'conference', 'book', 'dataset', 'web', 'unknown']).nullish(),
+  "citationCount": zod.number().nullish(),
+  "isOpenAccess": zod.boolean().nullish(),
+  "isPeerReviewed": zod.boolean().nullish(),
+  "sourceQualityScore": zod.number().nullish(),
+  "scoreReasons": zod.array(zod.string()).nullish(),
+  "relevanceLevel": zod.enum(['primary', 'secondary', 'clue', 'low', 'off_topic']).nullish(),
+  "relevanceScore": zod.number().nullish(),
+  "relevanceReasons": zod.array(zod.string()).nullish(),
+  "matchedCoreConcepts": zod.array(zod.string()).nullish(),
+  "missingCoreConcepts": zod.array(zod.string()).nullish(),
+  "matchedFacets": zod.array(zod.string()).nullish(),
+  "missingRequiredFacets": zod.array(zod.string()).nullish(),
+  "evidenceGrounding": zod.enum(['abstract_grounded', 'snippet_grounded', 'metadata_only', 'insufficient']).nullish(),
+  "sourceRelevanceReasonZhTw": zod.string().nullish(),
+  "shouldShowInMainList": zod.boolean().nullish(),
+  "shouldRecommendAccept": zod.boolean().nullish(),
+  "topicRelevance": zod.number().nullish(),
+  "evidenceQuality": zod.number().nullish(),
+  "metadataCompleteness": zod.number().nullish(),
+  "abstractQuality": zod.number().nullish(),
+  "sourceTrust": zod.number().nullish(),
+  "isMetadataOnly": zod.boolean().nullish(),
+  "isPrimaryEvidence": zod.boolean().nullish(),
+  "rejectionReason": zod.string().nullish(),
+  "recommendation": zod.string().nullish()
 })),
   "planner": zod.object({
   "normalizedTopic": zod.string(),
-  "domainProfile": zod.enum(['academic', 'business-industry', 'automotive-industry']),
   "primaryConcepts": zod.array(zod.string()),
   "contextConcepts": zod.array(zod.string()),
   "outcomeConcepts": zod.array(zod.string()),
@@ -168,28 +324,45 @@ export const SearchSourcesResponse = zod.object({
   "matchedOutcomeConcepts": zod.array(zod.string()),
   "penalties": zod.array(zod.string())
 })).optional(),
+  "searchTrace": zod.object({
+  "workflowId": zod.string(),
+  "topic": zod.string(),
+  "normalizedTopic": zod.string(),
+  "topicHash": zod.string(),
+  "queryPlanHash": zod.string(),
+  "providerQueries": zod.array(zod.string()),
+  "candidateCount": zod.number(),
+  "dedupedCount": zod.number(),
+  "acceptedCount": zod.number(),
+  "rejectedCount": zod.number(),
+  "sourceDecisions": zod.array(zod.object({
+  "title": zod.string(),
+  "provider": zod.string(),
+  "url": zod.string().nullable(),
+  "relevanceScore": zod.number(),
+  "authorityScore": zod.number(),
+  "summaryUsabilityScore": zod.number(),
+  "finalScore": zod.number(),
+  "classification": zod.string(),
+  "rejectReason": zod.string().nullable(),
+  "matchedTerms": zod.array(zod.string()),
+  "driftTerms": zod.array(zod.string())
+}))
+}).optional(),
   "diagnostics": zod.object({
-  "resultCount": zod.number(),
-  "resultTarget": zod.number(),
-  "minSources": zod.number(),
-  "targetSources": zod.number(),
-  "queryCount": zod.number(),
-  "providerCount": zod.number(),
-  "fallbackUsed": zod.boolean(),
-  "status": zod.enum(['success', 'partial_success', 'insufficient_sources', 'empty', 'failed']),
-  "providerFailures": zod.array(zod.object({
-  "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
+  "retrieved_count": zod.number(),
+  "deduped_count": zod.number(),
+  "rejected_count": zod.number(),
+  "candidate_count": zod.number(),
+  "displayed_count": zod.number(),
+  "primary_candidate_count": zod.number(),
+  "provider_status": zod.array(zod.object({
+  "provider": zod.string(),
   "query": zod.string(),
-  "stage": zod.enum(['academic', 'official', 'media']),
-  "error_type": zod.string(),
-  "error_message": zod.string()
-})),
-  "providerResultCounts": zod.array(zod.object({
-  "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
-  "query": zod.string(),
-  "stage": zod.enum(['academic', 'official', 'media']),
-  "resultCount": zod.number(),
-  "ok": zod.boolean()
+  "ok": zod.boolean(),
+  "result_count": zod.number(),
+  "error_type": zod.string().nullable(),
+  "error_message": zod.string().nullable()
 })),
   "warnings": zod.array(zod.string())
 }).optional()
@@ -228,22 +401,54 @@ export const SearchKeywordsResponse = zod.object({
 }),
   "groups": zod.array(zod.object({
   "ok": zod.boolean(),
-  "provider": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
+  "provider": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar', 'Official Source', 'Institutional Source', 'Authoritative Media']),
   "query": zod.string(),
-  "stage": zod.enum(['academic', 'official', 'media']),
   "results": zod.array(zod.object({
   "id": zod.string(),
   "title": zod.string(),
   "authors": zod.array(zod.string()),
   "year": zod.number().nullable(),
   "abstract": zod.string().nullable(),
+  "snippet": zod.string().nullish(),
+  "language": zod.string().nullish(),
+  "abstractMissing": zod.boolean().nullish(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
+  "sourceType": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar', 'Official Source', 'Institutional Source', 'Authoritative Media']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
+  "accessedAt": zod.string().nullable(),
+  "provider": zod.string().nullish(),
+  "queryUsed": zod.string().nullish(),
+  "retrievedAt": zod.string().nullish(),
+  "dedupeKey": zod.string().nullish(),
+  "sourceKind": zod.enum(['journal', 'conference', 'book', 'dataset', 'web', 'unknown']).nullish(),
+  "citationCount": zod.number().nullish(),
+  "isOpenAccess": zod.boolean().nullish(),
+  "isPeerReviewed": zod.boolean().nullish(),
+  "sourceQualityScore": zod.number().nullish(),
+  "scoreReasons": zod.array(zod.string()).nullish(),
+  "relevanceLevel": zod.enum(['primary', 'secondary', 'clue', 'low', 'off_topic']).nullish(),
+  "relevanceScore": zod.number().nullish(),
+  "relevanceReasons": zod.array(zod.string()).nullish(),
+  "matchedCoreConcepts": zod.array(zod.string()).nullish(),
+  "missingCoreConcepts": zod.array(zod.string()).nullish(),
+  "matchedFacets": zod.array(zod.string()).nullish(),
+  "missingRequiredFacets": zod.array(zod.string()).nullish(),
+  "evidenceGrounding": zod.enum(['abstract_grounded', 'snippet_grounded', 'metadata_only', 'insufficient']).nullish(),
+  "sourceRelevanceReasonZhTw": zod.string().nullish(),
+  "shouldShowInMainList": zod.boolean().nullish(),
+  "shouldRecommendAccept": zod.boolean().nullish(),
+  "topicRelevance": zod.number().nullish(),
+  "evidenceQuality": zod.number().nullish(),
+  "metadataCompleteness": zod.number().nullish(),
+  "abstractQuality": zod.number().nullish(),
+  "sourceTrust": zod.number().nullish(),
+  "isMetadataOnly": zod.boolean().nullish(),
+  "isPrimaryEvidence": zod.boolean().nullish(),
+  "rejectionReason": zod.string().nullish(),
+  "recommendation": zod.string().nullish()
 })),
   "error_type": zod.string().nullable(),
   "error_message": zod.string().nullable()
@@ -254,14 +459,155 @@ export const SearchKeywordsResponse = zod.object({
   "authors": zod.array(zod.string()),
   "year": zod.number().nullable(),
   "abstract": zod.string().nullable(),
+  "snippet": zod.string().nullish(),
+  "language": zod.string().nullish(),
+  "abstractMissing": zod.boolean().nullish(),
   "doi": zod.string().nullable(),
   "url": zod.string().nullable(),
-  "sourceType": zod.enum(['Crossref', 'OpenAlex', 'Semantic Scholar', 'Web']),
+  "sourceType": zod.enum(['OpenAlex', 'Crossref', 'Semantic Scholar', 'Official Source', 'Institutional Source', 'Authoritative Media']),
   "reviewState": zod.enum(['pending', 'accepted', 'rejected']),
   "publisher": zod.string().nullable(),
   "containerTitle": zod.string().nullable(),
-  "accessedAt": zod.string().nullable()
+  "accessedAt": zod.string().nullable(),
+  "provider": zod.string().nullish(),
+  "queryUsed": zod.string().nullish(),
+  "retrievedAt": zod.string().nullish(),
+  "dedupeKey": zod.string().nullish(),
+  "sourceKind": zod.enum(['journal', 'conference', 'book', 'dataset', 'web', 'unknown']).nullish(),
+  "citationCount": zod.number().nullish(),
+  "isOpenAccess": zod.boolean().nullish(),
+  "isPeerReviewed": zod.boolean().nullish(),
+  "sourceQualityScore": zod.number().nullish(),
+  "scoreReasons": zod.array(zod.string()).nullish(),
+  "relevanceLevel": zod.enum(['primary', 'secondary', 'clue', 'low', 'off_topic']).nullish(),
+  "relevanceScore": zod.number().nullish(),
+  "relevanceReasons": zod.array(zod.string()).nullish(),
+  "matchedCoreConcepts": zod.array(zod.string()).nullish(),
+  "missingCoreConcepts": zod.array(zod.string()).nullish(),
+  "matchedFacets": zod.array(zod.string()).nullish(),
+  "missingRequiredFacets": zod.array(zod.string()).nullish(),
+  "evidenceGrounding": zod.enum(['abstract_grounded', 'snippet_grounded', 'metadata_only', 'insufficient']).nullish(),
+  "sourceRelevanceReasonZhTw": zod.string().nullish(),
+  "shouldShowInMainList": zod.boolean().nullish(),
+  "shouldRecommendAccept": zod.boolean().nullish(),
+  "topicRelevance": zod.number().nullish(),
+  "evidenceQuality": zod.number().nullish(),
+  "metadataCompleteness": zod.number().nullish(),
+  "abstractQuality": zod.number().nullish(),
+  "sourceTrust": zod.number().nullish(),
+  "isMetadataOnly": zod.boolean().nullish(),
+  "isPrimaryEvidence": zod.boolean().nullish(),
+  "rejectionReason": zod.string().nullish(),
+  "recommendation": zod.string().nullish()
 }))
 })
 
 
+/**
+ * Expands a topic into structured research angles with deterministic fallback when local LLM is unavailable.
+ * @summary Understand a research topic
+ */
+
+
+
+export const TopicUnderstandingBody = zod.object({
+  "topic": zod.string().min(1),
+  "reportType": zod.string().optional(),
+  "audience": zod.string().optional(),
+  "sourceMode": zod.string().optional(),
+  "language": zod.string().optional()
+})
+
+export const TopicUnderstandingResponse = zod.object({
+  "normalizedTopic": zod.string(),
+  "domain": zod.string(),
+  "subdomain": zod.string(),
+  "entities": zod.array(zod.string()),
+  "likelyMeanings": zod.array(zod.string()),
+  "ambiguityWarnings": zod.array(zod.string()),
+  "researchAngles": zod.array(zod.object({
+  "title": zod.string(),
+  "angle": zod.string(),
+  "reason": zod.string(),
+  "searchQueries": zod.array(zod.string())
+})),
+  "diagnostics": zod.object({
+  "usedLocalLlm": zod.boolean(),
+  "fallbackReason": zod.string().nullish(),
+  "confidence": zod.number(),
+  "model": zod.string().nullish(),
+  "latencyMs": zod.number().nullish()
+})
+})
+
+
+/**
+ * Persists the job before executing the bounded grounding pipeline. The response contains the durable job identity and final or in-progress status.
+ * @summary Create and complete a durable research grounding job
+ */
+
+
+
+
+export const CreateResearchGroundingJobBody = zod.object({
+  "workflowId": zod.string().min(1),
+  "requestId": zod.string().optional(),
+  "attemptId": zod.string().optional(),
+  "topic": zod.string().min(1),
+  "rawUserTopic": zod.string().optional(),
+  "originalTopic": zod.string().optional(),
+  "normalizedTopic": zod.string().optional(),
+  "selectedDomain": zod.string().optional(),
+  "researchQuestion": zod.string().optional(),
+  "bilingualQueries": zod.object({
+  "zh": zod.array(zod.string()),
+  "en": zod.array(zod.string())
+}).optional(),
+  "querySeedZh": zod.array(zod.string()).optional(),
+  "querySeedEn": zod.array(zod.string()).optional(),
+  "excludeTerms": zod.array(zod.string()).optional(),
+  "reportType": zod.string().optional(),
+  "audience": zod.string().optional(),
+  "searchProfile": zod.enum(['standard', 'deep']).optional(),
+  "debugTrace": zod.boolean().optional()
+})
+
+export const CreateResearchGroundingJobResponse = zod.object({
+  "jobId": zod.string(),
+  "workflowId": zod.string(),
+  "topicHash": zod.string(),
+  "requestId": zod.string(),
+  "attemptId": zod.string(),
+  "status": zod.string()
+})
+
+
+/**
+ * @summary Read a durable research grounding job
+ */
+export const GetResearchGroundingJobParams = zod.object({
+  "jobId": zod.coerce.string()
+})
+
+
+export const getResearchGroundingJobResponseProgressMin = 0;
+export const getResearchGroundingJobResponseProgressMax = 100;
+
+
+
+export const GetResearchGroundingJobResponse = zod.object({
+  "jobId": zod.string(),
+  "workflowId": zod.string(),
+  "topicHash": zod.string(),
+  "requestId": zod.string(),
+  "attemptId": zod.string(),
+  "revision": zod.number().min(1),
+  "originalTopic": zod.string(),
+  "normalizedTopic": zod.string(),
+  "status": zod.string(),
+  "progress": zod.number().min(getResearchGroundingJobResponseProgressMin).max(getResearchGroundingJobResponseProgressMax),
+  "warnings": zod.array(zod.string()),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date(),
+  "expiresAt": zod.coerce.date()
+})

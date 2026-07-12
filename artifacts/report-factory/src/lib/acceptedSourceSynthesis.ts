@@ -108,7 +108,7 @@ function sourceHasEvidence(source: SourceRecord): boolean {
 }
 
 function limitationForMissingEvidence(source: SourceRecord, index: number): string {
-  return `${sourceLabel(source, index)}缺少可驗證 evidence snippet，暫不產生主要主張。`;
+  return `${sourceLabel(source, index)}缺少可驗證摘要片段，暫不產生主要主張。`;
 }
 
 function recommendedFocusForFacet(key: EvidenceFacetKey): string | null {
@@ -175,7 +175,7 @@ export function buildAcceptedSourceSynthesis(acceptedSources: SourceRecord[]): A
     });
 
     if (source.evidenceGrounding === "metadata_only" || source.evidenceGrounding === "insufficient") {
-      pushUnique(limitationsZhTw, `${sourceLabel(source, index)}的摘要 grounding 不足，正式撰寫前仍需回查原文。`, 8);
+      pushUnique(limitationsZhTw, `${sourceLabel(source, index)}的摘要 grounding 不足，正式撰寫時只能作為保守線索。`, 8);
     }
   });
 
@@ -188,7 +188,7 @@ export function buildAcceptedSourceSynthesis(acceptedSources: SourceRecord[]): A
     pushUnique(limitationsZhTw, "尚未接受來源，無法建立資料匯聚摘要。", 8);
   }
   if (acceptedSources.length > 0 && mainClaimsZhTw.length === 0) {
-    pushUnique(limitationsZhTw, "已接受來源缺少可驗證 evidence snippet，暫不形成主要主張。", 8);
+    pushUnique(limitationsZhTw, "已接受來源缺少可驗證摘要片段，暫不形成主要主張。", 8);
   }
   if (acceptedSources.length > 1 && consensusPointsZhTw.length === 0) {
     pushUnique(limitationsZhTw, "目前缺少兩筆以上來源共同支撐同一面向，跨來源共識仍不足。", 8);

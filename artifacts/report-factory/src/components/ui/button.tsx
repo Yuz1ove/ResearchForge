@@ -5,7 +5,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0" +
+  "interactive-button inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0" +
 " hover-elevate active-elevate-2",
   {
     variants: {
@@ -49,12 +49,67 @@ export interface ButtonProps
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
+  (
+    {
+      className,
+      variant,
+      size,
+      asChild = false,
+      onPointerMove,
+      onPointerLeave,
+      onPointerDown,
+      onPointerUp,
+      onPointerCancel,
+      onBlur,
+      ...props
+    },
+    ref,
+  ) => {
     const Comp = asChild ? Slot : "button"
+
+    const updatePointerGlow = (event: React.PointerEvent<HTMLButtonElement>) => {
+      const target = event.currentTarget as HTMLElement
+      const rect = target.getBoundingClientRect()
+      const x = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * 100
+      const y = ((event.clientY - rect.top) / Math.max(rect.height, 1)) * 100
+      target.style.setProperty("--button-pointer-x", `${x.toFixed(2)}%`)
+      target.style.setProperty("--button-pointer-y", `${y.toFixed(2)}%`)
+    }
+
     return (
       <Comp
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
+        onPointerMove={(event) => {
+          onPointerMove?.(event)
+          updatePointerGlow(event)
+        }}
+        onPointerLeave={(event) => {
+          onPointerLeave?.(event)
+          const target = event.currentTarget as HTMLElement
+          target.dataset.pressed = "false"
+        }}
+        onPointerDown={(event) => {
+          onPointerDown?.(event)
+          updatePointerGlow(event)
+          const target = event.currentTarget as HTMLElement
+          target.dataset.pressed = "true"
+        }}
+        onPointerUp={(event) => {
+          onPointerUp?.(event)
+          const target = event.currentTarget as HTMLElement
+          target.dataset.pressed = "false"
+        }}
+        onPointerCancel={(event) => {
+          onPointerCancel?.(event)
+          const target = event.currentTarget as HTMLElement
+          target.dataset.pressed = "false"
+        }}
+        onBlur={(event) => {
+          onBlur?.(event)
+          const target = event.currentTarget as HTMLElement
+          target.dataset.pressed = "false"
+        }}
         {...props}
       />
     )

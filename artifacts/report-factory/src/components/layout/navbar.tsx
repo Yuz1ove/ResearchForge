@@ -1,7 +1,8 @@
 import { Link, useLocation } from "wouter";
-import { Menu, X, BarChart } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { BrandWordmark } from "@/components/brand-wordmark";
 
 export function Navbar() {
   const [location] = useLocation();
@@ -10,7 +11,6 @@ export function Navbar() {
   const navLinks = [
     { href: "/", label: "首頁" },
     { href: "/features", label: "功能介紹" },
-    { href: "/pricing", label: "定價方案" },
     { href: "/faq", label: "常見問題" },
   ];
 
@@ -19,10 +19,12 @@ export function Navbar() {
       <div className="container mx-auto px-4 h-16 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Link href="/" className="flex items-center gap-2" data-testid="link-logo">
-            <div className="bg-primary text-primary-foreground p-1.5 rounded-md">
-              <BarChart className="h-5 w-5" />
-            </div>
-            <span className="font-bold text-lg tracking-tight">ResearchForge</span>
+            <img
+              src="/assets/researchforge_icon_transparent.png"
+              alt="ResearchForge"
+              className="h-9 w-9 rounded-md bg-background object-contain p-0.5"
+            />
+            <BrandWordmark className="text-lg" />
           </Link>
         </div>
 
@@ -40,8 +42,8 @@ export function Navbar() {
             </Link>
           ))}
           <div className="flex items-center gap-4 ml-4 pl-4 border-l border-border">
-            <Link href="/generator" data-testid="link-nav-try-free">
-              <Button>免費試用</Button>
+            <Link href="/generator" data-testid="link-nav-start-project">
+              <Button>開始整理內容</Button>
             </Link>
           </div>
         </div>
@@ -71,8 +73,8 @@ export function Navbar() {
                 {link.label}
               </Link>
             ))}
-            <Link href="/generator" onClick={() => setIsMobileMenuOpen(false)} data-testid="link-mobile-nav-try-free">
-              <Button className="w-full">免費試用</Button>
+            <Link href="/generator" onClick={() => setIsMobileMenuOpen(false)} data-testid="link-mobile-nav-start-project">
+              <Button className="w-full">開始整理內容</Button>
             </Link>
           </div>
         </div>

@@ -5,6 +5,8 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { SearchSourcesRequestSearchProfile } from './searchSourcesRequestSearchProfile';
+import type { SearchSourcesRequestSubtopicsItem } from './searchSourcesRequestSubtopicsItem';
 
 /**
  * Provide either `query` for direct keyword search or `topic` with generator context.
@@ -14,6 +16,22 @@ export interface SearchSourcesRequest {
   query?: string;
   /** @minLength 1 */
   topic?: string;
+  originalTopic?: string;
+  activeResearchTopic?: string;
+  refinedTopic?: string;
+  displayTitle?: string;
+  canonicalTopicZh?: string;
+  canonicalTopicEn?: string;
+  querySeedZh?: string[];
+  querySeedEn?: string[];
+  subtopics?: SearchSourcesRequestSubtopicsItem[];
+  mustIncludeTerms?: string[];
+  excludeTerms?: string[];
+  domainHints?: string[];
+  selectedResearchPlanId?: string;
+  workflowId?: string;
+  sourceMixProfile?: string;
+  searchProfile?: SearchSourcesRequestSearchProfile;
   reportType?: string;
   audience?: string;
   sourceMode?: string;

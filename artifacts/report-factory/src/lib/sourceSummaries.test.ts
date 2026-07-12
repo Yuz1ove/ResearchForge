@@ -5,6 +5,7 @@ import {
   sourceDecisionHint,
   sourceHasUsableAbstract,
   sourceRecommendedSections,
+  sourceStructuredSummary,
   sourceSummaryForUser,
   sourceSummaryText,
 } from "./sourceSummaries.ts";
@@ -31,21 +32,76 @@ function source(overrides: Partial<SourceRecord> = {}): SourceRecord {
 test("sourceSummaryText uses abstract and truncates to a compact card length", () => {
   const summary = sourceSummaryText(source());
 
-  assert.match(summary, /short video use and attention/);
+  assert.match(summary, /目前可確認這份資料主要涉及|短影音|attention/i);
+  assert.doesNotMatch(summary, /This study examines/);
   assert.ok(Array.from(summary).length <= 170);
 });
 
-test("sourceSummaryText does not invent conclusions when abstract is missing", () => {
-  const summary = sourceSummaryText(source({ abstract: null, title: "A title only source" }));
+test("sourceSummaryText prefers backend readableSummaryZhTW when available", () => {
+  const summary = sourceSummaryText(
+    source({
+      readableSummaryZhTW:
+        "這份來源主要整理短影音使用與學生注意力分散之間的關係，並說明它可作為目前研究主題的直接背景證據。",
+      summarySourceType: "abstract",
+      summaryConfidence: "high",
+    }),
+  );
 
-  assert.match(summary, /摘要不足/);
+  assert.match(summary, /短影音使用與學生注意力分散/);
+  assert.doesNotMatch(summary, /主旨：|摘要重點/);
+});
+
+test("sourceSummaryText deterministically summarizes English-only abstracts in zh-TW", () => {
+  const summary = sourceSummaryText(
+    source({
+      readableSummaryZhTW: null,
+      llmSummaryZhTw: null,
+      summaryFallbackUsed: true,
+      abstract:
+        "The alkaline hydrolysis of carboxylate esters was evaluated under controlled temperature conditions.",
+      originalAbstract:
+        "The alkaline hydrolysis of carboxylate esters was evaluated under controlled temperature conditions.",
+    }),
+  );
+
+  assert.match(summary, /來源|主旨|摘要|線索|英文原文/u);
+  assert.doesNotMatch(summary, /alkaline hydrolysis of carboxylate esters/i);
+});
+
+test("sourceStructuredSummary exposes fixed zh-TW schema without raw English summary leakage", () => {
+  const structured = sourceStructuredSummary(
+    source({
+      title: "Dog resource guarding behavior training",
+      abstract:
+        "Dog resource guarding behavior can be managed through humane training, veterinary behavior guidance, and positive reinforcement.",
+      sourceRole: "professional_guidance",
+      recommendationBucket: "official_background",
+    }),
+    "狗的護食行為與教育方式",
+  );
+
+  assert.equal(structured.sourceRole, "professional_guidance");
+  assert.match(structured.zhTwSummary, /狗|護食|訓練|專業|線索/u);
+  assert.ok(structured.topicRelation.length > 0);
+  assert.ok(structured.usableClaims.length > 0);
+  assert.ok(structured.recommendedSections.length > 0);
+  assert.ok(structured.originalSnippets.length > 0);
+  assert.doesNotMatch(structured.zhTwSummary, /Dog resource guarding behavior can be managed/i);
+});
+
+test("sourceSummaryText does not invent conclusions when abstract is missing", () => {
+  const summary = sourceSummaryText(
+    source({ abstract: null, title: "A title only source" }),
+  );
+
+  assert.match(summary, /標題與基本書目資訊|證據不足|主要證據/);
   assert.equal(sourceHasUsableAbstract(source({ abstract: null })), false);
 });
 
 test("sourceDecisionHint keeps accepted sources reversible through review helper", () => {
   const hint = sourceDecisionHint(source({ abstract: null }));
 
-  assert.match(hint, /建議開啟原文確認/);
+  assert.match(hint, /不能列入主要證據|有限書目資訊/);
 });
 
 test("sourceRecommendedSections always returns at least one section", () => {
@@ -76,9 +132,8 @@ test("sourceSummaryForUser explains cola-health topic relation in Traditional Ch
   );
 
   assert.equal(summary.recommendation, "recommended");
-  assert.match(summary.topicRelation, /可樂中的成分與攝取習慣對健康的影響/);
-  assert.match(summary.topicRelation, /主要證據|直接支撐|關聯/);
-  assert.match(summary.recommendationReason, /推薦採用/);
+  assert.match(summary.topicRelation, /可樂|含糖飲料|糖分|主要證據/u);
+  assert.match(summary.recommendationReason, /可作主要證據/);
   assert.ok(summary.usableSections.length > 0);
 });
 
@@ -93,9 +148,27 @@ test("sourceSummaryForUser separates content summary from relation and recommend
     "可樂中的成分與攝取習慣對健康的影響",
   );
 
-  assert.match(summary.contentSummary, /soft drink intake/);
-  assert.match(summary.topicRelation, /主題|直接支撐|延伸/);
-  assert.match(summary.recommendationReason, /採用|接受|確認|不建議/);
+  assert.match(summary.contentSummary, /含糖飲料|soft drink|health/i);
+  assert.doesNotMatch(summary.contentSummary, /This cohort study/);
+  assert.match(summary.topicRelation, /可樂|含糖飲料|糖分|主要證據/u);
+  assert.match(summary.recommendationReason, /主要證據|補充來源|僅供參考|建議排除/);
+});
+
+test("sourceSummaryForUser rewrites mixed English aircraft summaries into more natural Chinese", () => {
+  const summary = sourceSummaryForUser(
+    source({
+      title:
+        "A Runway Overrun Risk Assessment Model for Civil Aircraft Based on Quick Access Recorder Data",
+      abstract:
+        "In this paper, we propose a new dynamic runway overrun risk assessment model based on QAR data for civil aircraft safety.",
+      sourceCategory: "journal_article",
+      matchedFacets: ["aircraft", "flight safety"],
+    }),
+    "飛機",
+  );
+
+  assert.match(summary.contentSummary, /跑道衝出|飛航安全|民航飛機|風險評估/u);
+  assert.doesNotMatch(summary.contentSummary, /In this paper|QAR data/i);
 });
 
 test("sourceSummaryForUser does not recommend off-topic sources", () => {
@@ -110,14 +183,15 @@ test("sourceSummaryForUser does not recommend off-topic sources", () => {
   );
 
   assert.equal(summary.recommendation, "not_recommended");
-  assert.match(summary.topicRelation, /關聯不足/);
-  assert.match(summary.recommendationReason, /不建議納入/);
+  assert.match(summary.topicRelation, /關聯不足|不建議納入/);
+  assert.match(summary.recommendationReason, /建議排除/);
 });
 
 test("sourceSummaryForUser marks relevant metadata-only sources as check-first", () => {
   const summary = sourceSummaryForUser(
     source({
-      title: "Climate change causes from greenhouse gas emissions and fossil fuel combustion",
+      title:
+        "Climate change causes from greenhouse gas emissions and fossil fuel combustion",
       abstract: null,
       sourceCategory: "journal_article",
     }),
@@ -125,15 +199,84 @@ test("sourceSummaryForUser marks relevant metadata-only sources as check-first",
   );
 
   assert.equal(summary.recommendation, "check_first");
-  assert.match(summary.contentSummary, /只有書目資料|摘要不足/);
-  assert.match(summary.topicRelation, /開啟原文確認|摘要不足/);
-  assert.match(summary.recommendationReason, /開啟原文確認/);
+  assert.match(summary.contentSummary, /延伸線索|補充可驗證摘要|主要證據/);
+  assert.doesNotMatch(
+    `${summary.contentSummary} ${summary.topicRelation} ${summary.recommendationReason}`,
+    /請開啟原文|待確認|尚未取得摘要/,
+  );
+  assert.equal(summary.summaryConfidence, "low");
+});
+
+test("sourceSummaryForUser respects backend source classification for non-climate planner topics", () => {
+  const summary = sourceSummaryForUser(
+    source({
+      title: "Frozen dumpling nutrition, sodium content, and food labeling",
+      abstract:
+        "This source examines frozen dumpling nutrition facts, sodium content, food labeling, and consumer choice.",
+      sourceCategory: "journal_article",
+      relevanceLevel: "primary",
+      relevanceScore: 88,
+      classification: "primary",
+      matchedTerms: ["dumpling", "nutrition", "food labeling"],
+      shouldShowInMainList: true,
+      shouldRecommendAccept: true,
+      sourceRelevanceReasonZhTw:
+        "來源聚焦水餃營養成分、鈉含量與食品標示，可支撐研究問題。",
+    }),
+    "水餃",
+  );
+
+  assert.notEqual(summary.summaryQuality, "irrelevant");
+  assert.notEqual(summary.recommendation, "not_recommended");
+  assert.match(summary.topicRelation, /可支撐研究問題|營養成分|食品標示/);
+  assert.doesNotMatch(summary.summaryQualityReason, /明顯不符|離題/);
+});
+
+test("sourceSummaryForUser suppresses stale off-topic warnings for review candidates", () => {
+  const summary = sourceSummaryForUser(
+    source({
+      title: "Paleoenvironment, algal structures, and fossil algae",
+      abstract:
+        "This source discusses fossil algae, paleoenvironment, sedimentary environment, and fossil preservation.",
+      relevanceLevel: "primary",
+      classification: "review",
+      usageRecommendation: "secondary",
+      qualityWarnings: ["此來源已被判定為不相關。"],
+      sourceRelevanceReasonZhTw:
+        "此來源與主題相關，但仍建議人工確認是否納入正式報告。",
+    }),
+    "化石與藻類的關係",
+  );
+
+  assert.doesNotMatch(summary.summaryWarnings.join(" "), /不相關|建議排除/);
+  assert.match(summary.topicRelation, /主題相關|人工確認/);
+});
+
+test("sourceSummaryForUser writes a complete zh-TW paragraph for spider habitat abstracts", () => {
+  const summary = sourceSummaryForUser(
+    source({
+      title: "Spider habitat selection and microhabitat ecology",
+      abstract:
+        "This study examines spider habitat selection, microhabitat conditions, vegetation structure, species richness, and ecological distribution across forest sites.",
+      sourceCategory: "journal_article",
+    }),
+    "蜘蛛與其棲地相關研究",
+  );
+
+  assert.equal(summary.recommendation, "recommended");
+  assert.match(summary.contentSummary, /棲地|蜘蛛|核心面向/);
+  assert.doesNotMatch(
+    summary.contentSummary,
+    /請開啟原文|待確認|尚未取得摘要/,
+  );
+  assert.ok(Array.from(summary.contentSummary).length >= 20);
 });
 
 test("sourceSummaryForUser builds evidence snippets and zh-TW refined summary for climate sources", () => {
   const summary = sourceSummaryForUser(
     source({
-      title: "Observed global warming and current status of climate change indicators",
+      title:
+        "Observed global warming and current status of climate change indicators",
       abstract:
         "Observed warming is reflected in global temperature trends, CO2 concentration, and sea level change. Greenhouse gas emissions remain a major driver of climate change.",
       sourceCategory: "journal_article",
@@ -151,4 +294,37 @@ test("sourceSummaryForUser builds evidence snippets and zh-TW refined summary fo
   assert.ok(summary.mainEvidenceFacet);
   assert.match(summary.contentSummary, /溫室氣體|二氧化碳|觀測升溫|海平面/);
   assert.ok(summary.suitableSectionLabels.includes("現況分析"));
+});
+
+test("sourceSummaryForUser marks spider ecology sources as good and generic strategy drift as irrelevant", () => {
+  const spiderSummary = sourceSummaryForUser(
+    source({
+      title: "Spider habitat selection and microhabitat ecology",
+      abstract:
+        "This study examines spider habitat selection, microhabitat conditions, predation behavior, anti-predator behavior, web building, and survival adaptation.",
+      sourceCategory: "journal_article",
+    }),
+    "蜘蛛的棲地需求與生存策略",
+  );
+
+  const driftSummary = sourceSummaryForUser(
+    source({
+      title: "高中地理教學中國家安全教育存在問題及改進策略研究",
+      abstract: "本文探討國家安全教育的改進策略。",
+      doi: null,
+      sourceCategory: "news_or_web",
+    }),
+    "蜘蛛的棲地需求與生存策略",
+  );
+
+  assert.equal(spiderSummary.recommendation, "recommended");
+  assert.equal(spiderSummary.summaryQuality, "good");
+  assert.match(spiderSummary.summaryQualityReason, /摘要/);
+  assert.match(
+    spiderSummary.contentSummary,
+    /主旨：|棲地|捕食|避敵|築網|生存|蜘蛛/,
+  );
+  assert.equal(driftSummary.recommendation, "not_recommended");
+  assert.equal(driftSummary.summaryQuality, "irrelevant");
+  assert.match(driftSummary.summaryQualityReason, /明顯不符/);
 });

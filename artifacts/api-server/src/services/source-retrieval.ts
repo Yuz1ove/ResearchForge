@@ -3,79 +3,79 @@ import {
   normalizeSourceRecord,
   type SourceRecord,
 } from "@workspace/api-zod";
+import type { ProviderHealth } from "@workspace/api-zod/research-grounding";
 import {
   getSourceProviderConfigs,
   SOURCE_PROVIDER_NAMES,
   type SourceProviderConfig,
   type SourceProviderName,
 } from "./source-provider-config";
+import { logger } from "../lib/logger";
 
-const DEFAULT_MIN_SOURCES = 10;
-const DEFAULT_TARGET_SOURCES = 20;
+const MAX_RESULTS = 120;
+const PROVIDER_RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const MAX_PROVIDER_RETRIES = 1;
+const PROVIDER_RETRY_BASE_DELAY_MS = 250;
+const PROVIDER_RETRY_MAX_DELAY_MS = 1200;
+const PROVIDER_CACHE_TTL_MS = 20 * 60 * 1000;
+const DEGRADED_PROVIDER_TIMEOUT_MS = 2500;
+const RETRY_PROVIDER_TIMEOUT_MS = 2000;
+const PROVIDER_DOWN_COOLDOWN_MS = 5 * 60 * 1000;
+const FALLBACK_PROVIDER_NAMES = [
+  "Official Source",
+  "Institutional Source",
+  "Authoritative Media",
+] as const;
 
-export type SourceProvider = SourceProviderName;
-export type SourceSearchErrorCode = "timeout" | "api-failure";
-export type SourceSearchDiagnosticsStatus =
-  | "success"
-  | "partial_success"
-  | "insufficient_sources"
-  | "empty"
-  | "failed";
-
-export type SourceSearchStage = "academic" | "official" | "media";
-
-export interface SourceSearchProviderFailure {
-  provider: SourceProvider;
-  query: string;
-  stage: SourceSearchStage;
-  error_type: SourceSearchErrorCode;
-  error_message: string;
-}
-
-export interface SourceSearchDiagnostics {
-  resultCount: number;
-  resultTarget: number;
-  minSources: number;
-  targetSources: number;
-  queryCount: number;
-  providerCount: number;
-  fallbackUsed: boolean;
-  status: SourceSearchDiagnosticsStatus;
-  providerFailures: SourceSearchProviderFailure[];
-  providerResultCounts: Array<{
-    provider: SourceProvider;
-    query: string;
-    stage: SourceSearchStage;
-    resultCount: number;
-    ok: boolean;
-  }>;
-  warnings: string[];
-}
+export type AcademicSourceProvider = SourceProviderName;
+export type FallbackSourceProvider = (typeof FALLBACK_PROVIDER_NAMES)[number];
+export type SourceProvider = AcademicSourceProvider | FallbackSourceProvider;
+export type SourceSearchErrorCode =
+  | "timeout"
+  | "api-failure"
+  | "rate_limited"
+  | "server_error"
+  | "schema_error"
+  | "low_results";
 
 export type SourceFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
-export interface SourceSearchOptions {
-  fetchImpl?: SourceFetch;
-  providerConfigs?: Partial<Record<SourceProvider, SourceProviderConfig>>;
-  stage?: SourceSearchStage;
-  minSources?: number;
-  targetSources?: number;
+export interface SourceSearchTelemetryContext {
+  requestId: string;
+  workflowId: string;
+  jobId: string;
+  topicHash: string;
 }
 
-export interface SourceSearchResultWithDiagnostics {
-  sources: SourceRecord[];
-  diagnostics: SourceSearchDiagnostics;
-  provider_status: SourceProviderSearchResult[];
+export interface SourceSearchOptions {
+  fetchImpl?: SourceFetch;
+  providerConfigs?: Partial<Record<AcademicSourceProvider, SourceProviderConfig>>;
+  providers?: AcademicSourceProvider[];
+  telemetry?: SourceSearchTelemetryContext;
+  /**
+   * A topic-anchored planner owns query repair. Its provider calls must not
+   * silently retry with a shortened query that can discard the topic anchor.
+   */
+  allowShortQueryRetry?: boolean;
 }
 
 export interface SourceProviderSearchResult {
   ok: boolean;
   provider: SourceProvider;
   query: string;
-  stage: SourceSearchStage;
   results: SourceRecord[];
+  raw_count?: number;
+  normalize_attempt_count?: number;
+  normalized_valid_count?: number;
+  normalized_invalid_count?: number;
   error_type: SourceSearchErrorCode | null;
   error_message: string | null;
+  latency_ms?: number;
+  request_url?: string;
+  provider_health?: ProviderHealth;
+  retry_mode?: "short_query";
+  retry_query?: string;
+  retry_reason?: SourceSearchErrorCode;
 }
 
 export class SourceSearchError extends Error {
@@ -88,6 +88,241 @@ export class SourceSearchError extends Error {
     super(message);
     this.name = "SourceSearchError";
   }
+}
+
+type ProviderCacheEntry = {
+  expiresAt: number;
+  result: SourceProviderSearchResult;
+};
+
+const providerSearchCache = new Map<string, ProviderCacheEntry>();
+
+function providerHealthKey(provider: SourceProvider): ProviderHealth["provider"] | null {
+  if (provider === "OpenAlex") return "openalex";
+  if (provider === "Crossref") return "crossref";
+  if (provider === "Semantic Scholar") return "semantic_scholar";
+  return null;
+}
+
+function percentile(values: number[], quantile: number): number | undefined {
+  if (values.length === 0) return undefined;
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.min(
+    sorted.length - 1,
+    Math.max(0, Math.round((sorted.length - 1) * quantile)),
+  );
+  return sorted[index];
+}
+
+function baseProviderHealth(provider: ProviderHealth["provider"]): ProviderHealth {
+  return {
+    provider,
+    status: "healthy",
+    recentFailureCount: 0,
+    recentTimeoutCount: 0,
+  };
+}
+
+export interface ProviderHealthEvent {
+  errorType?: SourceSearchErrorCode | null;
+  latencyMs?: number;
+  occurredAt?: Date;
+}
+
+export interface ProviderHealthStore {
+  get(provider: SourceProvider): Promise<ProviderHealth>;
+  recordSuccess(provider: SourceProvider, event?: ProviderHealthEvent): Promise<void>;
+  recordFailure(provider: SourceProvider, event: ProviderHealthEvent): Promise<void>;
+  markDown(provider: SourceProvider, cooldownUntil: Date, reason?: string): Promise<void>;
+  reset?(provider: SourceProvider): Promise<void>;
+}
+
+export class InMemoryProviderHealthStore implements ProviderHealthStore {
+  private readonly state = new Map<ProviderHealth["provider"], ProviderHealth>();
+  private readonly latencySamples = new Map<ProviderHealth["provider"], number[]>();
+  private readonly successStreak = new Map<ProviderHealth["provider"], number>();
+
+  getSync(provider: SourceProvider): ProviderHealth {
+    const key = providerHealthKey(provider);
+    if (!key) return baseProviderHealth("core");
+    const current = this.state.get(key) ?? baseProviderHealth(key);
+    if (current.status === "down" && current.cooldownUntil) {
+      const cooldownMs = Date.parse(current.cooldownUntil);
+      if (Number.isFinite(cooldownMs) && cooldownMs <= Date.now()) {
+        const recovered: ProviderHealth = {
+          ...current,
+          status: "degraded",
+          cooldownUntil: undefined,
+        };
+        this.state.set(key, recovered);
+        this.successStreak.set(key, 0);
+        return recovered;
+      }
+    }
+    return current;
+  }
+
+  async get(provider: SourceProvider): Promise<ProviderHealth> {
+    return this.getSync(provider);
+  }
+
+  async recordSuccess(provider: SourceProvider, event: ProviderHealthEvent = {}): Promise<void> {
+    const key = providerHealthKey(provider);
+    if (!key) return;
+    const current = this.getSync(provider);
+    const latencyMs = event.latencyMs ?? 0;
+    const samples = [...(this.latencySamples.get(key) ?? []), latencyMs].slice(-20);
+    this.latencySamples.set(key, samples);
+    const nextStreak = (this.successStreak.get(key) ?? 0) + 1;
+    this.successStreak.set(key, nextStreak);
+    const status: ProviderHealth["status"] =
+      current.status === "degraded" && nextStreak < 2 ? "degraded" : "healthy";
+    const next: ProviderHealth = {
+      provider: key,
+      status,
+      lastSuccessAt: (event.occurredAt ?? new Date()).toISOString(),
+      recentFailureCount: status === "healthy" ? 0 : current.recentFailureCount,
+      recentTimeoutCount: status === "healthy" ? 0 : current.recentTimeoutCount,
+      ...(status === "degraded" && current.lastFailureAt
+        ? { lastFailureAt: current.lastFailureAt }
+        : {}),
+      ...(typeof percentile(samples, 0.5) === "number"
+        ? { rollingLatencyP50: percentile(samples, 0.5) }
+        : {}),
+      ...(typeof percentile(samples, 0.95) === "number"
+        ? { rollingLatencyP95: percentile(samples, 0.95) }
+        : {}),
+      ...(status === "degraded" && current.lastErrorCode
+        ? { lastErrorCode: current.lastErrorCode }
+        : {}),
+    };
+    this.state.set(key, next);
+  }
+
+  async recordFailure(provider: SourceProvider, event: ProviderHealthEvent): Promise<void> {
+    const key = providerHealthKey(provider);
+    if (!key) return;
+    const current = this.getSync(provider);
+    const failureCount = current.recentFailureCount + 1;
+    const timeoutCount =
+      event.errorType === "timeout"
+        ? current.recentTimeoutCount + 1
+        : current.recentTimeoutCount;
+    const latencyMs = event.latencyMs ?? 0;
+    const samples = [...(this.latencySamples.get(key) ?? []), latencyMs].slice(-20);
+    this.latencySamples.set(key, samples);
+    this.successStreak.set(key, 0);
+    const retryableFailure =
+      event.errorType === "timeout" || event.errorType === "server_error";
+    const status: ProviderHealth["status"] =
+      retryableFailure && failureCount >= 6
+        ? "down"
+        : retryableFailure && (failureCount >= 3 || timeoutCount >= 3)
+          ? "degraded"
+          : current.status === "down"
+            ? "down"
+            : current.status;
+    const next: ProviderHealth = {
+      provider: key,
+      status,
+      lastSuccessAt: current.lastSuccessAt,
+      lastFailureAt: (event.occurredAt ?? new Date()).toISOString(),
+      recentFailureCount: failureCount,
+      recentTimeoutCount: timeoutCount,
+      ...(typeof percentile(samples, 0.5) === "number"
+        ? { rollingLatencyP50: percentile(samples, 0.5) }
+        : {}),
+      ...(typeof percentile(samples, 0.95) === "number"
+        ? { rollingLatencyP95: percentile(samples, 0.95) }
+        : {}),
+      ...(status === "down"
+        ? { cooldownUntil: new Date(Date.now() + PROVIDER_DOWN_COOLDOWN_MS).toISOString() }
+        : {}),
+      ...(event.errorType ? { lastErrorCode: event.errorType } : {}),
+    };
+    this.state.set(key, next);
+  }
+
+  async markDown(provider: SourceProvider, cooldownUntil: Date, reason?: string): Promise<void> {
+    const key = providerHealthKey(provider);
+    if (!key) return;
+    const current = this.getSync(provider);
+    this.state.set(key, {
+      ...current,
+      status: "down",
+      cooldownUntil: cooldownUntil.toISOString(),
+      lastFailureAt: new Date().toISOString(),
+      ...(reason ? { lastErrorCode: reason } : {}),
+    });
+    this.successStreak.set(key, 0);
+  }
+
+  async reset(provider: SourceProvider): Promise<void> {
+    const key = providerHealthKey(provider);
+    if (!key) return;
+    this.state.delete(key);
+    this.latencySamples.delete(key);
+    this.successStreak.delete(key);
+  }
+
+  resetAll(): void {
+    this.state.clear();
+    this.latencySamples.clear();
+    this.successStreak.clear();
+  }
+}
+
+let providerHealthStore = new InMemoryProviderHealthStore();
+
+export function setProviderHealthStoreForTesting(store: InMemoryProviderHealthStore): void {
+  providerHealthStore = store;
+}
+
+export function resetProviderHealthStoreForTesting(): void {
+  providerHealthStore = new InMemoryProviderHealthStore();
+  providerSearchCache.clear();
+}
+
+export function providerHealthSnapshot(
+  provider: AcademicSourceProvider,
+): ProviderHealth {
+  return providerHealthStore.getSync(provider);
+}
+
+export function allProviderHealthSnapshots(): ProviderHealth[] {
+  return SOURCE_PROVIDER_NAMES.map((provider) => providerHealthSnapshot(provider));
+}
+
+function providerConfigForHealth(
+  provider: AcademicSourceProvider,
+  config: SourceProviderConfig,
+): SourceProviderConfig {
+  const health = providerHealthSnapshot(provider);
+  if (health.status !== "degraded") return config;
+  return {
+    ...config,
+    timeoutMs: Math.min(config.timeoutMs, DEGRADED_PROVIDER_TIMEOUT_MS),
+  };
+}
+
+function normalizedProviderCacheKey(
+  provider: SourceProvider,
+  query: string,
+  config?: Pick<SourceProviderConfig, "endpoint" | "queryLimit" | "pageLimit">,
+): string {
+  const dateBucket = Math.floor(Date.now() / PROVIDER_CACHE_TTL_MS);
+  const normalizedQuery = query.trim().toLowerCase().replace(/\s+/g, " ");
+  const endpoint = config?.endpoint.trim().toLowerCase() ?? "";
+  const queryLimit = config?.queryLimit ?? "";
+  const pageLimit = config?.pageLimit ?? "";
+  return `${provider}:${endpoint}:${queryLimit}:${pageLimit}:${normalizedQuery}:${dateBucket}`;
+}
+
+function cloneProviderResult(result: SourceProviderSearchResult): SourceProviderSearchResult {
+  return {
+    ...result,
+    results: result.results.map((source) => ({ ...source })),
+  };
 }
 
 type CrossrefAuthor = {
@@ -112,6 +347,8 @@ type CrossrefWork = {
   URL?: string;
   publisher?: string;
   "container-title"?: string[];
+  type?: string;
+  "is-referenced-by-count"?: number;
 };
 
 type CrossrefResponse = {
@@ -129,16 +366,110 @@ type SemanticScholarPaper = {
   authors?: SemanticScholarAuthor[];
   year?: number;
   abstract?: string;
+  tldr?: {
+    text?: string;
+  };
   externalIds?: {
     DOI?: string;
   };
   url?: string;
   venue?: string;
+  fieldsOfStudy?: string[];
+  citationCount?: number;
+  publicationTypes?: string[];
+  isOpenAccess?: boolean;
 };
 
 type SemanticScholarResponse = {
   data?: SemanticScholarPaper[];
+  next?: number;
 };
+
+type OpenAlexAuthor = {
+  author?: {
+    display_name?: string;
+  };
+};
+
+type OpenAlexInvertedIndex = Record<string, number[]>;
+
+type OpenAlexWork = {
+  id?: string;
+  doi?: string;
+  title?: string;
+  display_name?: string;
+  publication_year?: number;
+  abstract_inverted_index?: OpenAlexInvertedIndex | null;
+  cited_by_count?: number;
+  type?: string;
+  authorships?: OpenAlexAuthor[];
+  primary_location?: {
+    source?: {
+      display_name?: string;
+    } | null;
+    landing_page_url?: string | null;
+    raw_source_name?: string | null;
+  } | null;
+  host_venue?: {
+    display_name?: string;
+    url?: string;
+  } | null;
+  locations?: Array<{
+    landing_page_url?: string | null;
+    raw_source_name?: string | null;
+    source?: {
+      display_name?: string;
+    } | null;
+  }>;
+  concepts?: Array<{
+    display_name?: string;
+  }>;
+  topics?: Array<{
+    display_name?: string;
+  }>;
+  open_access?: {
+    is_oa?: boolean;
+  };
+};
+
+type OpenAlexResponse = {
+  results?: OpenAlexWork[];
+};
+
+interface ProviderNormalizedResults {
+  results: SourceRecord[];
+  rawCount: number;
+  retryMode?: "short_query";
+  retryQuery?: string;
+  retryReason?: SourceSearchErrorCode;
+}
+
+function pageCount(config: SourceProviderConfig): number {
+  return Math.max(1, Math.min(5, Math.trunc(config.pageLimit || 1)));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function retryAfterDelayMs(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(PROVIDER_RETRY_MAX_DELAY_MS, Math.round(seconds * 1000));
+  }
+  const dateMs = Date.parse(value);
+  if (!Number.isFinite(dateMs)) return null;
+  const delta = dateMs - Date.now();
+  if (delta <= 0) return 0;
+  return Math.min(PROVIDER_RETRY_MAX_DELAY_MS, delta);
+}
+
+function retryDelayMs(attempt: number, retryAfterMs?: number | null): number {
+  if (typeof retryAfterMs === "number") return retryAfterMs;
+  const exponentialDelay = PROVIDER_RETRY_BASE_DELAY_MS * 2 ** attempt;
+  return Math.min(PROVIDER_RETRY_MAX_DELAY_MS, exponentialDelay);
+}
 
 function firstText(value: unknown): string | null {
   if (typeof value === "string") {
@@ -167,22 +498,40 @@ function stripMarkup(text: string | null | undefined): string | null {
 
 function normalizeDoi(doi: string | null | undefined): string | null {
   if (!doi) return null;
-  const trimmed = doi.trim();
-  return trimmed ? trimmed : null;
+  const trimmed = doi
+    .trim()
+    .replace(/^https?:\/\/(dx\.)?doi\.org\//i, "");
+  return trimmed ? trimmed.toLowerCase() : null;
 }
 
 function normalizeUrl(url: string | null | undefined, doi: string | null): string | null {
-  if (url?.trim()) return url.trim();
   if (doi) return `https://doi.org/${doi}`;
+  if (url?.trim()) return url.trim();
   return null;
+}
+
+function sourceKindFromProviderType(value: string | null | undefined): SourceRecord["sourceKind"] {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return null;
+  if (/(journal|article|posted-content|peer-review)/.test(normalized)) return "journal";
+  if (/(proceedings|conference)/.test(normalized)) return "conference";
+  if (/(book|chapter|monograph)/.test(normalized)) return "book";
+  if (/(dataset|data)/.test(normalized)) return "dataset";
+  if (/(web|reference-entry)/.test(normalized)) return "web";
+  return null;
+}
+
+function citationCount(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.trunc(value));
 }
 
 function crossrefYear(work: CrossrefWork): number | null {
   const dates = [
-    work.published,
     work["published-print"],
     work["published-online"],
     work.issued,
+    work.published,
   ];
 
   for (const date of dates) {
@@ -208,7 +557,7 @@ function crossrefAuthors(authors: CrossrefAuthor[] | undefined): string[] {
     .filter((name): name is string => Boolean(name));
 }
 
-export function normalizeCrossrefWork(work: CrossrefWork): SourceRecord | null {
+export function normalizeCrossrefWork(work: CrossrefWork, queryUsed?: string): SourceRecord | null {
   const title = firstText(work.title);
   if (!title) return null;
 
@@ -225,19 +574,26 @@ export function normalizeCrossrefWork(work: CrossrefWork): SourceRecord | null {
     publisher: work.publisher ?? null,
     containerTitle: firstText(work["container-title"]),
     accessedAt: null,
+    provider: "Crossref",
+    queryUsed,
+    retrievedAt: new Date().toISOString(),
+    sourceKind: sourceKindFromProviderType(work.type),
+    citationCount: citationCount(work["is-referenced-by-count"]),
+    isPeerReviewed: sourceKindFromProviderType(work.type) === "journal",
   });
 }
 
-export function normalizeSemanticScholarPaper(paper: SemanticScholarPaper): SourceRecord | null {
+export function normalizeSemanticScholarPaper(paper: SemanticScholarPaper, queryUsed?: string): SourceRecord | null {
   const title = firstText(paper.title);
   if (!title) return null;
 
   const doi = normalizeDoi(paper.externalIds?.DOI);
+  const abstract = stripMarkup(paper.abstract) ?? stripMarkup(paper.tldr?.text);
   return normalizeSourceRecord({
     title,
     authors: paper.authors?.map((author) => author.name?.trim()).filter((name): name is string => Boolean(name)) ?? [],
     year: typeof paper.year === "number" ? paper.year : null,
-    abstract: stripMarkup(paper.abstract),
+    abstract,
     doi,
     url: normalizeUrl(paper.url, doi),
     sourceType: "Semantic Scholar",
@@ -245,140 +601,136 @@ export function normalizeSemanticScholarPaper(paper: SemanticScholarPaper): Sour
     publisher: null,
     containerTitle: paper.venue ?? null,
     accessedAt: null,
+    provider: "Semantic Scholar",
+    queryUsed,
+    retrievedAt: new Date().toISOString(),
+    sourceKind: sourceKindFromProviderType(firstText(paper.publicationTypes)),
+    citationCount: citationCount(paper.citationCount),
+    isOpenAccess: typeof paper.isOpenAccess === "boolean" ? paper.isOpenAccess : null,
   });
 }
 
-function sourceProviderConfigs(options?: SourceSearchOptions): Record<SourceProvider, SourceProviderConfig> {
-  const defaults = getSourceProviderConfigs();
-  return {
-    Crossref: options?.providerConfigs?.Crossref ?? defaults.Crossref,
-    OpenAlex: options?.providerConfigs?.OpenAlex ?? defaults.OpenAlex,
-    "Semantic Scholar": options?.providerConfigs?.["Semantic Scholar"] ?? defaults["Semantic Scholar"],
-    Web: options?.providerConfigs?.Web ?? defaults.Web,
-  };
-}
+function restoreOpenAlexAbstract(
+  invertedIndex: OpenAlexInvertedIndex | null | undefined,
+): string | null {
+  if (!invertedIndex) return null;
 
-function cleanSnippet(text: string | null | undefined, maxLength = 260): string | null {
-  if (!text) return null;
-  const cleaned = text.replace(/\s+/g, " ").trim();
-  if (!cleaned) return null;
-  const chars = Array.from(cleaned);
-  return chars.length > maxLength ? `${chars.slice(0, maxLength - 1).join("").trim()}…` : cleaned;
-}
-
-function decodeOpenAlexAbstract(value: string | null | undefined): string | null {
-  if (!value) return null;
-  try {
-    const data = JSON.parse(value) as Record<string, string[]>;
-    const entries = data ? Object.values(data).flat() : [];
-    return cleanSnippet(entries.join(" "));
-  } catch {
-    return cleanSnippet(value);
+  const wordsByPosition: Array<{ word: string; position: number }> = [];
+  for (const [word, positions] of Object.entries(invertedIndex)) {
+    for (const position of positions) {
+      if (typeof position === "number" && Number.isFinite(position)) {
+        wordsByPosition.push({ word, position });
+      }
+    }
   }
+
+  const restored = wordsByPosition
+    .sort((a, b) => a.position - b.position)
+    .map((item) => item.word)
+    .join(" ")
+    .replace(/\s+([,.;:!?%)])/g, "$1")
+    .replace(/([(])\s+/g, "$1")
+    .trim();
+
+  return restored || null;
 }
 
-type OpenAlexAuthor = {
-  author?: {
-    display_name?: string;
-  };
-};
+function openAlexAuthors(authorships: OpenAlexAuthor[] | undefined): string[] {
+  return (authorships ?? [])
+    .map((authorship) => authorship.author?.display_name?.trim())
+    .filter((name): name is string => Boolean(name));
+}
 
-type OpenAlexWork = {
-  display_name?: string;
-  publication_year?: number;
-  abstract_inverted_index?: Record<string, number[]>;
-  abstract?: string;
-  doi?: string | null;
-  id?: string;
-  primary_location?: {
-    landing_page_url?: string | null;
-    source?: {
-      display_name?: string | null;
-    };
-  };
-  host_venue?: {
-    display_name?: string | null;
-  };
-  authorships?: OpenAlexAuthor[];
-};
-
-type OpenAlexResponse = {
-  results?: OpenAlexWork[];
-};
-
-type PublicWebSource = {
-  title?: string;
-  url?: string;
-  snippet?: string;
-  source?: string;
-};
-
-function openAlexAbstract(work: OpenAlexWork): string | null {
-  if (work.abstract) return decodeOpenAlexAbstract(work.abstract);
-  const index = work.abstract_inverted_index;
-  if (!index) return null;
-
-  const words = Object.entries(index)
-    .flatMap(([word, positions]) => positions.map((position) => ({ word, position })))
-    .sort((a, b) => a.position - b.position)
-    .map((item) => item.word);
-
-  return cleanSnippet(words.join(" "));
+function openAlexVenue(work: OpenAlexWork): string | null {
+  return (
+    firstText(work.primary_location?.source?.display_name) ??
+    firstText(work.primary_location?.raw_source_name) ??
+    firstText(work.host_venue?.display_name) ??
+    firstText(
+      work.locations?.map(
+        (location) =>
+          location.source?.display_name ?? location.raw_source_name,
+      ),
+    )
+  );
 }
 
 function openAlexUrl(work: OpenAlexWork, doi: string | null): string | null {
-  if (work.primary_location?.landing_page_url?.trim()) return work.primary_location.landing_page_url.trim();
-  if (doi) return `https://doi.org/${doi}`;
-  if (work.id?.trim()) return work.id.trim();
-  return null;
+  return normalizeUrl(
+    firstText([
+      work.primary_location?.landing_page_url,
+      work.host_venue?.url,
+      work.locations?.map((location) => location.landing_page_url),
+      work.id,
+    ]),
+    doi,
+  );
 }
 
-function normalizeOpenAlexWork(work: OpenAlexWork): SourceRecord | null {
-  const title = firstText(work.display_name);
+export function normalizeOpenAlexWork(work: OpenAlexWork, queryUsed?: string): SourceRecord | null {
+  const title = firstText(work.title ?? work.display_name);
   if (!title) return null;
 
   const doi = normalizeDoi(work.doi);
-  const authors = work.authorships?.map((item) => item.author?.display_name?.trim()).filter((name): name is string => Boolean(name)) ?? [];
-  const venue = firstText(work.host_venue?.display_name ?? work.primary_location?.source?.display_name ?? null);
+  const restoredAbstract = stripMarkup(
+    restoreOpenAlexAbstract(work.abstract_inverted_index),
+  );
 
   return normalizeSourceRecord({
     title,
-    authors,
+    authors: openAlexAuthors(work.authorships),
     year: typeof work.publication_year === "number" ? work.publication_year : null,
-    abstract: openAlexAbstract(work),
+    abstract: restoredAbstract,
     doi,
-    url: normalizeUrl(openAlexUrl(work, doi), doi),
-    sourceType: "OpenAlex" as SourceProvider,
+    url: openAlexUrl(work, doi),
+    sourceType: "OpenAlex",
     reviewState: "pending",
     publisher: null,
-    containerTitle: venue,
+    containerTitle: openAlexVenue(work),
     accessedAt: null,
+    provider: "OpenAlex",
+    queryUsed,
+    retrievedAt: new Date().toISOString(),
+    sourceKind: sourceKindFromProviderType(work.type),
+    citationCount: citationCount(work.cited_by_count),
+    isOpenAccess: typeof work.open_access?.is_oa === "boolean" ? work.open_access.is_oa : null,
   });
 }
 
-function sourceTypeFromStage(_stage: SourceSearchStage, _url: string | null | undefined, _title: string): SourceRecord["sourceType"] {
-  return "Web";
+function sourceProviderConfigs(options?: SourceSearchOptions): Record<AcademicSourceProvider, SourceProviderConfig> {
+  const defaults = getSourceProviderConfigs();
+  return {
+    OpenAlex: options?.providerConfigs?.OpenAlex ?? defaults.OpenAlex,
+    Crossref: options?.providerConfigs?.Crossref ?? defaults.Crossref,
+    "Semantic Scholar": options?.providerConfigs?.["Semantic Scholar"] ?? defaults["Semantic Scholar"],
+  };
 }
 
-function normalizePublicWebSource(source: PublicWebSource, stage: SourceSearchStage): SourceRecord | null {
-  const title = firstText(source.title);
-  if (!title) return null;
+async function searchOpenAlex(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<ProviderNormalizedResults> {
+  const pages = Array.from({ length: pageCount(config) }, (_, index) => index + 1);
+  const results: SourceRecord[] = [];
+  let rawCount = 0;
 
-  const url = cleanSnippet(source.url, 280);
-  const snippet = cleanSnippet(source.snippet, 320);
-  return normalizeSourceRecord({
-    title,
-    authors: source.source?.trim() ? [source.source.trim()] : [],
-    year: null,
-    abstract: snippet,
-    doi: null,
-    url,
-    sourceType: sourceTypeFromStage(stage, url, title),
-    reviewState: "pending",
-    publisher: source.source ?? null,
-    containerTitle: source.source ?? null,
-    accessedAt: null,
-  });
+  for (const page of pages) {
+    const url = new URL(config.endpoint);
+    url.searchParams.set("search", query);
+    url.searchParams.set("per-page", String(config.queryLimit));
+    url.searchParams.set("page", String(page));
+    url.searchParams.set("sort", "relevance_score:desc");
+    url.searchParams.set("select", "id,doi,title,display_name,publication_year,abstract_inverted_index,authorships,primary_location,locations,concepts,topics,cited_by_count,type,open_access");
+    if (config.mailto) url.searchParams.set("mailto", config.mailto);
+
+    const data = await fetchJson<OpenAlexResponse>("OpenAlex", url, config, options?.fetchImpl);
+    const rawItems = data.results ?? [];
+    rawCount += rawItems.length;
+    const pageResults = rawItems
+      .map((work) => normalizeOpenAlexWork(work, query))
+      .filter((source): source is SourceRecord => Boolean(source));
+    results.push(...pageResults);
+    if (rawItems.length < config.queryLimit) break;
+  }
+
+  return { results, rawCount };
 }
 
 async function fetchJson<T>(
@@ -387,134 +739,211 @@ async function fetchJson<T>(
   config: SourceProviderConfig,
   fetchImpl: SourceFetch = fetch,
 ): Promise<T> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  let lastError: unknown;
 
-  try {
-    const response = await fetchImpl(url, {
-      signal: controller.signal,
-      headers: config.headers,
-    });
+  for (let attempt = 0; attempt <= MAX_PROVIDER_RETRIES; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutMs =
+      attempt > 0
+        ? Math.min(config.timeoutMs, RETRY_PROVIDER_TIMEOUT_MS)
+        : config.timeoutMs;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-    if (!response.ok) {
+    try {
+      const response = await fetchImpl(url, {
+        signal: controller.signal,
+        headers: config.headers,
+      });
+
+      if (!response.ok) {
+        if (
+          PROVIDER_RETRYABLE_STATUS_CODES.has(response.status) &&
+          attempt < MAX_PROVIDER_RETRIES
+        ) {
+          await sleep(
+            provider === "OpenAlex" && response.status === 503
+              ? 250
+              : retryDelayMs(
+                  attempt,
+                  retryAfterDelayMs(response.headers.get("retry-after")),
+                ),
+          );
+          continue;
+        }
+        throw new SourceSearchError(
+          response.status === 429
+            ? "rate_limited"
+            : response.status >= 500 && response.status <= 599
+              ? "server_error"
+              : "api-failure",
+          provider,
+          `${provider} returned HTTP ${response.status}`,
+        );
+      }
+
+      try {
+        return (await response.json()) as T;
+      } catch (error) {
+        throw new SourceSearchError(
+          "schema_error",
+          provider,
+          `${provider} response could not be parsed as JSON`,
+          error,
+        );
+      }
+    } catch (error) {
+      lastError = error;
+      if (error instanceof SourceSearchError) {
+        throw error;
+      }
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new SourceSearchError(
+          "timeout",
+          provider,
+          `${provider} request timed out`,
+          error,
+        );
+      }
+      if (attempt < MAX_PROVIDER_RETRIES) {
+        await sleep(retryDelayMs(attempt));
+        continue;
+      }
       throw new SourceSearchError(
         "api-failure",
         provider,
-        `${provider} returned HTTP ${response.status}`,
+        `${provider} request failed`,
+        error,
       );
+    } finally {
+      clearTimeout(timeout);
     }
-
-    return (await response.json()) as T;
-  } catch (error) {
-    if (error instanceof SourceSearchError) throw error;
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new SourceSearchError("timeout", provider, `${provider} request timed out`, error);
-    }
-    throw new SourceSearchError("api-failure", provider, `${provider} request failed`, error);
-  } finally {
-    clearTimeout(timeout);
   }
+
+  if (lastError instanceof SourceSearchError) throw lastError;
+  throw new SourceSearchError(
+    "api-failure",
+    provider,
+    `${provider} request failed`,
+    lastError,
+  );
 }
 
-async function searchCrossref(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<SourceRecord[]> {
-  const url = new URL(config.endpoint);
-  url.searchParams.set("query", query);
-  url.searchParams.set("rows", String(config.queryLimit));
-  url.searchParams.set("select", "title,author,issued,published,published-print,published-online,abstract,DOI,URL,publisher,container-title");
-  if (config.mailto) url.searchParams.set("mailto", config.mailto);
-
-  const data = await fetchJson<CrossrefResponse>("Crossref", url, config, options?.fetchImpl);
-  return (data.message?.items ?? [])
-    .map(normalizeCrossrefWork)
-    .filter((source): source is SourceRecord => Boolean(source));
+function shortCrossrefRetryQuery(query: string): string {
+  const normalized = query.trim().replace(/\s+/g, " ");
+  if (/rayleigh/i.test(normalized) && /sunset|twilight/i.test(normalized)) {
+    return "Rayleigh scattering sunset";
+  }
+  const terms = normalized
+    .split(/\s+/)
+    .filter((term) => !/^(and|or|of|the|a|an|relationship|effect|impact|study|research)$/i.test(term))
+    .slice(0, 3);
+  return terms.length >= 2 ? terms.join(" ") : normalized;
 }
 
-async function searchOpenAlex(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<SourceRecord[]> {
-  const url = new URL(config.endpoint);
-  url.searchParams.set(config.queryParam ?? "search", query);
-  url.searchParams.set("per-page", String(config.queryLimit));
-  url.searchParams.set("sort", "relevance_score:desc");
-  if (config.selectParam) url.searchParams.set("select", config.selectParam);
+async function searchCrossrefQuery(
+  query: string,
+  config: SourceProviderConfig,
+  options?: SourceSearchOptions,
+): Promise<ProviderNormalizedResults> {
+  const pages = Array.from({ length: pageCount(config) }, (_, index) => index);
+  const results: SourceRecord[] = [];
+  let rawCount = 0;
 
-  const data = await fetchJson<OpenAlexResponse>("OpenAlex", url, config, options?.fetchImpl);
-  return (data.results ?? [])
-    .map(normalizeOpenAlexWork)
-    .filter((source): source is SourceRecord => Boolean(source));
+  for (const page of pages) {
+    const url = new URL(config.endpoint);
+    url.searchParams.set("query", query);
+    url.searchParams.set("rows", String(config.queryLimit));
+    url.searchParams.set("offset", String(page * config.queryLimit));
+    url.searchParams.set("select", "title,author,issued,published,published-print,published-online,abstract,DOI,URL,publisher,container-title,type,is-referenced-by-count");
+    if (config.mailto) url.searchParams.set("mailto", config.mailto);
+
+    const data = await fetchJson<CrossrefResponse>("Crossref", url, config, options?.fetchImpl);
+    const rawItems = data.message?.items ?? [];
+    rawCount += rawItems.length;
+    const pageResults = rawItems
+      .map((work) => normalizeCrossrefWork(work, query))
+      .filter((source): source is SourceRecord => Boolean(source));
+    results.push(...pageResults);
+    if (rawItems.length < config.queryLimit) break;
+  }
+
+  return { results, rawCount };
 }
 
-function decodeBingRedirect(url: string): string {
+async function searchCrossref(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<ProviderNormalizedResults> {
   try {
-    const parsed = new URL(url);
-    const encoded = parsed.searchParams.get("u");
-    if (!encoded) return url;
-    const trimmed = encoded.startsWith("a1") ? encoded.slice(2) : encoded;
-    const decoded = Buffer.from(trimmed, "base64").toString("utf8");
-    return decoded.startsWith("http") ? decoded : url;
-  } catch {
-    return url;
-  }
-}
-
-function extractBingResults(markdown: string): PublicWebSource[] {
-  const results: PublicWebSource[] = [];
-  const lines = markdown.split("\n");
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? "";
-    const match = line.match(/^\d+\.\s+##\s+\[(.+?)\]\((https?:\/\/[^\s)]+)\)/);
-    if (!match) continue;
-    const title = match[1]?.trim();
-    const url = decodeBingRedirect(match[2]?.trim() ?? "");
-    let snippet = "";
-    for (let j = i + 1; j < lines.length; j += 1) {
-      const candidate = lines[j] ?? "";
-      if (/^\d+\.\s+##\s+\[/.test(candidate)) break;
-      if (candidate.trim()) {
-        snippet = candidate.trim();
-        break;
-      }
+    const initial = await searchCrossrefQuery(query, config, options);
+    if (initial.results.length > 1 && initial.rawCount > 1) return initial;
+    if (options?.allowShortQueryRetry === false) return initial;
+    const retryQuery = shortCrossrefRetryQuery(query);
+    if (retryQuery === query.trim()) return initial;
+    const retried = await searchCrossrefQuery(
+      retryQuery,
+      {
+        ...config,
+        timeoutMs: Math.min(config.timeoutMs, RETRY_PROVIDER_TIMEOUT_MS),
+        pageLimit: 1,
+      },
+      options,
+    );
+    return {
+      results: dedupeSourceRecords([...initial.results, ...retried.results]),
+      rawCount: initial.rawCount + retried.rawCount,
+      retryMode: "short_query",
+      retryQuery,
+      retryReason: "low_results",
+    };
+  } catch (error) {
+    if (!(error instanceof SourceSearchError) || error.code !== "timeout") {
+      throw error;
     }
-    results.push({
-      title,
-      url,
-      snippet,
-      source: "Bing",
-    });
-    if (results.length >= 8) break;
+    if (options?.allowShortQueryRetry === false) throw error;
+    const retryQuery = shortCrossrefRetryQuery(query);
+    if (retryQuery === query.trim()) throw error;
+    const retried = await searchCrossrefQuery(
+      retryQuery,
+      {
+        ...config,
+        timeoutMs: Math.min(config.timeoutMs, RETRY_PROVIDER_TIMEOUT_MS),
+        pageLimit: 1,
+      },
+      options,
+    );
+    return {
+      ...retried,
+      retryMode: "short_query",
+      retryQuery,
+      retryReason: "timeout",
+    };
   }
-  return results;
 }
 
-async function searchPublicWeb(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<SourceRecord[]> {
-  const endpoint = new URL(config.endpoint);
-  endpoint.searchParams.set(config.queryParam ?? "q", query);
-  const fetchImpl = options?.fetchImpl ?? fetch;
-  const response = await fetchImpl(endpoint, {
-    signal: AbortSignal.timeout(config.timeoutMs),
-    headers: config.headers,
-  });
+async function searchSemanticScholar(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<ProviderNormalizedResults> {
+  const results: SourceRecord[] = [];
+  let rawCount = 0;
+  let nextOffset: number | null = 0;
 
-  if (!response.ok) {
-    throw new SourceSearchError("api-failure", "Web", `Web search returned HTTP ${response.status}`);
+  for (let page = 0; page < pageCount(config) && nextOffset !== null; page += 1) {
+    const url = new URL(config.endpoint);
+    url.searchParams.set("query", query);
+    url.searchParams.set("limit", String(config.queryLimit));
+    url.searchParams.set("offset", String(nextOffset));
+    url.searchParams.set("fields", "title,authors,year,abstract,tldr,externalIds,url,venue,fieldsOfStudy,citationCount,publicationTypes,isOpenAccess");
+
+    const data = await fetchJson<SemanticScholarResponse>("Semantic Scholar", url, config, options?.fetchImpl);
+    const rawItems = data.data ?? [];
+    rawCount += rawItems.length;
+    const pageResults = rawItems
+      .map((paper) => normalizeSemanticScholarPaper(paper, query))
+      .filter((source): source is SourceRecord => Boolean(source));
+    results.push(...pageResults);
+    nextOffset =
+      typeof data.next === "number" && rawItems.length >= config.queryLimit
+        ? data.next
+        : null;
   }
 
-  const markdown = await response.text();
-  const stage = options?.stage ?? config.searchStage ?? "media";
-  return extractBingResults(markdown)
-    .map((source) => normalizePublicWebSource(source, stage))
-    .filter((source): source is SourceRecord => Boolean(source));
-}
-
-async function searchSemanticScholar(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<SourceRecord[]> {
-  const url = new URL(config.endpoint);
-  url.searchParams.set("query", query);
-  url.searchParams.set("limit", String(config.queryLimit));
-  url.searchParams.set("fields", "title,authors,year,abstract,externalIds,url,venue");
-
-  const data = await fetchJson<SemanticScholarResponse>("Semantic Scholar", url, config, options?.fetchImpl);
-
-  return (data.data ?? [])
-    .map(normalizeSemanticScholarPaper)
-    .filter((source): source is SourceRecord => Boolean(source));
+  return { results, rawCount };
 }
 
 export function dedupeSources(sources: SourceRecord[]): SourceRecord[] {
@@ -522,32 +951,31 @@ export function dedupeSources(sources: SourceRecord[]): SourceRecord[] {
 }
 
 async function searchProviderOrThrow(
-  provider: SourceProvider,
+  provider: AcademicSourceProvider,
   query: string,
   config: SourceProviderConfig,
   options?: SourceSearchOptions,
-): Promise<SourceRecord[]> {
-  if (provider === "Crossref") return searchCrossref(query, config, options);
+): Promise<ProviderNormalizedResults> {
   if (provider === "OpenAlex") return searchOpenAlex(query, config, options);
-  if (provider === "Semantic Scholar") return searchSemanticScholar(query, config, options);
-  return searchPublicWeb(query, config, options);
+  if (provider === "Crossref") return searchCrossref(query, config, options);
+  return searchSemanticScholar(query, config, options);
 }
 
 function providerErrorResult(
   provider: SourceProvider,
   query: string,
-  stage: SourceSearchStage,
   error: unknown,
+  latencyMs?: number,
 ): SourceProviderSearchResult {
   if (error instanceof SourceSearchError) {
     return {
       ok: false,
       provider,
       query,
-      stage,
       results: [],
       error_type: error.code,
       error_message: error.message,
+      latency_ms: latencyMs,
     };
   }
 
@@ -556,46 +984,174 @@ function providerErrorResult(
     ok: false,
     provider,
     query,
-    stage,
     results: [],
     error_type: "api-failure",
     error_message: message,
+    latency_ms: latencyMs,
   };
 }
 
+function safeProviderErrorMessage(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return value
+    .replace(/(api[_-]?key|authorization|bearer)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+}
+
+function providerHttpStatus(result: SourceProviderSearchResult): number | null {
+  if (result.ok) return 200;
+  const match = result.error_message?.match(/HTTP\s+(\d{3})/i);
+  return match ? Number(match[1]) : null;
+}
+
+function logProviderAttempt(
+  startedAt: number,
+  result: SourceProviderSearchResult,
+  telemetry: SourceSearchTelemetryContext | undefined,
+): void {
+  if (!telemetry) return;
+  const durationMs = Math.max(0, Date.now() - startedAt);
+  const status = result.ok
+    ? result.results.length > 0
+      ? "success"
+      : "empty"
+    : result.error_type === "timeout"
+      ? "timeout"
+      : "error";
+  const errorCode = result.error_type
+    ? result.error_type === "timeout"
+      ? "PROVIDER_TIMEOUT"
+      : result.error_type === "schema_error"
+        ? "PROVIDER_PARSE_ERROR"
+        : "PROVIDER_HTTP_ERROR"
+    : null;
+  logger.info(
+    {
+      event: "research_grounding.provider_attempt",
+      route: "/api/research-grounding-jobs",
+      stage: "provider_search",
+      ...telemetry,
+      provider: result.provider,
+      providerAttempt: 1,
+      queryUsed: result.query,
+      startedAt: new Date(startedAt).toISOString(),
+      completedAt: new Date().toISOString(),
+      durationMs,
+      status,
+      httpStatus: providerHttpStatus(result),
+      resultCount: result.results.length,
+      retryable: Boolean(
+        result.error_type &&
+          ["timeout", "rate_limited", "server_error", "api-failure"].includes(result.error_type),
+      ),
+      errorCode,
+      errorMessage: safeProviderErrorMessage(result.error_message),
+    },
+    "Research grounding provider attempt completed",
+  );
+}
+
 export async function searchSourceProvider(
-  provider: SourceProvider,
+  provider: AcademicSourceProvider,
   query: string,
   options?: SourceSearchOptions,
 ): Promise<SourceProviderSearchResult> {
   const trimmedQuery = query.trim();
-  const stage = options?.stage ?? "academic";
+  const startedAt = Date.now();
   const config = sourceProviderConfigs(options)[provider];
+  const cacheKey = normalizedProviderCacheKey(provider, trimmedQuery, config);
+  const cached = providerSearchCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    const result = cloneProviderResult(cached.result);
+    logProviderAttempt(startedAt, result, options?.telemetry);
+    return result;
+  }
   if (!trimmedQuery) {
-    return {
+    const result: SourceProviderSearchResult = {
       ok: true,
       provider,
       query: trimmedQuery,
-      stage,
       results: [],
+      raw_count: 0,
+      normalize_attempt_count: 0,
+      normalized_valid_count: 0,
+      normalized_invalid_count: 0,
       error_type: null,
       error_message: null,
+      latency_ms: 0,
+      provider_health: providerHealthSnapshot(provider),
     };
+    logProviderAttempt(startedAt, result, options?.telemetry);
+    return result;
+  }
+
+  const health = await providerHealthStore.get(provider);
+  if (health.status === "down") {
+    const result: SourceProviderSearchResult = {
+      ok: false,
+      provider,
+      query: trimmedQuery,
+      results: [],
+      raw_count: 0,
+      normalize_attempt_count: 0,
+      normalized_valid_count: 0,
+      normalized_invalid_count: 0,
+      error_type: "api-failure",
+      error_message: `${provider} provider is cooling down after repeated failures`,
+      latency_ms: Date.now() - startedAt,
+      provider_health: health,
+    };
+    logProviderAttempt(startedAt, result, options?.telemetry);
+    return result;
   }
 
   try {
-    const results = await searchProviderOrThrow(provider, trimmedQuery, config, options);
-    return {
+    const effectiveConfig = providerConfigForHealth(provider, config);
+    const { results, rawCount, retryMode, retryQuery, retryReason } = await searchProviderOrThrow(provider, trimmedQuery, effectiveConfig, options);
+    const latencyMs = Date.now() - startedAt;
+    await providerHealthStore.recordSuccess(provider, { latencyMs });
+    const providerHealth = await providerHealthStore.get(provider);
+    const result: SourceProviderSearchResult = {
       ok: true,
       provider,
       query: trimmedQuery,
-      stage,
       results,
+      raw_count: rawCount,
+      normalize_attempt_count: rawCount,
+      normalized_valid_count: results.length,
+      normalized_invalid_count: Math.max(0, rawCount - results.length),
       error_type: null,
       error_message: null,
+      latency_ms: latencyMs,
+      provider_health: providerHealth,
+      ...(retryMode ? { retry_mode: retryMode } : {}),
+      ...(retryQuery ? { retry_query: retryQuery } : {}),
+      ...(retryReason ? { retry_reason: retryReason } : {}),
     };
+    providerSearchCache.set(cacheKey, {
+      expiresAt: Date.now() + PROVIDER_CACHE_TTL_MS,
+      result: cloneProviderResult(result),
+    });
+    logProviderAttempt(startedAt, result, options?.telemetry);
+    return result;
   } catch (error) {
-    return providerErrorResult(provider, trimmedQuery, stage, error);
+    const latencyMs = Date.now() - startedAt;
+    const result = providerErrorResult(provider, trimmedQuery, error, latencyMs);
+    await providerHealthStore.recordFailure(provider, {
+      errorType: result.error_type,
+      latencyMs,
+    });
+    result.provider_health = await providerHealthStore.get(provider);
+    if (result.error_type === "rate_limited" || result.error_type === "timeout") {
+      providerSearchCache.set(cacheKey, {
+        expiresAt: Date.now() + PROVIDER_CACHE_TTL_MS,
+        result: cloneProviderResult(result),
+      });
+    }
+    logProviderAttempt(startedAt, result, options?.telemetry);
+    return result;
   }
 }
 
@@ -603,138 +1159,31 @@ export async function searchSourceProviders(
   query: string,
   options?: SourceSearchOptions,
 ): Promise<SourceProviderSearchResult[]> {
-  const stage = options?.stage ?? "academic";
-  const providers =
-    stage === "academic"
-      ? ["Crossref", "OpenAlex", "Semantic Scholar"] as const
-      : stage === "official"
-        ? ["Web", "Crossref"] as const
-        : ["Web"] as const;
-  const settled = await Promise.allSettled(providers.map((provider) => searchSourceProvider(provider, query, options)));
-  return settled.map((item, index) => {
-    const provider = providers[index];
-    if (item.status === "fulfilled") return item.value;
-    return providerErrorResult(provider, query.trim(), stage, item.reason);
-  });
+  const providers = options?.providers?.length
+    ? options.providers
+    : SOURCE_PROVIDER_NAMES;
+  return Promise.all(
+    providers.map((provider) => searchSourceProvider(provider, query, options)),
+  );
 }
 
-export function buildSourceSearchDiagnostics(
-  providerResults: SourceProviderSearchResult[],
-  minSources: number,
-  targetSources: number,
-  fallbackUsed: boolean,
-): SourceSearchDiagnostics {
-  const providerFailures = providerResults
-    .filter((result) => !result.ok)
-    .map((result) => ({
-      provider: result.provider,
-      query: result.query,
-      stage: result.stage ?? "academic",
-      error_type: result.error_type ?? "api-failure",
-      error_message: result.error_message ?? `${result.provider} request failed`,
-    }));
-
-  const resultCount = providerResults
-    .filter((result) => result.ok)
-    .reduce((count, result) => count + result.results.length, 0);
-
-  const providerResultCounts = providerResults.map((result) => ({
-    provider: result.provider,
-    query: result.query,
-    stage: result.stage ?? "academic",
-    resultCount: result.results.length,
-    ok: result.ok,
-  }));
-
-  const warnings: string[] = [];
-  const academicFailures = providerFailures.some((failure) => failure.provider !== "Web");
-  const webFailures = providerFailures.some((failure) => failure.provider === "Web");
-  if (academicFailures) warnings.push("外部學術 API 暫時不可用。");
-  if (webFailures) warnings.push("公共網頁備援暫時不可用。");
-  if (providerFailures.length > 0) {
-    warnings.push("部分資料來源暫時不可用，已保留可用結果。");
-  }
-  if (resultCount < minSources) {
-    warnings.push(`目前取得 ${resultCount}/${minSources} 筆，少於最低建議來源數。`);
-  } else if (resultCount < targetSources) {
-    warnings.push(`目前取得 ${resultCount}/${targetSources} 筆來源。`);
-  }
-
-  let status: SourceSearchDiagnosticsStatus = "success";
-  if (resultCount === 0 && providerFailures.length === 0) {
-    status = "empty";
-  } else if (resultCount === 0 && providerFailures.length > 0) {
-    status = "failed";
-  } else if (resultCount < minSources) {
-    status = "insufficient_sources";
-  } else if (resultCount < targetSources || providerFailures.length > 0) {
-    status = "partial_success";
-  }
-
-  return {
-    resultCount,
-    resultTarget: targetSources,
-    minSources,
-    targetSources,
-    queryCount: providerResults.length > 0 ? new Set(providerResults.map((result) => result.query)).size : 0,
-    providerCount: SOURCE_PROVIDER_NAMES.length,
-    fallbackUsed,
-    status,
-    providerFailures,
-    providerResultCounts,
-    warnings,
-  };
-}
-
-export async function searchSources(query: string, options?: SourceSearchOptions): Promise<SourceSearchResultWithDiagnostics> {
+export async function searchSources(query: string, options?: SourceSearchOptions): Promise<SourceRecord[]> {
   const trimmedQuery = query.trim();
-  const minSources = options?.minSources ?? DEFAULT_MIN_SOURCES;
-  const targetSources = options?.targetSources ?? DEFAULT_TARGET_SOURCES;
-  if (!trimmedQuery) {
-    return {
-      sources: [],
-      diagnostics: {
-        resultCount: 0,
-        resultTarget: targetSources,
-        minSources,
-        targetSources,
-        queryCount: 0,
-        providerCount: SOURCE_PROVIDER_NAMES.length,
-        fallbackUsed: false,
-        status: "empty",
-        providerFailures: [],
-        providerResultCounts: [],
-        warnings: ["請輸入有效的查詢關鍵字。"],
-      },
-      provider_status: [],
-    };
+  if (!trimmedQuery) return [];
+
+  const providerResults = await searchSourceProviders(trimmedQuery, options);
+  const fulfilled = providerResults.filter((result) => result.ok);
+
+  if (!fulfilled.length) {
+    const timedOut = providerResults.some((result) => result.error_type === "timeout");
+    throw new SourceSearchError(
+      timedOut ? "timeout" : "api-failure",
+      "all",
+      timedOut ? "All source providers timed out" : "All source providers failed",
+      providerResults,
+    );
   }
 
-  const academicResults = await searchSourceProviders(trimmedQuery, { ...options, stage: "academic" });
-  let providerResults = [...academicResults];
-  let fallbackUsed = false;
-  let sources = dedupeSources(providerResults.flatMap((result) => result.results));
-
-  if (sources.length < minSources) {
-    fallbackUsed = true;
-    const officialResults = await searchSourceProviders(trimmedQuery, { ...options, stage: "official" });
-    providerResults = [...providerResults, ...officialResults];
-    sources = dedupeSources(providerResults.flatMap((result) => result.results));
-  }
-
-  if (sources.length < targetSources) {
-    fallbackUsed = true;
-    const mediaResults = await searchSourceProviders(trimmedQuery, { ...options, stage: "media" });
-    providerResults = [...providerResults, ...mediaResults];
-    sources = dedupeSources(providerResults.flatMap((result) => result.results));
-  }
-
-  sources = sources.slice(0, targetSources);
-  const diagnostics = buildSourceSearchDiagnostics(providerResults, minSources, targetSources, fallbackUsed);
-
-  return {
-    sources,
-    diagnostics,
-    provider_status: providerResults,
-  };
+  const sources = fulfilled.flatMap((result) => result.results);
+  return dedupeSources(sources).slice(0, MAX_RESULTS);
 }

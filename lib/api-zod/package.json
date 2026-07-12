@@ -4,7 +4,18 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./source-record": "./src/source-record.ts",
+    "./source-mix-profile": "./src/source-mix-profile.ts",
+    "./llm-status": "./src/llm-status.ts",
+    "./research-tools": "./src/research-tools.ts",
+    "./research-grounding": "./src/research-grounding.ts",
+    "./evidence-governance": "./src/evidence-governance.ts",
+    "./research-intent": "./src/research-intent.ts",
+    "./report-readiness": "./src/report-readiness.ts",
+    "./domain-synonyms": "./src/domain-synonyms.ts",
+    "./topic-expansion": "./src/topic-expansion.ts",
+    "./topic-understanding": "./src/topic-understanding.ts"
   },
   "dependencies": {
     "zod": "catalog:"

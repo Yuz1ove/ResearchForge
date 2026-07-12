@@ -1,0 +1,16 @@
+.env
+.env.*
+.vercel
+.git
+node_modules
+**/node_modules
+dist
+**/dist
+build
+**/build
+output
+.playwright-cli
+.local
+.tmp
+tmp
+**/*.tsbuildinfo

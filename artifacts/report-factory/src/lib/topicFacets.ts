@@ -1,4 +1,8 @@
-export type ResearchIntent = "causes_current_status" | "causes" | "current_status" | "general";
+export type ResearchIntent =
+  | "causes_current_status"
+  | "causes"
+  | "current_status"
+  | "general";
 
 export type TopicFacetId =
   | "causes"
@@ -65,7 +69,128 @@ export function classifyResearchIntent(topic: string): ResearchIntent {
 
 export function buildTopicFacets(topic: string): TopicFacets {
   const normalized = cleanText(topic);
-  const climateTopic = /氣候變遷|全球暖化|溫室氣體|climate change|global warming|greenhouse gas|co2|carbon dioxide/.test(normalized);
+  const spiderTopic = /蜘蛛|蛛形綱|蛛網|spider|spiders|arachnid|araneae/.test(
+    normalized,
+  );
+  const spiderEcologyTopic =
+    spiderTopic &&
+    /棲地|微棲地|生存|捕食|避敵|築網|繁殖|生態|適應|habitat|microhabitat|survival|predation|anti[- ]?predator|web[- ]?building|ecology|adaptation/.test(
+      normalized,
+    );
+  const climateTopic =
+    /氣候變遷|全球暖化|溫室氣體|climate change|global warming|greenhouse gas|co2|carbon dioxide/.test(
+      normalized,
+    );
+  const paleontologyTopic =
+    /恐龍|化石|古生物|古生態|地層|白堊紀|侏羅紀|藻類|dinosaur|fossil|paleontology|paleoecology|stratigraphy|cretaceous|jurassic|algae|algal|cyanobacteria/.test(
+      normalized,
+    );
+  const paleontologyAlgaeTopic =
+    /化石|古生物|古環境|古生態|地層|沉積|fossil|paleontology|paleoenvironment|paleoecology|stratigraphy|sedimentary/.test(
+      normalized,
+    ) &&
+    /藻類|藻|微化石|疊層石|藍綠菌|algae|algal|microfossil|stromatolite|cyanobacteria/.test(
+      normalized,
+    );
+
+  if (spiderEcologyTopic) {
+    return {
+      topicCore: ["蜘蛛", "spider", "spiders", "arachnid", "araneae"],
+      researchIntent: classifyResearchIntent(topic),
+      requiredFacets: [
+        {
+          id: "causes",
+          labelZhTw: "棲地需求",
+          terms: [
+            "habitat",
+            "habitat selection",
+            "habitat requirements",
+            "microhabitat",
+            "microhabitat selection",
+            "棲地",
+            "棲地選擇",
+            "微棲地",
+          ],
+        },
+        {
+          id: "current_status",
+          labelZhTw: "生存策略",
+          terms: [
+            "survival",
+            "survival strategy",
+            "survival strategies",
+            "adaptation",
+            "behavior",
+            "behaviour",
+            "生存",
+            "生存策略",
+            "適應",
+            "行為",
+            "生態適應",
+          ],
+        },
+      ],
+      secondaryFacets: [
+        {
+          id: "impacts",
+          labelZhTw: "捕食行為",
+          terms: [
+            "predation",
+            "prey capture",
+            "foraging",
+            "捕食",
+            "獵食",
+            "覓食",
+          ],
+        },
+        {
+          id: "adaptation",
+          labelZhTw: "避敵與築網",
+          terms: [
+            "anti-predator",
+            "anti predator",
+            "web building",
+            "web-building",
+            "camouflage",
+            "避敵",
+            "築網",
+            "偽裝",
+          ],
+        },
+        {
+          id: "ecological_effects",
+          labelZhTw: "繁殖與生態",
+          terms: [
+            "reproduction",
+            "mating",
+            "ecology",
+            "ecological",
+            "繁殖",
+            "交配",
+            "生態",
+          ],
+        },
+      ],
+      excludeOrDowngrade: [
+        "national security",
+        "library",
+        "reading promotion",
+        "education administration",
+        "government governance",
+        "admission",
+        "teaching strategy",
+        "student reading",
+        "國家安全",
+        "圖書館",
+        "閱讀推廣",
+        "教育行政",
+        "政府治理",
+        "招生",
+        "教學策略",
+        "學生閱讀",
+      ],
+    };
+  }
 
   if (climateTopic) {
     return {
@@ -145,32 +270,94 @@ export function buildTopicFacets(topic: string): TopicFacets {
         {
           id: "impacts",
           labelZhTw: "延伸影響",
-          terms: ["impact", "impacts", "effect", "effects", "risk", "影響", "衝擊", "風險"],
+          terms: [
+            "impact",
+            "impacts",
+            "effect",
+            "effects",
+            "risk",
+            "影響",
+            "衝擊",
+            "風險",
+          ],
         },
         {
           id: "adaptation",
           labelZhTw: "因應調適",
-          terms: ["adaptation", "mitigation", "mitigate", "response", "resilience", "renewable energy", "調適", "減緩", "因應", "應對", "应对", "韌性", "可再生能源", "再生能源"],
+          terms: [
+            "adaptation",
+            "mitigation",
+            "mitigate",
+            "response",
+            "resilience",
+            "renewable energy",
+            "調適",
+            "減緩",
+            "因應",
+            "應對",
+            "应对",
+            "韌性",
+            "可再生能源",
+            "再生能源",
+          ],
         },
         {
           id: "policy",
           labelZhTw: "政策治理",
-          terms: ["policy", "governance", "committee", "council", "politics", "政策", "治理", "委員會", "對策委員會", "政治"],
+          terms: [
+            "policy",
+            "governance",
+            "committee",
+            "council",
+            "politics",
+            "政策",
+            "治理",
+            "委員會",
+            "對策委員會",
+            "政治",
+          ],
         },
         {
           id: "finance",
           labelZhTw: "金融風險",
-          terms: ["finance", "financial risk", "insurance", "investment", "金融", "金融風險", "投資", "保險"],
+          terms: [
+            "finance",
+            "financial risk",
+            "insurance",
+            "investment",
+            "金融",
+            "金融風險",
+            "投資",
+            "保險",
+          ],
         },
         {
           id: "local_case",
           labelZhTw: "地方案例",
-          terms: ["local", "regional", "case study", "台灣", "地方", "區域", "案例"],
+          terms: [
+            "local",
+            "regional",
+            "case study",
+            "台灣",
+            "地方",
+            "區域",
+            "案例",
+          ],
         },
         {
           id: "ecological_effects",
           labelZhTw: "生態影響",
-          terms: ["forest", "ecosystem", "water flux", "surface flux", "ecological", "森林", "生態", "地表通量", "水通量"],
+          terms: [
+            "forest",
+            "ecosystem",
+            "water flux",
+            "surface flux",
+            "ecological",
+            "森林",
+            "生態",
+            "地表通量",
+            "水通量",
+          ],
         },
       ],
       excludeOrDowngrade: [
@@ -196,6 +383,223 @@ export function buildTopicFacets(topic: string): TopicFacets {
     };
   }
 
+  if (paleontologyAlgaeTopic) {
+    return {
+      topicCore: [
+        "藻類化石",
+        "微化石",
+        "古環境",
+        "沉積環境",
+        "algal fossils",
+        "microfossils",
+        "paleoenvironment",
+        "sedimentary environment",
+      ],
+      researchIntent: classifyResearchIntent(topic),
+      requiredFacets: [
+        {
+          id: "causes",
+          labelZhTw: "藻類或微化石證據",
+          terms: [
+            "algae",
+            "algal",
+            "fossil algae",
+            "microfossil",
+            "microfossils",
+            "cyanobacteria",
+            "stromatolite",
+            "biomarker",
+            "藻類",
+            "藻類化石",
+            "微化石",
+            "藍綠菌",
+            "疊層石",
+            "生物標誌",
+          ],
+        },
+        {
+          id: "current_status",
+          labelZhTw: "古環境與沉積環境",
+          terms: [
+            "paleoenvironment",
+            "palaeoenvironment",
+            "paleoecology",
+            "palaeoecology",
+            "sedimentary",
+            "sediment",
+            "stratigraphy",
+            "marine shale",
+            "古環境",
+            "古生態",
+            "沉積環境",
+            "沉積",
+            "地層",
+          ],
+        },
+      ],
+      secondaryFacets: [
+        {
+          id: "impacts",
+          labelZhTw: "化石紀錄與保存條件",
+          terms: [
+            "fossil record",
+            "fossil preservation",
+            "fossil formation",
+            "taphonomy",
+            "化石紀錄",
+            "化石保存",
+            "化石形成",
+            "埋藏",
+          ],
+        },
+        {
+          id: "ecological_effects",
+          labelZhTw: "分類或指標用途",
+          terms: [
+            "indicator",
+            "classification",
+            "reconstruction",
+            "environment indicators",
+            "分類",
+            "指標",
+            "重建",
+            "環境指標",
+          ],
+        },
+      ],
+      excludeOrDowngrade: [
+        "dinosaur extinction only",
+        "dinosaur soft tissue only",
+        "asteroid impact only",
+        "volcanism only",
+        "mass extinction only",
+        "恐龍滅絕",
+        "恐龍軟組織",
+        "小行星撞擊",
+        "火山作用",
+        "大滅絕",
+      ],
+    };
+  }
+
+  if (paleontologyTopic) {
+    return {
+      topicCore: [
+        "恐龍",
+        "恐龍化石",
+        "化石",
+        "古生物",
+        "dinosaur",
+        "dinosaur fossil",
+        "fossil",
+        "paleontology",
+      ],
+      researchIntent: classifyResearchIntent(topic),
+      requiredFacets: [
+        {
+          id: "causes",
+          labelZhTw: "化石與地層證據",
+          terms: [
+            "fossil record",
+            "fossil preservation",
+            "fossil formation",
+            "fossil locality",
+            "stratigraphy",
+            "stratigraphic",
+            "geological age",
+            "sedimentary",
+            "sediment",
+            "taphonomy",
+            "化石紀錄",
+            "化石保存",
+            "化石形成",
+            "化石產地",
+            "地層",
+            "地層年代",
+            "沉積環境",
+            "埋藏",
+            "年代判定",
+          ],
+        },
+        {
+          id: "current_status",
+          labelZhTw: "古環境與藻類關聯",
+          terms: [
+            "paleoenvironment",
+            "palaeoenvironment",
+            "paleoecology",
+            "palaeoecology",
+            "algae",
+            "algal",
+            "cyanobacteria",
+            "stromatolite",
+            "microfossil",
+            "biomarker",
+            "古環境",
+            "古生態",
+            "藻類",
+            "藍綠菌",
+            "疊層石",
+            "微化石",
+            "生物標誌",
+          ],
+        },
+      ],
+      secondaryFacets: [
+        {
+          id: "impacts",
+          labelZhTw: "恐龍演化與分類",
+          terms: [
+            "dinosaur evolution",
+            "taxonomy",
+            "phylogeny",
+            "morphology",
+            "Cretaceous",
+            "Jurassic",
+            "Mesozoic",
+            "恐龍演化",
+            "分類",
+            "親緣關係",
+            "形態",
+            "白堊紀",
+            "侏羅紀",
+            "中生代",
+          ],
+        },
+        {
+          id: "ecological_effects",
+          labelZhTw: "生態與棲地背景",
+          terms: [
+            "habitat",
+            "ecosystem",
+            "ecological",
+            "food web",
+            "environmental reconstruction",
+            "棲地",
+            "生態系",
+            "生態",
+            "食物網",
+            "環境重建",
+          ],
+        },
+      ],
+      excludeOrDowngrade: [
+        "asteroid impact only",
+        "volcanism only",
+        "mass extinction only",
+        "小行星撞擊",
+        "火山作用",
+        "大滅絕",
+        "museum exhibition",
+        "science education",
+        "public understanding",
+        "博物館展示",
+        "科學教育",
+        "大眾理解",
+      ],
+    };
+  }
+
   const genericCore = unique(
     topic
       .split(/[，,。；;：:\s]+/)
@@ -204,7 +608,9 @@ export function buildTopicFacets(topic: string): TopicFacets {
   );
 
   return {
-    topicCore: genericCore.length ? genericCore : [topic.trim()].filter(Boolean),
+    topicCore: genericCore.length
+      ? genericCore
+      : [topic.trim()].filter(Boolean),
     requiredFacets: [],
     secondaryFacets: [],
     excludeOrDowngrade: [],

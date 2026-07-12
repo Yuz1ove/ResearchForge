@@ -21,11 +21,17 @@ import type {
 
 import type {
   ErrorResponse,
+  GroundingJob,
+  GroundingJobErrorResponse,
   HealthStatus,
   KeywordSourceSearchResult,
+  ResearchGroundingJobCreateRequest,
+  ResearchGroundingJobCreateResponse,
   SearchKeywordsRequest,
   SearchSourcesRequest,
-  SourceSearchResult
+  SourceSearchResult,
+  TopicUnderstandingRequest,
+  TopicUnderstandingResult
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -111,13 +117,6 @@ export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, 
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
-
-
-
-
-
-
-
 export const getSearchSourcesUrl = () => {
 
 
@@ -127,7 +126,7 @@ export const getSearchSourcesUrl = () => {
 }
 
 /**
- * Searches Crossref and Semantic Scholar for academic/web sources related to a research topic.
+ * Searches OpenAlex, Semantic Scholar, and Crossref for academic/web sources related to a research topic.
  * @summary Search sources
  */
 export const searchSources = async (searchSourcesRequest: SearchSourcesRequest, options?: RequestInit): Promise<SourceSearchResult> => {
@@ -262,3 +261,217 @@ export const useSearchKeywords = <TError = ErrorType<ErrorResponse>,
       return useMutation(getSearchKeywordsMutationOptions(options));
     }
 
+export const getTopicUnderstandingUrl = () => {
+
+
+
+
+  return `/api/topic-understanding`
+}
+
+/**
+ * Expands a topic into structured research angles with deterministic fallback when local LLM is unavailable.
+ * @summary Understand a research topic
+ */
+export const topicUnderstanding = async (topicUnderstandingRequest: TopicUnderstandingRequest, options?: RequestInit): Promise<TopicUnderstandingResult> => {
+
+  return customFetch<TopicUnderstandingResult>(getTopicUnderstandingUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      topicUnderstandingRequest,)
+  }
+);}
+
+
+
+
+export const getTopicUnderstandingMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof topicUnderstanding>>, TError,{data: BodyType<TopicUnderstandingRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof topicUnderstanding>>, TError,{data: BodyType<TopicUnderstandingRequest>}, TContext> => {
+
+const mutationKey = ['topicUnderstanding'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof topicUnderstanding>>, {data: BodyType<TopicUnderstandingRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  topicUnderstanding(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type TopicUnderstandingMutationResult = NonNullable<Awaited<ReturnType<typeof topicUnderstanding>>>
+    export type TopicUnderstandingMutationBody = BodyType<TopicUnderstandingRequest>
+    export type TopicUnderstandingMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Understand a research topic
+ */
+export const useTopicUnderstanding = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof topicUnderstanding>>, TError,{data: BodyType<TopicUnderstandingRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof topicUnderstanding>>,
+        TError,
+        {data: BodyType<TopicUnderstandingRequest>},
+        TContext
+      > => {
+      return useMutation(getTopicUnderstandingMutationOptions(options));
+    }
+
+export const getCreateResearchGroundingJobUrl = () => {
+
+
+
+
+  return `/api/research-grounding-jobs`
+}
+
+/**
+ * Persists the job before executing the bounded grounding pipeline. The response contains the durable job identity and final or in-progress status.
+ * @summary Create and complete a durable research grounding job
+ */
+export const createResearchGroundingJob = async (researchGroundingJobCreateRequest: ResearchGroundingJobCreateRequest, options?: RequestInit): Promise<ResearchGroundingJobCreateResponse> => {
+
+  return customFetch<ResearchGroundingJobCreateResponse>(getCreateResearchGroundingJobUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      researchGroundingJobCreateRequest,)
+  }
+);}
+
+
+
+
+export const getCreateResearchGroundingJobMutationOptions = <TError = ErrorType<GroundingJobErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createResearchGroundingJob>>, TError,{data: BodyType<ResearchGroundingJobCreateRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createResearchGroundingJob>>, TError,{data: BodyType<ResearchGroundingJobCreateRequest>}, TContext> => {
+
+const mutationKey = ['createResearchGroundingJob'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createResearchGroundingJob>>, {data: BodyType<ResearchGroundingJobCreateRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createResearchGroundingJob(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateResearchGroundingJobMutationResult = NonNullable<Awaited<ReturnType<typeof createResearchGroundingJob>>>
+    export type CreateResearchGroundingJobMutationBody = BodyType<ResearchGroundingJobCreateRequest>
+    export type CreateResearchGroundingJobMutationError = ErrorType<GroundingJobErrorResponse>
+
+    /**
+ * @summary Create and complete a durable research grounding job
+ */
+export const useCreateResearchGroundingJob = <TError = ErrorType<GroundingJobErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createResearchGroundingJob>>, TError,{data: BodyType<ResearchGroundingJobCreateRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createResearchGroundingJob>>,
+        TError,
+        {data: BodyType<ResearchGroundingJobCreateRequest>},
+        TContext
+      > => {
+      return useMutation(getCreateResearchGroundingJobMutationOptions(options));
+    }
+
+export const getGetResearchGroundingJobUrl = (jobId: string,) => {
+
+
+
+
+  return `/api/research-grounding-jobs/${jobId}`
+}
+
+/**
+ * @summary Read a durable research grounding job
+ */
+export const getResearchGroundingJob = async (jobId: string, options?: RequestInit): Promise<GroundingJob> => {
+
+  return customFetch<GroundingJob>(getGetResearchGroundingJobUrl(jobId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetResearchGroundingJobQueryKey = (jobId: string,) => {
+    return [
+    `/api/research-grounding-jobs/${jobId}`
+    ] as const;
+    }
+
+
+export const getGetResearchGroundingJobQueryOptions = <TData = Awaited<ReturnType<typeof getResearchGroundingJob>>, TError = ErrorType<GroundingJobErrorResponse>>(jobId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getResearchGroundingJob>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetResearchGroundingJobQueryKey(jobId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getResearchGroundingJob>>> = ({ signal }) => getResearchGroundingJob(jobId, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: !!(jobId), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getResearchGroundingJob>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetResearchGroundingJobQueryResult = NonNullable<Awaited<ReturnType<typeof getResearchGroundingJob>>>
+export type GetResearchGroundingJobQueryError = ErrorType<GroundingJobErrorResponse>
+
+
+/**
+ * @summary Read a durable research grounding job
+ */
+
+export function useGetResearchGroundingJob<TData = Awaited<ReturnType<typeof getResearchGroundingJob>>, TError = ErrorType<GroundingJobErrorResponse>>(
+ jobId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getResearchGroundingJob>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetResearchGroundingJobQueryOptions(jobId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}

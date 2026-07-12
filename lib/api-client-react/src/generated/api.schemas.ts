@@ -9,6 +9,26 @@ export interface HealthStatus {
   status: string;
 }
 
+export type SearchSourcesRequestSubtopicsItem = {
+  id?: string;
+  titleZh?: string;
+  titleEn?: string;
+  queryZh?: string[];
+  queryEn?: string[];
+  mustIncludeTerms?: string[];
+  excludeTerms?: string[];
+  expectedSourceTypes?: string[];
+};
+
+export type SearchSourcesRequestSearchProfile = typeof SearchSourcesRequestSearchProfile[keyof typeof SearchSourcesRequestSearchProfile];
+
+
+export const SearchSourcesRequestSearchProfile = {
+  quick: 'quick',
+  standard: 'standard',
+  deep: 'deep',
+} as const;
+
 /**
  * Provide either `query` for direct keyword search or `topic` with generator context.
  */
@@ -17,6 +37,22 @@ export interface SearchSourcesRequest {
   query?: string;
   /** @minLength 1 */
   topic?: string;
+  originalTopic?: string;
+  activeResearchTopic?: string;
+  refinedTopic?: string;
+  displayTitle?: string;
+  canonicalTopicZh?: string;
+  canonicalTopicEn?: string;
+  querySeedZh?: string[];
+  querySeedEn?: string[];
+  subtopics?: SearchSourcesRequestSubtopicsItem[];
+  mustIncludeTerms?: string[];
+  excludeTerms?: string[];
+  domainHints?: string[];
+  selectedResearchPlanId?: string;
+  workflowId?: string;
+  sourceMixProfile?: string;
+  searchProfile?: SearchSourcesRequestSearchProfile;
   reportType?: string;
   audience?: string;
   sourceMode?: string;
@@ -32,6 +68,41 @@ export interface SearchKeywordsRequest {
   language?: string;
 }
 
+export interface TopicUnderstandingRequest {
+  /** @minLength 1 */
+  topic: string;
+  reportType?: string;
+  audience?: string;
+  sourceMode?: string;
+  language?: string;
+}
+
+export interface TopicUnderstandingDiagnostics {
+  usedLocalLlm: boolean;
+  fallbackReason?: string | null;
+  confidence: number;
+  model?: string | null;
+  latencyMs?: number | null;
+}
+
+export type TopicUnderstandingResultResearchAnglesItem = {
+  title: string;
+  angle: string;
+  reason: string;
+  searchQueries: string[];
+};
+
+export interface TopicUnderstandingResult {
+  normalizedTopic: string;
+  domain: string;
+  subdomain: string;
+  entities: string[];
+  likelyMeanings: string[];
+  ambiguityWarnings: string[];
+  researchAngles: TopicUnderstandingResultResearchAnglesItem[];
+  diagnostics: TopicUnderstandingDiagnostics;
+}
+
 export type SourceReviewState = typeof SourceReviewState[keyof typeof SourceReviewState];
 
 
@@ -45,10 +116,45 @@ export type SourceRecordSourceType = typeof SourceRecordSourceType[keyof typeof 
 
 
 export const SourceRecordSourceType = {
-  Crossref: 'Crossref',
   OpenAlex: 'OpenAlex',
+  Crossref: 'Crossref',
   Semantic_Scholar: 'Semantic Scholar',
-  Web: 'Web',
+  Official_Source: 'Official Source',
+  Institutional_Source: 'Institutional Source',
+  Authoritative_Media: 'Authoritative Media',
+} as const;
+
+export type SourceRecordSourceKind = typeof SourceRecordSourceKind[keyof typeof SourceRecordSourceKind] | null;
+
+
+export const SourceRecordSourceKind = {
+  journal: 'journal',
+  conference: 'conference',
+  book: 'book',
+  dataset: 'dataset',
+  web: 'web',
+  unknown: 'unknown',
+} as const;
+
+export type SourceRecordRelevanceLevel = typeof SourceRecordRelevanceLevel[keyof typeof SourceRecordRelevanceLevel] | null;
+
+
+export const SourceRecordRelevanceLevel = {
+  primary: 'primary',
+  secondary: 'secondary',
+  clue: 'clue',
+  low: 'low',
+  off_topic: 'off_topic',
+} as const;
+
+export type SourceRecordEvidenceGrounding = typeof SourceRecordEvidenceGrounding[keyof typeof SourceRecordEvidenceGrounding] | null;
+
+
+export const SourceRecordEvidenceGrounding = {
+  abstract_grounded: 'abstract_grounded',
+  snippet_grounded: 'snippet_grounded',
+  metadata_only: 'metadata_only',
+  insufficient: 'insufficient',
 } as const;
 
 export interface SourceRecord {
@@ -57,6 +163,9 @@ export interface SourceRecord {
   authors: string[];
   year: number | null;
   abstract: string | null;
+  snippet?: string | null;
+  language?: string | null;
+  abstractMissing?: boolean | null;
   doi: string | null;
   url: string | null;
   sourceType: SourceRecordSourceType;
@@ -64,6 +173,36 @@ export interface SourceRecord {
   publisher: string | null;
   containerTitle: string | null;
   accessedAt: string | null;
+  provider?: string | null;
+  queryUsed?: string | null;
+  retrievedAt?: string | null;
+  dedupeKey?: string | null;
+  sourceKind?: SourceRecordSourceKind;
+  citationCount?: number | null;
+  isOpenAccess?: boolean | null;
+  isPeerReviewed?: boolean | null;
+  sourceQualityScore?: number | null;
+  scoreReasons?: string[] | null;
+  relevanceLevel?: SourceRecordRelevanceLevel;
+  relevanceScore?: number | null;
+  relevanceReasons?: string[] | null;
+  matchedCoreConcepts?: string[] | null;
+  missingCoreConcepts?: string[] | null;
+  matchedFacets?: string[] | null;
+  missingRequiredFacets?: string[] | null;
+  evidenceGrounding?: SourceRecordEvidenceGrounding;
+  sourceRelevanceReasonZhTw?: string | null;
+  shouldShowInMainList?: boolean | null;
+  shouldRecommendAccept?: boolean | null;
+  topicRelevance?: number | null;
+  evidenceQuality?: number | null;
+  metadataCompleteness?: number | null;
+  abstractQuality?: number | null;
+  sourceTrust?: number | null;
+  isMetadataOnly?: boolean | null;
+  isPrimaryEvidence?: boolean | null;
+  rejectionReason?: string | null;
+  recommendation?: string | null;
 }
 
 export type SourceSearchResultLlmStatus = typeof SourceSearchResultLlmStatus[keyof typeof SourceSearchResultLlmStatus];
@@ -87,15 +226,6 @@ export const SearchIntentSummaryPlannerStatus = {
   failed: 'failed',
 } as const;
 
-export type SearchIntentSummaryDomainProfile = typeof SearchIntentSummaryDomainProfile[keyof typeof SearchIntentSummaryDomainProfile];
-
-
-export const SearchIntentSummaryDomainProfile = {
-  academic: 'academic',
-  'business-industry': 'business-industry',
-  'automotive-industry': 'automotive-industry',
-} as const;
-
 export interface SearchIntentSummary {
   primaryConcepts: string[];
   contextConcepts: string[];
@@ -105,7 +235,6 @@ export interface SearchIntentSummary {
   mustHaveTerms: string[];
   plannerStatus: SearchIntentSummaryPlannerStatus;
   fallbackUsed: boolean;
-  domainProfile: SearchIntentSummaryDomainProfile;
 }
 
 export interface SearchIntentQuerySet {
@@ -119,26 +248,18 @@ export type KeywordSourceGroupProvider = typeof KeywordSourceGroupProvider[keyof
 
 
 export const KeywordSourceGroupProvider = {
-  Crossref: 'Crossref',
   OpenAlex: 'OpenAlex',
+  Crossref: 'Crossref',
   Semantic_Scholar: 'Semantic Scholar',
-  Web: 'Web',
-} as const;
-
-export type KeywordSourceGroupStage = typeof KeywordSourceGroupStage[keyof typeof KeywordSourceGroupStage];
-
-
-export const KeywordSourceGroupStage = {
-  academic: 'academic',
-  official: 'official',
-  media: 'media',
+  Official_Source: 'Official Source',
+  Institutional_Source: 'Institutional Source',
+  Authoritative_Media: 'Authoritative Media',
 } as const;
 
 export interface KeywordSourceGroup {
   ok: boolean;
   provider: KeywordSourceGroupProvider;
   query: string;
-  stage: KeywordSourceGroupStage;
   results: SourceRecord[];
   error_type: string | null;
   error_message: string | null;
@@ -168,15 +289,6 @@ export interface KeywordExpansionResult {
   llm_status: KeywordExpansionResultLlmStatus;
 }
 
-export type SearchIntentPlanDomainProfile = typeof SearchIntentPlanDomainProfile[keyof typeof SearchIntentPlanDomainProfile];
-
-
-export const SearchIntentPlanDomainProfile = {
-  academic: 'academic',
-  'business-industry': 'business-industry',
-  'automotive-industry': 'automotive-industry',
-} as const;
-
 export type SearchIntentPlanPlannerStatus = typeof SearchIntentPlanPlannerStatus[keyof typeof SearchIntentPlanPlannerStatus];
 
 
@@ -189,7 +301,6 @@ export const SearchIntentPlanPlannerStatus = {
 
 export interface SearchIntentPlan {
   normalizedTopic: string;
-  domainProfile: SearchIntentPlanDomainProfile;
   primaryConcepts: string[];
   contextConcepts: string[];
   outcomeConcepts: string[];
@@ -217,88 +328,60 @@ export interface SearchRelevanceDebug {
   penalties: string[];
 }
 
-export type SourceSearchDiagnosticsStatus = typeof SourceSearchDiagnosticsStatus[keyof typeof SourceSearchDiagnosticsStatus];
+export interface SourceDecisionTrace {
+  title: string;
+  provider: string;
+  url: string | null;
+  relevanceScore: number;
+  authorityScore: number;
+  summaryUsabilityScore: number;
+  finalScore: number;
+  classification: string;
+  rejectReason: string | null;
+  matchedTerms: string[];
+  driftTerms: string[];
+}
 
+export interface SearchTrace {
+  workflowId: string;
+  topic: string;
+  normalizedTopic: string;
+  topicHash: string;
+  queryPlanHash: string;
+  providerQueries: string[];
+  candidateCount: number;
+  dedupedCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  sourceDecisions: SourceDecisionTrace[];
+}
 
-export const SourceSearchDiagnosticsStatus = {
-  success: 'success',
-  partial_success: 'partial_success',
-  insufficient_sources: 'insufficient_sources',
-  empty: 'empty',
-  failed: 'failed',
-} as const;
-
-export type SourceSearchDiagnosticsProviderFailuresItemProvider = typeof SourceSearchDiagnosticsProviderFailuresItemProvider[keyof typeof SourceSearchDiagnosticsProviderFailuresItemProvider];
-
-
-export const SourceSearchDiagnosticsProviderFailuresItemProvider = {
-  Crossref: 'Crossref',
-  OpenAlex: 'OpenAlex',
-  Semantic_Scholar: 'Semantic Scholar',
-  Web: 'Web',
-} as const;
-
-export type SourceSearchDiagnosticsProviderFailuresItemStage = typeof SourceSearchDiagnosticsProviderFailuresItemStage[keyof typeof SourceSearchDiagnosticsProviderFailuresItemStage];
-
-
-export const SourceSearchDiagnosticsProviderFailuresItemStage = {
-  academic: 'academic',
-  official: 'official',
-  media: 'media',
-} as const;
-
-export type SourceSearchDiagnosticsProviderResultCountsItemProvider = typeof SourceSearchDiagnosticsProviderResultCountsItemProvider[keyof typeof SourceSearchDiagnosticsProviderResultCountsItemProvider];
-
-
-export const SourceSearchDiagnosticsProviderResultCountsItemProvider = {
-  Crossref: 'Crossref',
-  OpenAlex: 'OpenAlex',
-  Semantic_Scholar: 'Semantic Scholar',
-  Web: 'Web',
-} as const;
-
-export type SourceSearchDiagnosticsProviderResultCountsItemStage = typeof SourceSearchDiagnosticsProviderResultCountsItemStage[keyof typeof SourceSearchDiagnosticsProviderResultCountsItemStage];
-
-
-export const SourceSearchDiagnosticsProviderResultCountsItemStage = {
-  academic: 'academic',
-  official: 'official',
-  media: 'media',
-} as const;
-
-export type SourceSearchDiagnosticsProviderFailuresItem = {
-  provider: SourceSearchDiagnosticsProviderFailuresItemProvider;
+export type SourceSearchPipelineDiagnosticsProviderStatusItem = {
+  provider: string;
   query: string;
-  stage: SourceSearchDiagnosticsProviderFailuresItemStage;
-  error_type: string;
-  error_message: string;
-};
-
-export type SourceSearchDiagnosticsProviderResultCountsItem = {
-  provider: SourceSearchDiagnosticsProviderResultCountsItemProvider;
-  query: string;
-  stage: SourceSearchDiagnosticsProviderResultCountsItemStage;
-  resultCount: number;
   ok: boolean;
+  result_count: number;
+  error_type: string | null;
+  error_message: string | null;
 };
 
-export interface SourceSearchDiagnostics {
-  resultCount: number;
-  resultTarget: number;
-  minSources: number;
-  targetSources: number;
-  queryCount: number;
-  providerCount: number;
-  fallbackUsed: boolean;
-  status: SourceSearchDiagnosticsStatus;
-  providerFailures: SourceSearchDiagnosticsProviderFailuresItem[];
-  providerResultCounts: SourceSearchDiagnosticsProviderResultCountsItem[];
+export interface SourceSearchPipelineDiagnostics {
+  retrieved_count: number;
+  deduped_count: number;
+  rejected_count: number;
+  candidate_count: number;
+  displayed_count: number;
+  primary_candidate_count: number;
+  provider_status: SourceSearchPipelineDiagnosticsProviderStatusItem[];
   warnings: string[];
 }
 
 export interface SourceSearchResult {
   ok?: boolean;
   topic?: string;
+  workflowId?: string;
+  topicHash?: string;
+  queryPlanHash?: string;
   searchIntent?: SearchIntentSummary;
   queries?: SearchIntentQuerySet;
   results?: SourceRecord[];
@@ -310,7 +393,8 @@ export interface SourceSearchResult {
   sources: SourceRecord[];
   planner?: SearchIntentPlan;
   relevance_debug?: SearchRelevanceDebug[];
-  diagnostics?: SourceSearchDiagnostics;
+  searchTrace?: SearchTrace;
+  diagnostics?: SourceSearchPipelineDiagnostics;
 }
 
 export type SearchIntentSourceSearchResultLlmStatus = typeof SearchIntentSourceSearchResultLlmStatus[keyof typeof SearchIntentSourceSearchResultLlmStatus];
@@ -327,6 +411,9 @@ export const SearchIntentSourceSearchResultLlmStatus = {
 export interface SearchIntentSourceSearchResult {
   ok: boolean;
   topic: string;
+  workflowId: string;
+  topicHash: string;
+  queryPlanHash: string;
   searchIntent: SearchIntentSummary;
   queries: SearchIntentQuerySet;
   results: SourceRecord[];
@@ -335,10 +422,11 @@ export interface SearchIntentSourceSearchResult {
   warnings: string[];
   planner: SearchIntentPlan;
   relevance_debug?: SearchRelevanceDebug[];
+  searchTrace: SearchTrace;
+  diagnostics?: SourceSearchPipelineDiagnostics;
   llm_status: SearchIntentSourceSearchResultLlmStatus;
   keyword_expansion: KeywordExpansionResult;
   groups: KeywordSourceGroup[];
-  diagnostics?: SourceSearchDiagnostics;
 }
 
 export type KeywordSourceSearchResultLlmStatus = typeof KeywordSourceSearchResultLlmStatus[keyof typeof KeywordSourceSearchResultLlmStatus];
@@ -360,7 +448,108 @@ export interface KeywordSourceSearchResult {
   sources: SourceRecord[];
 }
 
+export type ResearchGroundingJobCreateRequestBilingualQueries = {
+  zh: string[];
+  en: string[];
+};
+
+export type ResearchGroundingJobCreateRequestSearchProfile = typeof ResearchGroundingJobCreateRequestSearchProfile[keyof typeof ResearchGroundingJobCreateRequestSearchProfile];
+
+
+export const ResearchGroundingJobCreateRequestSearchProfile = {
+  standard: 'standard',
+  deep: 'deep',
+} as const;
+
+export interface ResearchGroundingJobCreateRequest {
+  /** @minLength 1 */
+  workflowId: string;
+  requestId?: string;
+  attemptId?: string;
+  /** @minLength 1 */
+  topic: string;
+  rawUserTopic?: string;
+  originalTopic?: string;
+  normalizedTopic?: string;
+  selectedDomain?: string;
+  researchQuestion?: string;
+  bilingualQueries?: ResearchGroundingJobCreateRequestBilingualQueries;
+  querySeedZh?: string[];
+  querySeedEn?: string[];
+  excludeTerms?: string[];
+  reportType?: string;
+  audience?: string;
+  searchProfile?: ResearchGroundingJobCreateRequestSearchProfile;
+  debugTrace?: boolean;
+}
+
+export interface ResearchGroundingJobCreateResponse {
+  jobId: string;
+  workflowId: string;
+  topicHash: string;
+  requestId: string;
+  attemptId: string;
+  status: string;
+}
+
+export interface GroundingJob {
+  jobId: string;
+  workflowId: string;
+  topicHash: string;
+  requestId: string;
+  attemptId: string;
+  /** @minimum 1 */
+  revision: number;
+  originalTopic: string;
+  normalizedTopic: string;
+  status: string;
+  /**
+     * @minimum 0
+     * @maximum 100
+     */
+  progress: number;
+  warnings: string[];
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  [key: string]: unknown;
+ }
+
+export type GroundingJobErrorResponseCode = typeof GroundingJobErrorResponseCode[keyof typeof GroundingJobErrorResponseCode];
+
+
+export const GroundingJobErrorResponseCode = {
+  INVALID_GROUNDING_REQUEST: 'INVALID_GROUNDING_REQUEST',
+  GROUNDING_STORE_NOT_CONFIGURED: 'GROUNDING_STORE_NOT_CONFIGURED',
+  GROUNDING_JOB_CREATE_FAILED: 'GROUNDING_JOB_CREATE_FAILED',
+  GROUNDING_JOB_NOT_FOUND: 'GROUNDING_JOB_NOT_FOUND',
+  GROUNDING_JOB_POLL_FAILED: 'GROUNDING_JOB_POLL_FAILED',
+  PROVIDER_TIMEOUT: 'PROVIDER_TIMEOUT',
+  PROVIDER_HTTP_ERROR: 'PROVIDER_HTTP_ERROR',
+  PROVIDER_PARSE_ERROR: 'PROVIDER_PARSE_ERROR',
+  ALL_PROVIDERS_FAILED: 'ALL_PROVIDERS_FAILED',
+  NO_RESULTS_AFTER_EXPANSION: 'NO_RESULTS_AFTER_EXPANSION',
+  GROUNDING_PIPELINE_FAILED: 'GROUNDING_PIPELINE_FAILED',
+  GROUNDING_RESPONSE_SCHEMA_INVALID: 'GROUNDING_RESPONSE_SCHEMA_INVALID',
+} as const;
+
+export type GroundingJobErrorResponseStage = typeof GroundingJobErrorResponseStage[keyof typeof GroundingJobErrorResponseStage];
+
+
+export const GroundingJobErrorResponseStage = {
+  creation: 'creation',
+  polling: 'polling',
+  pipeline: 'pipeline',
+} as const;
+
+export interface GroundingJobErrorResponse {
+  code: GroundingJobErrorResponseCode;
+  message: string;
+  stage: GroundingJobErrorResponseStage;
+  retryable: boolean;
+  requestId: string;
+}
+
 export interface ErrorResponse {
   message: string;
 }
-

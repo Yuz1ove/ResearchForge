@@ -28,6 +28,13 @@ node_modules
 !.vscode/extensions.json
 
 # misc
+/.vercel
+**/.vercel
+/.env
+/.env.local
+/.env.*.local
+/artifacts/api-server/.env.local
+/artifacts/api-server/.env.*.local
 /.sass-cache
 /connect.lock
 /coverage
@@ -48,12 +55,10 @@ Thumbs.db
 .cache/
 .local/
 
-# Local backup patches
-*.patch
-
-# Python cache
-__pycache__/
-*.py[cod]
-
-# Accidental security-tool folder
-Storm-Breaker/
+# Local secrets
+.env
+.env.*
+!.env.example
+artifacts/api-server/.env
+artifacts/api-server/.env.*
+!artifacts/api-server/.env.example

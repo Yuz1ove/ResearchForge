@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   acceptedSourceRecords,
+  autoAcceptPrimarySources,
   buildBibliography,
   buildExportReadinessWarnings,
   calculateSourceConfidence,
@@ -13,7 +14,6 @@ import {
   rejectedSourceRecords,
   sourceHasIncompleteMetadata,
   sourceReviewCounts,
-  sourceReviewTabSources,
   sourceReviewState,
   updateSourceReviewState,
   type SourceRecord,
@@ -122,35 +122,40 @@ test("dedupes sources by DOI before URL or title", () => {
       title: "Same DOI from another provider",
       sourceType: "Semantic Scholar",
       url: "https://www.semanticscholar.org/paper/example",
+      abstract:
+        "A richer abstract from another provider should be preserved during enrichment.",
     }),
   ]);
 
   assert.equal(deduped.length, 1);
   assert.equal(deduped[0]?.sourceType, "Crossref");
+  assert.match(deduped[0]?.abstract ?? "", /richer abstract/);
 });
 
-test("dedupe keeps richer metadata when duplicate records are merged", () => {
+test("dedupes same title, first author, and year across providers and keeps richer metadata", () => {
   const deduped = dedupeSourceRecords([
     source({
-      id: "crossref-metadata",
+      id: "title:crossref:spider habitat selection",
+      title: "Spider habitat selection",
+      doi: null,
       abstract: null,
-      url: "https://doi.org/10.1000/example",
       sourceType: "Crossref",
     }),
     source({
-      id: "openalex-rich",
-      title: "Short video use and attention",
-      abstract: "This study examines attention and sleep quality among students with a longer abstract to preserve.",
-      authors: ["Ada Lovelace", "Grace Hopper"],
-      url: "https://openalex.org/W123",
+      id: "title:openalex:spider habitat selection",
+      title: "Spider habitat selection",
+      doi: null,
+      abstract:
+        "Spider habitat selection and microhabitat ecology are described in the restored abstract.",
       sourceType: "OpenAlex",
+      authors: ["Ada Lovelace", "Open Alex"],
     }),
   ]);
 
   assert.equal(deduped.length, 1);
-  assert.match(deduped[0]?.abstract ?? "", /longer abstract/);
-  assert.equal(deduped[0]?.url, "https://doi.org/10.1000/example");
-  assert.deepEqual(deduped[0]?.authors, ["Ada Lovelace", "Grace Hopper"]);
+  assert.equal(deduped[0]?.sourceType, "Crossref");
+  assert.match(deduped[0]?.abstract ?? "", /microhabitat ecology/);
+  assert.equal(deduped[0]?.dedupeKey, "title:spider habitat selection|author:ada lovelace|year:2020");
 });
 
 test("filters accepted and rejected sources explicitly", () => {
@@ -178,16 +183,20 @@ test("counts source review tabs from filtered records", () => {
   });
 });
 
-test("all review tab returns every candidate source even when none are primary", () => {
+test("accepted source count stays aligned with review-state driven card state", () => {
   const sources = [
-    source({ id: "accepted", reviewState: "accepted", doi: "10.1000/accepted" }),
-    source({ id: "pending-a", reviewState: "pending", doi: "10.1000/pending-a" }),
-    source({ id: "pending-b", reviewState: "pending", doi: "10.1000/pending-b" }),
-    source({ id: "rejected", reviewState: "rejected", doi: "10.1000/rejected" }),
+    source({ id: "accepted-1", reviewState: "accepted" }),
+    source({ id: "accepted-2", reviewState: "accepted", status: "accepted" } as Partial<SourceRecord>),
+    source({ id: "pending-1", reviewState: "pending" }),
   ];
 
-  assert.equal(sourceReviewTabSources(sources, "all").length, sources.length);
-  assert.deepEqual(sourceReviewTabSources(sources, "pending"), candidateSourceRecords(sources));
+  const acceptedIds = acceptedSourceRecords(sources).map((item) => item.id);
+  const acceptedCardCount = sources.filter(
+    (item) => sourceReviewState(item) === "accepted",
+  ).length;
+
+  assert.equal(acceptedIds.length, acceptedCardCount);
+  assert.deepEqual(sourceReviewCounts(sources).accepted, acceptedCardCount);
 });
 
 test("reads accepted review aliases before rendering source lists", () => {
@@ -228,6 +237,47 @@ test("updates source review state without duplicating source records", () => {
   assert.equal(undone.length, 2);
   assert.equal(undone[0]?.reviewState, "pending");
   assert.deepEqual(undone.map((item) => item.id), ["first", "second"]);
+});
+
+test("auto accepts directly relevant primary sources into the same accepted-source state", () => {
+  const autoAccepted = autoAcceptPrimarySources([
+    source({
+      id: "primary",
+      doi: "10.1000/primary",
+      classification: "primary",
+      relevanceLevel: "primary",
+      shouldRecommendAccept: true,
+      shouldShowInMainList: true,
+      evidenceGrounding: "abstract_grounded",
+    }),
+    source({
+      id: "secondary",
+      doi: "10.1000/secondary",
+      classification: "review",
+      relevanceLevel: "secondary",
+      shouldRecommendAccept: true,
+      shouldShowInMainList: true,
+      evidenceGrounding: "abstract_grounded",
+    }),
+    source({
+      id: "metadata-only",
+      doi: "10.1000/metadata-only",
+      classification: "primary",
+      relevanceLevel: "primary",
+      shouldRecommendAccept: true,
+      shouldShowInMainList: true,
+      evidenceGrounding: "metadata_only",
+      isMetadataOnly: true,
+    }),
+  ]);
+
+  assert.equal(sourceReviewState(autoAccepted[0]!), "accepted");
+  assert.equal(sourceReviewState(autoAccepted[1]!), "pending");
+  assert.equal(sourceReviewState(autoAccepted[2]!), "pending");
+  assert.deepEqual(
+    acceptedSourceRecords(autoAccepted).map((item) => item.id),
+    ["primary"],
+  );
 });
 
 test("formats accepted sources as APA-style bibliography entries", () => {

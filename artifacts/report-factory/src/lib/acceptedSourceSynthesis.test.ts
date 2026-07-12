@@ -103,7 +103,7 @@ test("accepted source synthesis does not create main claims without evidence sni
   ]);
 
   assert.deepEqual(synthesis.mainClaimsZhTw, []);
-  assert.ok(synthesis.limitationsZhTw.some((item) => item.includes("缺少可驗證 evidence snippet")));
+  assert.ok(synthesis.limitationsZhTw.some((item) => item.includes("缺少可驗證摘要片段")));
 });
 
 test("accepted source synthesis records limitations for insufficient evidence", () => {

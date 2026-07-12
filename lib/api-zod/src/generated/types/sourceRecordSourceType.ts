@@ -10,8 +10,10 @@ export type SourceRecordSourceType = typeof SourceRecordSourceType[keyof typeof 
 
 
 export const SourceRecordSourceType = {
-  Crossref: 'Crossref',
   OpenAlex: 'OpenAlex',
+  Crossref: 'Crossref',
   Semantic_Scholar: 'Semantic Scholar',
-  Web: 'Web',
+  Official_Source: 'Official Source',
+  Institutional_Source: 'Institutional Source',
+  Authoritative_Media: 'Authoritative Media',
 } as const;

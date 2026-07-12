@@ -12,12 +12,16 @@ import type { SearchIntentQuerySet } from './searchIntentQuerySet';
 import type { SearchIntentSourceSearchResultLlmStatus } from './searchIntentSourceSearchResultLlmStatus';
 import type { SearchIntentSummary } from './searchIntentSummary';
 import type { SearchRelevanceDebug } from './searchRelevanceDebug';
+import type { SearchTrace } from './searchTrace';
 import type { SourceRecord } from './sourceRecord';
-import type { SourceSearchDiagnostics } from './sourceSearchDiagnostics';
+import type { SourceSearchPipelineDiagnostics } from './sourceSearchPipelineDiagnostics';
 
 export interface SearchIntentSourceSearchResult {
   ok: boolean;
   topic: string;
+  workflowId: string;
+  topicHash: string;
+  queryPlanHash: string;
   searchIntent: SearchIntentSummary;
   queries: SearchIntentQuerySet;
   results: SourceRecord[];
@@ -26,8 +30,9 @@ export interface SearchIntentSourceSearchResult {
   warnings: string[];
   planner: SearchIntentPlan;
   relevance_debug?: SearchRelevanceDebug[];
+  searchTrace: SearchTrace;
+  diagnostics?: SourceSearchPipelineDiagnostics;
   llm_status: SearchIntentSourceSearchResultLlmStatus;
   keyword_expansion: KeywordExpansionResult;
   groups: KeywordSourceGroup[];
-  diagnostics?: SourceSearchDiagnostics;
 }
