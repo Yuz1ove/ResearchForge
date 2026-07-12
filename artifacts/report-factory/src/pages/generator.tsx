@@ -6559,12 +6559,17 @@ export function Generator() {
     }
     window.history.replaceState({}, "", nextUrl);
   };
-  const returnToTopicRefinement = (result: GroundingJob, showToast = false) => {
+  const returnToTopicRefinement = (
+    result: GroundingJob,
+    options?: { showToast?: boolean; runId?: string | null },
+  ) => {
     const nextAction = result.parsedInput?.nextAction;
     const message =
       nextAction === "ask_clarification"
         ? result.warnings[0] ?? "主題還需要補充研究對象、變項或範圍後再搜尋。"
         : result.warnings[0] ?? "主題仍偏短或多義，請先選一個更明確的研究方向。";
+    const retainedRunId =
+      options?.runId ?? generatorRunId ?? activeRunContextRef.current.runId;
 
     setInput((current) => ({ ...current, topic: result.originalTopic }));
     setDraftTopic(result.originalTopic);
@@ -6574,35 +6579,45 @@ export function Generator() {
     setTopicWorkflowStatus("ready");
     setTopicExpansionStatus(nextAction === "ask_clarification" ? "error" : "done");
     setTopicExpansionMessage(message);
-    setGroundingJobMeta(null);
+    setGroundingJobMeta((current) =>
+      current?.jobId === result.jobId &&
+      current.workflowId === result.workflowId &&
+      current.topicHash === result.topicHash
+        ? current
+        : {
+            jobId: result.jobId,
+            workflowId: result.workflowId,
+            topicHash: result.topicHash,
+          },
+    );
     setGroundingJob(result);
     setGroundingRequestState(groundingRequestStateForJob(result));
     setGroundingError(null);
     setSources([]);
-    setSourceWorkflowId(null);
-    setSourceWorkspaceFingerprint(null);
-    setSourceQueryPlanHash(null);
+    setSourceWorkflowId(result.workflowId);
+    setSourceWorkspaceFingerprint(result.topicHash);
+    setSourceQueryPlanHash(queryPlanHashFromJob(result));
     setSourceSearchStatus("idle");
     setSourceSearchMessage("");
     setIsSearchingSources(false);
-    setGeneratorRunId(null);
+    setGeneratorRunId(retainedRunId);
     setStepHistory([]);
     activeRunContextRef.current = {
-      runId: null,
-      workflowId: null,
-      topicHash: null,
+      runId: retainedRunId,
+      workflowId: result.workflowId,
+      topicHash: result.topicHash,
     };
     clearStepTransition();
     setActiveStep("topic");
     syncGeneratorUrl({
       step: "topic_input",
-      jobId: null,
-      workflowId: null,
-      topicHash: null,
-      runId: null,
+      jobId: result.jobId,
+      workflowId: result.workflowId,
+      topicHash: result.topicHash,
+      runId: retainedRunId,
       mode: "replace",
     });
-    if (showToast) {
+    if (options?.showToast) {
       toast({
         title: nextAction === "ask_clarification" ? "主題還需要補充" : "請先縮小研究方向",
         description: message,
@@ -6938,6 +6953,11 @@ export function Generator() {
       const snapshotJob = buildGroundingJobFromSnapshot(snapshot);
       const snapshotTerminal = groundingJobIsTerminal(snapshotJob);
 
+      if (groundingJobNeedsTopicRefinement(snapshotJob)) {
+        returnToTopicRefinement(snapshotJob, { runId: snapshot.runId });
+        return true;
+      }
+
 	      setInput((current) => ({ ...current, topic: snapshot.submittedTopic }));
       setDraftTopic(snapshot.submittedTopic);
       setDebouncedDraftTopic(snapshot.submittedTopic);
@@ -7033,7 +7053,7 @@ export function Generator() {
           console.info("[ResearchForge][grounding-diagnostics]", result.groundingDiagnostics);
         }
         if (groundingJobNeedsTopicRefinement(result)) {
-          returnToTopicRefinement(result);
+          returnToTopicRefinement(result, { runId });
           return;
         }
         const resultTerminal = groundingJobIsTerminal(result);
@@ -7180,7 +7200,7 @@ export function Generator() {
         setSourceWorkspaceFingerprint(result.topicHash);
         setSourceQueryPlanHash(queryPlanHashFromJob(result));
         if (groundingJobNeedsTopicRefinement(result)) {
-          returnToTopicRefinement(result, true);
+          returnToTopicRefinement(result, { showToast: true });
           return;
         }
 

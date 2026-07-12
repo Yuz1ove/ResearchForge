@@ -473,6 +473,27 @@ test("generator topic step exposes domain cards and no longer renders old first-
   assert.match(generatorSource, /currentTopicRunIdRef\.current !== topicRunId/);
 });
 
+test("terminal topic refinement recovery retains reload identity", () => {
+  const generatorSource = readFileSync(new URL("../pages/generator.tsx", import.meta.url), "utf8");
+  const refinementStart = generatorSource.indexOf("const returnToTopicRefinement =");
+  const refinementEnd = generatorSource.indexOf("const transitionToStep =", refinementStart);
+  const refinementSource = generatorSource.slice(refinementStart, refinementEnd);
+
+  assert.notEqual(refinementStart, -1);
+  assert.notEqual(refinementEnd, -1);
+  assert.match(refinementSource, /jobId: result\.jobId/);
+  assert.match(refinementSource, /workflowId: result\.workflowId/);
+  assert.match(refinementSource, /topicHash: result\.topicHash/);
+  assert.match(refinementSource, /runId: retainedRunId/);
+  assert.match(refinementSource, /setSourceWorkflowId\(result\.workflowId\)/);
+  assert.match(refinementSource, /setSourceWorkspaceFingerprint\(result\.topicHash\)/);
+  assert.doesNotMatch(refinementSource, /jobId: null/);
+  assert.match(
+    generatorSource,
+    /groundingJobNeedsTopicRefinement\(snapshotJob\)[\s\S]*returnToTopicRefinement\(snapshotJob, \{ runId: snapshot\.runId \}\)/,
+  );
+});
+
 test("rotating topic samples keep the expected semantic type and complete fields", () => {
   const cases: Array<{ expectedType: TopicType; topics: string[] }> = [
     { expectedType: "wildlife_conservation", topics: ["台灣黑熊", "穿山甲", "草鴞", "櫻花鉤吻鮭", "綠蠵龜"] },
