@@ -56,6 +56,24 @@ interface PaperSearchResponse {
   summaryMode: string;
 }
 
+interface PaperSummaryResponse {
+  ok: boolean;
+  papers: PaperSearchPaper[];
+  warnings: string[];
+  summaryMode: string;
+}
+
+type EnrichmentPhase = "idle" | "expanding" | "summarizing" | "complete";
+
+interface SummaryProgress {
+  completed: number;
+  total: number;
+}
+
+const FAST_RESULT_LIMIT = 8;
+const EXPANDED_RESULT_LIMIT = 12;
+const SUMMARY_BATCH_SIZE = 4;
+
 const EXAMPLE_QUERIES = [
   "生成式 AI 與學習成效",
   "塑膠微粒對海洋生態的影響",
@@ -63,9 +81,9 @@ const EXAMPLE_QUERIES = [
 ];
 
 const LOADING_MESSAGES = [
-  "正在查詢 OpenAlex 與 Crossref 的學術資料…",
+  "正在快速查詢 OpenAlex 與 Crossref…",
+  "第一批結果即將顯示，後續內容會在背景補齊…",
   "正在比對題名、作者、DOI 與原文摘要…",
-  "正在把論文重點整理成繁體中文摘要…",
 ];
 
 function apiUrl(path: string): string {
@@ -90,6 +108,7 @@ function authorsLabel(authors: string[]): string {
 }
 
 function summaryLabel(paper: PaperSearchPaper): string {
+  if (paper.summaryStatus === "pending") return "AI 整理中";
   if (paper.summaryStatus === "success") return "AI 繁中摘要";
   if (paper.summarySourceType === "metadataFallback") return "書目重點整理";
   if (paper.summarySourceType === "abstract") return "依原文摘要整理";
@@ -104,6 +123,46 @@ function summaryBadgeVariant(
   return "secondary";
 }
 
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function paperBatches(papers: PaperSearchPaper[]): PaperSearchPaper[][] {
+  const batches: PaperSearchPaper[][] = [];
+  for (let index = 0; index < papers.length; index += SUMMARY_BATCH_SIZE) {
+    batches.push(papers.slice(index, index + SUMMARY_BATCH_SIZE));
+  }
+  return batches;
+}
+
+function summaryFields(paper: PaperSearchPaper): Partial<PaperSearchPaper> {
+  return {
+    summary: paper.summary,
+    summaryStatus: paper.summaryStatus,
+    summarySourceType: paper.summarySourceType,
+    summaryConfidence: paper.summaryConfidence,
+  };
+}
+
+function mergedPaperList(
+  primary: PaperSearchPaper[],
+  secondary: PaperSearchPaper[],
+  summaries: Map<string, PaperSearchPaper>,
+  limit: number,
+): PaperSearchPaper[] {
+  const seen = new Set<string>();
+  const merged: PaperSearchPaper[] = [];
+  for (const paper of [...primary, ...secondary]) {
+    const key = paper.id || `${paper.doi ?? ""}:${paper.title.toLocaleLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const summarized = summaries.get(paper.id);
+    merged.push(summarized ? { ...paper, ...summaryFields(summarized) } : paper);
+    if (merged.length >= limit) break;
+  }
+  return merged;
+}
+
 function userFacingError(error: unknown): string {
   if (error instanceof DOMException && error.name === "AbortError") {
     return "搜尋時間較久，已先停止這次請求。請縮短關鍵詞後再試一次。";
@@ -113,6 +172,31 @@ function userFacingError(error: unknown): string {
     return "目前無法連線到論文搜尋服務。請確認 API 已啟動，或稍後再試。";
   }
   return message || "搜尋暫時失敗，請稍後再試。";
+}
+
+async function postJson<T>(
+  path: string,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  const data = (await response.json().catch(() => null)) as
+    | T
+    | { message?: string }
+    | null;
+  if (!response.ok) {
+    const message = data && typeof data === "object" && "message" in data
+      ? data.message
+      : null;
+    throw new Error(message || `搜尋服務回傳 HTTP ${response.status}`);
+  }
+  if (!data) throw new Error("搜尋服務回傳了無法辨識的資料，請稍後再試。");
+  return data as T;
 }
 
 function PaperCard({ paper, index }: { paper: PaperSearchPaper; index: number }) {
@@ -183,16 +267,29 @@ function PaperCard({ paper, index }: { paper: PaperSearchPaper; index: number })
 
           <div className="mt-5 rounded-lg border border-primary/15 bg-accent/55 p-4 sm:p-5">
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              <Sparkles className="h-4 w-4 text-primary" />
+              {paper.summaryStatus === "pending" ? (
+                <LoaderCircle className="h-4 w-4 animate-spin text-primary motion-reduce:animate-none" />
+              ) : (
+                <Sparkles className="h-4 w-4 text-primary" />
+              )}
               <h3 className="text-sm font-semibold">論文重點</h3>
               <Badge variant={summaryBadgeVariant(paper)}>{summaryLabel(paper)}</Badge>
               {paper.summaryConfidence === "low" ? (
                 <span className="text-xs text-muted-foreground">資訊有限，引用前請查看原文</span>
               ) : null}
             </div>
-            <p className="text-[15px] leading-7 text-foreground/90" data-testid="paper-summary">
+            <p
+              className="text-[15px] leading-7 text-foreground/90"
+              data-testid="paper-summary"
+              aria-live={paper.summaryStatus === "pending" ? "polite" : undefined}
+            >
               {paper.summary}
             </p>
+            {paper.summaryStatus === "pending" ? (
+              <p className="mt-3 text-xs text-muted-foreground">
+                已先顯示可用的原文摘要節錄，繁中重點完成後會自動更新。
+              </p>
+            ) : null}
           </div>
 
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
@@ -202,7 +299,7 @@ function PaperCard({ paper, index }: { paper: PaperSearchPaper; index: number })
             {paper.abstract ? (
               <details className="text-sm text-muted-foreground">
                 <summary className="cursor-pointer select-none font-medium text-foreground hover:text-primary">
-                  查看原文摘要
+                  查看完整原文摘要
                 </summary>
                 <p className="mt-3 max-w-4xl rounded-md bg-muted/60 p-4 leading-6">
                   {paper.abstract}
@@ -224,63 +321,226 @@ export function PaperSearch() {
   const [result, setResult] = useState<PaperSearchResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
+  const [enrichmentPhase, setEnrichmentPhase] = useState<EnrichmentPhase>("idle");
+  const [summaryProgress, setSummaryProgress] = useState<SummaryProgress>({
+    completed: 0,
+    total: 0,
+  });
   const abortRef = useRef<AbortController | null>(null);
+  const activeRunIdRef = useRef(0);
+  const summariesByIdRef = useRef(new Map<string, PaperSearchPaper>());
+  const visiblePaperIdsRef = useRef<string[]>([]);
   const autoSearchStartedRef = useRef(false);
 
-  const runSearch = useCallback(async (rawQuery: string) => {
-    const nextQuery = rawQuery.trim().replace(/\s+/g, " ");
-    if (nextQuery.length < 2) {
-      setStatus("error");
-      setErrorMessage("請輸入至少 2 個字的研究關鍵詞。");
-      return;
-    }
+  const applySummaryPapers = useCallback(
+    (papers: PaperSearchPaper[], warnings: string[], runId: number) => {
+      if (activeRunIdRef.current !== runId) return;
+      for (const paper of papers) summariesByIdRef.current.set(paper.id, paper);
 
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    const timeoutId = window.setTimeout(() => controller.abort(), 90_000);
-
-    setQuery(nextQuery);
-    setSearchedQuery(nextQuery);
-    setStatus("loading");
-    setResult(null);
-    setErrorMessage(null);
-    setLoadingMessageIndex(0);
-
-    const url = new URL(window.location.href);
-    url.searchParams.set("q", nextQuery);
-    window.history.replaceState(window.history.state, "", url);
-
-    try {
-      const response = await fetch(apiUrl("/api/paper-search"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: nextQuery, limit: 4 }),
-        signal: controller.signal,
+      setResult((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          papers: current.papers.map((paper) => {
+            const summarized = summariesByIdRef.current.get(paper.id);
+            return summarized ? { ...paper, ...summaryFields(summarized) } : paper;
+          }),
+          warnings: uniqueStrings([...current.warnings, ...warnings]),
+        };
       });
-      const data = (await response.json().catch(() => null)) as
-        | PaperSearchResponse
-        | { message?: string }
-        | null;
-      if (!response.ok) {
-        const message = data && "message" in data ? data.message : null;
-        throw new Error(message || `搜尋服務回傳 HTTP ${response.status}`);
+
+      const completed = visiblePaperIdsRef.current.filter((id) =>
+        summariesByIdRef.current.has(id),
+      ).length;
+      setSummaryProgress({ completed, total: visiblePaperIdsRef.current.length });
+    },
+    [],
+  );
+
+  const summarizePaperBatches = useCallback(
+    async (
+      topic: string,
+      papers: PaperSearchPaper[],
+      controller: AbortController,
+      runId: number,
+    ) => {
+      for (const batch of paperBatches(papers)) {
+        if (controller.signal.aborted || activeRunIdRef.current !== runId) return;
+        try {
+          const data = await postJson<PaperSummaryResponse>(
+            "/api/paper-search/summaries",
+            { query: topic, papers: batch },
+            controller.signal,
+          );
+          if (!Array.isArray(data.papers)) {
+            throw new Error("摘要服務回傳格式錯誤。");
+          }
+          applySummaryPapers(data.papers, data.warnings ?? [], runId);
+        } catch (error) {
+          if (controller.signal.aborted || activeRunIdRef.current !== runId) return;
+          const fallbackPapers = batch.map((paper) => ({
+            ...paper,
+            summaryStatus: "fallback",
+            summaryConfidence: "low",
+          }));
+          applySummaryPapers(
+            fallbackPapers,
+            ["部分繁中摘要暫時無法完成，已保留可追溯的原文摘要節錄。"],
+            runId,
+          );
+        }
       }
-      if (!data || !("papers" in data) || !Array.isArray(data.papers)) {
-        throw new Error("搜尋服務回傳了無法辨識的資料，請稍後再試。");
+    },
+    [applySummaryPapers],
+  );
+
+  const runSearch = useCallback(
+    async (rawQuery: string) => {
+      const nextQuery = rawQuery.trim().replace(/\s+/g, " ");
+      if (nextQuery.length < 2) {
+        setStatus("error");
+        setErrorMessage("請輸入至少 2 個字的研究關鍵詞。");
+        return;
       }
-      if (abortRef.current !== controller) return;
-      setResult(data);
-      setStatus("success");
-    } catch (error) {
-      if (abortRef.current !== controller) return;
-      setStatus("error");
-      setErrorMessage(userFacingError(error));
-    } finally {
-      window.clearTimeout(timeoutId);
-      if (abortRef.current === controller) abortRef.current = null;
-    }
-  }, []);
+
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const runId = activeRunIdRef.current + 1;
+      activeRunIdRef.current = runId;
+      const timeoutId = window.setTimeout(() => controller.abort(), 150_000);
+
+      summariesByIdRef.current.clear();
+      visiblePaperIdsRef.current = [];
+      setQuery(nextQuery);
+      setSearchedQuery(nextQuery);
+      setStatus("loading");
+      setResult(null);
+      setErrorMessage(null);
+      setLoadingMessageIndex(0);
+      setEnrichmentPhase("expanding");
+      setSummaryProgress({ completed: 0, total: 0 });
+
+      const url = new URL(window.location.href);
+      url.searchParams.set("q", nextQuery);
+      window.history.replaceState(window.history.state, "", url);
+
+      const expandedPromise: Promise<{
+        data: PaperSearchResponse | null;
+        error: unknown;
+      }> = postJson<PaperSearchResponse>(
+        "/api/paper-search",
+        {
+          query: nextQuery,
+          limit: EXPANDED_RESULT_LIMIT,
+          searchMode: "expanded",
+          includeSummaries: false,
+        },
+        controller.signal,
+      )
+        .then((data) => ({ data, error: null }))
+        .catch((error: unknown) => ({ data: null, error }));
+
+      try {
+        let initialResult: PaperSearchResponse;
+        let initialWasExpanded = false;
+        try {
+          initialResult = await postJson<PaperSearchResponse>(
+            "/api/paper-search",
+            {
+              query: nextQuery,
+              limit: FAST_RESULT_LIMIT,
+              searchMode: "fast",
+              includeSummaries: false,
+            },
+            controller.signal,
+          );
+        } catch (fastError) {
+          const expandedOutcome = await expandedPromise;
+          if (!expandedOutcome.data) throw fastError;
+          initialResult = expandedOutcome.data;
+          initialWasExpanded = true;
+        }
+
+        if (!Array.isArray(initialResult.papers)) {
+          throw new Error("搜尋服務回傳了無法辨識的資料，請稍後再試。");
+        }
+        if (controller.signal.aborted || activeRunIdRef.current !== runId) return;
+
+        visiblePaperIdsRef.current = initialResult.papers.map((paper) => paper.id);
+        setSummaryProgress({ completed: 0, total: initialResult.papers.length });
+        setResult(initialResult);
+        setStatus("success");
+
+        const firstSummaryPromise = initialWasExpanded
+          ? Promise.resolve()
+          : summarizePaperBatches(
+              nextQuery,
+              initialResult.papers.slice(0, SUMMARY_BATCH_SIZE),
+              controller,
+              runId,
+            );
+
+        let finalResult = initialResult;
+        if (!initialWasExpanded) {
+          const expandedOutcome = await expandedPromise;
+          if (controller.signal.aborted || activeRunIdRef.current !== runId) return;
+          if (expandedOutcome.data && Array.isArray(expandedOutcome.data.papers)) {
+            const papers = mergedPaperList(
+              expandedOutcome.data.papers,
+              initialResult.papers,
+              summariesByIdRef.current,
+              EXPANDED_RESULT_LIMIT,
+            );
+            finalResult = {
+              ...expandedOutcome.data,
+              count: papers.length,
+              papers,
+              warnings: uniqueStrings([
+                ...initialResult.warnings,
+                ...expandedOutcome.data.warnings,
+              ]),
+            };
+          } else if (expandedOutcome.error) {
+            finalResult = {
+              ...initialResult,
+              warnings: uniqueStrings([
+                ...initialResult.warnings,
+                "延伸英文檢索暫時未完成，已保留快速搜尋結果。",
+              ]),
+            };
+          }
+
+          visiblePaperIdsRef.current = finalResult.papers.map((paper) => paper.id);
+          const completed = visiblePaperIdsRef.current.filter((id) =>
+            summariesByIdRef.current.has(id),
+          ).length;
+          setSummaryProgress({ completed, total: finalResult.papers.length });
+          setResult(finalResult);
+        }
+
+        setEnrichmentPhase("summarizing");
+        await firstSummaryPromise;
+        if (controller.signal.aborted || activeRunIdRef.current !== runId) return;
+
+        const pendingPapers = finalResult.papers.filter(
+          (paper) => !summariesByIdRef.current.has(paper.id),
+        );
+        await summarizePaperBatches(nextQuery, pendingPapers, controller, runId);
+        if (controller.signal.aborted || activeRunIdRef.current !== runId) return;
+        setEnrichmentPhase("complete");
+      } catch (error) {
+        if (controller.signal.aborted || activeRunIdRef.current !== runId) return;
+        setStatus("error");
+        setEnrichmentPhase("idle");
+        setErrorMessage(userFacingError(error));
+      } finally {
+        window.clearTimeout(timeoutId);
+        if (abortRef.current === controller) abortRef.current = null;
+      }
+    },
+    [summarizePaperBatches],
+  );
 
   useEffect(() => {
     return () => abortRef.current?.abort();
@@ -310,6 +570,11 @@ export function PaperSearch() {
   const paperCount = result?.papers.length ?? 0;
   const aiSummaryCount =
     result?.papers.filter((paper) => paper.summaryStatus === "success").length ?? 0;
+  const isEnriching =
+    enrichmentPhase === "expanding" || enrichmentPhase === "summarizing";
+  const summaryProgressPercent = summaryProgress.total > 0
+    ? Math.round((summaryProgress.completed / summaryProgress.total) * 100)
+    : 0;
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -329,7 +594,7 @@ export function PaperSearch() {
               輸入關鍵詞，找到論文與中文摘要
             </h1>
             <p className="mx-auto mt-5 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">
-              同時查詢學術資料庫、合併重複結果，並根據論文原文摘要整理繁體中文重點。
+              先顯示第一批學術結果，再於背景擴充英文檢索並逐篇補上繁體中文重點。
             </p>
 
             <form
@@ -359,7 +624,7 @@ export function PaperSearch() {
               >
                 {status === "loading" ? (
                   <>
-                    <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                    <LoaderCircle className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" />
                     搜尋中
                   </>
                 ) : (
@@ -426,7 +691,7 @@ export function PaperSearch() {
               data-testid="paper-search-loading"
             >
               <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
-                <LoaderCircle className="h-7 w-7 animate-spin" />
+                <LoaderCircle className="h-7 w-7 animate-spin motion-reduce:animate-none" />
               </div>
               <h2 className="mt-5 text-xl font-semibold">正在搜尋「{searchedQuery}」</h2>
               <p className="mt-2 text-muted-foreground">
@@ -434,7 +699,7 @@ export function PaperSearch() {
               </p>
               <div className="mx-auto mt-7 grid max-w-3xl gap-3 text-left">
                 {[0, 1, 2].map((item) => (
-                  <div key={item} className="animate-pulse rounded-lg border border-border p-4">
+                  <div key={item} className="animate-pulse rounded-lg border border-border p-4 motion-reduce:animate-none">
                     <div className="h-4 w-24 rounded bg-muted" />
                     <div className="mt-3 h-5 w-3/4 rounded bg-muted" />
                     <div className="mt-3 h-3 w-full rounded bg-muted" />
@@ -469,19 +734,39 @@ export function PaperSearch() {
           {status === "success" && result ? (
             <div data-testid="paper-search-results">
               <div className="mb-6 flex flex-col gap-4 rounded-xl border border-border bg-card p-5 sm:flex-row sm:items-center sm:justify-between">
-                <div>
+                <div className="min-w-0 flex-1" aria-live="polite" data-testid="paper-search-enrichment-status">
                   <div className="flex items-center gap-2 text-sm font-medium text-primary">
-                    <CheckCircle2 className="h-4 w-4" />
-                    搜尋完成
+                    {isEnriching ? (
+                      <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                    ) : (
+                      <CheckCircle2 className="h-4 w-4" />
+                    )}
+                    {enrichmentPhase === "expanding"
+                      ? "快速結果已顯示"
+                      : enrichmentPhase === "summarizing"
+                        ? "更多論文已加入，正在整理摘要"
+                        : "搜尋與摘要完成"}
                   </div>
                   <h2 className="mt-1 text-xl font-semibold">
                     「{result.query}」找到 {paperCount} 篇論文
                   </h2>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    {aiSummaryCount > 0
-                      ? `${aiSummaryCount} 篇已完成 AI 繁中摘要，其餘依可用摘要內容保守整理。`
-                      : "目前摘要採用安全備援整理；每篇都可開啟原始來源確認。"}
+                    {enrichmentPhase === "expanding"
+                      ? `正在背景擴充到最多 ${EXPANDED_RESULT_LIMIT} 篇；已完成 ${summaryProgress.completed} 篇內容整理。`
+                      : enrichmentPhase === "summarizing"
+                        ? `${summaryProgress.completed} / ${summaryProgress.total} 篇已整理完成，結果會逐篇自動更新。`
+                        : aiSummaryCount > 0
+                          ? `${aiSummaryCount} 篇已完成較完整的 AI 繁中摘要，其餘保留原文重點。`
+                          : "目前摘要採用安全備援整理；每篇都可開啟原始來源確認。"}
                   </p>
+                  {isEnriching && summaryProgress.total > 0 ? (
+                    <div className="mt-3 h-1.5 max-w-xl overflow-hidden rounded-full bg-muted" aria-hidden="true">
+                      <div
+                        className="h-full rounded-full bg-primary transition-[width] duration-500 motion-reduce:transition-none"
+                        style={{ width: `${summaryProgressPercent}%` }}
+                      />
+                    </div>
+                  ) : null}
                 </div>
                 <Button type="button" variant="outline" onClick={() => void runSearch(result.query)}>
                   <RefreshCw className="mr-2 h-4 w-4" />

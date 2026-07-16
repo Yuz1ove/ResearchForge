@@ -237,6 +237,53 @@ test("source summarizer processes sources in smaller LLM batches", async () => {
   assert.match(result[4]?.llmSummaryZhTw ?? "", /source-5/);
 });
 
+test("source summarizer detailed mode sends more evidence and requests a fuller summary", async () => {
+  const evidenceMarker = "DETAILED_FINDING_MARKER";
+  const longAbstract = `${"Background evidence about adolescent sleep and attention. ".repeat(32)} ${evidenceMarker} The measured outcome improved after the intervention.`;
+  const detailedSummary =
+    "本研究聚焦青少年睡眠與注意力之關聯，先說明研究目的與觀察對象，再依摘要所載方法整理介入與測量方式。結果顯示，原文記錄的介入後指標有所改善；不過目前僅取得摘要內容，樣本代表性、完整統計值與研究限制仍應回到原文確認。";
+  const capturedRequests: Array<Record<string, unknown>> = [];
+
+  const result = await summarizeSourcesWithLlm(
+    "青少年睡眠與注意力",
+    [source({ abstract: longAbstract })],
+    {
+      detailLevel: "detailed",
+      llm: {
+        baseUrl: "https://llm.example/v1",
+        model: "test-model",
+        apiKey: "test-key",
+      },
+      fetchImpl: async (_input, init) => {
+        capturedRequests.push(
+          JSON.parse(String(init?.body)) as Record<string, unknown>,
+        );
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    summaries: [{ id: "source-1", summaryZhTw: detailedSummary }],
+                  }),
+                },
+              },
+            ],
+          }),
+        );
+      },
+    },
+  );
+
+  const capturedRequest = capturedRequests[0];
+  assert.ok(capturedRequest);
+  assert.equal(capturedRequest.max_tokens, 1_600);
+  const messages = capturedRequest.messages as Array<{ content?: string }> | undefined;
+  assert.match(messages?.[0]?.content ?? "", /220-360/);
+  assert.match(messages?.[1]?.content ?? "", new RegExp(evidenceMarker));
+  assert.equal(result[0]?.llmSummaryZhTw, detailedSummary);
+});
+
 test("source summarizer writes deterministic fallback summaries for metadata-only sources", async () => {
   const result = await summarizeSourcesWithLlm(
     "飛機",

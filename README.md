@@ -123,9 +123,11 @@ Open the paper search page:
 http://localhost:22067/generator
 ```
 
-Enter a research keyword to search academic providers and receive source-linked
-Traditional Chinese summaries. The API endpoint used by this page is
-`POST /api/paper-search`.
+Enter a research keyword to see an initial eight-paper result set quickly. The
+page then expands the search to as many as twelve papers and progressively
+replaces source excerpts with longer, source-linked Traditional Chinese
+summaries. The page uses `POST /api/paper-search` for retrieval and
+`POST /api/paper-search/summaries` for four-paper summary batches.
 
 Open the advanced report workspace:
 

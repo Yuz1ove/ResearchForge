@@ -12,25 +12,41 @@ import {
 import {
   searchSourceProviders,
   type SourceProviderSearchResult,
+  type SourceSearchOptions,
 } from "../services/source-retrieval";
+import {
+  getSourceProviderConfigs,
+  type SourceProviderConfig,
+  type SourceProviderName,
+} from "../services/source-provider-config";
 import {
   summarizeSourcesWithLlm,
   type SourceWithLlmSummary,
 } from "../services/source-summarizer";
 
-const DEFAULT_LIMIT = 6;
+const DEFAULT_LIMIT = 10;
 const MIN_LIMIT = 3;
-const MAX_LIMIT = 10;
+const MAX_LIMIT = 20;
 const MIN_QUERY_LENGTH = 2;
 const MAX_QUERY_LENGTH = 200;
 const SUMMARY_EXCERPT_LENGTH = 420;
-const PROVIDER_PRIORITY = ["OpenAlex", "Crossref", "Semantic Scholar"] as const;
+const EXPANDED_PROVIDERS = ["OpenAlex", "Crossref", "Semantic Scholar"] as const;
+const FAST_PROVIDERS = ["OpenAlex", "Crossref"] as const;
+const SUMMARY_REQUEST_MAX_PAPERS = 4;
+const MAX_PAPER_ID_LENGTH = 500;
+const MAX_PAPER_TITLE_LENGTH = 1_000;
+const MAX_PAPER_AUTHOR_LENGTH = 300;
+const MAX_PAPER_ABSTRACT_LENGTH = 20_000;
+const MAX_PAPER_METADATA_LENGTH = 2_000;
 
-type SummaryMode = "llm" | "mixed" | "fallback" | "none";
+export type PaperSearchMode = "fast" | "expanded";
+type SummaryMode = "llm" | "mixed" | "fallback" | "none" | "deferred";
 
 export interface PaperSearchRequest {
   query: string;
   limit: number;
+  searchMode: PaperSearchMode;
+  includeSummaries: boolean;
 }
 
 export interface PaperSearchPaper {
@@ -61,16 +77,36 @@ export interface PaperSearchResponse {
   summaryMode: SummaryMode;
 }
 
+export interface PaperSummariesRequest {
+  query: string;
+  sources: SourceRecord[];
+}
+
+export interface PaperSummariesResponse {
+  ok: true;
+  query: string;
+  count: number;
+  papers: PaperSearchPaper[];
+  warnings: string[];
+  summaryMode: SummaryMode;
+}
+
 export interface PaperSearchRouterOptions {
   expandKeywords?: typeof expandSearchKeywords;
   searchProviders?: typeof searchSourceProviders;
   dedupeSources?: typeof dedupeSourceRecords;
   summarizeSources?: typeof summarizeSourcesWithLlm;
+  getProviderConfigs?: typeof getSourceProviderConfigs;
 }
 
 type MappedPaper = {
   paper: PaperSearchPaper;
   usedSuccessfulLlmSummary: boolean;
+};
+
+type MapPaperOptions = {
+  deferred?: boolean;
+  preferSuccessfulRawLlmSummary?: boolean;
 };
 
 function cleanText(value: unknown): string | null {
@@ -105,7 +141,14 @@ export function normalizePaperSearchRequest(body: unknown): PaperSearchRequest |
     return null;
   }
 
-  return { query, limit };
+  const searchMode = data.searchMode === undefined ? "expanded" : data.searchMode;
+  if (searchMode !== "fast" && searchMode !== "expanded") return null;
+
+  const includeSummaries =
+    data.includeSummaries === undefined ? true : data.includeSummaries;
+  if (typeof includeSummaries !== "boolean") return null;
+
+  return { query, limit, searchMode, includeSummaries };
 }
 
 function distinctQueries(values: string[]): string[] {
@@ -135,12 +178,6 @@ function searchQueriesFor(query: string, expansion: KeywordExpansionResult): str
   return distinctQueries([query, bestEnglishQuery]);
 }
 
-function providerRank(source: SourceRecord): number {
-  const provider = cleanText(source.provider) ?? source.sourceType;
-  const index = PROVIDER_PRIORITY.indexOf(provider as (typeof PROVIDER_PRIORITY)[number]);
-  return index === -1 ? PROVIDER_PRIORITY.length : index;
-}
-
 function contentRank(source: SourceRecord): number {
   if (cleanText(source.abstract)) return 0;
   if (cleanText(source.snippet)) return 1;
@@ -158,7 +195,6 @@ function selectPapers(
     .map((source, index) => ({ source, index }))
     .sort((left, right) =>
       contentRank(left.source) - contentRank(right.source) ||
-      providerRank(left.source) - providerRank(right.source) ||
       left.index - right.index,
     )
     .slice(0, limit)
@@ -186,6 +222,35 @@ function interleaveSourceBuckets(buckets: SourceRecord[][]): SourceRecord[] {
   return interleaved;
 }
 
+function routeProviderConfigs(
+  providers: readonly SourceProviderName[],
+  getConfigs: typeof getSourceProviderConfigs,
+): Partial<Record<SourceProviderName, SourceProviderConfig>> {
+  const defaults = getConfigs();
+  return Object.fromEntries(
+    providers.map((provider) => [
+      provider,
+      {
+        ...defaults[provider],
+        pageLimit: 1,
+        queryLimit: Math.min(defaults[provider].queryLimit, 25),
+      },
+    ]),
+  ) as Partial<Record<SourceProviderName, SourceProviderConfig>>;
+}
+
+function searchOptionsForMode(
+  searchMode: PaperSearchMode,
+  getConfigs: typeof getSourceProviderConfigs,
+): SourceSearchOptions {
+  const providers = searchMode === "fast" ? FAST_PROVIDERS : EXPANDED_PROVIDERS;
+  return {
+    providers: [...providers],
+    providerConfigs: routeProviderConfigs(providers, getConfigs),
+    ...(searchMode === "fast" ? { allowShortQueryRetry: false } : {}),
+  };
+}
+
 function safeExcerpt(value: string): string {
   const text = cleanText(value) ?? "";
   if (textLength(text) <= SUMMARY_EXCERPT_LENGTH) return text;
@@ -198,15 +263,22 @@ function pushWarning(warnings: string[], warning: string): void {
   if (!warnings.includes(warning)) warnings.push(warning);
 }
 
-function mapPaper(source: SourceWithLlmSummary, warnings: string[]): MappedPaper {
+function mapPaper(
+  source: SourceWithLlmSummary,
+  warnings: string[],
+  options: MapPaperOptions = {},
+): MappedPaper {
   const title = cleanText(source.title) ?? "";
   const abstract = cleanText(source.abstract);
   const snippet = cleanText(source.snippet);
-  const preferredSummary =
-    cleanText(source.readableSummaryZhTW) ??
-    cleanText(source.readableSummaryZhTw) ??
-    cleanText(source.llmSummaryZhTw);
   const reportedStatus = source.summaryStatus ?? source.llmSummaryStatus ?? null;
+  const rawLlmSummary = cleanText(source.llmSummaryZhTw);
+  const readableSummary =
+    cleanText(source.readableSummaryZhTW) ?? cleanText(source.readableSummaryZhTw);
+  const preferredSummary =
+    options.preferSuccessfulRawLlmSummary
+      ? rawLlmSummary ?? readableSummary
+      : readableSummary ?? rawLlmSummary;
 
   let summary: string;
   let summaryStatus: string | null;
@@ -214,7 +286,14 @@ function mapPaper(source: SourceWithLlmSummary, warnings: string[]): MappedPaper
   let summaryConfidence: string | null;
   let usedSuccessfulLlmSummary = false;
 
-  if (preferredSummary) {
+  if (options.deferred) {
+    summary = abstract || snippet
+      ? safeExcerpt(abstract ?? snippet ?? "")
+      : `目前僅取得「${title}」的書目資訊，尚無原文摘要可供整理。`;
+    summaryStatus = "pending";
+    summarySourceType = abstract ? "abstract" : snippet ? "snippet" : "metadataFallback";
+    summaryConfidence = "low";
+  } else if (preferredSummary) {
     summary = preferredSummary;
     summaryStatus = reportedStatus ?? "success";
     summarySourceType =
@@ -235,7 +314,7 @@ function mapPaper(source: SourceWithLlmSummary, warnings: string[]): MappedPaper
       `「${title}」未取得繁中摘要，已顯示原文${abstract ? "摘要" : "片段"}節錄。`,
     );
   } else {
-    summary = "";
+    summary = `目前僅取得「${title}」的書目資訊，尚無原文摘要可供整理；請開啟來源確認內容。`;
     summaryStatus = "unavailable";
     summarySourceType = "metadataFallback";
     summaryConfidence = "low";
@@ -278,6 +357,97 @@ function summaryModeFor(mapped: MappedPaper[]): SummaryMode {
   return "fallback";
 }
 
+function boundedCleanText(value: unknown, maxLength: number): string | null {
+  const text = cleanText(value);
+  if (!text) return null;
+  return Array.from(text).slice(0, maxLength).join("");
+}
+
+function sourceTypeFromPaperProvider(value: unknown): SourceRecord["sourceType"] | null {
+  const provider = cleanText(value)?.toLocaleLowerCase();
+  if (!provider) return null;
+  if (provider.includes("openalex")) return "OpenAlex";
+  if (provider.includes("crossref")) return "Crossref";
+  if (
+    provider.includes("semantic scholar") ||
+    provider.includes("semantic_scholar") ||
+    /(?:^|[\s,;/|])s2(?:$|[\s,;/|])/.test(provider)
+  ) return "Semantic Scholar";
+  return null;
+}
+
+function sourceFromPaperShape(value: unknown): SourceRecord | null {
+  if (!value || typeof value !== "object") return null;
+  const paper = value as Record<string, unknown>;
+  const id = boundedCleanText(paper.id, MAX_PAPER_ID_LENGTH);
+  const title = boundedCleanText(paper.title, MAX_PAPER_TITLE_LENGTH);
+  if (!id || !title) return null;
+
+  if (paper.authors !== undefined && !Array.isArray(paper.authors)) return null;
+  const authors = Array.isArray(paper.authors)
+    ? paper.authors
+        .map((author) => boundedCleanText(author, MAX_PAPER_AUTHOR_LENGTH))
+        .filter((author): author is string => Boolean(author))
+        .slice(0, 20)
+    : [];
+  const year =
+    typeof paper.year === "number" &&
+    Number.isInteger(paper.year) &&
+    paper.year >= 1000 &&
+    paper.year <= 2200
+      ? paper.year
+      : null;
+  const citationCount =
+    typeof paper.citationCount === "number" &&
+    Number.isFinite(paper.citationCount) &&
+    paper.citationCount >= 0
+      ? Math.floor(paper.citationCount)
+      : null;
+  const sourceType = sourceTypeFromPaperProvider(paper.provider);
+  if (!sourceType) return null;
+
+  return {
+    id,
+    title,
+    authors,
+    year,
+    abstract: boundedCleanText(paper.abstract, MAX_PAPER_ABSTRACT_LENGTH),
+    snippet: boundedCleanText(paper.snippet, MAX_PAPER_ABSTRACT_LENGTH),
+    doi: boundedCleanText(paper.doi, MAX_PAPER_METADATA_LENGTH),
+    url: boundedCleanText(paper.url, MAX_PAPER_METADATA_LENGTH),
+    sourceType,
+    reviewState: "pending",
+    publisher: null,
+    containerTitle: boundedCleanText(paper.venue, MAX_PAPER_METADATA_LENGTH),
+    accessedAt: null,
+    provider: sourceType,
+    citationCount,
+    isOpenAccess:
+      typeof paper.isOpenAccess === "boolean" ? paper.isOpenAccess : null,
+    relevanceLevel: "primary",
+  };
+}
+
+export function normalizePaperSummariesRequest(body: unknown): PaperSummariesRequest | null {
+  if (!body || typeof body !== "object") return null;
+  const data = body as Record<string, unknown>;
+  const normalizedQuery = normalizePaperSearchRequest({
+    query: data.query,
+    limit: MIN_LIMIT,
+  });
+  if (!normalizedQuery || !Array.isArray(data.papers)) return null;
+  if (data.papers.length < 1 || data.papers.length > SUMMARY_REQUEST_MAX_PAPERS) return null;
+
+  const sources = data.papers.map(sourceFromPaperShape);
+  if (sources.some((source) => !source)) return null;
+  const ids = sources.map((source) => source?.id ?? "");
+  if (new Set(ids).size !== ids.length) return null;
+  return {
+    query: normalizedQuery.query,
+    sources: sources as SourceRecord[],
+  };
+}
+
 function emptyResponse(query: string, queries: string[], warnings: string[]): PaperSearchResponse {
   return {
     ok: true,
@@ -295,6 +465,7 @@ export function createPaperSearchRouter({
   searchProviders = searchSourceProviders,
   dedupeSources = dedupeSourceRecords,
   summarizeSources = summarizeSourcesWithLlm,
+  getProviderConfigs = getSourceProviderConfigs,
 }: PaperSearchRouterOptions = {}): IRouter {
   const router: IRouter = Router();
 
@@ -303,7 +474,7 @@ export function createPaperSearchRouter({
     if (!input) {
       res.status(400).json({
         ok: false,
-        message: "請輸入 2 至 200 個字的關鍵詞；limit 必須是 3 至 10 的整數。",
+        message: "請輸入 2 至 200 個字的關鍵詞；limit 必須是 3 至 20 的整數。",
       });
       return;
     }
@@ -312,33 +483,32 @@ export function createPaperSearchRouter({
     let queries: string[] = [input.query];
 
     try {
-      let expansion: KeywordExpansionResult;
-      try {
-        expansion = await expandKeywords({
-          topic: input.query,
-          sourceMode: "academic",
-          language: "zh-TW",
-        });
-      } catch (error) {
-        logger.warn({ err: error, route: "/api/paper-search" }, "Paper keyword expansion failed");
-        expansion = buildFallbackKeywordExpansion(
-          { topic: input.query, sourceMode: "academic", language: "zh-TW" },
-          "Keyword expansion failed; deterministic fallback used.",
-          "failed",
-        );
+      if (input.searchMode === "expanded") {
+        let expansion: KeywordExpansionResult;
+        try {
+          expansion = await expandKeywords({
+            topic: input.query,
+            sourceMode: "academic",
+            language: "zh-TW",
+          });
+        } catch (error) {
+          logger.warn({ err: error, route: "/api/paper-search" }, "Paper keyword expansion failed");
+          expansion = buildFallbackKeywordExpansion(
+            { topic: input.query, sourceMode: "academic", language: "zh-TW" },
+            "Keyword expansion failed; deterministic fallback used.",
+            "failed",
+          );
+        }
+
+        queries = searchQueriesFor(input.query, expansion);
+        if (expansion.fallback_used) {
+          pushWarning(warnings, "英文檢索詞由備援規則產生，搜尋範圍可能較廣。");
+        }
       }
 
-      queries = searchQueriesFor(input.query, expansion);
-      if (expansion.fallback_used) {
-        pushWarning(warnings, "英文檢索詞由備援規則產生，搜尋範圍可能較廣。");
-      }
-
+      const searchOptions = searchOptionsForMode(input.searchMode, getProviderConfigs);
       const attempts = await Promise.allSettled(
-        queries.map((query) =>
-          searchProviders(query, {
-            providers: [...PROVIDER_PRIORITY],
-          }),
-        ),
+        queries.map((query) => searchProviders(query, searchOptions)),
       );
       const groups: SourceProviderSearchResult[] = [];
       let rejectedSearchCount = 0;
@@ -367,22 +537,37 @@ export function createPaperSearchRouter({
         );
       }
 
-      const candidateBuckets = PROVIDER_PRIORITY.flatMap((provider) =>
-        attempts.flatMap((attempt) =>
+      const candidateBuckets = attempts
+        .flatMap((attempt) =>
           attempt.status === "fulfilled"
-            ? [
-                attempt.value
-                  .filter((group) => group.provider === provider)
-                  .flatMap((group) => group.results),
-              ]
+            ? attempt.value.map((group) => group.results)
             : [],
-        ),
-      ).filter((bucket) => bucket.length > 0);
+        )
+        .filter((bucket) => bucket.length > 0);
       const candidates = interleaveSourceBuckets(candidateBuckets);
       const selected = selectPapers(candidates, input.limit, dedupeSources);
       if (selected.length === 0) {
         pushWarning(warnings, "找不到符合條件且具有標題的論文。");
         res.status(200).json(emptyResponse(input.query, queries, warnings));
+        return;
+      }
+
+      if (!input.includeSummaries) {
+        pushWarning(warnings, "繁中摘要尚未產生，頁面將自動分批載入。");
+        const mapped = selected.map((source) =>
+          mapPaper(source, warnings, { deferred: true }),
+        );
+        const papers = mapped.map((item) => item.paper);
+        const response: PaperSearchResponse = {
+          ok: true,
+          query: input.query,
+          count: papers.length,
+          queries,
+          papers,
+          warnings,
+          summaryMode: "deferred",
+        };
+        res.status(200).json(response);
         return;
       }
 
@@ -415,6 +600,48 @@ export function createPaperSearchRouter({
       pushWarning(warnings, "論文搜尋暫時無法使用，請稍後再試。");
       res.status(200).json(emptyResponse(input.query, queries, warnings));
     }
+  });
+
+  router.post("/paper-search/summaries", async (req, res) => {
+    const input = normalizePaperSummariesRequest(req.body);
+    if (!input) {
+      res.status(400).json({
+        ok: false,
+        message: "請提供 2 至 200 個字的 query，以及 1 至 4 篇有效論文。",
+      });
+      return;
+    }
+
+    const warnings: string[] = [];
+    let summarized: SourceWithLlmSummary[] = input.sources;
+    try {
+      const summaryResult = await summarizeSources(input.query, input.sources, {
+        maxSources: input.sources.length,
+        detailLevel: "detailed",
+      });
+      const summaryById = new Map(summaryResult.map((source) => [source.id, source]));
+      summarized = input.sources.map((source) => summaryById.get(source.id) ?? source);
+    } catch (error) {
+      logger.warn(
+        { err: error, route: "/api/paper-search/summaries" },
+        "Deferred paper summaries failed",
+      );
+      pushWarning(warnings, "繁中摘要服務暫時無法使用，已改用原文摘要或片段節錄。");
+    }
+
+    const mapped = summarized.map((source) =>
+      mapPaper(source, warnings, { preferSuccessfulRawLlmSummary: true }),
+    );
+    const papers = mapped.map((item) => item.paper);
+    const response: PaperSummariesResponse = {
+      ok: true,
+      query: input.query,
+      count: papers.length,
+      papers,
+      warnings,
+      summaryMode: summaryModeFor(mapped),
+    };
+    res.status(200).json(response);
   });
 
   return router;

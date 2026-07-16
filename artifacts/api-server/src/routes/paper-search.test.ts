@@ -10,7 +10,9 @@ import type {
 import {
   createPaperSearchRouter,
   normalizePaperSearchRequest,
+  normalizePaperSummariesRequest,
   type PaperSearchResponse,
+  type PaperSummariesResponse,
 } from "./paper-search";
 
 function expansion(englishQuery = "generative AI learning outcomes"): KeywordExpansionResult {
@@ -64,8 +66,9 @@ function providerResult(
 async function invoke(
   router: ReturnType<typeof createPaperSearchRouter>,
   body: unknown,
+  path = "/paper-search",
 ): Promise<{ statusCode: number; payload: unknown }> {
-  const route = router.stack.find((layer) => layer.route?.path === "/paper-search");
+  const route = router.stack.find((layer) => layer.route?.path === path);
   assert.ok(route?.route);
 
   let statusCode = 200;
@@ -94,16 +97,133 @@ test("paper search rejects blank or invalid requests with 400", async () => {
   assert.equal(normalizePaperSearchRequest({ query: "   " }), null);
   assert.equal(normalizePaperSearchRequest({ query: "a" }), null);
   assert.equal(normalizePaperSearchRequest({ query: "valid", limit: 2 }), null);
+  assert.equal(normalizePaperSearchRequest({ query: "valid", limit: 21 }), null);
+  assert.equal(normalizePaperSearchRequest({ query: "valid", searchMode: "turbo" }), null);
+  assert.equal(normalizePaperSearchRequest({ query: "valid", includeSummaries: "no" }), null);
   assert.deepEqual(normalizePaperSearchRequest({ query: "  valid topic  " }), {
     query: "valid topic",
-    limit: 6,
+    limit: 10,
+    searchMode: "expanded",
+    includeSummaries: true,
   });
+  assert.deepEqual(
+    normalizePaperSearchRequest({
+      query: "valid topic",
+      limit: 20,
+      searchMode: "fast",
+      includeSummaries: false,
+    }),
+    {
+      query: "valid topic",
+      limit: 20,
+      searchMode: "fast",
+      includeSummaries: false,
+    },
+  );
 
   const { statusCode, payload } = await invoke(createPaperSearchRouter(), {
     query: "   ",
   });
   assert.equal(statusCode, 400);
   assert.deepEqual(Object.keys(payload as object).sort(), ["message", "ok"]);
+});
+
+test("paper search fast mode skips expansion and uses bounded single-page providers", async () => {
+  const originalQuery = "adolescent sleep";
+  let expansionCallCount = 0;
+  const searchCalls: Array<{ query: string; options: SourceSearchOptions | undefined }> = [];
+  const papersFor = (provider: "openalex" | "crossref") =>
+    Array.from({ length: 2 }, (_, index) =>
+      source({
+        id: `${provider}-${index + 1}`,
+        title: `${provider} paper ${index + 1}`,
+        doi: `10.1000/${provider}-${index + 1}`,
+        sourceType: provider === "openalex" ? "OpenAlex" : "Crossref",
+        provider: provider === "openalex" ? "OpenAlex" : "Crossref",
+      }),
+    );
+
+  const router = createPaperSearchRouter({
+    expandKeywords: async () => {
+      expansionCallCount += 1;
+      return expansion();
+    },
+    searchProviders: async (query, options) => {
+      searchCalls.push({ query, options });
+      return [
+        providerResult("OpenAlex", papersFor("openalex")),
+        providerResult("Crossref", papersFor("crossref")),
+      ];
+    },
+    summarizeSources: async (_topic, sources) => sources,
+  });
+
+  const { statusCode, payload } = await invoke(router, {
+    query: originalQuery,
+    searchMode: "fast",
+    limit: 20,
+  });
+  const response = payload as PaperSearchResponse;
+
+  assert.equal(statusCode, 200);
+  assert.equal(expansionCallCount, 0);
+  assert.equal(searchCalls.length, 1);
+  assert.equal(searchCalls[0]?.query, originalQuery);
+  assert.deepEqual(searchCalls[0]?.options?.providers, ["OpenAlex", "Crossref"]);
+  assert.equal(searchCalls[0]?.options?.allowShortQueryRetry, false);
+  assert.equal(searchCalls[0]?.options?.providerConfigs?.OpenAlex?.pageLimit, 1);
+  assert.equal(searchCalls[0]?.options?.providerConfigs?.Crossref?.pageLimit, 1);
+  assert.ok((searchCalls[0]?.options?.providerConfigs?.OpenAlex?.queryLimit ?? 26) <= 25);
+  assert.ok((searchCalls[0]?.options?.providerConfigs?.Crossref?.queryLimit ?? 26) <= 25);
+  assert.equal(searchCalls[0]?.options?.providerConfigs?.["Semantic Scholar"], undefined);
+  assert.deepEqual(response.queries, [originalQuery]);
+  assert.deepEqual(
+    response.papers.map((paper) => paper.id),
+    ["openalex-1", "crossref-1", "openalex-2", "crossref-2"],
+  );
+});
+
+test("paper search can defer summaries and return evidence excerpts immediately", async () => {
+  let summarizeCallCount = 0;
+  const router = createPaperSearchRouter({
+    searchProviders: async () => [
+      providerResult("OpenAlex", [
+        source({
+          abstract: "<p>Evidence   from the original abstract.</p>",
+        }),
+        source({
+          id: "metadata-only",
+          title: "Metadata-only paper",
+          doi: "10.1000/metadata-only",
+          abstract: null,
+          snippet: null,
+        }),
+      ]),
+    ],
+    summarizeSources: async (_topic, sources) => {
+      summarizeCallCount += 1;
+      return sources;
+    },
+  });
+
+  const { statusCode, payload } = await invoke(router, {
+    query: "adolescent sleep",
+    searchMode: "fast",
+    includeSummaries: false,
+  });
+  const response = payload as PaperSearchResponse;
+
+  assert.equal(statusCode, 200);
+  assert.equal(summarizeCallCount, 0);
+  assert.equal(response.summaryMode, "deferred");
+  assert.equal(response.papers[0]?.summary, "Evidence from the original abstract.");
+  assert.equal(response.papers[0]?.summaryStatus, "pending");
+  assert.equal(response.papers[0]?.summarySourceType, "abstract");
+  const metadataOnly = response.papers.find((paper) => paper.id === "metadata-only");
+  assert.match(metadataOnly?.summary ?? "", /書目資訊.*尚無原文摘要/);
+  assert.equal(metadataOnly?.summaryStatus, "pending");
+  assert.equal(metadataOnly?.summarySourceType, "metadataFallback");
+  assert.ok(response.warnings.every((warning) => !warning.includes("最多 4 篇")));
 });
 
 test("paper search dedupes results, marks primary sources, and maps summaries by id", async () => {
@@ -124,13 +244,13 @@ test("paper search dedupes results, marks primary sources, and maps summaries by
     provider: "Crossref",
     abstract: "Evidence about AI tutoring and higher education.",
   });
-  const calls: Array<{ query: string; providers: SourceSearchOptions["providers"] }> = [];
+  const calls: Array<{ query: string; options: SourceSearchOptions | undefined }> = [];
   let summarizedInput: SourceRecord[] = [];
 
   const router = createPaperSearchRouter({
     expandKeywords: async () => expansion(englishQuery),
     searchProviders: async (query, options) => {
-      calls.push({ query, providers: options?.providers });
+      calls.push({ query, options });
       if (query === originalQuery) {
         return [
           providerResult("OpenAlex", [source({ abstract: null })]),
@@ -194,8 +314,15 @@ test("paper search dedupes results, marks primary sources, and maps summaries by
   assert.ok(
     calls.every(
       (call) =>
-        JSON.stringify(call.providers) ===
+        JSON.stringify(call.options?.providers) ===
         JSON.stringify(["OpenAlex", "Crossref", "Semantic Scholar"]),
+    ),
+  );
+  assert.ok(
+    calls.every((call) =>
+      Object.values(call.options?.providerConfigs ?? {}).every(
+        (config) => config.pageLimit === 1 && config.queryLimit <= 25,
+      ),
     ),
   );
 });
@@ -304,4 +431,103 @@ test("paper search returns a stable 200 response when no titled papers are found
   assert.equal(response.summaryMode, "none");
   assert.ok(response.warnings.some((warning) => warning.includes("找不到")));
   assert.equal(summarizeCallCount, 0);
+});
+
+test("paper summaries endpoint validates a batch of one to four paper-shaped objects", async () => {
+  assert.equal(normalizePaperSummariesRequest({ query: "valid", papers: [] }), null);
+  assert.equal(
+    normalizePaperSummariesRequest({
+      query: "valid",
+      papers: [{ id: "missing-title" }],
+    }),
+    null,
+  );
+  assert.equal(
+    normalizePaperSummariesRequest({
+      query: "valid",
+      papers: Array.from({ length: 5 }, (_, index) => ({
+        id: `paper-${index}`,
+        title: `Paper ${index}`,
+      })),
+    }),
+    null,
+  );
+  const mergedProviders = normalizePaperSummariesRequest({
+    query: "valid",
+    papers: [
+      { id: "merged", title: "Merged providers", provider: "Crossref, S2" },
+      { id: "s2", title: "S2 provider", provider: "S2" },
+    ],
+  });
+  assert.equal(mergedProviders?.sources[0]?.sourceType, "Crossref");
+  assert.equal(mergedProviders?.sources[1]?.sourceType, "Semantic Scholar");
+
+  const { statusCode } = await invoke(
+    createPaperSearchRouter(),
+    { query: "valid", papers: [] },
+    "/paper-search/summaries",
+  );
+  assert.equal(statusCode, 400);
+});
+
+test("paper summaries endpoint safely maps papers and prefers a long cleaned raw LLM summary", async () => {
+  const longRawSummary = "這是依據原文摘要產生的完整繁體中文重點。".repeat(16);
+  const shortReadableSummary = "短".repeat(170);
+  let capturedSources: SourceRecord[] = [];
+  let capturedMaxSources = 0;
+  let capturedDetailLevel: string | undefined;
+  const router = createPaperSearchRouter({
+    summarizeSources: async (_topic, sources, options) => {
+      capturedSources = sources;
+      capturedMaxSources = options?.maxSources ?? 0;
+      capturedDetailLevel = options?.detailLevel;
+      return sources.map((paper) => ({
+        ...paper,
+        llmSummaryZhTw: `  <p>${longRawSummary}</p>  `,
+        readableSummaryZhTW: shortReadableSummary,
+        summarySourceType: "abstract" as const,
+        summaryConfidence: "high" as const,
+      }));
+    },
+  });
+
+  const { statusCode, payload } = await invoke(
+    router,
+    {
+      query: "  青少年睡眠  ",
+      papers: [
+        {
+          id: "paper-safe",
+          title: "Adolescent sleep duration",
+          authors: ["A. Author"],
+          year: 2023,
+          venue: "Sleep Journal",
+          doi: "10.1000/sleep",
+          url: "https://doi.org/10.1000/sleep",
+          provider: "OpenAlex, Crossref",
+          citationCount: 12,
+          isOpenAccess: true,
+          abstract: "Original evidence supplied by the paper provider.",
+          summary: "untrusted client summary",
+          readableSummaryZhTW: "must not be accepted from the client",
+          relevanceLevel: "off_topic",
+        },
+      ],
+    },
+    "/paper-search/summaries",
+  );
+  const response = payload as PaperSummariesResponse;
+
+  assert.equal(statusCode, 200);
+  assert.equal(response.query, "青少年睡眠");
+  assert.equal(response.count, 1);
+  assert.equal(response.summaryMode, "llm");
+  assert.equal(response.papers[0]?.summary, longRawSummary);
+  assert.ok((response.papers[0]?.summary.length ?? 0) > 170);
+  assert.equal(capturedMaxSources, 1);
+  assert.equal(capturedDetailLevel, "detailed");
+  assert.equal(capturedSources[0]?.sourceType, "OpenAlex");
+  assert.equal(capturedSources[0]?.relevanceLevel, "primary");
+  assert.equal(capturedSources[0]?.readableSummaryZhTW, undefined);
+  assert.equal(capturedSources[0]?.containerTitle, "Sleep Journal");
 });

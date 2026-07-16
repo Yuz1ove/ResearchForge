@@ -50,6 +50,7 @@ export interface SourceSummarizerOptions {
   llm?: Partial<OpenAICompatibleLlmConfig>;
   fetchImpl?: (input: string | URL, init?: RequestInit) => Promise<Response>;
   maxSources?: number;
+  detailLevel?: "concise" | "detailed";
 }
 
 type PreparedSummaryTarget = {
@@ -85,6 +86,7 @@ type BatchSummaryOutcome = {
 
 const MAX_SUMMARY_INPUT_CHARS = 4_000;
 const MAX_COMPACT_SOURCE_CHARS = 1_200;
+const MAX_DETAILED_COMPACT_SOURCE_CHARS = 2_400;
 const SUMMARY_BATCH_SIZE = 4;
 const ZH_TW_SUMMARY_FALLBACK_NOTICE =
   "此來源尚未完成繁中摘要，以下顯示原文摘要。";
@@ -893,11 +895,15 @@ async function prepareSummaryTarget(
   }
 }
 
-function compactPreparedSource(target: PreparedSummaryTarget, index: number): string {
+function compactPreparedSource(
+  target: PreparedSummaryTarget,
+  index: number,
+  maxSourceChars = MAX_COMPACT_SOURCE_CHARS,
+): string {
   return [
     `id: ${target.source.id || `source-${index + 1}`}`,
     `title: ${target.source.title}`,
-    `source_text: ${target.textForSummary.slice(0, MAX_COMPACT_SOURCE_CHARS) || "正文不足"}`,
+    `source_text: ${target.textForSummary.slice(0, maxSourceChars) || "正文不足"}`,
     `text_status: ${target.reason ?? "unknown"}`,
     `relevance: ${target.source.relevanceLevel ?? "unknown"}`,
   ].join("\n");
@@ -961,6 +967,7 @@ async function summarizeBatchWithLlm(
   batch: PreparedSummaryTarget[],
   options: SourceSummarizerOptions,
 ): Promise<BatchSummaryOutcome> {
+  const detailed = options.detailLevel === "detailed";
   const fallbackProvider = providerLabel(
     options.llm?.baseUrl ??
       process.env.LLM_BASE_URL ??
@@ -979,7 +986,7 @@ async function summarizeBatchWithLlm(
       featureName: "source_readable_summary",
       purpose: "summarizer",
       temperature: 0,
-      maxTokens: 700,
+      maxTokens: detailed ? 1_600 : 700,
       responseFormat: "json_object",
       llm: options.llm,
       fetchImpl: options.fetchImpl,
@@ -991,14 +998,26 @@ async function summarizeBatchWithLlm(
             "Output valid JSON only. No markdown. No explanation.",
             "Write Traditional Chinese summaries from the supplied source_text only.",
             "If source_text is weak, state the limitation. Do not invent methods, data, authors, DOI, or full text.",
-            "Schema: {\"summaries\":[{\"id\":\"source id\",\"summaryZhTw\":\"one concise paragraph\"}]}",
+            detailed
+              ? "When evidence allows, write 220-360 Traditional Chinese characters in one coherent paragraph covering the research purpose, method or sample, main findings, and evidence limitations. If source_text does not state one of these items, say it is not provided instead of guessing."
+              : "Keep each summary concise.",
+            detailed
+              ? "Schema: {\"summaries\":[{\"id\":\"source id\",\"summaryZhTw\":\"one evidence-grounded detailed paragraph\"}]}"
+              : "Schema: {\"summaries\":[{\"id\":\"source id\",\"summaryZhTw\":\"one concise paragraph\"}]}",
           ].join(" "),
         },
         {
           role: "user",
-          content: [`topic: ${topic}`, ...batch.map(compactPreparedSource)].join(
-            "\n\n",
-          ),
+          content: [
+            `topic: ${topic}`,
+            ...batch.map((target, index) =>
+              compactPreparedSource(
+                target,
+                index,
+                detailed ? MAX_DETAILED_COMPACT_SOURCE_CHARS : MAX_COMPACT_SOURCE_CHARS,
+              ),
+            ),
+          ].join("\n\n"),
         },
       ],
     });
