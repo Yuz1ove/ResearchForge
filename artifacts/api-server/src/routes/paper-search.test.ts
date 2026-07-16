@@ -136,7 +136,7 @@ test("paper search fast mode skips expansion and uses bounded single-page provid
     Array.from({ length: 2 }, (_, index) =>
       source({
         id: `${provider}-${index + 1}`,
-        title: `${provider} paper ${index + 1}`,
+        title: `Adolescent sleep ${provider} paper ${index + 1}`,
         doi: `10.1000/${provider}-${index + 1}`,
         sourceType: provider === "openalex" ? "OpenAlex" : "Crossref",
         provider: provider === "openalex" ? "OpenAlex" : "Crossref",
@@ -189,11 +189,12 @@ test("paper search can defer summaries and return evidence excerpts immediately"
     searchProviders: async () => [
       providerResult("OpenAlex", [
         source({
+          title: "Adolescent sleep evidence",
           abstract: "<p>Evidence   from the original abstract.</p>",
         }),
         source({
           id: "metadata-only",
-          title: "Metadata-only paper",
+          title: "Adolescent sleep metadata-only paper",
           doi: "10.1000/metadata-only",
           abstract: null,
           snippet: null,
@@ -224,6 +225,39 @@ test("paper search can defer summaries and return evidence excerpts immediately"
   assert.equal(metadataOnly?.summaryStatus, "pending");
   assert.equal(metadataOnly?.summarySourceType, "metadataFallback");
   assert.ok(response.warnings.every((warning) => !warning.includes("最多 4 篇")));
+});
+
+test("paper search removes provider records without a query or translated academic anchor", async () => {
+  const router = createPaperSearchRouter({
+    expandKeywords: async () => expansion("lutein clinical trial eye health"),
+    searchProviders: async () => [
+      providerResult("OpenAlex", [
+        source({
+          id: "lutein-paper",
+          title: "The effect of lutein supplementation on eye health",
+          abstract: "Lutein is a dietary carotenoid studied for eye health.",
+          doi: "10.1000/lutein-paper",
+        }),
+        source({
+          id: "unrelated-nudge",
+          title: "精準輕推：以客戶為導向的商業應用",
+          abstract: "This paper discusses business applications of nudge theory.",
+          doi: "10.1000/unrelated-nudge",
+        }),
+      ]),
+    ],
+    summarizeSources: async (_topic, sources) => sources,
+  });
+
+  const { statusCode, payload } = await invoke(router, {
+    query: "葉黃素",
+    includeSummaries: false,
+  });
+  const response = payload as PaperSearchResponse;
+
+  assert.equal(statusCode, 200);
+  assert.deepEqual(response.papers.map((paper) => paper.id), ["lutein-paper"]);
+  assert.ok(response.warnings.some((warning) => warning.includes("已略過 1 筆")));
 });
 
 test("paper search dedupes results, marks primary sources, and maps summaries by id", async () => {
@@ -334,7 +368,7 @@ test("paper search interleaves original and translated query results", async () 
     Array.from({ length: 5 }, (_, index) =>
       source({
         id: `${prefix}-${index + 1}`,
-        title: `${prefix} paper ${index + 1}`,
+        title: `Generative AI ${prefix} paper ${index + 1}`,
         doi: `10.1000/${prefix}-${index + 1}`,
         abstract: `${prefix} abstract ${index + 1} with enough source content.`,
       }),
@@ -377,7 +411,10 @@ test("paper search keeps partial provider results and falls back safely when sum
     searchProviders: async (query) => {
       if (query !== originalQuery) throw new Error("one query failed");
       return [
-        providerResult("OpenAlex", [source()]),
+        providerResult("OpenAlex", [source({
+          title: "Adolescent sleep evidence",
+          abstract: "Evidence about adolescent sleep duration.",
+        })]),
         providerResult("Crossref", [partialPaper], false),
       ];
     },

@@ -38,6 +38,32 @@ const MAX_PAPER_TITLE_LENGTH = 1_000;
 const MAX_PAPER_AUTHOR_LENGTH = 300;
 const MAX_PAPER_ABSTRACT_LENGTH = 20_000;
 const MAX_PAPER_METADATA_LENGTH = 2_000;
+const GENERIC_EXPANSION_TERMS = new Set([
+  "academic",
+  "adults",
+  "analysis",
+  "association",
+  "clinical",
+  "controlled",
+  "effect",
+  "effects",
+  "eye",
+  "health",
+  "impact",
+  "outcome",
+  "outcomes",
+  "people",
+  "quality",
+  "randomised",
+  "randomized",
+  "research",
+  "review",
+  "study",
+  "studies",
+  "systematic",
+  "trial",
+  "trials",
+]);
 
 export type PaperSearchMode = "fast" | "expanded";
 type SummaryMode = "llm" | "mixed" | "fallback" | "none" | "deferred";
@@ -184,21 +210,79 @@ function contentRank(source: SourceRecord): number {
   return 2;
 }
 
+function containsCjk(value: string): boolean {
+  return /[\u3400-\u9fff]/u.test(value);
+}
+
+function englishTerms(value: string, excludeGenericTerms: boolean): string[] {
+  return (value.toLocaleLowerCase().match(/[a-z0-9][a-z0-9-]*/g) ?? [])
+    .filter((term) => term.length >= 2)
+    .filter((term) => !excludeGenericTerms || !GENERIC_EXPANSION_TERMS.has(term));
+}
+
+/**
+ * Build a small deterministic relevance gate from the user's wording plus the
+ * translated academic query. Provider ranking alone is not reliable for short
+ * CJK queries: e.g. 葉黃素 can accidentally match unrelated records containing
+ * 葉, while the expansion contributes the precise English synonym lutein.
+ */
+export function topicAnchorTerms(
+  query: string,
+  expansion?: KeywordExpansionResult | null,
+): string[] {
+  const original = cleanText(query)?.toLocaleLowerCase() ?? "";
+  const expandedQueries = expansion
+    ? [...expansion.english_queries, ...expansion.search_queries]
+    : [];
+
+  return distinctQueries([
+    original,
+    ...englishTerms(original, false),
+    ...expandedQueries.flatMap((candidate) => englishTerms(candidate, true)),
+  ]).map((term) => term.toLocaleLowerCase());
+}
+
+function termMatchesSourceText(text: string, term: string): boolean {
+  if (containsCjk(term) || term.includes(" ")) return text.includes(term);
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`, "i").test(text);
+}
+
+export function sourceTopicMatchCount(source: SourceRecord, anchors: string[]): number {
+  const searchableText = [source.title, source.abstract, source.snippet]
+    .map((value) => cleanText(value)?.toLocaleLowerCase() ?? "")
+    .filter(Boolean)
+    .join(" ");
+  if (!searchableText) return 0;
+  return anchors.filter((term) => termMatchesSourceText(searchableText, term)).length;
+}
+
 function selectPapers(
   sources: SourceRecord[],
   limit: number,
   dedupeSources: typeof dedupeSourceRecords,
-): SourceRecord[] {
+  anchors: string[],
+): { selected: SourceRecord[]; filteredCount: number } {
   const titled = sources.filter((source) => Boolean(cleanText(source.title)));
   const deduped = dedupeSources(titled);
-  return deduped
-    .map((source, index) => ({ source, index }))
+  const relevant = deduped
+    .map((source, index) => ({
+      source,
+      index,
+      topicMatchCount: sourceTopicMatchCount(source, anchors),
+    }))
+    .filter(({ topicMatchCount }) => topicMatchCount > 0);
+  return {
+    selected: relevant
     .sort((left, right) =>
+      right.topicMatchCount - left.topicMatchCount ||
       contentRank(left.source) - contentRank(right.source) ||
       left.index - right.index,
     )
     .slice(0, limit)
-    .map(({ source }) => ({ ...source, relevanceLevel: "primary" as const }));
+    .map(({ source }) => ({ ...source, relevanceLevel: "primary" as const })),
+    filteredCount: deduped.length - relevant.length,
+  };
 }
 
 /**
@@ -481,10 +565,10 @@ export function createPaperSearchRouter({
 
     const warnings: string[] = [];
     let queries: string[] = [input.query];
+    let expansion: KeywordExpansionResult | null = null;
 
     try {
       if (input.searchMode === "expanded") {
-        let expansion: KeywordExpansionResult;
         try {
           expansion = await expandKeywords({
             topic: input.query,
@@ -545,7 +629,18 @@ export function createPaperSearchRouter({
         )
         .filter((bucket) => bucket.length > 0);
       const candidates = interleaveSourceBuckets(candidateBuckets);
-      const selected = selectPapers(candidates, input.limit, dedupeSources);
+      const { selected, filteredCount } = selectPapers(
+        candidates,
+        input.limit,
+        dedupeSources,
+        topicAnchorTerms(input.query, expansion),
+      );
+      if (filteredCount > 0) {
+        pushWarning(
+          warnings,
+          `已略過 ${filteredCount} 筆未含關鍵詞或學術同義詞的結果。`,
+        );
+      }
       if (selected.length === 0) {
         pushWarning(warnings, "找不到符合條件且具有標題的論文。");
         res.status(200).json(emptyResponse(input.query, queries, warnings));
