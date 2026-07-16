@@ -293,7 +293,7 @@ export function Home() {
               }}
             >
               <span className="flex h-2 w-2 rounded-full bg-primary animate-pulse" />
-              AI 知識整理工作台 · 報告、總結、摘要與知識庫
+              AI 論文搜尋 · 學術來源與繁中摘要
             </motion.div>
 
             <motion.h1
@@ -310,8 +310,8 @@ export function Home() {
               animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
               transition={{ duration: 0.46, delay: 0.14 }}
             >
-              輸入主題或素材，快速整理成報告、總結、摘要、<br className="hidden md:block" />
-              知識庫條目與可追溯的內容草稿。
+              輸入研究關鍵詞，快速找到相關論文，<br className="hidden md:block" />
+              並取得可回到原文確認的繁體中文摘要。
             </motion.p>
             <motion.p
               className="text-base text-muted-foreground mb-10 max-w-2xl mx-auto"
@@ -319,7 +319,7 @@ export function Home() {
               animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
               transition={{ duration: 0.46, delay: 0.2 }}
             >
-              適合學生、研究者、專題製作者，以及需要把資料整理成清楚內容的人。
+              搜尋結果保留作者、年份、期刊、DOI 與原始連結；需要時也能進入完整報告工作台。
             </motion.p>
 
             <motion.div
@@ -330,7 +330,7 @@ export function Home() {
             >
               <Link href="/generator" data-testid="button-hero-try">
                 <Button size="lg" className="h-14 px-8 text-base shadow-lg">
-                  開始整理內容 <ArrowRight className="ml-2 h-5 w-5" />
+                  搜尋論文 <ArrowRight className="ml-2 h-5 w-5" />
                 </Button>
               </Link>
               <Link href="/features" data-testid="button-hero-features">
@@ -400,17 +400,17 @@ export function Home() {
         <section className="py-20 bg-sidebar text-sidebar-foreground">
           <div className="container mx-auto px-4 text-center">
             <h2 className="text-3xl md:text-4xl font-bold mb-4 text-sidebar-foreground">
-              立即建立你的內容草稿
+              從一組關鍵詞開始找論文
             </h2>
             <p className="text-sidebar-foreground/80 mb-8 max-w-xl mx-auto">
-              不需要登入，先把主題、重點與資料缺口整理清楚。
+              不需要登入，搜尋論文後立即查看繁體中文重點摘要。
             </p>
             <Link href="/generator" data-testid="button-bottom-cta">
               <Button
                 size="lg"
                 className="h-14 px-8 text-base bg-primary text-primary-foreground hover:bg-primary/90"
               >
-                開始整理內容 <ArrowRight className="ml-2 h-5 w-5" />
+                搜尋論文 <ArrowRight className="ml-2 h-5 w-5" />
               </Button>
             </Link>
           </div>

@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { Menu, X } from "lucide-react";
+import { Menu, Search, X } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { BrandWordmark } from "@/components/brand-wordmark";
@@ -43,7 +43,10 @@ export function Navbar() {
           ))}
           <div className="flex items-center gap-4 ml-4 pl-4 border-l border-border">
             <Link href="/generator" data-testid="link-nav-start-project">
-              <Button>開始整理內容</Button>
+              <Button>
+                <Search className="mr-2 h-4 w-4" />
+                搜尋論文
+              </Button>
             </Link>
           </div>
         </div>
@@ -74,7 +77,10 @@ export function Navbar() {
               </Link>
             ))}
             <Link href="/generator" onClick={() => setIsMobileMenuOpen(false)} data-testid="link-mobile-nav-start-project">
-              <Button className="w-full">開始整理內容</Button>
+              <Button className="w-full">
+                <Search className="mr-2 h-4 w-4" />
+                搜尋論文
+              </Button>
             </Link>
           </div>
         </div>

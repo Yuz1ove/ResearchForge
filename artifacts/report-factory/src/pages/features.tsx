@@ -99,7 +99,7 @@ export function Features() {
             <div className="mt-16 text-center">
               <Link href="/generator" data-testid="button-features-try">
                 <Button size="lg" className="h-14 px-8 text-base bg-primary text-primary-foreground">
-                  開始整理內容
+                  搜尋論文與摘要
                 </Button>
               </Link>
             </div>

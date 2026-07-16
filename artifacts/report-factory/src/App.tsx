@@ -9,6 +9,7 @@ import { Home } from "@/pages/home";
 import { Features } from "@/pages/features";
 import { FAQ } from "@/pages/faq";
 import { Generator } from "@/pages/generator";
+import { PaperSearch } from "@/pages/paper-search";
 import { ReportPreview } from "@/pages/report-preview";
 
 const queryClient = new QueryClient();
@@ -19,7 +20,9 @@ function AppRoutes() {
       <Route path="/" component={Home} />
       <Route path="/features" component={Features} />
       <Route path="/faq" component={FAQ} />
-      <Route path="/generator" component={Generator} />
+      <Route path="/generator" component={PaperSearch} />
+      <Route path="/search" component={PaperSearch} />
+      <Route path="/workspace" component={Generator} />
       <Route path="/reports/:reportId" component={ReportPreview} />
       <Route path="/preview/:reportId" component={ReportPreview} />
       <Route component={NotFound} />

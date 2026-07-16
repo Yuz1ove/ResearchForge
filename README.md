@@ -117,10 +117,20 @@ Run the frontend:
 pnpm --filter @workspace/report-factory run dev
 ```
 
-Open the content workspace:
+Open the paper search page:
 
 ```text
 http://localhost:22067/generator
+```
+
+Enter a research keyword to search academic providers and receive source-linked
+Traditional Chinese summaries. The API endpoint used by this page is
+`POST /api/paper-search`.
+
+Open the advanced report workspace:
+
+```text
+http://localhost:22067/workspace
 ```
 
 ## Quality checks

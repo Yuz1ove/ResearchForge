@@ -25,16 +25,17 @@ export function Footer() {
             <ul className="space-y-2 text-sm text-sidebar-foreground/70">
               <li><Link href="/features" className="hover:text-primary transition-colors" data-testid="link-footer-features">功能介紹</Link></li>
               <li><Link href="/faq" className="hover:text-primary transition-colors" data-testid="link-footer-faq">常見問題</Link></li>
-              <li><Link href="/generator" className="hover:text-primary transition-colors" data-testid="link-footer-generator">開始整理內容</Link></li>
+              <li><Link href="/generator" className="hover:text-primary transition-colors" data-testid="link-footer-generator">搜尋論文與摘要</Link></li>
+              <li><Link href="/workspace" className="hover:text-primary transition-colors">進階研究工作台</Link></li>
             </ul>
           </div>
 
           <div>
             <h3 className="font-semibold mb-4 text-sidebar-foreground">整理輸出</h3>
             <ul className="space-y-2 text-sm text-sidebar-foreground/70">
-              <li><Link href="/generator" className="hover:text-primary transition-colors" data-testid="link-footer-research-plan">研究報告</Link></li>
-              <li><Link href="/generator" className="hover:text-primary transition-colors" data-testid="link-footer-experiment-records">摘要總結</Link></li>
-              <li><Link href="/generator" className="hover:text-primary transition-colors" data-testid="link-footer-final-report">知識庫條目</Link></li>
+              <li><Link href="/generator" className="hover:text-primary transition-colors" data-testid="link-footer-research-plan">論文搜尋</Link></li>
+              <li><Link href="/generator" className="hover:text-primary transition-colors" data-testid="link-footer-experiment-records">繁中摘要</Link></li>
+              <li><Link href="/workspace" className="hover:text-primary transition-colors" data-testid="link-footer-final-report">報告工作台</Link></li>
             </ul>
           </div>
         </div>
