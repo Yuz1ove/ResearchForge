@@ -5,7 +5,11 @@ import {
   GroundingJobSchema,
   ResearchGroundingJobCreateRequestSchema,
   ResearchGroundingJobCreateResponseSchema,
+  SourceDecisionPatchRequestSchema,
   type GroundingJobErrorCode,
+  type GroundingJob,
+  type SourceCandidate,
+  type SourceDecision,
 } from "@workspace/api-zod/research-grounding";
 import { logger } from "../lib/logger";
 import {
@@ -15,7 +19,10 @@ import {
   type GroundingJobRunDependencies,
 } from "../services/research/grounding/researchGroundingJobStore";
 import {
+  defaultGroundingJobRepository,
   GroundingStoreNotConfiguredError,
+  GroundingJobNotFoundError,
+  GroundingJobRevisionConflictError,
   type GroundingJobRepository,
 } from "../services/research/grounding/groundingJobRepository";
 
@@ -76,6 +83,114 @@ function normalizeGroundingJobForResponse<T extends Record<string, unknown>>(job
       ...diagnostics,
       firstCandidateLatencyMs: 0,
     },
+  };
+}
+
+function candidateDecision(
+  candidate: SourceCandidate,
+  decisions: ReadonlyMap<string, SourceDecision>,
+): SourceCandidate {
+  const decision = decisions.get(candidate.sourceId);
+  if (!decision) return candidate;
+  if (decision.decision === "accepted") {
+    return {
+      ...candidate,
+      reviewStatus: "accepted",
+      acceptedByUser: true,
+      userDecision:
+        candidate.recommendationBucket === "official_background"
+          ? "accepted_as_background"
+          : candidate.recommendationBucket === "manual_review"
+            ? "accepted_as_manual_review"
+            : "accepted",
+      acceptedAs:
+        candidate.recommendationBucket === "official_background"
+          ? "background"
+          : candidate.recommendationBucket === "manual_review"
+            ? "manual_review"
+            : "source",
+      rejectionReason: undefined,
+    };
+  }
+  if (decision.decision === "rejected") {
+    return {
+      ...candidate,
+      reviewStatus: "rejected",
+      acceptedByUser: false,
+      userDecision: "rejected",
+      acceptedAs: undefined,
+    };
+  }
+  return {
+    ...candidate,
+    reviewStatus: "review",
+    acceptedByUser: false,
+    userDecision: "pending",
+    acceptedAs: undefined,
+    rejectionReason: undefined,
+  };
+}
+
+function canonicalCandidates(job: GroundingJob): SourceCandidate[] {
+  const candidates =
+    job.candidateSources ??
+    job.sourceCandidates ??
+    [
+      ...(job.highConfidenceCandidateSources ?? []),
+      ...(job.fallbackReviewSources ?? []),
+      ...(job.acceptedSources ?? []),
+      ...(job.rejectedSources ?? []),
+    ];
+  const unique = new Map<string, SourceCandidate>();
+  for (const candidate of candidates) {
+    if (!unique.has(candidate.sourceId)) unique.set(candidate.sourceId, candidate);
+  }
+  return Array.from(unique.values());
+}
+
+function sourceDecisionPatch(
+  job: GroundingJob,
+  updates: Array<{ sourceId: string; decision: SourceDecision["decision"] }>,
+): Partial<GroundingJob> {
+  const now = new Date().toISOString();
+  const existing = new Map(
+    (job.sourceDecisions ?? []).map((decision) => [decision.sourceId, decision]),
+  );
+  for (const update of updates) {
+    const previous = existing.get(update.sourceId);
+    existing.set(update.sourceId, {
+      sourceId: update.sourceId,
+      workflowId: job.workflowId,
+      decision: update.decision,
+      decidedBy: "user",
+      decidedAt: now,
+      decisionVersion: (previous?.decisionVersion ?? 0) + 1,
+    });
+  }
+  const sourceDecisions = canonicalCandidates(job)
+    .map((candidate) => existing.get(candidate.sourceId))
+    .filter((decision): decision is SourceDecision => Boolean(decision));
+  const decisionMap = new Map(
+    sourceDecisions.map((decision) => [decision.sourceId, decision]),
+  );
+  const mappedCandidates = canonicalCandidates(job).map((candidate) =>
+    candidateDecision(candidate, decisionMap),
+  );
+  const mapExisting = (items: SourceCandidate[] | undefined) =>
+    items?.map((candidate) => candidateDecision(candidate, decisionMap));
+
+  return {
+    sourceDecisions,
+    ...(job.sourceCandidates ? { sourceCandidates: mapExisting(job.sourceCandidates) } : {}),
+    ...(job.candidateSources ? { candidateSources: mapExisting(job.candidateSources) } : {}),
+    ...(job.highConfidenceCandidateSources
+      ? { highConfidenceCandidateSources: mapExisting(job.highConfidenceCandidateSources) }
+      : {}),
+    ...(job.fallbackReviewSources
+      ? { fallbackReviewSources: mapExisting(job.fallbackReviewSources) }
+      : {}),
+    acceptedSources: mappedCandidates.filter((candidate) => candidate.reviewStatus === "accepted"),
+    rejectedSources: mappedCandidates.filter((candidate) => candidate.reviewStatus === "rejected"),
   };
 }
 
@@ -205,6 +320,76 @@ export function createResearchGroundingJobsRouter(
             : "Research grounding job status could not be read.",
         stage: "polling",
         retryable: code !== "GROUNDING_STORE_NOT_CONFIGURED",
+        requestId,
+      });
+    }
+  });
+
+  router.patch("/research-grounding-jobs/:jobId/source-decisions", async (req, res) => {
+    const requestId = requestIdFor(req);
+    const parsed = SourceDecisionPatchRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        code: "INVALID_SOURCE_DECISIONS",
+        message: "Invalid source decision payload.",
+        requestId,
+      });
+      return;
+    }
+    try {
+      const repository = options.repository ?? defaultGroundingJobRepository();
+      const job = await repository.get(req.params.jobId);
+      if (!job) throw new GroundingJobNotFoundError(req.params.jobId);
+      if (
+        job.workflowId !== parsed.data.workflowId ||
+        job.topicHash !== parsed.data.topicHash
+      ) {
+        res.status(409).json({
+          code: "SOURCE_DECISION_CONTEXT_MISMATCH",
+          message: "Source decisions do not match this workflow.",
+          requestId,
+        });
+        return;
+      }
+      const knownSourceIds = new Set(canonicalCandidates(job).map((candidate) => candidate.sourceId));
+      if (parsed.data.decisions.some((decision) => !knownSourceIds.has(decision.sourceId))) {
+        res.status(400).json({
+          code: "UNKNOWN_SOURCE_DECISION_TARGET",
+          message: "A source decision targets an unknown source.",
+          requestId,
+        });
+        return;
+      }
+      const updated = await repository.patch(
+        job.jobId,
+        sourceDecisionPatch(job, parsed.data.decisions),
+        { expectedRevision: parsed.data.expectedRevision },
+      );
+      res.json(GroundingJobSchema.parse(normalizeGroundingJobForResponse(updated)));
+    } catch (error) {
+      if (error instanceof GroundingJobNotFoundError) {
+        res.status(404).json({
+          code: "GROUNDING_JOB_NOT_FOUND",
+          message: "Research grounding job not found.",
+          requestId,
+        });
+        return;
+      }
+      if (error instanceof GroundingJobRevisionConflictError) {
+        res.status(409).json({
+          code: "SOURCE_DECISION_REVISION_CONFLICT",
+          message: "Source decisions changed in another browser context. Reload and try again.",
+          requestId,
+        });
+        return;
+      }
+      const status = error instanceof GroundingStoreNotConfiguredError ? 503 : 500;
+      res.status(status).json({
+        code:
+          error instanceof GroundingStoreNotConfiguredError
+            ? "GROUNDING_STORE_NOT_CONFIGURED"
+            : "SOURCE_DECISION_PERSIST_FAILED",
+        message: "Source decisions could not be persisted.",
         requestId,
       });
     }

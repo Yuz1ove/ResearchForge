@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { createHash, randomUUID } from "node:crypto";
 import { normalizeSourceRecord, type ReportMode, type SourceRecord } from "@workspace/api-zod";
+import { getReportReadiness } from "@workspace/api-zod/report-readiness";
 import { resolveSourceMixProfile } from "@workspace/api-zod/source-mix-profile";
 import {
   writeReportWithLlm,
@@ -1189,6 +1190,30 @@ export function createReportDraftsRouter({
       topic,
     });
     const reportMode = normalizeReportMode(body.reportMode, acceptedSources.length);
+    const readiness = getReportReadiness({
+      acceptedSources,
+      evidenceCards,
+      reportMode,
+    });
+    if (!readiness.canGenerate) {
+      res.status(422).json({
+        ok: false,
+        code: "EVIDENCE_REQUIRED",
+        message: readiness.message,
+        readiness,
+      });
+      return;
+    }
+    if (reportMode === "standard" && !readiness.canGenerateStandard) {
+      res.status(422).json({
+        ok: false,
+        code: "EVIDENCE_INSUFFICIENT_FOR_STANDARD_REPORT",
+        message:
+          "Standard/full report generation is blocked because usable evidence is insufficient.",
+        readiness,
+      });
+      return;
+    }
     const input: ReportWriterInput = {
       workflowId,
       jobId: cleanString(body.jobId) ?? workflowId,
@@ -1335,11 +1360,16 @@ export function createReportDraftsRouter({
         ? warnings.join(" | ") || "fallback_conservative_draft"
         : null,
       reportMode,
+      evidenceSufficiency: readiness.evidenceSufficiency,
+      exportAllowed: readiness.canExport,
       sourceMixProfile,
       details: {
         reportMode,
         acceptedSourcesCount: acceptedSources.length,
         evidenceCardsCount: evidenceCards.length,
+        distinctUsableEvidenceSourceCount: readiness.distinctUsableEvidenceSourceCount,
+        evidenceSufficiency: readiness.evidenceSufficiency,
+        exportAllowed: readiness.canExport,
         fallbackUsed: generationMode === "fallback_conservative_draft",
         requestedModel: writerResult.requestedModel ?? null,
         actualModel: writerResult.actualModel ?? null,

@@ -377,6 +377,45 @@ export async function fetchResearchGroundingJob(
   });
 }
 
+export async function persistResearchGroundingSourceDecisions(input: {
+  jobId: string;
+  workflowId: string;
+  topicHash: string;
+  expectedRevision?: number;
+  decisions: Array<{
+    sourceId: string;
+    decision: "accepted" | "rejected" | "unreviewed";
+  }>;
+  signal?: AbortSignal;
+}): Promise<GroundingJob> {
+  const response = await fetch(
+    apiUrl(
+      `/api/research-grounding-jobs/${encodeURIComponent(input.jobId)}/source-decisions`,
+    ),
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workflowId: input.workflowId,
+        topicHash: input.topicHash,
+        ...(input.expectedRevision
+          ? { expectedRevision: input.expectedRevision }
+          : {}),
+        decisions: input.decisions,
+      }),
+      signal: input.signal,
+    },
+  );
+  if (!response.ok) {
+    throw await errorFromResponse(response, "polling");
+  }
+  return parsedJsonResponse({
+    response,
+    stage: "polling",
+    parse: GroundingJobSchema.safeParse,
+  });
+}
+
 export function sourceCandidateToSourceRecord(input: {
   candidate: SourceCandidate;
   workflowId: string;
@@ -578,10 +617,13 @@ export function groundingJobToSourceRecords(
   job: GroundingJob,
 ): SourceRecord[] {
   const queryPlanHash = queryPlanHashFromJob(job);
-  const canonicalCandidates = [
+  const combinedCandidates = [
     ...(job.candidateSources ?? job.highConfidenceCandidateSources ?? []),
     ...(job.fallbackReviewSources ?? []),
   ];
+  const canonicalCandidates = Array.from(
+    new Map(combinedCandidates.map((candidate) => [candidate.sourceId, candidate])).values(),
+  );
   const legacyCandidates =
     canonicalCandidates.length > 0 ? canonicalCandidates : job.sourceCandidates ?? [];
   if (legacyCandidates.length === 0) {
@@ -590,15 +632,26 @@ export function groundingJobToSourceRecords(
       return legacySources.map(normalizeSourceForReview);
     }
   }
-  return legacyCandidates.map((candidate) =>
-    sourceCandidateToSourceRecord({
-      candidate,
+  const decisionBySourceId = new Map(
+    (job.sourceDecisions ?? []).map((decision) => [decision.sourceId, decision.decision]),
+  );
+  return legacyCandidates.map((candidate) => {
+    const decision = decisionBySourceId.get(candidate.sourceId);
+    const authoritativeCandidate = decision
+      ? {
+          ...candidate,
+          reviewStatus:
+            decision === "unreviewed" ? "review" as const : decision,
+        }
+      : candidate;
+    return sourceCandidateToSourceRecord({
+      candidate: authoritativeCandidate,
       workflowId: job.workflowId,
       topicHash: job.topicHash,
       queryPlanHash,
       originalTopic: job.originalTopic,
-    }),
-  );
+    });
+  });
 }
 
 export function groundingJobSourceContractMismatch(job: GroundingJob): string | null {

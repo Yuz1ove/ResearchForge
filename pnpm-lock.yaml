@@ -405,6 +405,10 @@ importers:
         version: 3.25.76
 
   artifacts/report-factory:
+    dependencies:
+      '@expo-google-fonts/noto-sans-tc':
+        specifier: 0.4.3
+        version: 0.4.3
     devDependencies:
       '@hookform/resolvers':
         specifier: ^3.10.0
@@ -771,6 +775,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [linux]
+
+  '@expo-google-fonts/noto-sans-tc@0.4.3':
+    resolution: {integrity: sha512-69XAOTLPz0WlAxL6qJEKlDMxHsBd4J1M39HjV0gPF2o1xWVALOsVWvDgistnecVockA9wbU/tH5C/gyS2PdnHg==}
 
   '@floating-ui/core@1.7.5':
     resolution: {integrity: sha512-1Ih4WTWyw0+lKyFMcBHGbb5U5FtuHJuujoyyr5zTaWS5EYMeT6Jb2AuDeftsCsEuchO+mM2ij5+q9crhydzLhQ==}
@@ -3415,6 +3422,8 @@ snapshots:
 
   '@esbuild/linux-x64@0.27.3':
     optional: true
+
+  '@expo-google-fonts/noto-sans-tc@0.4.3': {}
 
   '@floating-ui/core@1.7.5':
     dependencies:

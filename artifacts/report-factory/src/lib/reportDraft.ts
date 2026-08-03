@@ -318,6 +318,194 @@ function sanitizeReportParagraph(text: string): string {
   return sanitized || "目前可用證據不足，本段暫不形成正式結論。";
 }
 
+function uniqueStrings(values: readonly string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+interface FinalizedCitationSections {
+  sections: ReportDraftSection[];
+  references: string[];
+}
+
+function finalizeCitationSections(
+  sections: readonly ReportDraftSection[],
+  acceptedSources: readonly SourceRecord[],
+  evidenceCards: readonly EvidenceCard[],
+  citationFormat = "APA",
+): FinalizedCitationSections {
+  const sourceMarkerMap = buildStableCitationMarkerMap([...acceptedSources]);
+  const acceptedMarkers = new Set(sourceMarkerMap.values());
+  const acceptedSourceIds = new Set(acceptedSources.map((source) => source.id));
+  const evidenceById = new Map(evidenceCards.map((card) => [card.id, card]));
+
+  const canonicalSections = sections.map((section) => {
+    if (section.sectionId === "references") return section;
+    const citationMarkers = uniqueStrings(
+      extractCitationMarkers(section.body).filter((item) => acceptedMarkers.has(item)),
+    );
+    const citationIds = sourceIdsFromCitationMarkers(citationMarkers, sourceMarkerMap)
+      .filter((sourceId) => acceptedSourceIds.has(sourceId));
+    const citedSourceIds = new Set(citationIds);
+    const evidenceCardIds = uniqueStrings(section.evidenceCardIds).filter((evidenceCardId) => {
+      const sourceId = evidenceById.get(evidenceCardId)?.sourceId;
+      return Boolean(sourceId && citedSourceIds.has(sourceId));
+    });
+
+    return {
+      ...section,
+      supportingSourceIds: citationIds,
+      citationMarkers,
+      evidenceCardIds,
+      citationIds,
+      citationCount: citationMarkers.length,
+      evidenceCardCount: evidenceCardIds.length,
+      evidenceCoverageStatus:
+        citationMarkers.length === 0 && section.evidenceCoverageStatus === "sufficient"
+          ? "insufficient" as const
+          : section.evidenceCoverageStatus,
+    };
+  });
+
+  const citedSourceIdSet = new Set(
+    canonicalSections
+      .filter((section) => section.sectionId !== "references")
+      .flatMap((section) => section.citationIds),
+  );
+  const citedSources = acceptedSources.filter((source) => citedSourceIdSet.has(source.id));
+  const references = buildBibliography([...citedSources], citationFormat).map((entry) => {
+    const citationMarker = sourceMarkerMap.get(entry.sourceId);
+    return citationMarker ? `${citationMarker} ${entry.text}` : entry.text;
+  });
+  const canonicalReferences = references.length > 0 ? references : ["參考資料待補"];
+  const citedSourceIds = citedSources.map((source) => source.id);
+  const citedMarkers = citedSourceIds
+    .map((sourceId) => sourceMarkerMap.get(sourceId))
+    .filter((citationMarker): citationMarker is string => Boolean(citationMarker));
+  const citedEvidenceCardIds = evidenceCards
+    .filter((card) => citedSourceIdSet.has(card.sourceId))
+    .map((card) => card.id);
+  const existingReferences = sections.find((section) => section.sectionId === "references");
+  const referencesSection: ReportDraftSection = {
+    sectionId: "references",
+    title: "參考資料",
+    body: canonicalReferences.join("\n"),
+    synthesizedProseZhTw: canonicalReferences.join("\n"),
+    sectionGoal: existingReferences?.sectionGoal ?? "列出正文實際引用的來源。",
+    supportingSourceIds: citedSourceIds,
+    citationMarkers: citedMarkers,
+    evidenceSummary: "參考資料僅列正文實際引用且已接受的來源。",
+    evidenceGaps: [],
+    writerNote: "引用標記、正文來源與參考資料使用同一個 canonical source identity。",
+    evidenceCardIds: uniqueStrings(citedEvidenceCardIds),
+    citationIds: citedSourceIds,
+    evidenceCoverageStatus: references.length > 0 ? "sufficient" : "insufficient",
+    citationCount: citedMarkers.length,
+    evidenceCardCount: uniqueStrings(citedEvidenceCardIds).length,
+    warnings: references.length > 0 ? [] : ["正文尚未出現可追溯引用標記。"],
+  };
+
+  const referencesIndex = canonicalSections.findIndex(
+    (section) => section.sectionId === "references",
+  );
+  if (referencesIndex >= 0) canonicalSections[referencesIndex] = referencesSection;
+  else canonicalSections.push(referencesSection);
+
+  return { sections: canonicalSections, references: canonicalReferences };
+}
+
+export function finalizeReportDraftCitations(
+  draft: ReportDraft,
+  acceptedSources: readonly SourceRecord[],
+  evidenceCards: readonly EvidenceCard[],
+  citationFormat = "APA",
+): ReportDraft {
+  const finalized = finalizeCitationSections(
+    draft.sections,
+    acceptedSources,
+    evidenceCards,
+    citationFormat,
+  );
+  const sectionEvidenceMap = draft.sectionEvidenceMap.map((entry) => {
+    const section = finalized.sections.find((candidate) => candidate.sectionId === entry.sectionId);
+    if (!section) return entry;
+    return {
+      ...entry,
+      evidenceCardIds: section.evidenceCardIds,
+      citationIds: section.citationIds,
+      citationMarkers: section.citationMarkers,
+      coverageStatus: section.evidenceCoverageStatus,
+    };
+  });
+  return {
+    ...draft,
+    sections: finalized.sections,
+    referenceList: finalized.references,
+    references: finalized.references,
+    text: finalized.sections.map((section) => `${section.title}\n${section.body}`).join("\n\n"),
+    sectionEvidenceMap,
+  };
+}
+
+export interface ReportCitationIntegrity {
+  valid: boolean;
+  errors: string[];
+  citedSourceIds: string[];
+  usedEvidenceCardIds: string[];
+}
+
+export function validateReportCitationIntegrity(
+  draft: ReportDraft,
+  acceptedSources: readonly SourceRecord[],
+  evidenceCards: readonly EvidenceCard[],
+): ReportCitationIntegrity {
+  const markerMap = buildStableCitationMarkerMap([...acceptedSources]);
+  const acceptedSourceIds = new Set(acceptedSources.map((source) => source.id));
+  const acceptedMarkers = new Set(markerMap.values());
+  const evidenceById = new Map(evidenceCards.map((card) => [card.id, card]));
+  const errors: string[] = [];
+  const proseSections = draft.sections.filter((section) => section.sectionId !== "references");
+  const citedSourceIds = uniqueStrings(proseSections.flatMap((section) => section.citationIds));
+  const usedEvidenceCardIds = uniqueStrings(proseSections.flatMap((section) => section.evidenceCardIds));
+
+  for (const section of proseSections) {
+    const actualMarkers = uniqueStrings(extractCitationMarkers(section.body));
+    if (actualMarkers.some((item) => !acceptedMarkers.has(item))) {
+      errors.push(`${section.sectionId}: marker_not_accepted`);
+    }
+    const actualSourceIds = sourceIdsFromCitationMarkers(
+      actualMarkers.filter((item) => acceptedMarkers.has(item)),
+      markerMap,
+    );
+    if (actualSourceIds.join("|") !== section.citationIds.join("|")) {
+      errors.push(`${section.sectionId}: citation_identity_mismatch`);
+    }
+    for (const evidenceCardId of section.evidenceCardIds) {
+      const card = evidenceById.get(evidenceCardId);
+      if (!card || !section.citationIds.includes(card.sourceId)) {
+        errors.push(`${section.sectionId}: orphan_evidence_card:${evidenceCardId}`);
+      }
+    }
+  }
+
+  if (citedSourceIds.some((sourceId) => !acceptedSourceIds.has(sourceId))) {
+    errors.push("cited_source_not_accepted");
+  }
+  const referenceSection = draft.sections.find((section) => section.sectionId === "references");
+  if (!referenceSection || referenceSection.citationIds.join("|") !== citedSourceIds.join("|")) {
+    errors.push("reference_list_mismatch");
+  }
+  if (new Set(referenceSection?.citationIds ?? []).size !== (referenceSection?.citationIds.length ?? 0)) {
+    errors.push("duplicate_reference");
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors: uniqueStrings(errors),
+    citedSourceIds,
+    usedEvidenceCardIds,
+  };
+}
+
 function sectionTitleFor(sectionId: string, title: string): string {
   return sectionId === "title" ? "標題" : title.replace(/^[一二三四五六七八九十]+、/, "");
 }
@@ -565,8 +753,6 @@ function renderParagraphPlan(
 
 export function buildReportDraft(input: ReportDraftInput): ReportDraft {
   const context = buildReportSynthesisContext(input);
-  const bibliography = buildBibliography(context.acceptedSources, input.citationFormat || "APA");
-  const references = bibliography.length ? bibliography.map((entry) => entry.text) : ["參考資料待補"];
   const outlineSections = context.outline.sections;
   const sectionEvidenceMap = buildSectionEvidenceMap(outlineSections, context);
   const paragraphPlans = buildParagraphPlans(sectionEvidenceMap, context);
@@ -578,19 +764,17 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
       return {
         sectionId: "references",
         title: "參考資料",
-        body: references.map((reference, index) => `${index + 1}. ${reference}`).join("\n"),
-        synthesizedProseZhTw: references
-          .map((reference, index) => `${index + 1}. ${reference}`)
-          .join("\n"),
+        body: "參考資料待正文引用完成後產生。",
+        synthesizedProseZhTw: "參考資料待正文引用完成後產生。",
         sectionGoal: outlineSection.purpose,
-        supportingSourceIds: context.acceptedSources.map((source) => source.id).filter(Boolean),
+        supportingSourceIds: [],
         citationMarkers: [],
-        evidenceSummary: "參考資料依已接受來源產生。",
+        evidenceSummary: "參考資料依正文實際引用來源產生。",
         evidenceGaps: [],
-        writerNote: "僅列已接受來源，不使用 demo 或未審查來源。",
+        writerNote: "僅列正文實際引用且已接受的來源。",
         evidenceCardIds: [],
-        citationIds: context.acceptedSources.map((source) => source.id).filter(Boolean),
-        evidenceCoverageStatus: "sufficient",
+        citationIds: [],
+        evidenceCoverageStatus: "insufficient",
         citationCount: 0,
         evidenceCardCount: 0,
         warnings: [],
@@ -685,12 +869,19 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
     };
   });
 
+  const finalized = finalizeCitationSections(
+    sections,
+    context.acceptedSources,
+    context.evidenceCards,
+    input.citationFormat || "APA",
+  );
+  const finalizedSections = finalized.sections;
   const qualityReport = buildQualityReport({
     topic: context.topic,
     depth: input.project.depth,
     acceptedSources: context.acceptedSources,
     evidenceCards: context.evidenceCards,
-    sections: sections.map((section) => ({
+    sections: finalizedSections.map((section) => ({
       id: section.sectionId,
       key: section.sectionId as ResearchSectionKey,
       title: section.title,
@@ -701,7 +892,7 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
     })),
   });
 
-  const text = sections.map((section) => `${section.title}\n${section.body}`).join("\n\n");
+  const text = finalizedSections.map((section) => `${section.title}\n${section.body}`).join("\n\n");
   const debug: ReportDraftDebug = {
     acceptedSourcesCount: context.acceptedSources.length,
     evidenceCardsCount: context.evidenceCards.length,
@@ -714,7 +905,7 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
     sectionEvidenceMap,
     paragraphPlans,
     supportedClaims: context.supportedClaims,
-    sectionCoverage: sections.map((section) =>
+    sectionCoverage: finalizedSections.map((section) =>
       validateSectionEvidenceCoverage({
         sectionKey: section.sectionId as ResearchSectionKey,
         text: section.body,
@@ -731,9 +922,9 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
     workflowId: context.acceptedSources[0]?.workflowId ?? null,
     topicHash: context.acceptedSources[0]?.topicHash ?? null,
     title: `《${context.topic}》${context.reportType}草稿`,
-    sections,
-    referenceList: references,
-    references,
+    sections: finalizedSections,
+    referenceList: finalized.references,
+    references: finalized.references,
     text,
     qualityReport,
     sectionEvidenceMap,

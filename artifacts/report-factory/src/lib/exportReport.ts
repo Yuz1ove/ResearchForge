@@ -1,4 +1,5 @@
 import type { GeneratedReport, ReportInput, ContentBlock } from "./generateReport";
+import type { Buffer } from "node:buffer";
 import {
   DEFAULT_REPORT_PRESENTATION,
   primaryFontName,
@@ -8,6 +9,40 @@ import {
 // docx is heavy; it is lazy-loaded inside downloadDocx so it never enters the
 // initial bundle. `D` is the dynamically imported module namespace.
 type DocxModule = typeof import("docx");
+// Use one Unicode font for every OOXML script slot. Some DOCX renderers ignore
+// w:eastAsia and shape CJK text through w:hAnsi, which previously produced
+// near-blank exports even though the document XML still contained the text.
+const DOCX_EAST_ASIA_FONT = "Noto Sans TC";
+type DocxTextRunInput = ConstructorParameters<DocxModule["TextRun"]>[0];
+
+function docxRun(
+  D: DocxModule,
+  input: DocxTextRunInput,
+  primaryFont = DOCX_EAST_ASIA_FONT,
+): InstanceType<DocxModule["TextRun"]> {
+  const options = typeof input === "string" ? { text: input } : input;
+  return new D.TextRun({
+    ...options,
+    font: {
+      ascii: DOCX_EAST_ASIA_FONT,
+      hAnsi: DOCX_EAST_ASIA_FONT,
+      eastAsia: DOCX_EAST_ASIA_FONT,
+      cs: DOCX_EAST_ASIA_FONT,
+      hint: "eastAsia",
+    },
+    language: { value: "zh-TW", eastAsia: "zh-TW" },
+  });
+}
+
+export function assertReportExportAllowed(report: GeneratedReport): void {
+  if (report.meta.exportAllowed === false) {
+    throw new Error(
+      report.meta.isLimitedDraft
+        ? "目前是證據有限／不完整草稿，補足可用證據後才能匯出。"
+        : "報告未通過證據與引用一致性檢查，暫停匯出。",
+    );
+  }
+}
 
 // ─── Shared text builders (plain text / markdown) ─────────────────────────────
 
@@ -117,11 +152,13 @@ function safeFileName(topic: string): string {
 }
 
 export function downloadTxt(report: GeneratedReport, input: ReportInput) {
+  assertReportExportAllowed(report);
   const blob = new Blob([buildPlainText(report, input)], { type: "text/plain;charset=utf-8" });
   triggerDownload(blob, `${safeFileName(input.topic)}.txt`);
 }
 
 export function downloadMarkdown(report: GeneratedReport, input: ReportInput) {
+  assertReportExportAllowed(report);
   const blob = new Blob([buildMarkdown(report, input)], { type: "text/markdown;charset=utf-8" });
   triggerDownload(blob, `${safeFileName(input.topic)}.md`);
 }
@@ -143,6 +180,7 @@ export function buildJson(report: GeneratedReport, input: ReportInput): string {
 }
 
 export function downloadJson(report: GeneratedReport, input: ReportInput) {
+  assertReportExportAllowed(report);
   const blob = new Blob([buildJson(report, input)], { type: "application/json;charset=utf-8" });
   triggerDownload(blob, `${safeFileName(input.topic)}.json`);
 }
@@ -234,44 +272,48 @@ export function downloadPromptPackage(report: GeneratedReport, input: ReportInpu
 
 // ─── DOCX export ──────────────────────────────────────────────────────────────
 
-function docxBlock(D: DocxModule, b: ContentBlock): InstanceType<DocxModule["Paragraph"]>[] {
-  const { Paragraph, TextRun } = D;
+function docxBlock(
+  D: DocxModule,
+  b: ContentBlock,
+  primaryFont: string,
+): InstanceType<DocxModule["Paragraph"]>[] {
+  const { Paragraph } = D;
   switch (b.type) {
     case "paragraph":
       // A paragraph may carry style/length lead lines joined by \n.
       return (b.text ?? "")
         .split("\n")
         .filter((t) => t.length > 0)
-        .map((t) => new Paragraph({ children: [new TextRun(t)], spacing: { after: 160, line: 320 } }));
+        .map((t) => new Paragraph({ children: [docxRun(D, t, primaryFont)], spacing: { after: 160, line: 320 } }));
 
     case "list":
       return (b.items ?? []).map(
-        (i) => new Paragraph({ children: [new TextRun(i)], bullet: { level: 0 }, spacing: { after: 80, line: 300 } }),
+        (i) => new Paragraph({ children: [docxRun(D, i, primaryFont)], bullet: { level: 0 }, spacing: { after: 80, line: 300 } }),
       );
 
     case "note":
       return b.text
-        ? [new Paragraph({ children: [new TextRun({ text: `※ ${b.text}`, italics: true, color: "8a6d00" })], spacing: { after: 140, line: 300 } })]
+        ? [new Paragraph({ children: [docxRun(D, { text: `※ ${b.text}`, italics: true, color: "8a6d00" }, primaryFont)], spacing: { after: 140, line: 300 } })]
         : [];
 
     case "suggestions":
       return (b.suggestions ?? []).flatMap((s, i) => [
-        new Paragraph({ children: [new TextRun({ text: `建議${b.suggestionKind} ${i + 1}：${s.title}`, bold: true })], spacing: { before: 120, after: 60 } }),
-        new Paragraph({ children: [new TextRun(`位置：${s.position}`)], spacing: { after: 40 } }),
-        new Paragraph({ children: [new TextRun(`用途：${s.purpose}`)], spacing: { after: 40 } }),
-        new Paragraph({ children: [new TextRun(`${b.suggestionKind === "流程圖" ? "流程" : "內容"}：${s.content}`)], spacing: { after: 120 } }),
+        new Paragraph({ children: [docxRun(D, { text: `建議${b.suggestionKind} ${i + 1}：${s.title}`, bold: true }, primaryFont)], spacing: { before: 120, after: 60 } }),
+        new Paragraph({ children: [docxRun(D, `位置：${s.position}`, primaryFont)], spacing: { after: 40 } }),
+        new Paragraph({ children: [docxRun(D, `用途：${s.purpose}`, primaryFont)], spacing: { after: 40 } }),
+        new Paragraph({ children: [docxRun(D, `${b.suggestionKind === "流程圖" ? "流程" : "內容"}：${s.content}`, primaryFont)], spacing: { after: 120 } }),
       ]);
 
     case "quality":
       return (b.checks ?? []).map(
-        (c) => new Paragraph({ children: [new TextRun(`${c.passed ? "✓" : "✗"} ${c.label}`)], bullet: { level: 0 }, spacing: { after: 60 } }),
+        (c) => new Paragraph({ children: [docxRun(D, `${c.passed ? "✓" : "✗"} ${c.label}`, primaryFont)], bullet: { level: 0 }, spacing: { after: 60 } }),
       );
 
     case "slides":
       return (b.slides ?? []).flatMap((s) => [
-        new Paragraph({ children: [new TextRun({ text: `第 ${s.page} 頁：${s.title}`, bold: true })], spacing: { before: 120, after: 60 } }),
-        ...s.points.map((p) => new Paragraph({ children: [new TextRun(p)], bullet: { level: 0 }, spacing: { after: 40 } })),
-        new Paragraph({ children: [new TextRun({ text: `視覺建議：${s.visual}`, italics: true })], spacing: { after: 120 } }),
+        new Paragraph({ children: [docxRun(D, { text: `第 ${s.page} 頁：${s.title}`, bold: true }, primaryFont)], spacing: { before: 120, after: 60 } }),
+        ...s.points.map((p) => new Paragraph({ children: [docxRun(D, p, primaryFont)], bullet: { level: 0 }, spacing: { after: 40 } })),
+        new Paragraph({ children: [docxRun(D, { text: `視覺建議：${s.visual}`, italics: true }, primaryFont)], spacing: { after: 120 } }),
       ]);
 
     default:
@@ -279,13 +321,17 @@ function docxBlock(D: DocxModule, b: ContentBlock): InstanceType<DocxModule["Par
   }
 }
 
-function docxDataTable(D: DocxModule, b: ContentBlock): (InstanceType<DocxModule["Table"]> | InstanceType<DocxModule["Paragraph"]>)[] {
+function docxDataTable(
+  D: DocxModule,
+  b: ContentBlock,
+  primaryFont: string,
+): (InstanceType<DocxModule["Table"]> | InstanceType<DocxModule["Paragraph"]>)[] {
   if (b.type !== "dataTable" || !b.rows?.length) return [];
-  const { Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle } = D;
+  const { Paragraph, Table, TableRow, TableCell, WidthType, BorderStyle } = D;
   const headerCells = ["資料類型", "需要內容", "用途", "優先程度"].map(
     (h) =>
       new TableCell({
-        children: [new Paragraph({ children: [new TextRun({ text: h, bold: true })] })],
+        children: [new Paragraph({ children: [docxRun(D, { text: h, bold: true }, primaryFont)] })],
         shading: { fill: "f1f5f9" },
       }),
   );
@@ -295,7 +341,7 @@ function docxDataTable(D: DocxModule, b: ContentBlock): (InstanceType<DocxModule
       (r) =>
         new TableRow({
           children: [r.type, r.need, r.use, r.priority].map(
-            (v) => new TableCell({ children: [new Paragraph({ children: [new TextRun(String(v))] })] }),
+            (v) => new TableCell({ children: [new Paragraph({ children: [docxRun(D, String(v), primaryFont)] })] }),
           ),
         }),
     ),
@@ -322,9 +368,29 @@ export async function downloadDocx(
   input: ReportInput,
   presentation: ReportPresentationSettings = DEFAULT_REPORT_PRESENTATION,
 ) {
+  const fontModule = await import(
+    "@expo-google-fonts/noto-sans-tc/400Regular/NotoSansTC_400Regular.ttf?url"
+  );
+  const fontResponse = await fetch(fontModule.default);
+  if (!fontResponse.ok) {
+    throw new Error(`無法載入 DOCX 繁中字型（HTTP ${fontResponse.status}）。`);
+  }
+  const embeddedCjkFontData = new Uint8Array(await fontResponse.arrayBuffer());
+  const blob = await buildDocxBlob(report, input, presentation, embeddedCjkFontData);
+  triggerDownload(blob, `${safeFileName(input.topic)}.docx`);
+}
+
+export async function buildDocxBlob(
+  report: GeneratedReport,
+  input: ReportInput,
+  presentation: ReportPresentationSettings = DEFAULT_REPORT_PRESENTATION,
+  embeddedCjkFontData?: Uint8Array,
+): Promise<Blob> {
+  assertReportExportAllowed(report);
   const D = await import("docx");
-  const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, PageNumber, Header, Footer, TableOfContents, PageBreak } = D;
+  const { Document, Packer, Paragraph, HeadingLevel, AlignmentType, PageNumber, Header, Footer, PageBreak } = D;
   const today = new Date().toLocaleDateString("zh-TW");
+  const primaryFont = primaryFontName(presentation.fontFamily);
 
   type P = InstanceType<DocxModule["Paragraph"]>;
   type T = InstanceType<DocxModule["Table"]>;
@@ -334,53 +400,112 @@ export async function downloadDocx(
     new Paragraph({
       heading: HeadingLevel.TITLE,
       alignment: AlignmentType.CENTER,
-      children: [new TextRun({ text: report.meta.title, bold: true, size: 56 })],
+      children: [docxRun(D, { text: report.meta.title, bold: true, size: 48 }, primaryFont)],
       spacing: { after: 300 },
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
-      children: [new TextRun({ text: metaLine(input, today), size: 24, color: "475569" })],
+      children: [docxRun(D, { text: metaLine(input, today), size: 24, color: "475569" }, primaryFont)],
       spacing: { after: 120 },
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
       children: [
-        new TextRun({
+        docxRun(D, {
           text: `分類：${report.meta.category}　｜　目前版本：${report.meta.versionLabel}（完整度約 ${report.meta.completeness}%）`,
           size: 24,
           color: "475569",
-        }),
+        }, primaryFont),
       ],
     }),
     new Paragraph({ children: [new PageBreak()] }),
   ];
 
-  const toc: P[] = [new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun("目錄")] })];
-  const tocField = new TableOfContents("目錄", { hyperlink: true, headingStyleRange: "1-2" });
+  const toc: P[] = [
+    new Paragraph({
+      heading: HeadingLevel.HEADING_1,
+      children: [docxRun(D, "目錄", primaryFont)],
+      spacing: { after: 160 },
+    }),
+    ...report.sections.map(
+      (section, index) =>
+        new Paragraph({
+          children: [docxRun(D, `${index + 1}. ${section.heading}`, primaryFont)],
+          indent: { left: 360 },
+          spacing: { after: 100 },
+        }),
+    ),
+  ];
 
   const body: (P | T)[] = [];
   if (report.shortTopic) {
     body.push(
-      new Paragraph({ children: [new TextRun({ text: `提醒：${report.shortTopic.message}`, italics: true, color: "8a6d00" })], spacing: { after: 120 } }),
+      new Paragraph({ children: [docxRun(D, { text: `提醒：${report.shortTopic.message}`, italics: true, color: "8a6d00" }, primaryFont)], spacing: { after: 120 } }),
     );
   }
   for (const section of report.sections) {
-    body.push(new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun(section.heading)], spacing: { before: 240, after: 120 } }));
+    body.push(new Paragraph({ heading: HeadingLevel.HEADING_1, children: [docxRun(D, section.heading, primaryFont)], spacing: { before: 240, after: 120 } }));
     for (const b of section.blocks) {
-      if (b.type === "dataTable") body.push(...docxDataTable(D, b));
-      else body.push(...docxBlock(D, b));
+      if (b.type === "dataTable") body.push(...docxDataTable(D, b, primaryFont));
+      else body.push(...docxBlock(D, b, primaryFont));
     }
   }
 
   const doc = new Document({
     creator: "Report Factory AI",
     title: report.meta.title,
+    fonts: embeddedCjkFontData
+      ? [{ name: DOCX_EAST_ASIA_FONT, data: embeddedCjkFontData as Buffer }]
+      : undefined,
     styles: {
       default: {
         document: {
           run: {
             size: Math.round(presentation.fontSizePx * 1.5),
-            font: primaryFontName(presentation.fontFamily),
+            font: {
+              ascii: DOCX_EAST_ASIA_FONT,
+              hAnsi: DOCX_EAST_ASIA_FONT,
+              eastAsia: DOCX_EAST_ASIA_FONT,
+              cs: DOCX_EAST_ASIA_FONT,
+              hint: "eastAsia",
+            },
+            language: { value: "zh-TW", eastAsia: "zh-TW" },
+          },
+        },
+        title: {
+          run: {
+            font: {
+              ascii: DOCX_EAST_ASIA_FONT,
+              hAnsi: DOCX_EAST_ASIA_FONT,
+              eastAsia: DOCX_EAST_ASIA_FONT,
+              cs: DOCX_EAST_ASIA_FONT,
+              hint: "eastAsia",
+            },
+            language: { value: "zh-TW", eastAsia: "zh-TW" },
+          },
+        },
+        heading1: {
+          run: {
+            font: {
+              ascii: DOCX_EAST_ASIA_FONT,
+              hAnsi: DOCX_EAST_ASIA_FONT,
+              eastAsia: DOCX_EAST_ASIA_FONT,
+              cs: DOCX_EAST_ASIA_FONT,
+              hint: "eastAsia",
+            },
+            language: { value: "zh-TW", eastAsia: "zh-TW" },
+          },
+        },
+        heading2: {
+          run: {
+            font: {
+              ascii: DOCX_EAST_ASIA_FONT,
+              hAnsi: DOCX_EAST_ASIA_FONT,
+              eastAsia: DOCX_EAST_ASIA_FONT,
+              cs: DOCX_EAST_ASIA_FONT,
+              hint: "eastAsia",
+            },
+            language: { value: "zh-TW", eastAsia: "zh-TW" },
           },
         },
       },
@@ -389,7 +514,7 @@ export async function downloadDocx(
       {
         headers: {
           default: new Header({
-            children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: report.meta.title, size: 18, color: "94a3b8" })] })],
+            children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [docxRun(D, { text: report.meta.title, size: 18, color: "94a3b8" }, primaryFont)] })],
           }),
         },
         footers: {
@@ -397,18 +522,17 @@ export async function downloadDocx(
             children: [
               new Paragraph({
                 alignment: AlignmentType.CENTER,
-                children: [new TextRun({ children: ["第 ", PageNumber.CURRENT, " 頁／共 ", PageNumber.TOTAL_PAGES, " 頁"], size: 18, color: "94a3b8" })],
+                children: [docxRun(D, { children: ["第 ", PageNumber.CURRENT, " 頁／共 ", PageNumber.TOTAL_PAGES, " 頁"], size: 18, color: "94a3b8" }, primaryFont)],
               }),
             ],
           }),
         },
-        children: [...cover, ...toc, tocField, new Paragraph({ children: [new PageBreak()] }), ...body],
+        children: [...cover, ...toc, new Paragraph({ children: [new PageBreak()] }), ...body],
       },
     ],
   });
 
-  const blob = await Packer.toBlob(doc);
-  triggerDownload(blob, `${safeFileName(input.topic)}.docx`);
+  return Packer.toBlob(doc);
 }
 
 // ─── Print-to-PDF (browser print engine, reliable for Traditional Chinese) ────
@@ -462,10 +586,10 @@ function blockToHtml(b: ContentBlock): string {
   }
 }
 
-function buildPrintHtml(
+export function buildPrintHtml(
   report: GeneratedReport,
   input: ReportInput,
-  presentation: ReportPresentationSettings,
+  presentation: ReportPresentationSettings = DEFAULT_REPORT_PRESENTATION,
 ): string {
   const today = new Date().toLocaleDateString("zh-TW");
   const sectionsHtml = report.sections
@@ -516,6 +640,7 @@ export function printPdf(
   input: ReportInput,
   presentation: ReportPresentationSettings = DEFAULT_REPORT_PRESENTATION,
 ): boolean {
+  assertReportExportAllowed(report);
   const win = window.open("", "_blank");
   if (!win) return false;
   win.document.open();

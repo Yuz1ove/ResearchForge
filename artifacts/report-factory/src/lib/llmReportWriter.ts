@@ -6,6 +6,7 @@ import {
 import type { ReportInput } from "./generateReport.ts";
 import type { SourceRecord } from "./sourceRecords.ts";
 import type { EvidenceCard } from "./evidenceCards.ts";
+import { finalizeReportDraftCitations } from "./reportDraft.ts";
 import { buildQualityReport, type ResearchSectionKey } from "./qualityJudge.ts";
 import type { AcademicSafetyReview } from "@workspace/api-zod";
 import {
@@ -510,7 +511,7 @@ export function mergeLlmReportDraft(
   );
   const sourceMarkerMap = buildStableCitationMarkerMap(workspace.acceptedSources);
   const acceptedMarkers = new Set(sourceMarkerMap.values());
-  const nextDraft = {
+  const mergedDraft = {
     ...workspace.draft,
     sections: workspace.draft.sections.map((section) => {
       const llmSection = sectionsById.get(section.sectionId);
@@ -580,9 +581,12 @@ export function mergeLlmReportDraft(
       };
     }),
   };
-  nextDraft.text = nextDraft.sections
-    .map((section) => `${section.title}\n${section.body}`)
-    .join("\n\n");
+  const nextDraft = finalizeReportDraftCitations(
+    mergedDraft,
+    workspace.acceptedSources,
+    mergedEvidenceCards,
+    workspace.input.citationFormat,
+  );
   const nextQualityReport = buildQualityReport({
     topic: workspace.input.topic,
     depth: workspace.project.depth,

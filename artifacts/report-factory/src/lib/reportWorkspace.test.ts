@@ -320,7 +320,7 @@ test("report generation blocking reason is explicit below three accepted sources
   );
 });
 
-test("generation readiness requires at least one evidence card when evidence gating is provided", () => {
+test("generation readiness blocks zero evidence and labels one-source evidence as limited", () => {
   const acceptedSources = [
     source(1, { usableSections: ["研究背景"] }),
     source(2, { usableSections: ["文獻探討"] }),
@@ -328,14 +328,23 @@ test("generation readiness requires at least one evidence card when evidence gat
   ];
 
   const blocked = generationReadiness(acceptedSources, "standard", []);
-  const ready = generationReadiness(acceptedSources, "standard", [{}] as any);
+  const limited = generationReadiness(acceptedSources, "standard", [{
+    id: "evidence-source-1",
+    sourceId: "source-1",
+    claimText: "來源一支持的可引用主張。",
+    supportSpan: "來源一提供可逐字追溯的支持文字。",
+    sectionFit: ["findings"],
+    extractionMethod: "llm_structured_extract",
+  }] as any);
 
   assert.equal(blocked.canGenerate, false);
   assert.equal(blocked.buttonLabel, "缺少證據卡");
   assert.match(blocked.message ?? "", /至少需 1 張證據卡/);
-  assert.equal(ready.canGenerate, true);
-  assert.equal(ready.reportMode, "short");
-  assert.equal(ready.buttonLabel, "生成短版研究報告");
+  assert.equal(limited.canGenerate, true);
+  assert.equal(limited.reportMode, "short");
+  assert.equal(limited.canExport, false);
+  assert.equal(limited.isLimitedDraft, true);
+  assert.equal(limited.buttonLabel, "建立證據有限草稿");
 });
 
 test("supplemental coverage search yields to server-side reviewed evidence derivation", () => {
@@ -599,6 +608,71 @@ test("workspace export replaces verifier-blocked sections with review prompts", 
 
   assert.match(exportedText, /不輸出正式段落|補查/);
   assert.doesNotMatch(exportedText, /這是一句未支撐但看似正式的外推。/);
+});
+
+test("canonical references include only sources actually cited by report prose", () => {
+  const acceptedSources = [source(1), source(2), source(3)];
+  const evidenceCards = [1, 2].map((index) => ({
+    id: `evidence-source-${index}`,
+    evidenceId: `evidence-source-${index}`,
+    workflowId: DEFAULT_WORKFLOW_ID,
+    topicHash: DEFAULT_TOPIC_HASH,
+    sourceId: `source-${index}`,
+    claimText: `來源 ${index} 支撐的研究主張。`,
+    claimTextZhTw: `來源 ${index} 支撐的研究主張。`,
+    mainClaim: `來源 ${index} 支撐的研究主張。`,
+    supportSpan: `來源 ${index} 的原始可引用支持文字。`,
+    evidence: `來源 ${index} 的原始可引用支持文字。`,
+    evidencePointZhTw: `來源 ${index} 的原始可引用支持文字。`,
+    summary: `來源 ${index} 摘要。`,
+    sourceTitle: `Source ${index}`,
+    sourceProvider: "Crossref",
+    sourceType: "Crossref",
+    sourceUrl: `https://doi.org/10.1000/source-${index}`,
+    sourceDomain: "doi.org",
+    provider: "Crossref",
+    doi: `10.1000/source-${index}`,
+    abstract: `來源 ${index} 的原始可引用支持文字。`,
+    citationMarker: `[S${index}]`,
+    citationText: `Source ${index}`,
+    recommendationBucket: "scholarly_recommended",
+    isPeerReviewed: true,
+    reliability: "高",
+    relevance: "finding",
+    limitations: [],
+    limitationsZhTw: [],
+    sectionTargets: ["literature_review", "findings", "discussion"],
+    sectionFit: ["literature_review", "findings", "discussion"],
+    usableSections: ["文獻探討", "數據分析", "結論"],
+    relevanceScore: 0.9,
+    sourceQualityScore: 0.9,
+    finalScore: 0.9,
+    confidence: "高",
+    confidenceScore: 0.9,
+    derivation: "fulltext-derived",
+    abstractOnly: false,
+    year: 2020 + index,
+    createdAt: "2026-08-03T00:00:00.000Z",
+    notes: "",
+  })) as any;
+  const workspace = createReportWorkspace(
+    input(),
+    acceptedSources,
+    "short_research_report",
+    "rf-canonical-citations",
+    { evidenceCards },
+  );
+  const references = workspace.draft.sections.find(
+    (section) => section.sectionId === "references",
+  );
+
+  assert.deepEqual(
+    references?.citationIds,
+    ["source-1", "source-2"],
+  );
+  assert.match(references?.body ?? "", /\[S1\]/);
+  assert.match(references?.body ?? "", /\[S2\]/);
+  assert.doesNotMatch(references?.body ?? "", /source-3|10\.1000\/source-3/i);
 });
 
 test("generator hides evidence cards unless developer debug is open", () => {

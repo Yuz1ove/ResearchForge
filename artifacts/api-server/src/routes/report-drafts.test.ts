@@ -155,7 +155,49 @@ test("report-drafts returns conservative fallback draft with evidence bindings w
   assert.doesNotMatch(result.sections[0]?.prose ?? "", /目前可先|建議補充/);
 });
 
-test("report-drafts marks findings missingEvidence when only background encyclopedia evidence is provided", async () => {
+test("report-drafts refuses a standard report when ten accepted sources yield one usable evidence source", async () => {
+  let writerCalled = false;
+  const router = createReportDraftsRouter({
+    reportWriter: async () => {
+      writerCalled = true;
+      return failedWriterResult();
+    },
+  });
+  const acceptedSources = Array.from({ length: 10 }, (_, index) =>
+    source({
+      id: `source-${index + 1}`,
+      doi: `10.1000/source-${index + 1}`,
+      url: `https://doi.org/10.1000/source-${index + 1}`,
+      abstract: index === 0
+        ? "唯一可形成引用證據卡的來源內容。"
+        : null,
+      recommendationBucket: "scholarly_recommended",
+      sourceRole: "core_scholarly_evidence",
+    }),
+  );
+
+  const { statusCode, payload } = await invoke(router, {
+    topic: "多來源接受但證據抽取失敗的研究主題",
+    reportMode: "standard",
+    acceptedSources,
+    evidenceCards: [
+      evidence({
+        id: "evidence:source-1:only",
+        sourceId: "source-1",
+        sourceTitle: "來源 1",
+        supportSpan: "唯一可形成引用證據卡的來源內容。",
+        supportedByText: "唯一可形成引用證據卡的來源內容。",
+      }),
+    ],
+    outline: [{ sectionId: "literature_review", title: "文獻探討" }],
+  });
+
+  assert.equal(statusCode, 422);
+  assert.equal(writerCalled, false);
+  assert.equal((payload as { code?: string }).code, "EVIDENCE_INSUFFICIENT_FOR_STANDARD_REPORT");
+});
+
+test("report-drafts blocks when background encyclopedia evidence fails the usable-evidence gate", async () => {
   const router = createReportDraftsRouter({
     reportWriter: async () => failedWriterResult(),
   });
@@ -182,17 +224,11 @@ test("report-drafts marks findings missingEvidence when only background encyclop
     ],
     outline: [{ sectionId: "findings", title: "主要發現" }],
   });
-  const result = payload as {
-    missingEvidence: Array<{ sectionId: string; reason: string }>;
-    sections: Array<{ warnings?: string[] }>;
-  };
+  const result = payload as { code?: string; readiness?: { canGenerate?: boolean } };
 
-  assert.equal(statusCode, 200);
-  assert.equal(
-    result.missingEvidence.some((item) => item.sectionId === "findings" && /百科|主要發現|academic|professional|official/.test(item.reason)),
-    true,
-  );
-  assert.equal(result.sections[0]?.warnings?.includes("missingEvidence"), true);
+  assert.equal(statusCode, 422);
+  assert.equal(result.code, "EVIDENCE_REQUIRED");
+  assert.equal(result.readiness?.canGenerate, false);
 });
 
 test("report-drafts returns canonical evidence cards, bundles, and insufficient sections", async () => {
@@ -277,7 +313,7 @@ test("verifyGroundedSection flags cited sentences unsupported by the cited card"
   assert.equal(diagnostics.unsupportedSentences.some((sentence) => /治療疾病/u.test(sentence)), true);
 });
 
-test("report-drafts rejects legacy frontend evidence without explicit supportSpan", async () => {
+test("report-drafts blocks legacy frontend evidence without explicit supportSpan", async () => {
   const router = createReportDraftsRouter({
     reportWriter: async () => failedWriterResult(),
   });
@@ -301,14 +337,11 @@ test("report-drafts rejects legacy frontend evidence without explicit supportSpa
     ],
     outline: [{ sectionId: "findings", title: "主要發現" }],
   });
-  const result = payload as {
-    evidenceCards: unknown[];
-    rejectedChunks: Array<{ reason: string }>;
-  };
+  const result = payload as { code?: string; readiness?: { canGenerate?: boolean } };
 
-  assert.equal(statusCode, 200);
-  assert.equal(result.evidenceCards.length, 0);
-  assert.equal(result.rejectedChunks.some((item) => item.reason === "missing_claim_or_support_span"), true);
+  assert.equal(statusCode, 422);
+  assert.equal(result.code, "EVIDENCE_REQUIRED");
+  assert.equal(result.readiness?.canGenerate, false);
 });
 
 test("report-drafts derives reviewed supportSpan cards server-side from accepted source abstracts", async () => {

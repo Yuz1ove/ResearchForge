@@ -3,6 +3,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import app from "./app";
+import { RESEARCHFORGE_DEPLOYMENT_CONTRACT_VERSION } from "@workspace/api-zod/deployment-contract";
 
 const FORBIDDEN_RESPONSE_SIGNATURES = [
   "import { createRequire",
@@ -43,7 +44,15 @@ test("API root, health, CORS, and 404 responses do not expose server source", as
   assert.deepEqual(JSON.parse(rootBody), {
     service: "ResearchForge API",
     status: "ok",
+    contractVersion: RESEARCHFORGE_DEPLOYMENT_CONTRACT_VERSION,
+    commitSha: "development",
+    gitRef: "development",
+    dirty: false,
   });
+
+  const deploymentResponse = await fetch(`${baseUrl}/api/deployment`, { headers: closeConnection });
+  assert.equal(deploymentResponse.status, 200);
+  assert.deepEqual(await deploymentResponse.json(), JSON.parse(rootBody));
 
   const healthResponse = await fetch(`${baseUrl}/api/healthz`, { headers: closeConnection });
   assert.equal(healthResponse.status, 200);

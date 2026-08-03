@@ -263,6 +263,14 @@ export interface ReportMeta {
   researchDraft?: unknown;
   qualityReport?: unknown;
   evidenceCards?: unknown;
+  acceptedSourceCount?: number;
+  usedSourceCount?: number;
+  usedSourceIds?: string[];
+  citedSourceIds?: string[];
+  exportAllowed?: boolean;
+  isLimitedDraft?: boolean;
+  evidenceSufficiency?: "not_evaluated" | "none" | "limited" | "short_ready" | "standard_ready";
+  citationIntegrity?: { valid: boolean; errors: string[] };
 }
 
 export interface GeneratedReport {

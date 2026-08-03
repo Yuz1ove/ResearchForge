@@ -255,7 +255,7 @@ test("mergeLlmReportDraft replaces matching draft section prose for preview", ()
         sectionId: targetSection.sectionId,
         title: "摘要",
         prose:
-          "這是一段由 LLM 根據已接受來源重新撰寫的正式中文報告段落，會顯示在 report preview。",
+          "這是一段由 LLM 根據已接受來源重新撰寫的正式中文報告段落，會顯示在 report preview[S1][S2]。",
         evidenceCardIds: workspace.evidenceCards.slice(0, 2).map((card) => card.id),
         citationIds: ["source-1", "source-2", "not-accepted"],
       },

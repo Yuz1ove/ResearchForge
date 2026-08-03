@@ -4,8 +4,29 @@ import { pinoHttp } from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { isAllowedResearchForgeOrigin } from "./config/cors";
+import {
+  RESEARCHFORGE_DEPLOYMENT_CONTRACT_VERSION,
+  type ResearchForgeDeploymentIdentity,
+} from "@workspace/api-zod/deployment-contract";
 
 const app: Express = express();
+
+function deploymentIdentity(): ResearchForgeDeploymentIdentity {
+  return {
+    service: "ResearchForge API",
+    status: "ok",
+    contractVersion: RESEARCHFORGE_DEPLOYMENT_CONTRACT_VERSION,
+    commitSha:
+      process.env.VERCEL_GIT_COMMIT_SHA ??
+      process.env.RESEARCHFORGE_GIT_SHA ??
+      "development",
+    gitRef:
+      process.env.VERCEL_GIT_COMMIT_REF ??
+      process.env.RESEARCHFORGE_GIT_REF ??
+      "development",
+    dirty: process.env.RESEARCHFORGE_GIT_DIRTY === "true",
+  };
+}
 
 app.use(
   pinoHttp({
@@ -38,10 +59,11 @@ app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true, limit: "5mb" }));
 
 app.get("/", (_req, res) => {
-  res.json({
-    service: "ResearchForge API",
-    status: "ok",
-  });
+  res.json(deploymentIdentity());
+});
+
+app.get("/api/deployment", (_req, res) => {
+  res.json(deploymentIdentity());
 });
 
 app.use("/api", router);

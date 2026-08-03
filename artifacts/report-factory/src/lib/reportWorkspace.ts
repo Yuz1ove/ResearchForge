@@ -4,7 +4,12 @@ import {
   type SourceRecord,
 } from "./sourceRecords.ts";
 import type { EvidenceCard } from "./evidenceCards.ts";
-import { buildReportDraft, type ReportDraft } from "./reportDraft.ts";
+import {
+  buildReportDraft,
+  finalizeReportDraftCitations,
+  validateReportCitationIntegrity,
+  type ReportDraft,
+} from "./reportDraft.ts";
 import { buildReportOutline, type ReportOutline } from "./reportOutline.ts";
 import type { QualityReport, ResearchProject } from "./qualityJudge.ts";
 import type { AcademicSafetyReview } from "@workspace/api-zod";
@@ -67,6 +72,14 @@ export interface GenerationReadiness {
   claimMode: ReportClaimMode | "blocked";
   minRequiredSources: number;
   badge: string;
+  evidenceSufficiency: ReturnType<typeof getReportReadiness>["evidenceSufficiency"];
+  usableEvidenceCardsCount: number;
+  distinctUsableEvidenceSourceCount: number;
+  citationReadyClaimsCount: number;
+  requiredSectionCoverageCount: number;
+  extractionFailureCount: number;
+  canExport: boolean;
+  isLimitedDraft: boolean;
 }
 
 export interface GeneratorWorkflowVisibility {
@@ -372,6 +385,7 @@ export function reportGenerationBlockingReason(input: {
   acceptedSources: SourceRecord[];
   hasWorkspaceTopicMismatch?: boolean;
   evidenceCardCount?: number;
+  evidenceCards?: EvidenceCard[] | null;
   workflowId?: string | null;
   topicHash?: string | null;
 }): string | null {
@@ -383,7 +397,12 @@ export function reportGenerationBlockingReason(input: {
   const workflowId = input.workflowId?.trim();
   if (!workflowId) return MISSING_WORKFLOW_ID_MESSAGE;
 
-  const readiness = getReportReadiness({ acceptedSources: input.acceptedSources });
+  const readiness = getReportReadiness({
+    acceptedSources: input.acceptedSources,
+    ...(input.evidenceCards !== undefined
+      ? { evidenceCards: input.evidenceCards }
+      : {}),
+  });
   if (!readiness.canGenerate) {
     return readiness.message;
   }
@@ -644,6 +663,14 @@ export function generationReadiness(
       claimMode: canonicalReadiness.claimMode,
       minRequiredSources: canonicalReadiness.minRequiredSources,
       badge: canonicalReadiness.badge,
+      evidenceSufficiency: canonicalReadiness.evidenceSufficiency,
+      usableEvidenceCardsCount: canonicalReadiness.usableEvidenceCardsCount,
+      distinctUsableEvidenceSourceCount: canonicalReadiness.distinctUsableEvidenceSourceCount,
+      citationReadyClaimsCount: canonicalReadiness.citationReadyClaimsCount,
+      requiredSectionCoverageCount: canonicalReadiness.requiredSectionCoverageCount,
+      extractionFailureCount: canonicalReadiness.extractionFailureCount,
+      canExport: canonicalReadiness.canExport,
+      isLimitedDraft: canonicalReadiness.isLimitedDraft,
     };
   }
 
@@ -651,6 +678,9 @@ export function generationReadiness(
     canonicalReadiness.acceptedUsableSourcesCount,
     canonicalReadiness.claimMode,
   );
+  const effectiveGenerationMode = canonicalReadiness.isLimitedDraft
+    ? "initial_brief"
+    : generationMode;
   if (canonicalReadiness.reportMode === "short") {
     return {
       ...diagnostics,
@@ -658,7 +688,7 @@ export function generationReadiness(
       scholarlySourcesCount: canonicalReadiness.scholarlySourcesCount,
       officialBackgroundSourcesCount: canonicalReadiness.officialBackgroundSourcesCount,
       reliableBackgroundSourcesCount: canonicalReadiness.reliableBackgroundSourcesCount,
-      mode: generationMode,
+      mode: effectiveGenerationMode,
       canGenerate: true,
       canGenerateFull: false,
       warning: canonicalReadiness.message,
@@ -672,6 +702,14 @@ export function generationReadiness(
       claimMode: canonicalReadiness.claimMode,
       minRequiredSources: canonicalReadiness.minRequiredSources,
       badge: canonicalReadiness.badge,
+      evidenceSufficiency: canonicalReadiness.evidenceSufficiency,
+      usableEvidenceCardsCount: canonicalReadiness.usableEvidenceCardsCount,
+      distinctUsableEvidenceSourceCount: canonicalReadiness.distinctUsableEvidenceSourceCount,
+      citationReadyClaimsCount: canonicalReadiness.citationReadyClaimsCount,
+      requiredSectionCoverageCount: canonicalReadiness.requiredSectionCoverageCount,
+      extractionFailureCount: canonicalReadiness.extractionFailureCount,
+      canExport: canonicalReadiness.canExport,
+      isLimitedDraft: canonicalReadiness.isLimitedDraft,
     };
   }
 
@@ -698,6 +736,14 @@ export function generationReadiness(
     claimMode: canonicalReadiness.claimMode,
     minRequiredSources: canonicalReadiness.minRequiredSources,
     badge: canonicalReadiness.badge,
+    evidenceSufficiency: canonicalReadiness.evidenceSufficiency,
+    usableEvidenceCardsCount: canonicalReadiness.usableEvidenceCardsCount,
+    distinctUsableEvidenceSourceCount: canonicalReadiness.distinctUsableEvidenceSourceCount,
+    citationReadyClaimsCount: canonicalReadiness.citationReadyClaimsCount,
+    requiredSectionCoverageCount: canonicalReadiness.requiredSectionCoverageCount,
+    extractionFailureCount: canonicalReadiness.extractionFailureCount,
+    canExport: canonicalReadiness.canExport,
+    isLimitedDraft: canonicalReadiness.isLimitedDraft,
   };
 }
 
@@ -1358,9 +1404,29 @@ export function workspaceToGeneratedReport(
   workspace: ReportWorkspace,
   category: TopicCategory,
 ): GeneratedReport {
+  const canonicalDraft = finalizeReportDraftCitations(
+    workspace.draft,
+    workspace.acceptedSources,
+    workspace.evidenceCards,
+    workspace.input.citationFormat,
+  );
+  const citationIntegrity = validateReportCitationIntegrity(
+    canonicalDraft,
+    workspace.acceptedSources,
+    workspace.evidenceCards,
+  );
+  const readiness = getReportReadiness({
+    acceptedSources: workspace.acceptedSources,
+    evidenceCards: workspace.evidenceCards,
+    reportMode: reportModeFromGenerationMode(workspace.generationMode),
+  });
+  const citedSourceIdSet = new Set(citationIntegrity.citedSourceIds);
+  const citedSources = workspace.acceptedSources.filter((source) =>
+    citedSourceIdSet.has(source.id),
+  );
   return {
     ...workspace.report,
-    sections: workspace.draft.sections.map((section) => ({
+    sections: canonicalDraft.sections.map((section) => ({
       heading: section.title,
       blocks: [
         {
@@ -1375,12 +1441,23 @@ export function workspaceToGeneratedReport(
       category,
       acceptedSources: workspace.acceptedSources,
       bibliography: buildBibliography(
-        workspace.acceptedSources,
+        citedSources,
         workspace.input.citationFormat,
       ),
-      researchDraft: workspace.draft,
+      researchDraft: canonicalDraft,
       qualityReport: workspace.qualityReport,
       evidenceCards: workspace.evidenceCards,
+      acceptedSourceCount: workspace.acceptedSources.length,
+      usedSourceCount: citedSources.length,
+      usedSourceIds: citationIntegrity.citedSourceIds,
+      citedSourceIds: citationIntegrity.citedSourceIds,
+      exportAllowed: readiness.canExport && citationIntegrity.valid,
+      isLimitedDraft: readiness.isLimitedDraft,
+      evidenceSufficiency: readiness.evidenceSufficiency,
+      citationIntegrity: {
+        valid: citationIntegrity.valid,
+        errors: citationIntegrity.errors,
+      },
     },
   };
 }

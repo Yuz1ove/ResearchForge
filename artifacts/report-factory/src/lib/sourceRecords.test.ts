@@ -280,6 +280,27 @@ test("auto accepts directly relevant primary sources into the same accepted-sour
   );
 });
 
+test("zero recommendations never falls back to accepting every retrieved source", () => {
+  const retrieved = Array.from({ length: 12 }, (_, index) =>
+    source({
+      id: `manual-review-${index + 1}`,
+      doi: `10.1000/manual-review-${index + 1}`,
+      classification: "primary",
+      relevanceLevel: "primary",
+      shouldRecommendAccept: undefined,
+      shouldShowInMainList: true,
+      recommendationBucket: "manual_review",
+      evidenceGrounding: "abstract_grounded",
+    }),
+  );
+
+  const projected = autoAcceptPrimarySources(retrieved);
+
+  assert.equal(projected.length, 12);
+  assert.equal(acceptedSourceRecords(projected).length, 0);
+  assert.equal(candidateSourceRecords(projected).length, 12);
+});
+
 test("formats accepted sources as APA-style bibliography entries", () => {
   const bibliography = buildBibliography([source({ reviewState: "accepted" })], "APA");
 

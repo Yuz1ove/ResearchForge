@@ -37,3 +37,18 @@ test("frontend source does not read secret LLM environment variables", () => {
 
   assert.deepEqual(offenders, []);
 });
+
+test("frontend embeds build provenance and verifies the paired API deployment identity", () => {
+  const viteConfig = readFileSync(path.resolve(process.cwd(), "vite.config.ts"), "utf8");
+  const main = readFileSync(path.resolve(process.cwd(), "src/main.tsx"), "utf8");
+  const rootVercel = JSON.parse(
+    readFileSync(path.resolve(process.cwd(), "../..", "vercel.json"), "utf8"),
+  ) as { rewrites?: Array<{ source?: string; destination?: string }> };
+
+  assert.match(viteConfig, /RESEARCHFORGE_DEPLOYMENT_CONTRACT_VERSION/);
+  assert.match(viteConfig, /VITE_RESEARCHFORGE_GIT_SHA/);
+  assert.match(viteConfig, /VERCEL_GIT_COMMIT_SHA/);
+  assert.match(main, /\/api\/deployment/);
+  assert.match(main, /researchforgeApiMatch/);
+  assert.deepEqual(rootVercel.rewrites, [{ source: "/(.*)", destination: "/index.html" }]);
+});

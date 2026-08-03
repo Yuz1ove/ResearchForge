@@ -1554,7 +1554,13 @@ function sourceShouldAutoAccept(source: SourceRecord): boolean {
   }
   if (source.relevanceLevel !== "primary") return false;
   if (source.classification !== "primary") return false;
-  if (source.shouldRecommendAccept === false) return false;
+  // Recommendation and acceptance are separate states. Only an explicit
+  // recommendation may seed acceptance; an absent recommendation must remain
+  // pending instead of falling back to "accept everything".
+  if (source.shouldRecommendAccept !== true) return false;
+  if (source.recommendationBucket === "manual_review" || source.recommendationBucket === "rejected") {
+    return false;
+  }
   if (source.shouldShowInMainList === false) return false;
   if (source.isMetadataOnly || source.evidenceGrounding === "metadata_only") return false;
   return true;

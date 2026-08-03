@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 
 const baseUrl = process.env.RESEARCHFORGE_E2E_URL ?? "http://127.0.0.1:22067";
+const localCommitSha = execFileSync("git", ["rev-parse", "HEAD"], {
+  encoding: "utf8",
+}).trim();
 const now = "2026-07-05T00:00:00.000Z";
 const expiresAt = "2026-07-06T00:00:00.000Z";
 
@@ -951,4 +955,140 @@ test("Chinese Step 2 topics with zero accepted sources still enter source review
     await generateButton.click();
     await expect(page.getByTestId("generator-generate-step")).toBeVisible();
   }
+});
+
+test("persisted source decisions survive reload and a new browser context", async ({ browser }) => {
+  const fixture = reviewableFixtures[0]!;
+  const baseJob = reviewableGroundingJob(fixture);
+  const job = {
+    ...baseJob,
+    candidateSources: [...baseJob.sourceCandidates],
+    expiresAt: "2026-08-10T00:00:00.000Z",
+    sourceDecisions: [] as Array<{
+      sourceId: string;
+      workflowId: string;
+      decision: "accepted" | "rejected" | "unreviewed";
+      decidedBy: "user";
+      decidedAt: string;
+      decisionVersion: number;
+    }>,
+  };
+  const jobUrl = `**/api/research-grounding-jobs/${fixture.jobId}`;
+  const decisionUrl = `${jobUrl}/source-decisions`;
+  let decisionPatchCount = 0;
+  const runtimeErrors: string[] = [];
+  const workspaceUrl =
+    `${baseUrl}/workspace?step=source_review` +
+    `&jobId=${encodeURIComponent(fixture.jobId)}` +
+    `&workflowId=${encodeURIComponent(fixture.workflowId)}` +
+    `&topicHash=${encodeURIComponent(fixture.topicHash)}` +
+    `&runId=${encodeURIComponent(`run-${fixture.jobId}`)}`;
+
+  const installJobRoute = async (context: Awaited<ReturnType<typeof browser.newContext>>) => {
+    await context.route("**/api/deployment", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          service: "ResearchForge API",
+          status: "ok",
+          contractVersion: "report-integrity-v1",
+          commitSha: localCommitSha,
+          gitRef: "codex/fix/report-integrity-p1-20260803",
+          dirty: true,
+        }),
+      });
+    });
+    await context.route(jobUrl, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job) });
+    });
+    await context.route(decisionUrl, async (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      decisionPatchCount += 1;
+      const patch = JSON.parse(route.request().postData() ?? "{}") as {
+        expectedRevision?: number;
+        decisions?: Array<{ sourceId: string; decision: "accepted" | "rejected" | "unreviewed" }>;
+      };
+      expect(patch.expectedRevision).toBe(job.revision);
+      for (const decision of patch.decisions ?? []) {
+        const candidate = job.sourceCandidates.find((item) => item.sourceId === decision.sourceId);
+        expect(candidate).toBeTruthy();
+        if (!candidate) continue;
+        candidate.reviewStatus = decision.decision === "unreviewed" ? "review" : decision.decision;
+        job.sourceDecisions = [
+          ...job.sourceDecisions.filter((item) => item.sourceId !== decision.sourceId),
+          {
+            sourceId: decision.sourceId,
+            workflowId: fixture.workflowId,
+            decision: decision.decision,
+            decidedBy: "user",
+            decidedAt: "2026-08-03T12:00:00.000Z",
+            decisionVersion: 1,
+          },
+        ];
+      }
+      job.acceptedSources = job.sourceCandidates.filter((item) => item.reviewStatus === "accepted");
+      job.rejectedSources = job.sourceCandidates.filter((item) => item.reviewStatus === "rejected");
+      job.fallbackReviewSources = [...job.sourceCandidates];
+      job.candidateSources = [...job.sourceCandidates];
+      job.revision += 1;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job) });
+    });
+  };
+
+  const firstContext = await browser.newContext();
+  await installJobRoute(firstContext);
+  const firstPage = await firstContext.newPage();
+  firstPage.on("console", (message) => {
+    if (message.type() === "error") runtimeErrors.push(`console:${message.text()}`);
+  });
+  firstPage.on("pageerror", (error) => runtimeErrors.push(`page:${error.message}`));
+  firstPage.on("requestfailed", (request) =>
+    runtimeErrors.push(`request:${request.method()} ${request.url()}`),
+  );
+  await firstPage.goto(workspaceUrl);
+  await expect.poll(() =>
+    firstPage.locator("#root").getAttribute("data-researchforge-api-match")
+  ).toBe("true");
+  await expect(firstPage.getByTestId("generator-manage-step")).toBeVisible();
+  await expect(firstPage.getByTestId("source-card-pending")).toHaveCount(8);
+  await firstPage
+    .getByTestId("source-card-pending")
+    .first()
+    .getByRole("button", { name: /接受|確認後接受|強制保留/ })
+    .click();
+  await expect.poll(() => decisionPatchCount).toBe(1);
+  await expect.poll(() => job.acceptedSources.length).toBe(1);
+  await expect(firstPage.getByTestId("source-card-accepted")).toHaveCount(1);
+  await firstPage
+    .getByTestId("source-card-pending")
+    .first()
+    .getByRole("button", { name: /拒絕/ })
+    .click();
+  await expect.poll(() => decisionPatchCount).toBe(2);
+  await expect.poll(() => job.rejectedSources.length).toBe(1);
+  await expect(firstPage.getByTestId("source-card-rejected")).toHaveCount(1);
+  await firstPage.reload();
+  await expect(firstPage.getByTestId("source-card-accepted")).toHaveCount(1);
+  await expect(firstPage.getByTestId("source-card-rejected")).toHaveCount(1);
+  await firstContext.close();
+
+  const secondContext = await browser.newContext();
+  await installJobRoute(secondContext);
+  const secondPage = await secondContext.newPage();
+  secondPage.on("console", (message) => {
+    if (message.type() === "error") runtimeErrors.push(`console:${message.text()}`);
+  });
+  secondPage.on("pageerror", (error) => runtimeErrors.push(`page:${error.message}`));
+  secondPage.on("requestfailed", (request) =>
+    runtimeErrors.push(`request:${request.method()} ${request.url()}`),
+  );
+  await secondPage.goto(workspaceUrl);
+  await expect(secondPage.getByTestId("generator-manage-step")).toBeVisible();
+  await expect(secondPage.getByTestId("source-card-accepted")).toHaveCount(1);
+  await expect(secondPage.getByTestId("source-card-rejected")).toHaveCount(1);
+  await expect(secondPage.getByTestId("source-card-pending")).toHaveCount(6);
+  await secondContext.close();
+  expect(runtimeErrors).toEqual([]);
 });

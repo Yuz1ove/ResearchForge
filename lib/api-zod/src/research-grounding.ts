@@ -590,6 +590,34 @@ export const SourceCandidateSchema = z.object({
 });
 export type SourceCandidate = z.infer<typeof SourceCandidateSchema>;
 
+export const SourceDecisionValueSchema = z.enum([
+  "accepted",
+  "rejected",
+  "unreviewed",
+]);
+export type SourceDecisionValue = z.infer<typeof SourceDecisionValueSchema>;
+
+export const SourceDecisionSchema = z.object({
+  sourceId: z.string().trim().min(1),
+  workflowId: z.string().trim().min(1),
+  decision: SourceDecisionValueSchema,
+  decidedBy: z.enum(["user", "system_migration"]),
+  decidedAt: z.string().trim().min(1),
+  decisionVersion: z.number().int().min(1),
+});
+export type SourceDecision = z.infer<typeof SourceDecisionSchema>;
+
+export const SourceDecisionPatchRequestSchema = z.object({
+  workflowId: z.string().trim().min(1),
+  topicHash: z.string().trim().min(1),
+  expectedRevision: z.number().int().min(1).optional(),
+  decisions: z.array(z.object({
+    sourceId: z.string().trim().min(1),
+    decision: SourceDecisionValueSchema,
+  })).min(1),
+});
+export type SourceDecisionPatchRequest = z.infer<typeof SourceDecisionPatchRequestSchema>;
+
 export const GroundingProviderErrorSchema = z.object({
   provider: z.string().trim().min(1),
   query: z.string().trim().min(1),
@@ -1209,6 +1237,7 @@ export const GroundingJobSchema = z.object({
   fallbackReviewSources: z.array(SourceCandidateSchema).optional(),
   rejectedSources: z.array(SourceCandidateSchema).optional(),
   acceptedSources: z.array(SourceCandidateSchema).optional(),
+  sourceDecisions: z.array(SourceDecisionSchema).optional(),
   fallbackAttempts: GroundingPipelineDiagnosticsSchema.shape.fallbackAttempts,
   academicRetry: AcademicRetrySchema.optional(),
   sourceQualitySummary: SourceQualitySummarySchema.optional(),

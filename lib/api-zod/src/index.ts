@@ -11,6 +11,7 @@ export type {
 export * from "./research-tools";
 export * from "./evidence-governance";
 export * from "./report-readiness";
+export * from "./deployment-contract";
 export * from "./domain-synonyms";
 export * from "./llm-status";
 export * from "./topic-expansion";

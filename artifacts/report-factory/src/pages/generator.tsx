@@ -140,6 +140,7 @@ import {
   ResearchGroundingApiError,
   groundingJobSourceContractMismatch,
   groundingJobToSourceRecords,
+  persistResearchGroundingSourceDecisions,
   queryPlanHashFromJob,
 } from "@/lib/researchGrounding";
 import {
@@ -6017,6 +6018,9 @@ export function Generator() {
   const [groundingRequestState, setGroundingRequestState] =
     useState<GroundingRequestState>("idle");
   const [groundingError, setGroundingError] = useState<string | null>(null);
+  const [sourceDecisionPersistenceStatus, setSourceDecisionPersistenceStatus] = useState<
+    "idle" | "saving" | "error"
+  >("idle");
   const [generatorRunId, setGeneratorRunId] = useState<string | null>(null);
   const [stepHistory, setStepHistory] = useState<GeneratorRouteStep[]>([]);
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
@@ -6252,10 +6256,13 @@ export function Generator() {
     () => acceptedSources.some(sourceHasServerDerivableSupport),
     [acceptedSources],
   );
-  const readinessEvidenceCards =
-    acceptedEvidenceCards.length > 0 || !serverDerivableEvidenceAvailable
-      ? acceptedEvidenceCards
-      : null;
+  const readinessEvidenceCards = useMemo(
+    () =>
+      acceptedEvidenceCards.length > 0
+        ? acceptedEvidenceCards
+        : buildEvidenceCards(acceptedSources),
+    [acceptedEvidenceCards, acceptedSources],
+  );
   const readiness = generationReadiness(
     acceptedSources,
     input.researchDepth,
@@ -6317,18 +6324,17 @@ export function Generator() {
     topic: activeReportTopic,
     acceptedSources,
     hasWorkspaceTopicMismatch,
-    evidenceCardCount:
-      acceptedEvidenceCards.length > 0
-        ? acceptedEvidenceCards.length
-        : serverDerivableEvidenceAvailable
-          ? 1
-          : 0,
+    evidenceCards: readinessEvidenceCards,
     workflowId: sourceWorkflowLock?.workflowId ?? null,
     topicHash: sourceWorkflowLock?.topicHash ?? null,
   });
-  const effectiveBlockingReason = academicSafetyBlocksReport(academicSafetyReview)
-    ? "此主題已被標記為不可輸出操作性內容，因此不會進入一般報告生成。"
-    : blockingReason;
+  const effectiveBlockingReason = sourceDecisionPersistenceStatus === "saving"
+    ? "來源決策仍在儲存，請稍候完成後再生成報告。"
+    : sourceDecisionPersistenceStatus === "error"
+      ? "來源決策尚未寫入持久化工作，請重新接受／拒絕來源後再生成報告。"
+      : academicSafetyBlocksReport(academicSafetyReview)
+        ? "此主題已被標記為不可輸出操作性內容，因此不會進入一般報告生成。"
+        : blockingReason;
   const canGenerateReport = !effectiveBlockingReason;
   const reportGenerationDebug: ReportGenerationDebugState = {
     workflowId: sourceWorkflowLock?.workflowId ?? null,
@@ -6989,7 +6995,10 @@ export function Generator() {
       return true;
     };
 
-    if (restoreFromSnapshot()) return;
+    // A persisted job is authoritative across reloads and browser contexts.
+    // Session storage is only a compatibility fallback for legacy URLs that
+    // do not carry a job identity.
+    if (!jobId && restoreFromSnapshot()) return;
     if (!jobId) {
       setRestoreMessage("此查詢狀態已失效，請重新搜尋。");
       return;
@@ -7488,6 +7497,7 @@ export function Generator() {
     setGroundingJob(null);
     setGroundingRequestState("creating_job");
     setGroundingError(null);
+    setSourceDecisionPersistenceStatus("idle");
     setSources([]);
     setSourceWorkflowId(workflowId);
     setSourceWorkspaceFingerprint(topicHash);
@@ -7691,6 +7701,7 @@ export function Generator() {
     });
     setKeywordSearchDebug(null);
     setSources([]);
+    setSourceDecisionPersistenceStatus("idle");
     setSourceWorkspaceFingerprint(null);
     setSourceWorkflowId(null);
     setSourceQueryPlanHash(null);
@@ -7927,6 +7938,13 @@ export function Generator() {
     sourceId: string,
     reviewState: SourceReviewState,
   ) => {
+    if (sourceDecisionPersistenceStatus === "saving") {
+      toast({
+        title: "正在儲存上一筆來源決策",
+        description: "請等待儲存完成後再變更下一筆來源。",
+      });
+      return;
+    }
     const source = sources.find(
       (item) => (item.id || sourceRecordKey(item)) === sourceId,
     );
@@ -7974,22 +7992,96 @@ export function Generator() {
         });
       }),
     );
+
+    if (groundingJobMeta?.jobId && sourceWorkflowLock) {
+      setSourceDecisionPersistenceStatus("saving");
+      void (async () => {
+        try {
+          const updatedJob = await persistResearchGroundingSourceDecisions({
+            jobId: groundingJobMeta.jobId,
+            workflowId: sourceWorkflowLock.workflowId,
+            topicHash: sourceWorkflowLock.topicHash,
+            expectedRevision: groundingJob?.revision,
+            decisions: [{
+              sourceId,
+              decision:
+                reviewState === "pending" ? "unreviewed" : reviewState,
+            }],
+          });
+          setGroundingJob(updatedJob);
+          setSources(groundingJobToSourceRecords(updatedJob));
+          setSourceDecisionPersistenceStatus("idle");
+        } catch {
+          try {
+            const authoritativeJob = await fetchResearchGroundingJob(
+              groundingJobMeta.jobId,
+            );
+            setGroundingJob(authoritativeJob);
+            setSources(groundingJobToSourceRecords(authoritativeJob));
+            setSourceDecisionPersistenceStatus("idle");
+          } catch {
+            // Keep the visible decision but make the persistence failure clear;
+            // a later reload will not pretend it was saved.
+            setSourceDecisionPersistenceStatus("error");
+          }
+          toast({
+            title: "來源決策尚未儲存",
+            description: "請確認連線後再試一次；系統不會以未儲存的狀態生成報告。",
+            variant: "destructive",
+          });
+        }
+      })();
+    }
   };
 
   const handleAcceptAllSources = () => {
-    setSources((current) => {
-      const selectableIds = new Set(
-        selectableCandidateSources(current).map(
-          (source) => source.id || sourceRecordKey(source),
-        ),
-      );
-      return current.map((source) => {
-        const key = source.id || sourceRecordKey(source);
-        if (!selectableIds.has(key)) return source;
-        if (sourceReviewState(source) !== "pending") return source;
-        return updateSourceReviewState([source], key, "accepted")[0]!;
-      });
-    });
+    if (sourceDecisionPersistenceStatus === "saving") return;
+    const selectableIds = new Set(
+      selectableCandidateSources(sources)
+        .filter((source) => sourceReviewState(source) === "pending")
+        .map((source) => source.id || sourceRecordKey(source)),
+    );
+    if (selectableIds.size === 0) return;
+    setSources((current) => current.map((source) => {
+      const key = source.id || sourceRecordKey(source);
+      return selectableIds.has(key)
+        ? updateSourceReviewState([source], key, "accepted")[0]!
+        : source;
+    }));
+    if (groundingJobMeta?.jobId && sourceWorkflowLock) {
+      setSourceDecisionPersistenceStatus("saving");
+      void (async () => {
+        try {
+          const updatedJob = await persistResearchGroundingSourceDecisions({
+            jobId: groundingJobMeta.jobId,
+            workflowId: sourceWorkflowLock.workflowId,
+            topicHash: sourceWorkflowLock.topicHash,
+            expectedRevision: groundingJob?.revision,
+            decisions: [...selectableIds].map((sourceId) => ({
+              sourceId,
+              decision: "accepted" as const,
+            })),
+          });
+          setGroundingJob(updatedJob);
+          setSources(groundingJobToSourceRecords(updatedJob));
+          setSourceDecisionPersistenceStatus("idle");
+        } catch {
+          try {
+            const authoritativeJob = await fetchResearchGroundingJob(groundingJobMeta.jobId);
+            setGroundingJob(authoritativeJob);
+            setSources(groundingJobToSourceRecords(authoritativeJob));
+            setSourceDecisionPersistenceStatus("idle");
+          } catch {
+            setSourceDecisionPersistenceStatus("error");
+          }
+          toast({
+            title: "批次來源決策尚未儲存",
+            description: "請確認連線後再試一次；未持久化前不會生成報告。",
+            variant: "destructive",
+          });
+        }
+      })();
+    }
   };
 
   // ── Generate ────────────────────────────────────────────────────────────────
@@ -8114,6 +8206,14 @@ export function Generator() {
       });
       return;
     }
+    if (sourceDecisionPersistenceStatus !== "idle") {
+      toast({
+        title: "來源決策尚未完成",
+        description: effectiveBlockingReason ?? "請等待來源決策儲存完成後再生成。",
+        variant: "destructive",
+      });
+      return;
+    }
     if (needsSupplementalCoverage) {
       const supplemented = await runSectionCoverageSupplementalSearch();
       if (supplemented) {
@@ -8133,12 +8233,7 @@ export function Generator() {
           topic: activeReportTopic,
           acceptedSources,
           hasWorkspaceTopicMismatch,
-          evidenceCardCount:
-            acceptedEvidenceCards.length > 0
-              ? acceptedEvidenceCards.length
-              : serverDerivableEvidenceAvailable
-                ? 1
-                : 0,
+          evidenceCards: readinessEvidenceCards,
           workflowId: sourceWorkflowLock?.workflowId ?? null,
           topicHash: sourceWorkflowLock?.topicHash ?? null,
         });

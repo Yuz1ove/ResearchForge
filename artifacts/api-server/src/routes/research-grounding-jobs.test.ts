@@ -130,3 +130,100 @@ test("route classifies invalid input and a terminal pipeline failure", async (t)
   assert.equal(job.status, "failed");
   assert.match(job.warnings[0] ?? "", /GROUNDING_PIPELINE_FAILED/);
 });
+
+test("source decisions persist in the job and are visible from a second app instance", async (t) => {
+  const repository = new InMemoryGroundingJobRepository();
+  const first = await listen(appFor(repository));
+  const second = await listen(appFor(repository));
+  t.after(async () => {
+    await first.close();
+    await second.close();
+  });
+
+  const now = "2026-08-03T00:00:00.000Z";
+  const workflowId = "wf-source-decisions";
+  const topicHash = "topic-source-decisions";
+  const candidate = (sourceId: string) => ({
+    sourceId,
+    workflowId,
+    topicHash,
+    queryUsed: "繁體中文研究主題",
+    queryIntent: "exact",
+    provider: "openalex" as const,
+    title: `來源 ${sourceId}`,
+    authors: ["ResearchForge Fixture"],
+    year: 2026,
+    doi: `10.1000/${sourceId}`,
+    url: `https://doi.org/10.1000/${sourceId}`,
+    abstractOriginal: `來源 ${sourceId} 的可引用摘要內容。`,
+    sourceType: "paper" as const,
+    relevanceScore: 0.9,
+    sourceQualityScore: 0.9,
+    retrievalMode: "live_provider" as const,
+    recommendationBucket: "manual_review" as const,
+    sourceRole: "core_scholarly_evidence" as const,
+    reviewStatus: "review" as const,
+    evidencePoints: ["可引用重點"],
+    limitations: [],
+    usableSections: ["literature_review"],
+    citationMarker: `[${sourceId}]`,
+    dedupeKey: sourceId,
+    createdAt: now,
+    retrievedAt: now,
+  });
+  await repository.create(GroundingJobSchema.parse({
+    jobId: "job-source-decisions",
+    workflowId,
+    topicHash,
+    requestId: "request-source-decisions",
+    attemptId: "attempt-source-decisions",
+    revision: 1,
+    originalTopic: "繁體中文研究主題",
+    normalizedTopic: "繁體中文研究主題",
+    status: "source_review_ready",
+    progress: 100,
+    candidateSources: [candidate("source-a"), candidate("source-b")],
+    warnings: [],
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: "2026-08-10T00:00:00.000Z",
+  }));
+
+  const persisted = await fetch(
+    `${first.baseUrl}/api/research-grounding-jobs/job-source-decisions/source-decisions`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        workflowId,
+        topicHash,
+        expectedRevision: 1,
+        decisions: [
+          { sourceId: "source-a", decision: "accepted" },
+          { sourceId: "source-b", decision: "rejected" },
+        ],
+      }),
+    },
+  );
+  assert.equal(persisted.status, 200);
+
+  const reloaded = await fetch(
+    `${second.baseUrl}/api/research-grounding-jobs/job-source-decisions`,
+  );
+  assert.equal(reloaded.status, 200);
+  const job = GroundingJobSchema.parse(await reloaded.json());
+  assert.deepEqual(
+    job.sourceDecisions?.map((decision) => [decision.sourceId, decision.decision]),
+    [
+      ["source-a", "accepted"],
+      ["source-b", "rejected"],
+    ],
+  );
+  assert.deepEqual(
+    job.candidateSources?.map((item) => [item.sourceId, item.reviewStatus]),
+    [
+      ["source-a", "accepted"],
+      ["source-b", "rejected"],
+    ],
+  );
+});

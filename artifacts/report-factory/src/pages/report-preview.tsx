@@ -53,6 +53,10 @@ import {
   visibleReportSectionText,
 } from "@/lib/reportPreviewGuards";
 import {
+  buildStableCitationMarkerMap,
+  sourceIdsFromCitationMarkers,
+} from "@/lib/sectionEvidencePolicy";
+import {
   buildPlainText,
   downloadDocx,
   downloadMarkdown,
@@ -503,6 +507,11 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
     [workspace.input.purpose, workspace.input.reportType, workspace.input.topic],
   );
   const exportReport = useMemo(() => workspaceToGeneratedReport(workspace, category), [category, workspace]);
+  const exportAllowed = exportReport.meta.exportAllowed !== false;
+  const sourceMarkerMap = useMemo(
+    () => buildStableCitationMarkerMap(workspace.acceptedSources),
+    [workspace.acceptedSources],
+  );
   const exportWarnings = buildExportReadinessWarnings(exportReport);
   const generatedAcceptedSourceDigest = useMemo(
     () =>
@@ -723,6 +732,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
   };
 
   const handleCopy = () => {
+    if (!exportAllowed) return;
     navigator.clipboard.writeText(buildPlainText(exportReport, workspace.input));
     toast({ title: "已複製到剪貼簿", description: "報告純文字已複製。" });
   };
@@ -732,14 +742,28 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
     try {
       await downloadDocx(exportReport, workspace.input, workspace.presentation);
       toast({ title: "已下載 Word（DOCX）", description: "Word 檔已儲存到你的裝置。" });
-    } catch {
-      toast({ title: "DOCX 產生失敗", description: "請稍後再試一次。", variant: "destructive" });
+    } catch (error) {
+      toast({
+        title: "DOCX 產生失敗",
+        description: error instanceof Error ? error.message : "請稍後再試一次。",
+        variant: "destructive",
+      });
     }
   };
 
   const handlePrintPdf = () => {
     warnExportReadiness();
-    const ok = printPdf(exportReport, workspace.input, workspace.presentation);
+    let ok = false;
+    try {
+      ok = printPdf(exportReport, workspace.input, workspace.presentation);
+    } catch (error) {
+      toast({
+        title: "PDF 匯出已停止",
+        description: error instanceof Error ? error.message : "請先補足可用證據。",
+        variant: "destructive",
+      });
+      return;
+    }
     toast(
       ok
         ? { title: "正在開啟列印視窗", description: "請在列印對話框選擇「另存為 PDF」。" }
@@ -749,7 +773,16 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
 
   const handleMarkdown = () => {
     warnExportReadiness();
-    downloadMarkdown(exportReport, workspace.input);
+    try {
+      downloadMarkdown(exportReport, workspace.input);
+    } catch (error) {
+      toast({
+        title: "Markdown 匯出已停止",
+        description: error instanceof Error ? error.message : "請先補足可用證據。",
+        variant: "destructive",
+      });
+      return;
+    }
     toast({ title: "已下載 Markdown", description: "Markdown 檔已儲存。" });
   };
 
@@ -773,6 +806,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                           : "初步資料整理"}
                 </Badge>
                 <Badge variant="outline">{workspace.acceptedSources.length} 筆已接受來源</Badge>
+                <Badge variant="outline">{exportReport.meta.usedSourceCount ?? 0} 筆正文實際引用</Badge>
                 <Badge variant="outline">工作區 {workspace.id}</Badge>
               </div>
               <h1 className="truncate text-2xl font-bold text-foreground" title={workspace.draft.title}>
@@ -785,6 +819,11 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                 <Badge variant="outline">第三工作區：正式草稿</Badge>
                 <Badge variant="outline">第四工作區：報告格式</Badge>
               </div>
+              {!exportAllowed ? (
+                <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+                  證據有限／不完整草稿：可繼續檢視與補查，但在通過 evidence sufficiency 與引用一致性檢查前不得匯出。
+                </div>
+              ) : null}
               <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-md border border-border bg-background px-3 py-2">
                   <span className="block font-medium text-foreground">報告類型</span>
@@ -1112,14 +1151,14 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                       {section.citationMarkers.length > 0 ? (
                         <div className="mt-2 flex flex-wrap gap-2 text-xs">
                           {section.citationMarkers.map((marker, markerIndex) => {
-                            const targetCard =
-                              workspace.evidenceCards.find((card) =>
-                                section.evidenceCardIds.includes(card.id) &&
-                                (card.citationMarker === marker || card.citationText === marker),
-                              ) ??
-                              workspace.evidenceCards.find((card) =>
-                                section.evidenceCardIds.includes(card.id),
-                              );
+                            const targetSourceId = sourceIdsFromCitationMarkers(
+                              [marker],
+                              sourceMarkerMap,
+                            )[0];
+                            const targetCard = workspace.evidenceCards.find((card) =>
+                              card.sourceId === targetSourceId &&
+                              section.evidenceCardIds.includes(card.id),
+                            );
                             return (
                               <button
                                 key={`${section.sectionId}-${marker}-${markerIndex}`}
@@ -1347,19 +1386,21 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                   <h2 className="text-base font-semibold text-foreground">匯出與下載</h2>
                   <p className="mt-1 text-xs text-muted-foreground">匯出會帶入目前頁面上已修改的摘要、草稿與格式設定。</p>
                 </div>
-                <Badge variant="secondary">可匯出</Badge>
+                <Badge variant={exportAllowed ? "secondary" : "destructive"}>
+                  {exportAllowed ? "可匯出" : "匯出已鎖定"}
+                </Badge>
               </div>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-2">
-                <Button size="sm" className="min-h-[42px] justify-start" onClick={handleDownloadDocx} data-testid="button-preview-export-docx">
+                <Button size="sm" className="min-h-[42px] justify-start" onClick={handleDownloadDocx} disabled={!exportAllowed} data-testid="button-preview-export-docx">
                   <FileType className="mr-2 h-4 w-4" /> DOCX
                 </Button>
-                <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={handlePrintPdf} data-testid="button-preview-export-pdf">
+                <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={handlePrintPdf} disabled={!exportAllowed} data-testid="button-preview-export-pdf">
                   <Printer className="mr-2 h-4 w-4" /> PDF
                 </Button>
-                <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={handleCopy} data-testid="button-preview-copy">
+                <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={handleCopy} disabled={!exportAllowed} data-testid="button-preview-copy">
                   <Copy className="mr-2 h-4 w-4" /> 複製
                 </Button>
-                <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={handleMarkdown} data-testid="button-preview-export-md">
+                <Button size="sm" variant="outline" className="min-h-[42px] justify-start" onClick={handleMarkdown} disabled={!exportAllowed} data-testid="button-preview-export-md">
                   <FileDown className="mr-2 h-4 w-4" /> Markdown
                 </Button>
               </div>

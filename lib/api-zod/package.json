@@ -13,6 +13,7 @@
     "./evidence-governance": "./src/evidence-governance.ts",
     "./research-intent": "./src/research-intent.ts",
     "./report-readiness": "./src/report-readiness.ts",
+    "./deployment-contract": "./src/deployment-contract.ts",
     "./domain-synonyms": "./src/domain-synonyms.ts",
     "./topic-expansion": "./src/topic-expansion.ts",
     "./topic-understanding": "./src/topic-understanding.ts"
