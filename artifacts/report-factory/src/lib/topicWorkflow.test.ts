@@ -304,6 +304,16 @@ test("抗生素 routes to medicine public health with clinical and AMR direction
   assert.match(visibleText(directions), /作用機制|抗藥|臨床|公共衛生|管制政策|醫療資源|環境殘留/);
 });
 
+test("a clear lutein mechanism and clinical topic is not duplicated by direction expansion", () => {
+  const topic = "葉黃素的作用機制與臨床應用";
+  const directions = assertTypedDirections(topic, "medicine_public_health");
+  const mechanismDirection = directions.find((direction) => direction.displayTitleZh === "作用機制");
+
+  assert.ok(mechanismDirection);
+  assert.equal(mechanismDirection.researchQuestionZh, `${topic}之研究`);
+  assert.doesNotMatch(mechanismDirection.researchQuestionZh, /臨床應用作用機制/u);
+});
+
 test("海洛因 routes to illegal-drug safe research and blocks operational content", () => {
   const validation = validateTopicForWorkflow("海洛因");
   const directions = generateResearchDirections(validation);

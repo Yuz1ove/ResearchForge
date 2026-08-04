@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ReportInput } from "./generateReport.ts";
 import type { SourceRecord } from "./sourceRecords.ts";
+import { buildEvidenceCards } from "./evidenceCards.ts";
 import {
   createReportWorkspace,
   generationReadiness,
@@ -103,21 +104,21 @@ function sourceForTopic(
 
 const SUNSET_TOPIC = "夕陽餘暉與光波長的關係";
 
-test("generation readiness uses canonical 3-source short and 10-source standard thresholds", () => {
-  const blocked = generationReadiness(2);
-  const shortReport = generationReadiness(3);
+test("generation readiness allows an evidence-limited short report without a fixed paper minimum", () => {
+  const blocked = generationReadiness(0);
+  const shortReport = generationReadiness(1);
   const standardReport = generationReadiness(10);
 
   assert.equal(blocked.canGenerate, false);
   assert.equal(blocked.buttonLabel, "來源不足");
-  assert.equal(blocked.minRequiredSources, 3);
+  assert.equal(blocked.minRequiredSources, 1);
   assert.equal(blocked.reportMode, "blocked");
-  assert.equal(shortReport.mode, "short_research_report");
-  assert.equal(shortReport.buttonLabel, "生成短版研究報告");
+  assert.equal(shortReport.mode, "background_report_mode");
+  assert.equal(shortReport.buttonLabel, "生成背景型研究報告");
   assert.equal(shortReport.reportMode, "short");
-  assert.equal(shortReport.claimMode, "academic_claim_mode");
+  assert.equal(shortReport.claimMode, "background_report_mode");
   assert.equal(shortReport.canGenerateFull, false);
-  assert.match(shortReport.warning ?? "", /可生成短版研究報告/);
+  assert.match(shortReport.warning ?? "", /背景型研究報告/);
   assert.equal(generationReadiness(9).canGenerateFull, false);
   assert.equal(standardReport.mode, "standard_research_report");
   assert.equal(standardReport.buttonLabel, "生成標準研究報告");
@@ -267,7 +268,7 @@ test("official background sources can generate a background report without acade
   assert.equal(result.workspace.generationPayload.evidenceCards.length, 0);
 });
 
-test("report generation blocking reason is explicit below three accepted sources and clears at three", () => {
+test("report generation uses evidence sufficiency instead of a fixed three-source minimum", () => {
   const topic = "月球表面撞擊坑形成機制";
   const twoAccepted = [
     sourceForTopic(1, topic, { title: "月球表面撞擊坑形成機制 source 1" }),
@@ -286,13 +287,23 @@ test("report generation blocking reason is explicit below three accepted sources
       workflowId: `wf-${reportTopicFingerprint(topic)}`,
       topicHash: reportTopicFingerprint(topic),
     }),
-    "目前已接受 2 筆可用來源，至少需 3 筆才能生成研究報告。",
+    null,
   );
   assert.equal(
     reportGenerationBlockingReason({
       topic,
       acceptedSources: threeAccepted,
       evidenceCardCount: 3,
+      workflowId: `wf-${reportTopicFingerprint(topic)}`,
+      topicHash: reportTopicFingerprint(topic),
+    }),
+    null,
+  );
+  assert.equal(
+    reportGenerationBlockingReason({
+      topic,
+      acceptedSources: threeAccepted,
+      evidenceCards: buildEvidenceCards(threeAccepted).slice(0, 1),
       workflowId: `wf-${reportTopicFingerprint(topic)}`,
       topicHash: reportTopicFingerprint(topic),
     }),
@@ -342,9 +353,9 @@ test("generation readiness blocks zero evidence and labels one-source evidence a
   assert.match(blocked.message ?? "", /至少需 1 張證據卡/);
   assert.equal(limited.canGenerate, true);
   assert.equal(limited.reportMode, "short");
-  assert.equal(limited.canExport, false);
+  assert.equal(limited.canExport, true);
   assert.equal(limited.isLimitedDraft, true);
-  assert.equal(limited.buttonLabel, "建立證據有限草稿");
+  assert.equal(limited.buttonLabel, "建立證據有限簡報");
 });
 
 test("supplemental coverage search yields to server-side reviewed evidence derivation", () => {

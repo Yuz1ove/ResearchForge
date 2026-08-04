@@ -335,6 +335,31 @@ test("buildGroundingEvidenceCards caps abstract-only sources at two abstract evi
   assert.equal(cards.every((card) => card.confidence <= 0.55), true);
 });
 
+test("buildGroundingEvidenceCards maps English lutein abstracts to a clear Chinese topic", () => {
+  const abstractOnly = sourceCandidateFixture({
+    sourceId: "lutein-abstract-only",
+    title: "Effects of lutein in human retinal pigment epithelial cells",
+    abstractOriginal:
+      "Lutein and zeaxanthin are xanthophyll carotenoids that accumulate in macular pigment and protect retinal cells through antioxidant and photoprotective activity. The study reports that lutein reduced oxidative-stress-related retinal pigment epithelial cell loss in an in-vitro model.",
+    accessLevel: "abstract_only",
+    extractionStatus: "extraction_skipped_no_full_text",
+    extractionMethod: "abstract_only",
+    sourceUseLevel: "citable_abstract",
+  });
+
+  const cards = buildGroundingEvidenceCards({
+    workflowId: "wf-lutein-abstract",
+    topicHash: "topic-hash",
+    topic: "葉黃素的作用機制與臨床應用",
+    acceptedSources: [abstractOnly],
+    safetyReview: reviewAcademicSafety({ topic: "葉黃素的作用機制與臨床應用" }),
+  });
+
+  assert.equal(cards.length, 2);
+  assert.equal(cards.every((card) => card.sourceId === "lutein-abstract-only"), true);
+  assert.equal(cards.every((card) => card.source_access_level === "abstract_only"), true);
+});
+
 test("buildGroundingEvidenceCards turns extracted full-text chunks into traceable evidence cards", () => {
   const fullText = sourceCandidateFixture({
     sourceId: "fulltext-rayleigh",
@@ -750,6 +775,58 @@ function sunsetOfficialBackgroundSources(): SourceRecord[] {
   ];
 }
 
+test("grounding sends precise lutein mechanism and clinical queries before broad health templates", async () => {
+  const topic = "葉黃素的作用機制與臨床應用";
+  const capturedInputs: Array<{ querySeedEn?: string[] }> = [];
+  const sources = academicSourceSet(
+    {
+      query: "lutein macular pigment retina clinical trial",
+      titlePrefix: "Lutein Retina Clinical Evidence",
+      abstractTerms:
+        "Lutein is a xanthophyll carotenoid in macular pigment. The study examines retinal antioxidant mechanisms and clinical supplementation outcomes.",
+    },
+    8,
+  );
+
+  const result = await runResearchGroundingPipeline(
+    {
+      workflowId: "wf-lutein-query-priority",
+      originalTopic: topic,
+      topic,
+      selectedDomain: "life_environment",
+      reportType: "研究報告",
+      audience: "高中",
+      searchProfile: "standard",
+    },
+    {
+      searchHandler: async (input) => {
+        capturedInputs.push({ querySeedEn: input.querySeedEn });
+        return mockedGroundingSearchResult(
+          {
+            topic: input.topic,
+            originalTopic: input.originalTopic,
+            workflowId: input.workflowId,
+            querySeedZh: input.querySeedZh,
+            querySeedEn: input.querySeedEn,
+          },
+          sources,
+          {
+            primaryConcepts: ["lutein", "macular pigment", "retina", "clinical trial"],
+            mustHaveTerms: ["lutein", "xanthophyll"],
+          },
+        );
+      },
+    },
+  );
+
+  const firstQueries = capturedInputs[0]?.querySeedEn ?? [];
+  assert.match(firstQueries[0] ?? "", /lutein/i);
+  assert.match(firstQueries.slice(0, 3).join(" "), /macular pigment|retina|antioxidant/i);
+  assert.match(firstQueries.slice(0, 3).join(" "), /clinical trial|visual function/i);
+  assert.doesNotMatch(firstQueries[0] ?? "", /^public health\b/i);
+  assert.equal(result.queryPlan?.domain, "ophthalmology / nutrition / retinal health");
+});
+
 test("normalizeResearchTopic rewrites sunset wavelength topic into bilingual atmospheric optics queries", () => {
   const normalized = normalizeResearchTopic("探討夕陽餘暉之光波長關係", "zh-TW");
 
@@ -1120,6 +1197,77 @@ test("topic-specific source buckets reject dental and dog behavior drift despite
       `unexpected rejection reason ${candidate?.rejectionReason}`,
     );
   }
+});
+
+test("lutein source candidates require a stable lutein or xanthophyll entity match", async () => {
+  const topic = "葉黃素的作用機制與臨床應用";
+  const workflowId = "wf-lutein-source-anchor";
+  const relevant = sourceRecord({
+    id: "lutein-retina-trial",
+    title: "Lutein supplementation and retinal function in macular degeneration",
+    abstract:
+      "A randomized trial evaluates lutein and zeaxanthin supplementation, macular pigment, and retinal visual function.",
+    queryUsed: "lutein supplementation macular degeneration clinical trial",
+    provider: "Crossref",
+    sourceType: "Crossref",
+    relevanceScore: 96,
+    sourceQualityScore: 91,
+  });
+  const unrelated = sourceRecord({
+    id: "unrelated-diabetes-trial",
+    title: "Safety and efficacy of linagliptin in type 2 diabetes",
+    abstract:
+      "A randomized clinical trial evaluates glycemic control in patients receiving metformin.",
+    queryUsed: "clinical use mechanism randomized controlled trial",
+    provider: "Crossref",
+    sourceType: "Crossref",
+    relevanceScore: 94,
+    sourceQualityScore: 90,
+  });
+  const topicAnalysis = analyzeTopicInput({ topic, workflowId });
+  const seedQueryPlan = buildSeedQueryPlan({ topicAnalysis });
+  const lexicalSignals = await collectLexicalSignals({ topicAnalysis });
+  const queryPlan = buildGroundingQueryPlan({
+    topicAnalysis,
+    seedQueryPlan,
+    lexicalSignals,
+  });
+  const searchResult = mockedGroundingSearchResult(
+    {
+      topic,
+      workflowId,
+      querySeedZh: queryPlan.bilingualQueries.zh,
+      querySeedEn: queryPlan.bilingualQueries.en,
+    },
+    [relevant, unrelated],
+    {
+      primaryConcepts: ["lutein", "xanthophyll", "macular pigment", "retina"],
+      mustHaveTerms: ["lutein", "xanthophyll"],
+    },
+  );
+  const result = buildSourceCandidates({
+    workflowId,
+    topicHash: topicAnalysis.topicHash,
+    queryPlan,
+    parsedInput: parseResearchInput(topic),
+    searchResult: {
+      ...searchResult,
+      candidateSources: [relevant, unrelated],
+      fallbackReviewSources: [],
+      rejectedSources: [],
+    } as any,
+  });
+
+  const relevantCandidate = result.sourceCandidates.find(
+    (source) => source.sourceId === relevant.id,
+  );
+  const unrelatedCandidate = result.sourceCandidates.find(
+    (source) => source.sourceId === unrelated.id,
+  );
+  assert.notEqual(relevantCandidate?.reviewStatus, "rejected");
+  assert.equal(unrelatedCandidate?.reviewStatus, "rejected");
+  assert.equal(unrelatedCandidate?.recommendationBucket, "rejected");
+  assert.equal(unrelatedCandidate?.usableAsEvidence, false);
 });
 
 test("runResearchGroundingPipeline emits diagnostic trace for panda topic with provider success and empty provider", async () => {

@@ -253,6 +253,7 @@ const DOMAIN_INTENT_PATTERNS: Array<{
   { domain: "marine ecology / sea turtle hatchling orientation", pattern: /海龜|綠蠵龜|幼龜|海龜幼體|入海|人工夜間照明|夜間照明|光害|sea turtle|marine turtle|hatchling orientation|artificial light at night|coastal lighting|light pollution/i },
   { domain: "applied linguistics / writing education", pattern: /同儕回饋|第二語言|寫作修訂|修訂品質|peer feedback|second language writing|L2 writing|writing revision/i },
   { domain: "indoor air / adsorption engineering", pattern: /活性碳|活性炭|甲醛|室內空氣|移除效率|activated carbon|formaldehyde|indoor air quality|adsorption efficiency/i },
+  { domain: "ophthalmology / nutrition / retinal health", pattern: /葉黃素|叶黄素|lutein|xanthophyll|macular pigment|zeaxanthin/i },
   { domain: "biomedical / oral health / dentistry", pattern: /健康|醫|睡眠|心率|氣喘|咖啡因|抗生素|抗藥性|牙菌斑|牙垢|口腔生物膜|牙周病|health|medical|sleep|heart rate|asthma|caffeine|antibiotic|dental plaque|oral biofilm|periodontal|plaque control/i },
   { domain: "physics / aerospace", pattern: /太陽帆|輻射壓|光壓|航天推進|深空探測|solar sail|solar sailing|radiation pressure|spacecraft propulsion|deep space/i },
   { domain: "energy / photovoltaic engineering", pattern: /太陽能板|光伏|光電轉換|表面粗糙|反射率|光反射|發電效率|solar panel|photovoltaic|surface roughness|optical reflectance|anti-reflection|power conversion efficiency|solar cell efficiency/i },
@@ -1468,8 +1469,13 @@ function evidenceFacetsForSource(source: {
 }): string[] {
   const text = [source.title, source.abstract].filter(Boolean).join(" ");
   const patterns: Array<{ label: string; pattern: RegExp }> = [
+    { label: "黃斑色素", pattern: /黃斑色素|macular pigment/i },
+    { label: "視網膜健康", pattern: /視網膜|retina|retinal|retinal pigment epithelium|RPE cells?/i },
+    { label: "抗氧化機制", pattern: /抗氧化|氧化壓力|antioxidant|oxidative stress|photoprotect/i },
+    { label: "生體可用率與臨床應用", pattern: /生體可用率|臨床應用|bioavailability|clinical trial|supplementation/i },
     { label: "微化石", pattern: /微化石|microfossil/i },
-    { label: "藻類化石", pattern: /藻類|藻|algae|algal|fossil algae/i },
+    { label: "藻類化石", pattern: /藻類化石|化石藻|fossil algae|algal fossils?/i },
+    { label: "藻類來源", pattern: /藻類|微藻|algae|algal|microalgae/i },
     { label: "古環境重建", pattern: /古環境|paleoenvironment|palaeoenvironment/i },
     { label: "沉積環境", pattern: /沉積|sediment|sedimentary|marine shale/i },
     { label: "疊層石與藍綠菌", pattern: /疊層石|藍綠菌|stromatolite|cyanobacteria/i },
@@ -1487,7 +1493,7 @@ function evidenceFacetsForSource(source: {
     { label: "口腔生物膜", pattern: /口腔生物膜|oral biofilm|dental biofilm/i },
     { label: "牙周治療", pattern: /牙周治療|牙周病|periodontal therapy|periodontal treatment|periodontal disease|periodontitis/i },
     { label: "牙菌斑控制", pattern: /牙菌斑控制|plaque control|chlorhexidine|scaling|洗牙/i },
-    { label: "口腔衛生", pattern: /口腔衛生|oral hygiene|prevention|預防/i },
+    { label: "口腔衛生", pattern: /口腔衛生|oral hygiene/i },
     { label: "護食行為", pattern: /護食|food guarding|resource guarding/i },
     { label: "資源防衛", pattern: /資源防衛|resource guarding|possession aggression/i },
     { label: "食物攻擊", pattern: /食物攻擊|food aggression/i },
@@ -2996,6 +3002,44 @@ type SourceClassificationInput = Pick<
 
 function normalizedLowerText(values: Array<string | null | undefined>): string {
   return compactWhitespace(values.filter(Boolean).join(" ")).toLowerCase();
+}
+
+function stableTopicEntityTerms(topic: string): string[] {
+  const understanding = understandTopic(topic);
+  if (!understanding.entity) return [];
+  return uniqueStrings([
+    understanding.entity.canonicalName,
+    ...understanding.entity.aliases,
+    ...understanding.entity.englishNames,
+    ...(understanding.entity.scientificNames ?? []),
+    understanding.canonicalEnglishTopic,
+  ]).filter((term) => term.trim().length >= 2);
+}
+
+function sourceMatchesStableEntity(
+  source: Pick<SourceClassificationInput, "title" | "abstractOriginal" | "venue"> & {
+    keywords?: string[];
+  },
+  terms: string[],
+): boolean {
+  if (terms.length === 0) return true;
+  const text = normalizedLowerText([
+    source.title,
+    source.abstractOriginal,
+    source.venue,
+    ...(source.keywords ?? []),
+  ]);
+  return terms.some((term) => {
+    const normalized = term.trim().toLowerCase();
+    if (!normalized) return false;
+    if (/^[a-z0-9][a-z0-9\s-]*$/i.test(normalized)) {
+      const pattern = normalized
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        .replace(/\s+/g, "\\s+");
+      return new RegExp(`(^|[^a-z0-9])${pattern}($|[^a-z0-9])`, "i").test(text);
+    }
+    return text.includes(normalized);
+  });
 }
 
 function rawPayloadText(payload: unknown): string {
@@ -4642,6 +4686,9 @@ export function buildSourceCandidates(input: {
   const requiresColaHealthEvidence = isColaHealthTopic(
     input.searchResult.topic || input.parsedInput.canonicalTopic,
   );
+  const requiredStableEntityTerms = stableTopicEntityTerms(
+    input.searchResult.topic || input.parsedInput.canonicalTopic,
+  );
   const scoringPlan: Parameters<typeof analyzeRelevanceScore>[1] = {
     workflowId: input.workflowId,
     topicHash: input.topicHash,
@@ -4725,12 +4772,22 @@ export function buildSourceCandidates(input: {
         !requiresAiWorkImpactEvidence || hasAiWorkImpactSourceEvidence(normalized);
       const passesColaHealthEvidence =
         !requiresColaHealthEvidence || hasColaHealthSourceEvidence(normalized);
+      const passesStableTopicEntityEvidence = sourceMatchesStableEntity(
+        {
+          title: normalized.title,
+          abstractOriginal: normalized.abstract,
+          venue: normalized.venue,
+          keywords: normalized.keywords,
+        },
+        requiredStableEntityTerms,
+      );
       const passesRequiredTopicEvidence =
         passesPaleontologyAlgaeEvidence &&
         passesAstronomyScienceEducationEvidence &&
         passesAgriculturalWastePollutionEvidence &&
         passesAiWorkImpactEvidence &&
-        passesColaHealthEvidence;
+        passesColaHealthEvidence &&
+        passesStableTopicEntityEvidence;
       const canonicalRelevanceScore =
         typeof source.relevanceScore === "number"
           ? Math.max(0, Math.min(1, source.relevanceScore / 100))
@@ -4744,10 +4801,9 @@ export function buildSourceCandidates(input: {
         (lexicalRelevanceScore * 0.75 + intentAssessment.score * 0.25).toFixed(3),
       );
       const relevanceScore = Number(
-        (canonicalRelevanceScore ??
-          (passesRequiredTopicEvidence
-            ? rawRelevanceScore
-            : Math.min(rawRelevanceScore, 0.18))).toFixed(3),
+        (passesRequiredTopicEvidence
+          ? (canonicalRelevanceScore ?? rawRelevanceScore)
+          : Math.min(canonicalRelevanceScore ?? rawRelevanceScore, 0.12)).toFixed(3),
       );
       const sourceQualityScore = Number(
         (canonicalQualityScore ?? computeSourceQualityScore(normalized) / 100).toFixed(3),
@@ -4899,7 +4955,7 @@ export function buildSourceCandidates(input: {
           sourceRole: "rejected",
           institutionType: sourceClassification.institutionType,
         };
-      } else if (bucketAssessment.decision === "accepted") {
+      } else if (bucketAssessment.decision === "accepted" && passesRequiredTopicEvidence) {
         sourceClassification = {
           recommendationBucket: "scholarly_recommended",
           sourceRole: "core_scholarly_evidence",
@@ -4993,6 +5049,8 @@ export function buildSourceCandidates(input: {
           ? "excluded_drift_term_match"
           : intentAssessment.decision === "reject"
             ? "low_topic_relevance"
+          : !passesStableTopicEntityEvidence
+            ? "missing_core_concept"
             : relevanceAnalysis.hasCoreConceptMatch
               ? "low_topic_relevance"
               : bucketAssessment.decision === "rejected"
@@ -7084,6 +7142,14 @@ export async function runResearchGroundingPipeline(
   const normalizedSearchTopic =
     seedQueryPlan.normalizedResearchTopic ??
     normalizeResearchTopic(planningTopic || effectiveTopic, topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW");
+  const stableTopicUnderstanding = understandTopic(topicAnalysis.normalizedTopic);
+  const stableTopicEnglishQueries = uniqueStrings([
+    ...stableTopicUnderstanding.researchAngles.flatMap((angle) =>
+      angle.enQueries.slice(0, 1),
+    ),
+    ...stableTopicUnderstanding.searchQueries.en,
+    stableTopicUnderstanding.canonicalEnglishTopic,
+  ]).filter((query) => containsLatin(query) && !containsZh(query));
   const queryRoutingTopicText = compactWhitespace([
     topicAnalysis.normalizedTopic,
     normalizedSearchTopic.displayTitle,
@@ -7098,6 +7164,10 @@ export async function runResearchGroundingPipeline(
   ], queryRoutingTopicText);
   const initialAnchorProfile = topicQueryAnchorProfile(queryRoutingTopicText);
   const initialQuerySeedEn = providerSafeDomainAnchoredQueries([
+    // Stable entity-aware queries must run before broad domain templates. The
+    // academic provider budget is finite, so putting "public health" first can
+    // consume the whole window before a precise term such as "lutein" runs.
+    ...stableTopicEnglishQueries,
     ...normalizedSearchTopic.enAcademicQuery,
     ...(initialAnchorProfile?.fallbackQueries ?? []),
     ...normalizedSearchTopic.broaderAcademicQueries,

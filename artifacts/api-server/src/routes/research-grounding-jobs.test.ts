@@ -11,6 +11,7 @@ import {
 import { topicHashForWorkflow } from "../services/research/workflow/workflowIds";
 import { InMemoryGroundingJobRepository } from "../services/research/grounding/groundingJobRepository";
 import { createResearchGroundingJobsRouter } from "./research-grounding-jobs";
+import { reviewAcademicSafety } from "../services/research/grounding/researchGroundingPipeline";
 
 function appFor(repository: InMemoryGroundingJobRepository, shouldFail = false) {
   const app = express();
@@ -226,4 +227,84 @@ test("source decisions persist in the job and are visible from a second app inst
       ["source-b", "rejected"],
     ],
   );
+});
+
+test("source decisions work when canonical candidates are review-only fallbacks", async (t) => {
+  const repository = new InMemoryGroundingJobRepository();
+  const app = await listen(appFor(repository));
+  t.after(() => app.close());
+
+  const now = "2026-08-03T00:00:00.000Z";
+  const workflowId = "wf-fallback-decisions";
+  const topicHash = "topic-fallback-decisions";
+  const fallbackCandidate = {
+    sourceId: "fallback-source",
+    workflowId,
+    topicHash,
+    queryUsed: "lutein macular pigment",
+    queryIntent: "exact",
+    provider: "web" as const,
+    title: "The Macular Carotenoids: A Biochemical Overview",
+    url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC7347445/",
+    abstractOriginal:
+      "本回顧整理葉黃素（lutein）、玉米黃素與黃斑色素的生化作用及視網膜相關機制。",
+    sourceType: "official" as const,
+    relevanceScore: 0.6,
+    sourceQualityScore: 0.7,
+    retrievalMode: "live_provider" as const,
+    recommendationBucket: "official_background" as const,
+    sourceRole: "official_background_explanation" as const,
+    reviewStatus: "review" as const,
+    evidencePoints: ["Lutein is discussed as a macular carotenoid."],
+    limitations: ["background only"],
+    usableSections: ["background"],
+    citationMarker: "[fallback-source]",
+    dedupeKey: "fallback-source",
+    createdAt: now,
+    retrievedAt: now,
+  };
+  await repository.create(GroundingJobSchema.parse({
+    jobId: "job-fallback-decisions",
+    workflowId,
+    topicHash,
+    requestId: "request-fallback-decisions",
+    attemptId: "attempt-fallback-decisions",
+    revision: 1,
+    originalTopic: "葉黃素的作用機制與臨床應用",
+    normalizedTopic: "葉黃素的作用機制與臨床應用",
+    academicSafetyReview: reviewAcademicSafety({
+      topic: "葉黃素的作用機制與臨床應用",
+    }),
+    status: "source_review_needs_manual",
+    progress: 100,
+    candidateSources: [],
+    sourceCandidates: [fallbackCandidate],
+    fallbackReviewSources: [fallbackCandidate],
+    warnings: [],
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: "2026-08-10T00:00:00.000Z",
+  }));
+
+  const response = await fetch(
+    `${app.baseUrl}/api/research-grounding-jobs/job-fallback-decisions/source-decisions`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        workflowId,
+        topicHash,
+        expectedRevision: 1,
+        decisions: [{ sourceId: "fallback-source", decision: "accepted" }],
+      }),
+    },
+  );
+  assert.equal(response.status, 200);
+  const job = GroundingJobSchema.parse(await response.json());
+  assert.equal(job.sourceDecisions?.[0]?.decision, "accepted");
+  assert.equal(job.sourceCandidates?.[0]?.reviewStatus, "accepted");
+  assert.equal(job.fallbackReviewSources?.[0]?.reviewStatus, "accepted");
+  assert.equal(job.evidenceCards?.length, 1);
+  assert.equal(job.evidenceCards?.[0]?.source_access_level, "abstract_only");
+  assert.equal(job.evidenceCards?.[0]?.sourceId, "fallback-source");
 });

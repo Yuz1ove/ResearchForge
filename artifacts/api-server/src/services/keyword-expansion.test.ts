@@ -5,6 +5,7 @@ import {
   expandSearchKeywords,
   searchKeywordSources,
 } from "./keyword-expansion";
+import { understandTopic } from "@workspace/api-zod";
 
 const shortVideoTopic = "短影音使用對高中生注意力與睡眠品質之影響";
 
@@ -26,6 +27,38 @@ test("deterministic fallback selects relevant domains for short-video student sl
   assert.ok(["skipped", "failed"].includes(result.llm_status));
   assert.ok(result.english_queries.some((query) => query.includes("short-form video")));
   assert.ok(result.chinese_queries.some((query) => query.includes("短影音")));
+});
+
+test("clear lutein topics search immediately with subject-preserving bilingual queries", () => {
+  const topic = "葉黃素的作用機制與臨床應用";
+  const understanding = understandTopic(topic);
+  const result = buildFallbackKeywordExpansion({
+    topic,
+    reportType: "研究報告",
+    sourceMode: "academic",
+    language: "zh-TW",
+  });
+
+  assert.equal(understanding.shouldSearchImmediately, true);
+  assert.equal(understanding.needsClarification, false);
+  assert.equal(understanding.canonicalEnglishTopic, "lutein");
+  assert.ok(result.english_queries.length >= 2);
+  assert.ok(result.english_queries.every((query) => /lutein|xanthophyll/i.test(query)));
+  assert.ok(result.english_queries.some((query) => /macular pigment|retina|antioxidant/i.test(query)));
+  assert.ok(result.english_queries.some((query) => /clinical trial|visual function/i.test(query)));
+  assert.ok(result.chinese_queries.some((query) => /葉黃素.*視網膜|視網膜.*葉黃素/u.test(query)));
+  assert.ok(result.english_queries.every((query) => !/^healthcare\b/i.test(query)));
+});
+
+test("English fallback queries retain the user's research subject", () => {
+  const result = buildFallbackKeywordExpansion({
+    topic: "lutein mechanism and clinical applications",
+    sourceMode: "academic",
+    language: "en",
+  });
+
+  assert.ok(result.english_queries.length > 0);
+  assert.ok(result.english_queries.every((query) => /lutein/i.test(query)));
 });
 
 test("falls back when LLM provider returns DAILY_LIMIT_EXCEEDED with 429", async () => {

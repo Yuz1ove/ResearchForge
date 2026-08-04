@@ -43,7 +43,10 @@ export interface ReportReadiness {
   message: string | null;
 }
 
-export const SHORT_REPORT_MIN_ACCEPTED_SOURCES = 3;
+// A short evidence-limited brief is evidence-gated, not paper-count-gated.
+// One traceable accepted source with a usable card is enough to proceed
+// conservatively; standard reports still require broader evidence coverage.
+export const SHORT_REPORT_MIN_ACCEPTED_SOURCES = 1;
 export const STANDARD_REPORT_MIN_ACCEPTED_SOURCES = 10;
 export const ACADEMIC_CLAIM_MIN_SCHOLARLY_SOURCES = 3;
 export const SHORT_REPORT_MIN_EVIDENCE_SOURCES = 2;
@@ -344,17 +347,17 @@ export function getReportReadiness(input: ReportReadinessInput): ReportReadiness
 
   if (evidenceGateEnabled && evidenceSufficiency === "limited") {
     const message =
-      "目前只有 1 個 distinct usable evidence source，只能建立「證據有限／不完整」草稿；不得標示或匯出為標準／完整研究報告。";
+      "目前證據來源與可引用主張有限，將建立明確標示的 evidence-limited brief；不得標示為標準／完整研究報告。";
     return {
       ...common,
       minRequiredSources: SHORT_REPORT_MIN_ACCEPTED_SOURCES,
       canGenerate: true,
       canGenerateStandard: false,
-      canGenerateShort: false,
-      canExport: false,
+      canGenerateShort: true,
+      canExport: true,
       isLimitedDraft: true,
-      badge: "證據有限／不完整",
-      buttonLabel: "建立證據有限草稿",
+      badge: "證據有限簡報",
+      buttonLabel: "建立證據有限簡報",
       message,
       warnings: [...warnings, message],
     };

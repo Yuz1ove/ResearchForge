@@ -623,9 +623,63 @@ const ENGLISH_TOPIC_HINTS: Array<{
     pattern: /榫卯|mortise and tenon/i,
     englishTerms: ["mortise and tenon joint", "traditional joinery"],
   },
+  {
+    pattern: /葉黃素|lutein/i,
+    englishTerms: ["lutein", "xanthophyll"],
+  },
 ];
 
 const TOPIC_LEXICON: TopicLexiconEntry[] = [
+  {
+    canonicalName: "葉黃素",
+    aliases: ["葉黃素補充品", "lutein"],
+    englishNames: ["lutein", "xanthophyll"],
+    category: "material",
+    domain: "health",
+    topicKind: "known_entity",
+    matchTerms: ["葉黃素", "葉黃素補充品", "lutein", "xanthophyll"],
+    excludedMeanings: [
+      "healthcare systems",
+      "clinical workflow",
+      "medical education",
+      "systematic review methodology",
+    ],
+    researchAngles: [
+      angle(
+        "視網膜作用機制",
+        "葉黃素在黃斑色素、視網膜抗氧化與藍光吸收中的作用機制",
+        "可查核葉黃素作為類胡蘿蔔素與黃斑色素的生理作用。",
+        ["葉黃素 黃斑色素 視網膜 抗氧化 機制"],
+        [
+          "lutein carotenoid macular pigment retina antioxidant mechanism",
+          "lutein retinal health blue light oxidative stress",
+        ],
+        ["眼科與視覺科學研究", "營養生化研究", "系統性回顧"],
+      ),
+      angle(
+        "臨床應用",
+        "葉黃素補充在黃斑部病變、視覺功能與其他眼科情境的臨床證據",
+        "可優先比較隨機試驗、系統性回顧與臨床研究的族群、劑量和結果。",
+        ["葉黃素 補充 黃斑部病變 視覺功能 臨床研究"],
+        [
+          "lutein supplementation macular degeneration visual function clinical trial",
+          "lutein eye health randomized controlled trial systematic review",
+        ],
+        ["隨機對照試驗", "系統性回顧", "眼科臨床研究"],
+      ),
+      angle(
+        "生物可用率與限制",
+        "葉黃素的飲食來源、吸收、生物可用率與補充證據的限制",
+        "吸收與生物可用率會影響補充研究的可比較性與應用邊界。",
+        ["葉黃素 飲食來源 吸收 生物可用率"],
+        [
+          "lutein bioavailability absorption metabolism dietary sources",
+          "lutein supplementation dose response safety limitations",
+        ],
+        ["臨床營養研究", "藥物動力學研究", "系統性回顧"],
+      ),
+    ],
+  },
   {
     canonicalName: "太陽帆",
     aliases: ["光帆", "太陽光帆", "solar sail", "solar sailing"],

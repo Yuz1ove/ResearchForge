@@ -244,6 +244,12 @@ test("paper search removes provider records without a query or translated academ
           abstract: "This paper discusses business applications of nudge theory.",
           doi: "10.1000/unrelated-nudge",
         }),
+        source({
+          id: "unrelated-healthcare",
+          title: "Implicit bias in healthcare professionals: a systematic review",
+          abstract: "This review examines implicit bias across healthcare systems.",
+          doi: "10.1000/unrelated-healthcare",
+        }),
       ]),
     ],
     summarizeSources: async (_topic, sources) => sources,
@@ -257,7 +263,7 @@ test("paper search removes provider records without a query or translated academ
 
   assert.equal(statusCode, 200);
   assert.deepEqual(response.papers.map((paper) => paper.id), ["lutein-paper"]);
-  assert.ok(response.warnings.some((warning) => warning.includes("已略過 1 筆")));
+  assert.ok(response.warnings.some((warning) => warning.includes("已略過 2 筆")));
 });
 
 test("paper search dedupes results, marks primary sources, and maps summaries by id", async () => {

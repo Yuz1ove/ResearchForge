@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import {
   dedupeSourceRecords,
+  understandTopic,
   type SourceRecord,
 } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
@@ -50,6 +51,12 @@ const GENERIC_EXPANSION_TERMS = new Set([
   "eye",
   "health",
   "impact",
+  "application",
+  "applications",
+  "healthcare",
+  "mechanism",
+  "mechanisms",
+  "medical",
   "outcome",
   "outcomes",
   "people",
@@ -63,6 +70,8 @@ const GENERIC_EXPANSION_TERMS = new Set([
   "systematic",
   "trial",
   "trials",
+  "use",
+  "uses",
 ]);
 
 export type PaperSearchMode = "fast" | "expanded";
@@ -197,11 +206,11 @@ function searchQueriesFor(query: string, expansion: KeywordExpansionResult): str
     ...expansion.english_queries,
     ...expansion.search_queries.filter((candidate) => /[a-z]/i.test(candidate)),
   ]);
-  const bestEnglishQuery =
-    englishCandidates.find((candidate) => candidate.toLocaleLowerCase() !== originalKey) ??
-    `${query} academic research`;
+  const focusedEnglishQueries = englishCandidates
+    .filter((candidate) => candidate.toLocaleLowerCase() !== originalKey)
+    .slice(0, 2);
 
-  return distinctQueries([query, bestEnglishQuery]);
+  return distinctQueries([query, ...focusedEnglishQueries]);
 }
 
 function contentRank(source: SourceRecord): number {
@@ -231,15 +240,78 @@ export function topicAnchorTerms(
   expansion?: KeywordExpansionResult | null,
 ): string[] {
   const original = cleanText(query)?.toLocaleLowerCase() ?? "";
+  const understanding = understandTopic(query);
   const expandedQueries = expansion
     ? [...expansion.english_queries, ...expansion.search_queries]
     : [];
 
   return distinctQueries([
     original,
-    ...englishTerms(original, false),
+    ...meaningfulTopicTerms(original),
+    understanding.canonicalEnglishTopic,
+    ...understanding.canonicalTerms,
+    ...understanding.aliases,
+    ...understanding.englishTerms,
+    ...understanding.scientificNames,
     ...expandedQueries.flatMap((candidate) => englishTerms(candidate, true)),
   ]).map((term) => term.toLocaleLowerCase());
+}
+
+function meaningfulTopicTerms(value: string): string[] {
+  const genericCjkTerms = new Set([
+    "作用機制",
+    "作用",
+    "機制",
+    "臨床應用",
+    "臨床",
+    "應用",
+    "研究",
+    "實證研究",
+    "文獻回顧",
+    "系統性回顧",
+  ]);
+  const cjkTerms = value
+    .split(/\s+|[，,、：:;；。！？!?()（）]|(?:的|與|和|及|之|對)/u)
+    .map((term) => term.trim())
+    .filter((term) => /[\u3400-\u9fff]/u.test(term))
+    .filter((term) => Array.from(term).length >= 2)
+    .filter((term) => !genericCjkTerms.has(term));
+  return distinctQueries([
+    ...cjkTerms,
+    ...englishTerms(value, true),
+  ]);
+}
+
+function topicCoreAnchorTerms(
+  query: string,
+  expansion?: KeywordExpansionResult | null,
+): string[] {
+  const understanding = understandTopic(query);
+  const entityTerms = understanding.entity
+    ? [
+        understanding.entity.canonicalName,
+        ...understanding.entity.aliases,
+        ...understanding.entity.englishNames,
+        ...(understanding.entity.scientificNames ?? []),
+      ]
+    : [];
+  const translatedTerms = expansion
+    ? expansion.english_queries
+        .slice(0, 1)
+        .flatMap((candidate) => englishTerms(candidate, true))
+        .slice(0, 3)
+    : [];
+
+  return distinctQueries([
+    ...entityTerms,
+    ...meaningfulTopicTerms(query),
+    understanding.canonicalEnglishTopic,
+    ...understanding.englishTerms,
+    ...understanding.scientificNames,
+    ...translatedTerms,
+  ])
+    .filter((term) => !/[\u3400-\u9fff]/u.test(term) || Array.from(term).length >= 2)
+    .map((term) => term.toLocaleLowerCase());
 }
 
 function termMatchesSourceText(text: string, term: string): boolean {
@@ -262,6 +334,7 @@ function selectPapers(
   limit: number,
   dedupeSources: typeof dedupeSourceRecords,
   anchors: string[],
+  coreAnchors: string[],
 ): { selected: SourceRecord[]; filteredCount: number } {
   const titled = sources.filter((source) => Boolean(cleanText(source.title)));
   const deduped = dedupeSources(titled);
@@ -270,11 +343,15 @@ function selectPapers(
       source,
       index,
       topicMatchCount: sourceTopicMatchCount(source, anchors),
+      coreMatchCount: sourceTopicMatchCount(source, coreAnchors),
     }))
-    .filter(({ topicMatchCount }) => topicMatchCount > 0);
+    .filter(({ topicMatchCount, coreMatchCount }) =>
+      topicMatchCount > 0 && coreMatchCount > 0,
+    );
   return {
     selected: relevant
     .sort((left, right) =>
+      right.coreMatchCount - left.coreMatchCount ||
       right.topicMatchCount - left.topicMatchCount ||
       contentRank(left.source) - contentRank(right.source) ||
       left.index - right.index,
@@ -586,7 +663,7 @@ export function createPaperSearchRouter({
 
         queries = searchQueriesFor(input.query, expansion);
         if (expansion.fallback_used) {
-          pushWarning(warnings, "英文檢索詞由備援規則產生，搜尋範圍可能較廣。");
+          pushWarning(warnings, "英文檢索詞由內建主題規則產生，已保留原始題意與研究子題。");
         }
       }
 
@@ -634,6 +711,7 @@ export function createPaperSearchRouter({
         input.limit,
         dedupeSources,
         topicAnchorTerms(input.query, expansion),
+        topicCoreAnchorTerms(input.query, expansion),
       );
       if (filteredCount > 0) {
         pushWarning(

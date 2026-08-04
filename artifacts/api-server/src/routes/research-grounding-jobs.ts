@@ -25,6 +25,7 @@ import {
   GroundingJobRevisionConflictError,
   type GroundingJobRepository,
 } from "../services/research/grounding/groundingJobRepository";
+import { buildGroundingEvidenceCards } from "../services/research/grounding/researchGroundingPipeline";
 
 export interface ResearchGroundingJobsRouterOptions {
   repository?: GroundingJobRepository;
@@ -132,15 +133,18 @@ function candidateDecision(
 }
 
 function canonicalCandidates(job: GroundingJob): SourceCandidate[] {
-  const candidates =
-    job.candidateSources ??
-    job.sourceCandidates ??
-    [
-      ...(job.highConfidenceCandidateSources ?? []),
-      ...(job.fallbackReviewSources ?? []),
-      ...(job.acceptedSources ?? []),
-      ...(job.rejectedSources ?? []),
-    ];
+  // A completed job may intentionally expose an empty high-confidence
+  // candidateSources list while keeping reviewable results in
+  // sourceCandidates/fallbackReviewSources. Nullish coalescing used to pick
+  // that empty list and made every user decision look like an unknown source.
+  const candidates = [
+    ...(job.candidateSources ?? []),
+    ...(job.sourceCandidates ?? []),
+    ...(job.highConfidenceCandidateSources ?? []),
+    ...(job.fallbackReviewSources ?? []),
+    ...(job.acceptedSources ?? []),
+    ...(job.rejectedSources ?? []),
+  ];
   const unique = new Map<string, SourceCandidate>();
   for (const candidate of candidates) {
     if (!unique.has(candidate.sourceId)) unique.set(candidate.sourceId, candidate);
@@ -173,11 +177,38 @@ function sourceDecisionPatch(
   const decisionMap = new Map(
     sourceDecisions.map((decision) => [decision.sourceId, decision]),
   );
-  const mappedCandidates = canonicalCandidates(job).map((candidate) =>
+  const decidedCandidates = canonicalCandidates(job).map((candidate) =>
     candidateDecision(candidate, decisionMap),
   );
+  const acceptedSources = decidedCandidates.filter(
+    (candidate) => candidate.reviewStatus === "accepted",
+  );
+  const evidenceCards = job.academicSafetyReview
+    ? buildGroundingEvidenceCards({
+        workflowId: job.workflowId,
+        topicHash: job.topicHash,
+        topic: job.normalizedTopic || job.originalTopic,
+        acceptedSources,
+        claimCandidates: job.claimCandidates,
+        safetyReview: job.academicSafetyReview,
+      })
+    : (job.evidenceCards ?? []);
+  const evidenceCountBySourceId = new Map<string, number>();
+  for (const card of evidenceCards) {
+    evidenceCountBySourceId.set(
+      card.sourceId,
+      (evidenceCountBySourceId.get(card.sourceId) ?? 0) + 1,
+    );
+  }
+  const mappedCandidates = decidedCandidates.map((candidate) => ({
+    ...candidate,
+    acceptedEvidenceCardCount: evidenceCountBySourceId.get(candidate.sourceId) ?? 0,
+  }));
+  const candidateById = new Map(
+    mappedCandidates.map((candidate) => [candidate.sourceId, candidate]),
+  );
   const mapExisting = (items: SourceCandidate[] | undefined) =>
-    items?.map((candidate) => candidateDecision(candidate, decisionMap));
+    items?.map((candidate) => candidateById.get(candidate.sourceId) ?? candidate);
 
   return {
     sourceDecisions,
@@ -191,6 +222,7 @@ function sourceDecisionPatch(
       : {}),
     acceptedSources: mappedCandidates.filter((candidate) => candidate.reviewStatus === "accepted"),
     rejectedSources: mappedCandidates.filter((candidate) => candidate.reviewStatus === "rejected"),
+    evidenceCards,
   };
 }
 

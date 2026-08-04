@@ -1,5 +1,6 @@
 import {
   dedupeSourceRecords,
+  understandTopic,
   type SourceRecord,
 } from "@workspace/api-zod";
 import {
@@ -202,6 +203,7 @@ function hasAny(text: string, patterns: RegExp[]): boolean {
 function buildChineseQueries(input: KeywordExpansionRequest): string[] {
   const topic = input.topic.trim();
   const text = normalize(`${input.topic} ${input.audience ?? ""}`);
+  const understanding = understandTopic(topic);
   const terms = [
     hasAny(text, [/短影音|影音|tiktok|reels|short/i]) ? "短影音使用" : null,
     hasAny(text, [/高中|學生|青少年|student|adolescent/i]) ? "高中生" : null,
@@ -212,6 +214,7 @@ function buildChineseQueries(input: KeywordExpansionRequest): string[] {
 
   return unique([
     topic,
+    ...understanding.searchQueries.zh,
     `${topic} 文獻回顧`,
     `${focused} 實證研究`,
     `${focused} 系統性回顧`,
@@ -232,16 +235,32 @@ function buildEnglishQueries(input: KeywordExpansionRequest, domains: string[]):
     ];
   }
 
-  const audience = hasAny(text, [/高中|學生|青少年|student|adolescent/i]) ? "students" : "people";
-  const domainTerms = domains
-    .filter((domain) => domain !== "general_academic_research")
-    .map((domain) => domain.replace(/_/g, " "))
-    .slice(0, 3)
-    .join(" ");
+  const understanding = understandTopic(input.topic);
+  const canonicalTopic = understanding.canonicalEnglishTopic.trim();
+  const angleQueries = understanding.researchAngles
+    .map((angle) =>
+      angle.enQueries.find((query) =>
+        /[A-Za-z]/.test(query) && !/[\u3400-\u9fff]/u.test(query),
+      )?.trim(),
+    )
+    .filter((query): query is string => Boolean(query));
+  const stableQueries = understanding.searchQueries.en
+    .map((query) => query.trim())
+    .filter((query) => /[A-Za-z]/.test(query) && !/[\u3400-\u9fff]/u.test(query));
+
+  if (stableQueries.length > 0) {
+    return unique([...angleQueries, ...stableQueries, canonicalTopic].filter(Boolean)).slice(0, 3);
+  }
+
+  // A subjectless domain query such as "healthcare systematic review" loses
+  // the user's actual concept and can rank any highly cited medical paper.
+  // When no trustworthy translation exists, keep searching the Chinese topic
+  // instead of pretending the broad domain label is an English equivalent.
+  if (!canonicalTopic || /[\u3400-\u9fff]/u.test(canonicalTopic)) return [];
 
   return unique([
-    `${domainTerms || input.topic} ${audience} peer reviewed research`.trim(),
-    `${domainTerms || input.topic} systematic review`.trim(),
+    canonicalTopic,
+    `${canonicalTopic} systematic review`,
   ]).slice(0, 3);
 }
 

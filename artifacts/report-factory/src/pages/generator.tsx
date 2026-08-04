@@ -4645,7 +4645,7 @@ function SourceManagePanel({
               : "outline"
             }
           >
-            最低 3 筆 / 建議 {recommendedAcceptedSourceCount} 筆
+            依證據充足度判斷 / 建議 {recommendedAcceptedSourceCount} 筆
           </Badge>
         </div>
       </div>

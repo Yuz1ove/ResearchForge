@@ -1123,7 +1123,10 @@ const TITLE_PATTERN_BANK: Partial<Record<TopicType, DirectionPattern[]>> = {
     pattern("醫療倫理", (topic) => `${topic}臨床決策、公平近用與兒少醫療倫理之研究`, (topic) => `透過治療適應症、醫療資源、家庭決策與倫理指引資料，評估${topic}使用上的公平性與治理需求。`, "ethics_welfare", ["臨床決策", "公平近用", "醫療倫理"], ["clinical decision", "treatment access", "medical ethics"]),
   ],
   medicine_public_health: [
-    pattern("作用機制", (topic) => `${topic}作用機制與臨床使用限制之研究`, (topic) => `可整理藥理作用、治療目標、療效指標與禁忌資料，說明${topic}在臨床使用上的適用範圍與限制。`, "mechanism", ["作用機制", "臨床使用", "使用限制"], ["mechanism of action", "clinical use", "treatment limitation"]),
+    pattern("作用機制", (topic) =>
+      topic.includes("作用機制") && /臨床(?:應用|使用)/u.test(topic)
+        ? `${topic}之研究`
+        : `${topic}作用機制與臨床使用限制之研究`, (topic) => `可整理藥理作用、治療目標、療效指標與禁忌資料，說明${topic}在臨床使用上的適用範圍與限制。`, "mechanism", ["作用機制", "臨床使用", "使用限制"], ["mechanism of action", "clinical use", "treatment limitation"]),
     pattern("臨床使用", (topic) => `${topic}臨床指引、處方管理與照護情境之分析`, (topic) => `從適應症、療程設計、醫囑遵從與照護場域資料，評估${topic}臨床使用模式及其管理挑戰。`, "clinical_use", ["臨床指引", "處方管理", "照護情境"], ["clinical guideline", "prescription management", "care setting"]),
     pattern("抗藥副作用", (topic) => `${topic}濫用、抗藥性風險與公共衛生治理策略`, (topic) => `結合抗藥性監測、不良反應通報、風險族群與用藥規範資料，討論${topic}對公共衛生治理的挑戰。`, "health_risk", ["抗藥性風險", "副作用", "公共衛生治理"], ["antimicrobial resistance", "adverse effects", "public health governance"]),
     pattern("公共衛生", (topic) => `${topic}在疾病預防、族群健康與公共衛生策略中的角色`, (topic) => `可使用流行病學、社區介入、健康不平等與政策成效資料，分析${topic}對族群健康的影響。`, "public_health", ["疾病預防", "族群健康", "公共衛生策略"], ["disease prevention", "population health", "public health strategy"]),

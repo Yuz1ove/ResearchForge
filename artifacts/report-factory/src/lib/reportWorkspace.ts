@@ -406,7 +406,8 @@ export function reportGenerationBlockingReason(input: {
   if (!readiness.canGenerate) {
     return readiness.message;
   }
-  const evidenceCardCount = input.evidenceCardCount ?? 0;
+  const evidenceCardCount =
+    input.evidenceCardCount ?? input.evidenceCards?.length ?? 0;
   if (evidenceCardCount < 1) {
     return "來源已接受，但尚未形成足夠證據卡，請先重新產生證據卡後再生成報告。";
   }

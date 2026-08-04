@@ -423,7 +423,7 @@ function containsTerm(text: string, term: string): boolean {
   if (!normalizedTerm) return false;
   if (
     normalizedTerm === "氧化" &&
-    /二氧化碳|carbon dioxide|\bco2\b/i.test(normalizedText) &&
+    /二氧化碳|抗氧化|carbon dioxide|\bco2\b/i.test(normalizedText) &&
     !/氧化還原|氧化反應|氧化劑|氧化數|電子轉移|電化學|redox|oxidation[-\s]?reduction/i.test(normalizedText)
   ) {
     return false;

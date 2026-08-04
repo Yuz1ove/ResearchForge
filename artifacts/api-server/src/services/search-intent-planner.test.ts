@@ -125,6 +125,33 @@ test("school_report_balanced builds parallel source-role query buckets for accep
   }
 });
 
+test("lutein academic bucket prioritizes entity-aware mechanism and clinical queries", () => {
+  const topic = "葉黃素的作用機制與臨床應用";
+  const plan = buildRuleBasedSearchIntent({
+    topic,
+    reportType: "研究報告",
+    audience: "高中",
+    language: "zh-TW",
+  });
+  const querySet = buildSearchIntentQueries(plan);
+  const buckets = buildSourceMixQueryBuckets(plan, querySet, "school_report_balanced");
+
+  assert.match(buckets.academic_evidence[0] ?? "", /lutein/i);
+  assert.doesNotMatch(
+    JSON.stringify(buildSearchIntentQueries(plan)),
+    /redox|oxidation[-\s]?reduction|electron transfer/i,
+  );
+  assert.match(
+    buckets.academic_evidence.slice(0, 3).join(" "),
+    /macular pigment|retina|antioxidant/i,
+  );
+  assert.match(
+    buckets.academic_evidence.slice(0, 3).join(" "),
+    /clinical trial|visual function|macular degeneration/i,
+  );
+  assert.doesNotMatch(buckets.academic_evidence[0] ?? "", /^public health\b/i);
+});
+
 test("dog resource guarding fallback queries stay balanced instead of review-only", () => {
   const plan = buildRuleBasedSearchIntent({
     topic: dogResourceGuardingTopic,

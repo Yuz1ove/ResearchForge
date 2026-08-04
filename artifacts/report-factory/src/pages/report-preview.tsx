@@ -819,7 +819,11 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                 <Badge variant="outline">第三工作區：正式草稿</Badge>
                 <Badge variant="outline">第四工作區：報告格式</Badge>
               </div>
-              {!exportAllowed ? (
+              {workspace.generationMode === "initial_brief" ? (
+                <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+                  證據有限簡報：目前內容只使用可追溯的有限證據，結論採保守寫法；可匯出，但不得標示為標準或完整研究報告。
+                </div>
+              ) : !exportAllowed ? (
                 <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
                   證據有限／不完整草稿：可繼續檢視與補查，但在通過 evidence sufficiency 與引用一致性檢查前不得匯出。
                 </div>

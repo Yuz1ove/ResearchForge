@@ -16,6 +16,7 @@ import {
   validateTopicTextAgainstContract,
   type TopicAnchorContract,
 } from "./topic-anchor-contract";
+import { understandTopic } from "@workspace/api-zod/topic-understanding";
 
 const acceptanceCases = [
   {
@@ -228,6 +229,76 @@ test("provider boundary rejects invalid academic query before fetch", async () =
   assert.equal(groups.length, 1);
   assert.equal(groups[0]?.ok, false);
   assert.match(groups[0]?.error_message ?? "", /TOPIC_ANCHOR_CONTRACT_REJECTED/);
+});
+
+test("provider boundary allows precise entity query without repeating every structured synonym", async () => {
+  const topic = "葉黃素的作用機制與臨床應用";
+  const contract = buildTopicAnchorContract({
+    topic,
+    originalTopic: topic,
+    canonicalTopic: topic,
+    canonicalTopicEn: "lutein carotenoid macular pigment retina antioxidant mechanism",
+    mustIncludeTerms: ["葉黃素", "lutein", "xanthophyll"],
+  });
+  const plan: SearchIntentPlan = {
+    normalizedTopic: topic,
+    primaryConcepts: ["葉黃素", "lutein"],
+    contextConcepts: [],
+    outcomeConcepts: [],
+    populationConcepts: [],
+    lowWeightTerms: [],
+    mustHaveTerms: ["葉黃素", "lutein", "xanthophyll"],
+    shouldHaveTerms: [],
+    penaltyTerms: [],
+    negativeTerms: [],
+    chineseQueries: [],
+    englishQueries: [],
+    reasoningNotes: [],
+    plannerStatus: "rule_fallback",
+    fallbackUsed: true,
+    originalTopic: topic,
+    activeResearchTopic: topic,
+    canonicalTopicZh: topic,
+    canonicalEnglishTopic: "lutein carotenoid macular pigment retina antioxidant mechanism",
+    topicUnderstanding: understandTopic(topic),
+    topicAnchorContract: contract,
+    topicAnchorValidation: validateTopicTextAgainstContract(
+      `${topic} lutein xanthophyll`,
+      contract,
+    ),
+    topicAnchorRepairAttempted: false,
+    topicAnchorFailureReason: null,
+  };
+  let fetchCalls = 0;
+  const groups = await searchAcademicProviderGroupsForTesting({
+    queries: ["lutein macular pigment retina antioxidant mechanism"],
+    plan,
+    activeProviders: new Set(["OpenAlex"]),
+    options: {
+      sourceSearch: {
+        providers: ["OpenAlex"],
+        providerConfigs: {
+          OpenAlex: {
+            provider: "OpenAlex",
+            endpoint: "https://example.test/openalex/works",
+            timeoutMs: 50,
+            queryLimit: 1,
+            pageLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+        },
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          return new Response(JSON.stringify({ results: [] }));
+        },
+      },
+    },
+  });
+
+  assert.equal(fetchCalls, 1);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]?.query, "lutein macular pigment retina antioxidant mechanism");
+  assert.doesNotMatch(groups[0]?.error_message ?? "", /TOPIC_ANCHOR_CONTRACT_REJECTED/);
 });
 
 test("source search diagnostics preserve A-E original topic anchors after planner drift", async () => {

@@ -9530,12 +9530,33 @@ function providerBoundaryDecision(
 ): TopicAnchorQueryDecision | null {
   const contract = plan?.topicAnchorContract;
   if (!contract || requiredContractAnchorCount(contract) === 0) return null;
-  return validateAndRepairTopicQuery(query, contract, {
+  const decision = validateAndRepairTopicQuery(query, contract, {
     id: `provider:${provider ?? "unknown"}:${normalizeText(query).slice(0, 32)}`,
     role,
     provider,
     repair: true,
   });
+  if (
+    decision.status !== "valid" &&
+    decision.validation.forbiddenHits.length === 0 &&
+    decision.validation.missingAnchors.every(
+      (anchor) => anchor.provenance === "structured_input_field",
+    ) &&
+    plan?.topicUnderstanding?.topicKind === "specific_research_topic" &&
+    [
+      plan.topicUnderstanding.entity?.canonicalName ?? "",
+      ...(plan.topicUnderstanding.entity?.aliases ?? []),
+      ...(plan.topicUnderstanding.entity?.englishNames ?? []),
+      ...(plan.topicUnderstanding.entity?.scientificNames ?? []),
+    ].some((entity) => entity.length > 1 && textContains(query, entity))
+  ) {
+    // `mustIncludeTerms` are a relevance vocabulary, not a requirement that
+    // every provider query repeat every synonym. A precise entity-preserving
+    // query (for example, "lutein macular pigment retina") is safe to run as
+    // long as no registered/original anchor or forbidden drift is violated.
+    return null;
+  }
+  return decision;
 }
 
 function topicAnchorRejectedProviderGroup(
@@ -11973,6 +11994,13 @@ export function buildSourceMixQueryBuckets(
   const labels = topicSearchLabels(plan);
   const text = sourceMixTopicText(plan);
   const profileFallback = profileAwareFallbackQueries(plan, querySet, profile);
+  const stableAcademicQueries = cleanQueryList([
+    ...(plan.topicUnderstanding?.researchAngles ?? []).flatMap((angle) =>
+      angle.enQueries.filter((query) => /[A-Za-z]/.test(query)).slice(0, 1),
+    ),
+    ...(plan.topicUnderstanding?.searchQueries.en ?? []),
+    plan.canonicalEnglishTopic ?? "",
+  ], 6).filter((query) => !/[\u3400-\u9fff]/u.test(query));
   const professionalSeeds = /dog|canine|犬|狗|護食|resource guarding|animal|veterinary|獸醫/i.test(text)
     ? [
         "狗 護食 行為 訓練",
@@ -12010,6 +12038,7 @@ export function buildSourceMixQueryBuckets(
   return evidenceCardAnchoredSourceMixBuckets(plan, {
     academic_evidence: cleanQueryList(
       [
+        ...stableAcademicQueries,
         ...querySet.coreEnglishAcademic,
         ...querySet.academicSynonyms,
         ...(profile === "academic_strict"
@@ -14805,6 +14834,16 @@ async function searchAcademicProviderGroups(
           }
         }
       }
+    }
+
+    const academicResultCount = groups
+      .filter((group) => isAcademicProviderName(group.provider) && group.ok)
+      .reduce((sum, group) => sum + group.results.length, 0);
+    if (academicResultCount >= TARGET_SOURCE_COUNT) {
+      budget.warnings.add(
+        `early_stop: 精準學術查詢已取得 ${academicResultCount} 筆候選，停止消耗後續寬鬆 query budget。`,
+      );
+      break;
     }
   }
 

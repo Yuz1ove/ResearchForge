@@ -84,6 +84,23 @@ const LITHIUM_TOPIC_TERMS = {
 
 const TOPIC_ALIAS_GROUPS: Array<{ pattern: RegExp; terms: string[] }> = [
   {
+    pattern: /葉黃素|叶黄素|lutein|xanthophyll/i,
+    terms: [
+      "葉黃素",
+      "lutein",
+      "xanthophyll",
+      "carotenoid",
+      "macular pigment",
+      "macula",
+      "retina",
+      "retinal",
+      "antioxidant",
+      "oxidative stress",
+      "visual function",
+      "macular degeneration",
+    ],
+  },
+  {
     pattern: /藍光|蓝光|睡眠|sleep|blue light/i,
     terms: [
       "blue light",
