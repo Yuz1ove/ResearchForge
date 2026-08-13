@@ -1,3 +1,8 @@
+/**
+ * AI assistance disclosure: Portions of this multi-stage workflow were drafted
+ * or refactored with Replit Agent and OpenAI Codex. See /AI_ASSISTANCE.md for
+ * the scope of assistance and verification performed for this submission.
+ */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Navbar } from "@/components/layout/navbar";
 import { BrandWordmark } from "@/components/brand-wordmark";
@@ -101,8 +106,10 @@ import {
   type SourceReviewState,
 } from "@/lib/sourceRecords";
 import {
-  buildEvidenceCards,
+  analyzeEvidenceExtraction,
+  evidenceCardHasUsableSupport,
   type EvidenceCard,
+  type EvidenceExtractionDiagnostics,
 } from "@/lib/evidenceCards";
 import {
   sourceHasUsableAbstract,
@@ -124,18 +131,18 @@ import {
   reportTopicFingerprint,
   reportWorkspacePath,
   saveReportWorkspace,
-  shouldRunSupplementalCoverageSearch,
   workspaceMatchesTopic,
 } from "@/lib/reportWorkspace";
 import {
   mergeLlmReportDraft,
   requestLlmReportDraft,
 } from "@/lib/llmReportWriter";
+import { applyDetailedReportSummary } from "@/lib/detailedReport";
 import {
   academicSafetyBlocksReport,
   createResearchGroundingJob,
   fetchResearchGroundingJob,
-  groundedEvidenceCardsForAcceptedSources,
+  reportEvidenceCardsForAcceptedSources,
   GROUNDING_STATUS_LABELS,
   ResearchGroundingApiError,
   groundingJobSourceContractMismatch,
@@ -143,10 +150,19 @@ import {
   queryPlanHashFromJob,
 } from "@/lib/researchGrounding";
 import {
+  loadPaperSearchHandoff,
+  paperSearchHandoffToSources,
+  restorePaperSearchSourceReviews,
+  savePaperSearchSourceReviews,
+  type PaperSearchSourceReviewContext,
+} from "@/lib/paperSearchHandoff";
+import {
   DEFAULT_REPORT_PRESENTATION,
   normalizeReportPresentation,
   type ReportPresentationSettings,
 } from "@/lib/reportPresentation";
+import { sanitizeReaderFacingInternalLanguage } from "@/lib/reportPreviewGuards";
+import { buildStructuredReportPlan } from "@/lib/structuredReportPlan";
 import {
   Wand2,
   Loader2,
@@ -737,8 +753,8 @@ const RESEARCH_DEPTH_OPTIONS: {
   estimatedTime: string;
 }[] = [
   { label: "quick：5 筆", value: "quick", recommendedSources: 5, estimatedTime: "約 6-8 秒" },
-  { label: "standard：8 筆", value: "standard", recommendedSources: 8, estimatedTime: "約 8-12 秒" },
-  { label: "deep：12 筆", value: "deep", recommendedSources: 12, estimatedTime: "約 20-30 秒，會先顯示候選來源，背景補強 metadata" },
+  { label: "standard：10 筆", value: "standard", recommendedSources: 10, estimatedTime: "約 8-12 秒" },
+  { label: "deep：12 筆", value: "deep", recommendedSources: 12, estimatedTime: "約 20-30 秒，會先顯示候選來源，再補齊書目資訊" },
 ];
 
 // ─── Field config (visible labels map to stable internal generator values) ───
@@ -1131,8 +1147,34 @@ function domainFocusedResearchPlan(topic: string, domain: ResearchDomain): Groun
   if (searchEngineTopic) {
     return fallbackPlan(`${normalizedTopic} 搜尋引擎 排序演算法 資訊檢索 搜尋品質 使用者行為`);
   }
-  void domain;
-  return fallbackPlan(fallbackTopic);
+  const genericDomainFacet: Record<
+    ResearchDomain,
+    { focus: string; queryFacets: string[] }
+  > = {
+    natural_science: {
+      focus: "核心機制、關鍵變項與可驗證證據",
+      queryFacets: ["物理或自然機制", "關鍵變項 測量", "實證研究 文獻"],
+    },
+    humanities_social_science: {
+      focus: "歷史與社會脈絡、核心概念及實證研究",
+      queryFacets: ["歷史 社會脈絡", "核心概念 理論", "實證研究 文獻"],
+    },
+    life_environment: {
+      focus: "生命或環境機制、影響因素與研究證據",
+      queryFacets: ["生命 環境機制", "影響因素 觀察", "實證研究 文獻"],
+    },
+    technology_engineering_application: {
+      focus: "技術原理、效能指標、應用情境與限制",
+      queryFacets: ["技術原理", "效能指標 測試", "應用 限制 文獻"],
+    },
+  };
+  const facet = genericDomainFacet[domain];
+  const researchTopic = `${fallbackTopic}：${facet.focus}`;
+  return {
+    ...fallbackPlan(researchTopic),
+    researchQuestion: `針對「${fallbackTopic}」，現有研究如何解釋其${facet.focus}？`,
+    querySeedZh: facet.queryFacets.map((queryFacet) => `${fallbackTopic} ${queryFacet}`),
+  };
 }
 
 function domainFocusedResearchTopic(topic: string, domain: ResearchDomain): string {
@@ -1298,7 +1340,7 @@ function sourceDomainLabel(url: string | null | undefined): string {
 function sourceLocatorLabel(source: SourceRecord): string {
   if (source.sourceLinkInfo?.doiUrl) return `DOI ${source.sourceLinkInfo.doi}`;
   if (source.sourceLinkInfo?.canonicalUrl) return sourceDomainLabel(source.sourceLinkInfo.canonicalUrl);
-  if (source.sourceLinkInfo?.metadataUrl) return "來源 metadata";
+  if (source.sourceLinkInfo?.metadataUrl) return "來源資料頁";
   if (source.url) return sourceDomainLabel(source.url);
   if (source.doi) return `DOI ${source.doi}`;
   return "來源位置待確認";
@@ -1331,7 +1373,7 @@ function primarySourceLink(source: SourceRecord): {
     return {
       href: linkInfo.metadataUrl ?? source.url ?? null,
       label: "查看來源資料",
-      warning: "來源連結可能失效；目前只能確認 metadata，未確認可開啟全文。",
+      warning: "來源連結可能失效；目前只能確認書目資訊，未確認可開啟全文。",
     };
   }
   if (linkInfo?.canonicalUrl) {
@@ -1352,7 +1394,7 @@ function primarySourceLink(source: SourceRecord): {
     return {
       href: linkInfo.metadataUrl,
       label: "查看來源資料",
-      warning: "來源連結可能失效；目前只有來源資料庫 metadata 可追溯。",
+      warning: "來源連結可能失效；目前只有來源資料庫的書目資訊可追溯。",
     };
   }
   return { href: null, label: "來源位置待確認" };
@@ -1366,7 +1408,7 @@ function sourceAccessLabel(source: SourceRecord): string {
     case "redirected":
       return "已改用較穩定的追溯連結";
     case "metadata_only":
-      return "來源連結可能失效，目前只有 metadata 可追溯";
+      return "來源連結可能失效，目前只有書目資訊可追溯";
     case "blocked":
     case "not_found":
       return "來源連結可能失效";
@@ -1424,9 +1466,9 @@ function keywordSearchDebugFromResult(
     skipped: "略過",
   };
   const plannerStatusLabelMap: Record<string, string> = {
-    llm: "LLM 規劃",
+    llm: "模型輔助規劃",
     rule_fallback: "規則備援",
-    skipped: "未設定 LLM",
+    skipped: "模型服務未設定",
     failed: "規劃失敗",
   };
   const llmStatus =
@@ -1849,21 +1891,15 @@ const WORKFLOW_STEPS: {
   Icon: typeof CheckCircle2;
 }[] = [
   {
-    value: "topic",
-    label: "設定主題",
-    description: "輸入研究方向",
-    Icon: ClipboardList,
-  },
-  {
     value: "search",
-    label: "搜尋來源",
-    description: "查找可信資料",
+    label: "論文搜尋",
+    description: "沿用前頁結果",
     Icon: Search,
   },
   {
     value: "manage",
     label: "管理來源",
-    description: "審查與補 metadata",
+    description: "審查與補齊書目資料",
     Icon: BookOpen,
   },
   {
@@ -2263,7 +2299,7 @@ function WorkflowStepper({
       className="rounded-lg border border-border bg-card px-4 py-4 shadow-sm"
       data-testid="generator-workflow-stepper"
     >
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {WORKFLOW_STEPS.map((step, index) => {
           const completed = completedSteps[step.value] || index < currentIndex;
           const active = index === currentIndex;
@@ -2544,17 +2580,17 @@ function sourceRoleBadgeVariant(
 function retrievalModeLabel(mode: SourceRecord["retrievalMode"]): string {
   switch (mode) {
     case "live_provider":
-      return "live provider";
+      return "即時學術搜尋";
     case "trusted_seed":
-      return "trusted seed";
+      return "可信備援資料";
     case "stale_cache":
-      return "stale cache";
+      return "先前搜尋結果";
     case "user_import":
-      return "user import";
+      return "使用者匯入";
     case "manual_url":
-      return "manual URL";
+      return "手動網址";
     default:
-      return "live provider";
+      return "即時學術搜尋";
   }
 }
 
@@ -2563,9 +2599,9 @@ function summaryQualityLabel(
 ): string {
   switch (quality) {
     case "good":
-      return "摘要品質 good";
+      return "摘要資訊完整";
     case "partial":
-      return "摘要品質 partial";
+      return "摘要資訊部分可用";
     case "poor":
       return "摘要不足";
     case "irrelevant":
@@ -2606,9 +2642,9 @@ function sourceSummaryStatusLabel(source: SourceRecord): string {
   }
   switch (source.summaryStructuredStatus) {
     case "success":
-      return "LLM 摘要";
+      return "模型輔助摘要";
     case "unavailable":
-      return "LLM unavailable";
+      return "模型服務暫不可用";
     case "invalid_input":
       return "主題無效";
     case "insufficient_sources":
@@ -2621,21 +2657,21 @@ function sourceSummaryStatusLabel(source: SourceRecord): string {
   const status = source.summaryStatus ?? source.llmSummaryStatus;
   switch (status) {
     case "success":
-      return "摘要 LLM 成功";
+      return "模型摘要已完成";
     case "metadata-only":
-      return "metadata-only";
+      return "書目資訊整理";
     case "fetch-failed":
-      return "fetch failed";
+      return "來源內容取得失敗";
     case "llm-failed":
-      return "llm failed";
+      return "模型摘要失敗";
     case "fallback":
-      return "fallback 摘要";
+      return "規則輔助摘要";
     case "timeout":
-      return "摘要 LLM 逾時";
+      return "模型摘要逾時";
     case "quota_exceeded":
       return "摘要額度限制";
     case "failed":
-      return "摘要 LLM 失敗";
+      return "模型摘要失敗";
     case "skipped":
       return "摘要略過";
     default:
@@ -2720,19 +2756,6 @@ function abstractSnippet(source: SourceRecord): string | null {
   const text = source.abstract?.trim() || source.snippet?.trim();
   if (!text) return null;
   return compactSourceLine(text, 180);
-}
-
-function sourceHasServerDerivableSupport(source: SourceRecord): boolean {
-  const record = source as SourceRecord & Record<string, unknown>;
-  if (Array.isArray(record.extractedChunks) && record.extractedChunks.length > 0) {
-    return true;
-  }
-  return Boolean(
-    (typeof record.extractedAbstract === "string" && record.extractedAbstract.trim()) ||
-      (typeof record.abstractOriginal === "string" && record.abstractOriginal.trim()) ||
-      (typeof record.originalAbstract === "string" && record.originalAbstract.trim()) ||
-      (typeof source.abstract === "string" && source.abstract.trim()),
-  );
 }
 
 function parseAuthorsInput(value: string): string[] {
@@ -2869,24 +2892,24 @@ function sourceReadableStatus(source: SourceRecord): {
 } {
   switch (source.accessLevel) {
     case "full_text":
-      return { label: "full text", variant: "default" };
+      return { label: "可核對全文", variant: "default" };
     case "abstract_only":
-      return { label: "abstract only", variant: "secondary" };
+      return { label: "僅摘要", variant: "secondary" };
     case "metadata_only":
-      return { label: "metadata only", variant: "outline" };
+      return { label: "僅書目資訊", variant: "outline" };
     case "blocked_or_paywalled":
-      return { label: "manual review required", variant: "outline" };
+      return { label: "需人工複核", variant: "outline" };
     case "failed_extraction":
-      return { label: "extraction failed", variant: "outline" };
+      return { label: "內容擷取失敗", variant: "outline" };
     default:
       if (source.extractionStatus === "text_extracted" || source.extractionStatus === "grobid_extracted" || source.extractionStatus === "ocr_extracted") {
-        return { label: "full text", variant: "default" };
+        return { label: "可核對全文", variant: "default" };
       }
-      if (source.extractionStatus === "extraction_skipped_no_full_text") return { label: "abstract only", variant: "secondary" };
-      if (source.extractionStatus === "metadata_only") return { label: "metadata only", variant: "outline" };
-      if (source.extractionStatus === "failed" || source.extractionStatus === "extraction_failed" || source.extractionStatus === "extraction_unavailable_no_parser") return { label: "extraction failed", variant: "outline" };
-      if (source.abstract) return { label: "abstract only", variant: "secondary" };
-      return { label: "metadata only", variant: "outline" };
+      if (source.extractionStatus === "extraction_skipped_no_full_text") return { label: "僅摘要", variant: "secondary" };
+      if (source.extractionStatus === "metadata_only") return { label: "僅書目資訊", variant: "outline" };
+      if (source.extractionStatus === "failed" || source.extractionStatus === "extraction_failed" || source.extractionStatus === "extraction_unavailable_no_parser") return { label: "內容擷取失敗", variant: "outline" };
+      if (source.abstract) return { label: "僅摘要", variant: "secondary" };
+      return { label: "僅書目資訊", variant: "outline" };
   }
 }
 
@@ -3037,7 +3060,7 @@ function SourceReviewCard({
   const extractionFailureMessage =
     source.userFacingMessage ||
     (source.extractionStatus === "extraction_unavailable_no_parser"
-      ? "此 PDF 無法抽出可用文字；GROBID/OCR 未啟用或不可用，因此只能使用摘要或 metadata。"
+      ? "此 PDF 無法取得可用文字，因此目前只能使用摘要或書目資訊。"
       : "");
   const extractionWarnings = sourceWarningsForDisplay(source);
   const authorityLabel = source.authorityLabel ?? "權威性待確認";
@@ -3153,10 +3176,9 @@ function SourceReviewCard({
                     <Badge variant={readableStatus.variant}>
                       {readableStatus.label}
                     </Badge>
-                    <Badge variant="outline">evidence {extractedCount}</Badge>
-                    <Badge variant="outline">chunks {chunkCount}</Badge>
-                    <Badge variant="outline">claims {acceptedClaimCount}/{claimCount}</Badge>
-                    <Badge variant="outline">cards {acceptedEvidenceCardCount}</Badge>
+                    {!showTechnicalDetails && extractedCount > 0 ? (
+                      <Badge variant="outline">證據摘錄 {extractedCount}</Badge>
+                    ) : null}
                     {(source.lowConfidence || source.needsReview) && (
                       <Badge variant="outline">待人工審查</Badge>
                     )}
@@ -3229,7 +3251,7 @@ function SourceReviewCard({
                   </p>
                 )}
                 <p className="line-clamp-1 text-sm leading-6 text-foreground/90">
-                  {compactSummary}
+                  {sanitizeReaderFacingInternalLanguage(compactSummary)}
                 </p>
               </div>
             ) : (
@@ -3239,7 +3261,7 @@ function SourceReviewCard({
                     文章主旨
                   </p>
                   <p className="text-sm leading-6 text-foreground/90">
-                    {summary.contentSummary}
+                    {sanitizeReaderFacingInternalLanguage(summary.contentSummary)}
                   </p>
                   {summary.summaryConfidence === "low" && (
                     <p className="text-xs leading-5 text-amber-700">
@@ -3248,23 +3270,23 @@ function SourceReviewCard({
                   )}
                   {summary.summaryWarnings.length > 0 && (
                     <p className="text-xs leading-5 text-muted-foreground">
-                      {summary.summaryWarnings[0]}
+                      {sanitizeReaderFacingInternalLanguage(summary.summaryWarnings[0])}
                     </p>
                   )}
                   {isForceAccepted && (
                     <p className="text-xs leading-5 text-amber-700">
-                      這筆來源是人工強制保留，不會自動視為主要證據，也不會直接進入正式 evidence cards。
+                      這筆來源是人工強制保留，不會自動視為主要證據，也不會直接成為正式引用依據。
                     </p>
                   )}
                 </div>
                 <div className="grid gap-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2">
                   <p>
                     <span className="font-medium text-foreground">相關判斷：</span>
-                    {summary.topicRelation}
+                    {sanitizeReaderFacingInternalLanguage(summary.topicRelation)}
                   </p>
                   <p>
                     <span className="font-medium text-foreground">使用建議：</span>
-                    {summary.recommendationReason}
+                    {sanitizeReaderFacingInternalLanguage(summary.recommendationReason)}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -3280,54 +3302,40 @@ function SourceReviewCard({
                     </Badge>
                   ))}
                 </div>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  retrieval：{retrievalLabel}
-                </p>
-                <div className="grid gap-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2">
-                  <p>
-                    <span className="font-medium text-foreground">可讀狀態：</span>
-                    {readableStatus.label}
-                  </p>
-                  <p>
-                    <span className="font-medium text-foreground">抽取方法：</span>
-                    {extractionModeLabel}
-                  </p>
-                  <p>
-                    <span className="font-medium text-foreground">抽取狀態：</span>
-                    {source.extractionStatus ?? "未抽取"}
-                  </p>
-                  <p>
-                    <span className="font-medium text-foreground">claim extraction：</span>
-                    {claimExtractionLabel}
-                  </p>
-                  <p>
-                    <span className="font-medium text-foreground">全文字數：</span>
-                    {source.fullTextCharCount ?? 0}
-                  </p>
-                  <p>
-                    <span className="font-medium text-foreground">chunks / claims / cards：</span>
-                    {chunkCount} / {acceptedClaimCount}/{claimCount} / {acceptedEvidenceCardCount}
-                  </p>
-                  <p>
-                    <span className="font-medium text-foreground">可用章節：</span>
-                    {(source.extractedSections?.map((section) => section.heading).slice(0, 3).join("、") ||
-                      usableSections.join("、") ||
-                      "尚未抽取")}
-                  </p>
-                </div>
-                {extractionWarnings.length > 0 ? (
+                {showTechnicalDetails ? (
+                  <>
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      retrieval：{retrievalLabel}
+                    </p>
+                    <div className="grid gap-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2">
+                      <p><span className="font-medium text-foreground">可讀狀態：</span>{readableStatus.label}</p>
+                      <p><span className="font-medium text-foreground">抽取方法：</span>{extractionModeLabel}</p>
+                      <p><span className="font-medium text-foreground">抽取狀態：</span>{source.extractionStatus ?? "未抽取"}</p>
+                      <p><span className="font-medium text-foreground">claim extraction：</span>{claimExtractionLabel}</p>
+                      <p><span className="font-medium text-foreground">全文字數：</span>{source.fullTextCharCount ?? 0}</p>
+                      <p><span className="font-medium text-foreground">chunks / claims / cards：</span>{chunkCount} / {acceptedClaimCount}/{claimCount} / {acceptedEvidenceCardCount}</p>
+                      <p>
+                        <span className="font-medium text-foreground">可用章節：</span>
+                        {(source.extractedSections?.map((section) => section.heading).slice(0, 3).join("、") || usableSections.join("、") || "尚未抽取")}
+                      </p>
+                    </div>
+                    {extractionWarnings.length > 0 ? (
+                      <p className="text-xs leading-5 text-muted-foreground">warnings：{extractionWarnings.join("；")}</p>
+                    ) : null}
+                  </>
+                ) : (
                   <p className="text-xs leading-5 text-muted-foreground">
-                    warnings：{extractionWarnings.join("；")}
+                    取得方式：{retrievalLabel}；內容層級：{readableStatus.label}；可用證據摘錄：{extractedCount} 筆。
                   </p>
-                ) : null}
+                )}
                 {extractionFailureMessage ? (
                   <p className="text-xs leading-5 text-amber-700">
-                    {extractionFailureMessage}
+                    {sanitizeReaderFacingInternalLanguage(extractionFailureMessage)}
                   </p>
                 ) : null}
                 {sourceLimitations.length > 0 ? (
                   <p className="text-xs leading-5 text-muted-foreground">
-                    限制：{sourceLimitations.slice(0, 2).join("；")}
+                    限制：{sanitizeReaderFacingInternalLanguage(sourceLimitations.slice(0, 2).join("；"))}
                   </p>
                 ) : null}
                 {showTechnicalDetails && (
@@ -3943,6 +3951,7 @@ function SearchStepPanel({
   onRetry,
   onNext,
   onBack,
+  showTechnicalDetails,
 }: {
   topic: string;
   originalTopic: string;
@@ -3960,6 +3969,7 @@ function SearchStepPanel({
   onRetry: () => void;
   onNext: () => void;
   onBack: () => void;
+  showTechnicalDetails: boolean;
 }) {
   const status = groundingJob?.status ?? "queued";
   const isCreateFailure = groundingRequestState === "job_create_failed";
@@ -4094,8 +4104,8 @@ function SearchStepPanel({
       ? "無法建立搜尋任務；尚未開始呼叫 OpenAlex 或 Crossref。請確認 API 連線後重新搜尋。"
       : isPollFailure
         ? "搜尋任務狀態讀取失敗；任務可能仍在執行，請稍後重新讀取或重新搜尋。"
-        : isProviderFailure
-          ? "所有已嘗試的來源服務均失敗，請查看 provider diagnostics 後重試；逾時不會被視為 0 筆結果。"
+      : isProviderFailure
+          ? "所有已嘗試的來源服務均失敗，請查看來源服務狀態後重試；逾時不會被視為 0 筆結果。"
           : isPipelineFailure
             ? groundingError ?? "搜尋任務執行失敗，請稍後重試。"
       : isAcademicRetrying
@@ -4105,7 +4115,7 @@ function SearchStepPanel({
       : isSourceReviewNeedsManual
         ? `已自動嘗試 ${academicRetry?.count ?? 0} 輪學術延伸查詢，但學術來源仍不足；請在來源審查中補充或手動調整查詢。`
       : isNoSourcesAfterFallback
-        ? "所有自動 fallback 查詢完成後，仍未取得可審查來源。"
+        ? "所有自動備援查詢完成後，仍未取得可審查來源。"
       : canReview && reviewableSourceCount >= READY_REVIEWABLE_SOURCE_COUNT
         ? `找到 ${reviewableSourceCount} 筆待審來源，可進入來源審查。`
       : canReview
@@ -4124,18 +4134,18 @@ function SearchStepPanel({
       case "searching":
         return "搜尋中";
       case "success":
-        return "success";
+        return "已完成";
       case "empty":
-        return "empty";
+        return "未找到結果";
       case "returned":
         return "已回傳";
       case "timeout":
-        return "timeout";
+        return "逾時";
       case "background":
         return "背景補強中";
       case "error":
       default:
-        return "error";
+        return "失敗";
     }
   };
   const providerProgressLabel =
@@ -4145,16 +4155,16 @@ function SearchStepPanel({
           .map((provider) => {
             const rawCount = provider.rawResultsCount ?? provider.resultCount;
             const queryCount = provider.queryCount ?? (provider.query ? 1 : 0);
-            return `${provider.provider}：${providerStatusLabel(provider.status)}，${queryCount} queries，raw ${rawCount} / normalized ${provider.normalizedCount ?? provider.resultCount}`;
+            return `${provider.provider}：${providerStatusLabel(provider.status)}，${queryCount} 組查詢，收到 ${rawCount} 筆／整理後 ${provider.normalizedCount ?? provider.resultCount} 筆`;
           })
           .join(" / ")
       : isCreateFailure
-        ? "尚未開始 provider 搜尋（任務建立失敗）"
+        ? "尚未開始搜尋（任務建立失敗）"
         : isPollFailure
-          ? "尚未取得 provider 狀態（輪詢失敗）"
+          ? "尚未取得來源服務狀態（狀態讀取失敗）"
           : groundingRequestState === "creating_job"
-            ? "正在建立搜尋任務，provider 尚未開始"
-            : "尚未取得 provider 執行紀錄";
+            ? "正在建立搜尋任務，來源服務尚未開始"
+            : "尚未取得來源服務紀錄";
   const providerHealthLabel =
     groundingDiagnostics?.providerHealth
       ?.filter((health) => health.status !== "healthy")
@@ -4173,21 +4183,24 @@ function SearchStepPanel({
               : health.provider === "crossref"
                 ? "Crossref"
                 : "CORE";
-        return `${label}：${health.status}`;
+        return `${label}：${health.status === "down" ? "暫時無法使用" : "暫時不穩定"}`;
       })
       .join(" / ") ?? null;
   const cacheLabel =
     groundingDiagnostics?.cacheStatus === "stale_hit_refreshing"
-      ? "stale hit / refreshing"
+      ? "正在更新先前結果"
       : groundingDiagnostics?.cacheStatus === "refresh_failed_using_stale"
-        ? "refresh failed / using stale"
+        ? "使用先前結果"
         : groundingDiagnostics?.cacheStatus === "write_failed"
-          ? "write failed"
+          ? "搜尋結果已取得"
           : groundingDiagnostics?.cacheStatus === "hit" || groundingDiagnostics?.cacheHit === true
-            ? "hit"
+            ? "使用已保存結果"
             : groundingDiagnostics?.cacheStatus === "miss" || groundingDiagnostics?.cacheHit === false
-              ? "miss"
-              : "miss";
+              ? "即時搜尋"
+              : "即時搜尋";
+  const earlyStopLabel = groundingDiagnostics?.earlyStopReason
+    ? "來源數達標後已停止延伸搜尋"
+    : "未提前停止";
 
   return (
     <section
@@ -4197,7 +4210,7 @@ function SearchStepPanel({
       <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <Badge variant="secondary" className="w-fit">
-            步驟 2
+            步驟 1
           </Badge>
           <Button
             type="button"
@@ -4214,7 +4227,7 @@ function SearchStepPanel({
             <span className="block text-xs font-medium text-muted-foreground">
               搜尋主題
             </span>
-            <p className="mt-1 font-medium text-foreground">{topic || "尚未設定主題"}</p>
+            <p className="mt-1 font-medium text-foreground">{topic || "尚未取得搜尋主題"}</p>
             {originalTopic && originalTopic !== topic ? (
               <p className="mt-1 text-xs text-muted-foreground">
                 原始輸入：{originalTopic}
@@ -4270,19 +4283,19 @@ function SearchStepPanel({
               </p>
             </div>
             <div className="rounded-md border border-border bg-background px-3 py-2">
-              <p className="text-xs text-muted-foreground">provider progress</p>
+              <p className="text-xs text-muted-foreground">來源服務進度</p>
               <p className="mt-1 line-clamp-2 text-foreground">
                 {providerProgressLabel}
               </p>
             </div>
             <div className="rounded-md border border-border bg-background px-3 py-2">
-              <p className="text-xs text-muted-foreground">cache</p>
+              <p className="text-xs text-muted-foreground">結果取得方式</p>
               <p className="mt-1 text-foreground">{cacheLabel}</p>
             </div>
             <div className="rounded-md border border-border bg-background px-3 py-2">
-              <p className="text-xs text-muted-foreground">early stop</p>
+              <p className="text-xs text-muted-foreground">延伸搜尋</p>
               <p className="mt-1 truncate text-foreground">
-                {groundingDiagnostics?.earlyStopReason ?? "尚未觸發"}
+                {earlyStopLabel}
               </p>
             </div>
           </div>
@@ -4344,9 +4357,11 @@ function SearchStepPanel({
               </Badge>
             </div>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
-              {groundingError ||
+              {sanitizeReaderFacingInternalLanguage(
+                groundingError ||
                 groundingDiagnostics?.userVisibleStatus ||
-                userFacingStatusMessage}
+                userFacingStatusMessage,
+              )}
             </p>
             {isSourceReviewNeedsManual ? (
               <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm leading-6 text-amber-900">
@@ -4361,7 +4376,7 @@ function SearchStepPanel({
             {groundingDiagnostics?.readinessWarnings?.length ? (
               <ul className="mt-3 space-y-1 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground">
                 {groundingDiagnostics.readinessWarnings.slice(0, 3).map((warning) => (
-                  <li key={warning}>{warning}</li>
+                  <li key={warning}>{sanitizeReaderFacingInternalLanguage(warning)}</li>
                 ))}
               </ul>
             ) : null}
@@ -4370,13 +4385,13 @@ function SearchStepPanel({
                 <table className="w-full min-w-[720px] text-left text-xs">
                   <thead className="bg-muted/30 text-muted-foreground">
                     <tr>
-                      <th className="px-3 py-2 font-medium">provider</th>
-                      <th className="px-3 py-2 font-medium">status</th>
-                      <th className="px-3 py-2 font-medium">queries</th>
-                      <th className="px-3 py-2 font-medium">raw / normalized</th>
-                      <th className="px-3 py-2 font-medium">accepted / candidate / fallback / rejected</th>
-                      <th className="px-3 py-2 font-medium">duration</th>
-                      <th className="px-3 py-2 font-medium">error</th>
+                      <th className="px-3 py-2 font-medium">來源服務</th>
+                      <th className="px-3 py-2 font-medium">狀態</th>
+                      <th className="px-3 py-2 font-medium">查詢組數</th>
+                      <th className="px-3 py-2 font-medium">收到／整理後</th>
+                      <th className="px-3 py-2 font-medium">已接受／候選／待複核／已排除</th>
+                      <th className="px-3 py-2 font-medium">耗時</th>
+                      <th className="px-3 py-2 font-medium">說明</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -4395,7 +4410,9 @@ function SearchStepPanel({
                           {provider.durationMs ?? provider.latencyMs ?? 0} ms
                         </td>
                         <td className="max-w-[220px] truncate px-3 py-2 text-muted-foreground">
-                          {provider.errorMessage ?? "-"}
+                          {provider.errorMessage
+                            ? sanitizeReaderFacingInternalLanguage(provider.errorMessage)
+                            : "正常"}
                         </td>
                       </tr>
                     ))}
@@ -4469,7 +4486,7 @@ function SearchStepPanel({
             ) : null}
           </div>
 
-          {diagnosticTrace ? (
+          {showTechnicalDetails && diagnosticTrace ? (
             <ResearchGroundingDiagnosticTracePanel trace={diagnosticTrace} />
           ) : null}
 
@@ -4764,7 +4781,7 @@ function SourceManagePanel({
                         待人工審查來源 ({secondarySources.length})
                         </span>
                         <span className="block text-xs text-muted-foreground">
-                        這些來源信心較低或 metadata 較少；確認相關後可手動接受。
+                        這些來源信心較低或書目資訊較少；確認相關後可手動接受。
                         </span>
                       </span>
                     <ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -5232,7 +5249,7 @@ function ManageStepPanel({
   const sourceGateWarning = blockingReason
     ? blockingReason
     : usableAcceptedSourceCount < 3
-      ? `目前已採用來源 ${acceptedCount} 筆，建議至少 3 筆後再生成，citation 與結論會更穩定。`
+      ? `目前已採用來源 ${acceptedCount} 筆，建議至少 3 筆後再生成，引用與結論會更穩定。`
       : sourceQualityReadiness.lowQualityAcceptedCount > 0
         ? "目前接受的來源仍混有低相關資料，建議優先保留與主題直接相關的來源。"
         : sourceQualityReadiness.warning;
@@ -5305,6 +5322,7 @@ function GenerateStepPanel({
   recommendedAcceptedSourceCount,
   readiness,
   sectionSufficiency,
+  evidenceDiagnostics,
   limitedReadableSourceWarning,
   canGenerateReport,
   blockingReason,
@@ -5324,6 +5342,7 @@ function GenerateStepPanel({
   recommendedAcceptedSourceCount: number;
   readiness: ReturnType<typeof generationReadiness>;
   sectionSufficiency: UiSectionSufficiency[];
+  evidenceDiagnostics: EvidenceExtractionDiagnostics;
   limitedReadableSourceWarning: string | null;
   canGenerateReport: boolean;
   blockingReason: string | null;
@@ -5351,14 +5370,10 @@ function GenerateStepPanel({
       : llmStatus.modelConfigured === false
         ? "模型名稱未設定"
         : llmStatus.apiKeyPresent === false || llmStatus.baseURLConfigured === false
-          ? "provider 尚未設定"
+          ? "模型服務尚未設定"
           : /401|invalid|credential|key|金鑰/i.test(llmStatus.errorMessage ?? "")
             ? "金鑰驗證失敗"
-            : "provider 尚未設定";
-  const llmProviderLabel =
-    llmStatus.provider === "school_llm"
-      ? "SCHOOL_LLM"
-      : llmStatus.provider || "LLM";
+            : "模型服務尚未設定";
   const sourceRoleCounts = acceptedSources.reduce<Record<string, number>>((counts, source) => {
     const role = sourceRoleBadgeLabel(source.sourceRole) ?? "未分類";
     counts[role] = (counts[role] ?? 0) + 1;
@@ -5367,7 +5382,7 @@ function GenerateStepPanel({
   const sourceDiversityCount = Object.keys(sourceRoleCounts).filter((role) => role !== "未分類").length;
   const insufficientSections = sectionSufficiency.filter((section) => section.status !== "sufficient");
   const generationCapability =
-    canGenerateReport && readiness.canGenerateFull && llmStatus.healthOk && llmStatus.smokeOk && llmStatus.modelConfigured
+    canGenerateReport && readiness.canGenerateFull
       ? "可生成完整報告"
       : canGenerateReport
         ? "只能生成草稿"
@@ -5382,7 +5397,7 @@ function GenerateStepPanel({
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <Badge variant="secondary" className="mb-3">
-              步驟 4
+              步驟 3
             </Badge>
             <h2 className="text-2xl font-semibold tracking-normal text-foreground">
               生成報告
@@ -5493,22 +5508,58 @@ function GenerateStepPanel({
         {(blockingReason || readiness.warning) && (
           <div className="mt-4 flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{blockingReason ?? readiness.warning}</span>
+            <span>{sanitizeReaderFacingInternalLanguage(blockingReason ?? readiness.warning)}</span>
           </div>
         )}
 
         {limitedReadableSourceWarning ? (
           <div className="mt-4 flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{limitedReadableSourceWarning}</span>
+            <span>{sanitizeReaderFacingInternalLanguage(limitedReadableSourceWarning)}</span>
           </div>
         ) : null}
+
+        <div
+          className="mt-4 rounded-md border border-border bg-muted/20 px-3 py-3"
+          data-testid="evidence-extraction-diagnostics"
+        >
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="font-medium text-foreground">引用依據整理</span>
+            <Badge variant="outline">已接受來源 {evidenceDiagnostics.acceptedSourceCount}</Badge>
+            <Badge variant="outline">證據摘錄 {evidenceDiagnostics.evidenceCardCount}</Badge>
+            <Badge variant={evidenceDiagnostics.usableEvidenceCardCount > 0 ? "secondary" : "outline"}>
+              可引用 {evidenceDiagnostics.usableEvidenceCardCount}
+            </Badge>
+            <Badge variant="outline">全文摘錄 {evidenceDiagnostics.fullTextEvidenceCardCount}</Badge>
+            <Badge variant="outline">摘要摘錄 {evidenceDiagnostics.abstractEvidenceCardCount}</Badge>
+            <Badge variant="outline">書目背景 {evidenceDiagnostics.bibliographicCardCount}</Badge>
+          </div>
+          {evidenceDiagnostics.blockingMessage ? (
+            <p className="mt-2 text-sm leading-6 text-amber-800">
+              {sanitizeReaderFacingInternalLanguage(evidenceDiagnostics.blockingMessage)}
+            </p>
+          ) : (
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+              證據摘錄整理已完成；摘要與全文摘錄可用於保守引用，書目背景資料只用於說明來源脈絡。
+            </p>
+          )}
+          {evidenceDiagnostics.issues.length > 0 ? (
+            <ul className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground">
+              {evidenceDiagnostics.issues.slice(0, 6).map((issue) => (
+                <li key={`${issue.sourceId}:${issue.stage}`}>
+                  <span className="font-medium text-foreground">{issue.title}</span>
+                  {` · ${sanitizeReaderFacingInternalLanguage(issue.message)}`}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
 
         <div className="mt-4 rounded-md border border-border bg-muted/20 px-3 py-3">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-foreground">段落證據充足度</span>
             <Badge variant="outline">
-              {sectionSufficiency.filter((item) => item.status === "sufficient").length}/{sectionSufficiency.length} sufficient
+              {sectionSufficiency.filter((item) => item.status === "sufficient").length}/{sectionSufficiency.length} 個段落來源充足
             </Badge>
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
@@ -5517,12 +5568,12 @@ function GenerateStepPanel({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium text-foreground">{section.title}</span>
                   <Badge variant={badgeVariantForSufficiency(section.status)}>
-                    {section.status}
+                    {section.status === "sufficient" ? "充足" : section.status === "weak" ? "部分充足" : "不足"}
                   </Badge>
-                  <Badge variant="outline">{section.evidenceCount} 張</Badge>
+                  <Badge variant="outline">{section.evidenceCount} 筆摘錄</Badge>
                 </div>
                 <p className="mt-1 text-muted-foreground">
-                  full text {section.fullTextEvidenceCount} / abstract {section.abstractOnlyEvidenceCount} / citation {section.citationCount}
+                  全文摘錄 {section.fullTextEvidenceCount} 筆／摘要摘錄 {section.abstractOnlyEvidenceCount} 筆／可引用來源 {section.citationCount} 筆
                 </p>
                 {section.missingEvidenceTypes.length > 0 ? (
                   <p className="mt-1 text-muted-foreground">
@@ -5537,7 +5588,7 @@ function GenerateStepPanel({
         {readiness.diagnostics.length > 0 && (
           <ul className="mt-3 space-y-1 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground">
             {readiness.diagnostics.slice(0, 5).map((diagnostic) => (
-              <li key={diagnostic}>{diagnostic}</li>
+              <li key={diagnostic}>{sanitizeReaderFacingInternalLanguage(diagnostic)}</li>
             ))}
           </ul>
         )}
@@ -5545,34 +5596,34 @@ function GenerateStepPanel({
         {generateStatus === "error" && canGenerateReport && (
           <div className="mt-4 flex gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{generateErrorMessage ?? "報告生成失敗，請檢查 GPT 連線與來源證據卡狀態。"}</span>
+            <span>{sanitizeReaderFacingInternalLanguage(generateErrorMessage ?? "報告生成失敗，請檢查模型服務與來源證據摘錄狀態。")}</span>
           </div>
         )}
 
         <div className="mt-4 rounded-md border border-border bg-muted/20 px-3 py-3 text-sm">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium text-foreground">LLM 狀態</span>
+            <span className="font-medium text-foreground">模型服務狀態</span>
             <Badge variant={llmStatus.healthOk && llmStatus.smokeOk ? "secondary" : "outline"}>
-              {llmProviderLabel} {llmUserStatus}
+              模型服務 {llmUserStatus}
             </Badge>
             {llmStatus.loading ? (
-              <Badge variant="outline">checking</Badge>
+              <Badge variant="outline">檢查中</Badge>
             ) : null}
           </div>
           <div className="mt-2 grid grid-cols-1 gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-4">
-            <p>provider：{llmStatus.provider}</p>
-            <p>model：{llmStatus.model}</p>
+            <p>服務設定：{llmStatus.provider ? "已設定" : "尚未設定"}</p>
+            <p>模型：{llmStatus.model || "尚未設定"}</p>
             <p>金鑰：{llmStatus.apiKeyPresent ? "已設定" : "尚未設定"}</p>
-            <p>base URL：{llmStatus.baseURLConfigured ? "已設定" : "尚未設定"}</p>
-            <p>latency：{llmStatus.latencyMs ?? "-"} ms</p>
+            <p>服務網址：{llmStatus.baseURLConfigured ? "已設定" : "尚未設定"}</p>
+            <p>回應時間：{llmStatus.latencyMs ?? "-"} 毫秒</p>
             <p>
-              checked：{llmStatus.checkedAt ? new Date(llmStatus.checkedAt).toLocaleString() : "-"}
+              檢查時間：{llmStatus.checkedAt ? new Date(llmStatus.checkedAt).toLocaleString() : "-"}
             </p>
           </div>
           {(!llmStatus.healthOk || !llmStatus.smokeOk || !llmStatus.modelConfigured) && (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
-              {llmStatus.errorMessage ??
-                "請確認 LLM provider credentials、SCHOOL_LLM_MODEL 或 OPENAI_MODEL，並檢查 /api/llm/health 與 /api/llm/smoke。"}
+              {sanitizeReaderFacingInternalLanguage(llmStatus.errorMessage ??
+                "請確認模型服務的金鑰、模型名稱與服務網址設定。")}
             </div>
           )}
         </div>
@@ -5592,12 +5643,7 @@ function GenerateStepPanel({
               size="lg"
               className="min-h-[46px]"
               onClick={onGenerate}
-              disabled={
-                isGenerating ||
-                !llmStatus.healthOk ||
-                !llmStatus.smokeOk ||
-                !llmStatus.modelConfigured
-              }
+              disabled={isGenerating}
               data-testid="button-generate"
             >
               {isGenerating ? (
@@ -6028,8 +6074,6 @@ export function Generator() {
     "idle" | "loading" | "done" | "empty" | "error"
   >("idle");
   const [sourceSearchMessage, setSourceSearchMessage] = useState("");
-  const [supplementalCoverageAttemptKey, setSupplementalCoverageAttemptKey] =
-    useState<string | null>(null);
   const [searchRequestDebug, setSearchRequestDebug] =
     useState<SearchRequestDebugState | null>(null);
   const [keywordSearchDebug, setKeywordSearchDebug] =
@@ -6048,7 +6092,7 @@ export function Generator() {
   const [sourceQueryPlanHash, setSourceQueryPlanHash] = useState<string | null>(
     null,
   );
-  const [activeStep, setActiveStep] = useState<GeneratorWorkflowStep>("topic");
+  const [activeStep, setActiveStep] = useState<GeneratorWorkflowStep>("search");
   const [isStepTransitioning, setIsStepTransitioning] = useState(false);
   const [transitionTargetStep, setTransitionTargetStep] = useState<
     GeneratorWorkflowStep | "report"
@@ -6069,6 +6113,9 @@ export function Generator() {
     topicHash: null,
   });
   const groundingCreateAbortRef = useRef<AbortController | null>(null);
+  const paperSearchHandoffLoadedRef = useRef(false);
+  const paperSearchReviewContextRef =
+    useRef<PaperSearchSourceReviewContext | null>(null);
 
   useEffect(
     () => () => {
@@ -6150,7 +6197,9 @@ export function Generator() {
   const originalTopicValue = input.topic.trim();
   const draftTopicValue = draftTopic.trim();
   const selectedExpansionTopic = searchTopic.trim();
-  const activeResearchTopic = selectedExpansionTopic || originalTopicValue;
+  const groundingCanonicalTopic = groundingJob?.normalizedTopic?.trim() ?? "";
+  const activeResearchTopic =
+    selectedExpansionTopic || groundingCanonicalTopic || originalTopicValue;
   const displayTitleValue =
     displayTitle.trim() || selectedExpansionTopic || originalTopicValue;
   const hasSelectedExpansion =
@@ -6241,38 +6290,30 @@ export function Generator() {
   const reviewedSourceCount = reviewCounts.accepted + reviewCounts.rejected;
   const acceptedEvidenceCards = useMemo(
     () =>
-      groundedEvidenceCardsForAcceptedSources({
+      reportEvidenceCardsForAcceptedSources({
         acceptedSources,
         groundingEvidenceCards: groundingJob?.evidenceCards ?? [],
         topic: activeReportTopic,
       }),
     [acceptedSources, activeReportTopic, groundingJob?.evidenceCards],
   );
-  const serverDerivableEvidenceAvailable = useMemo(
-    () => acceptedSources.some(sourceHasServerDerivableSupport),
-    [acceptedSources],
+  const usableEvidenceCards = useMemo(
+    () => acceptedEvidenceCards.filter(evidenceCardHasUsableSupport),
+    [acceptedEvidenceCards],
   );
-  const readinessEvidenceCards =
-    acceptedEvidenceCards.length > 0 || !serverDerivableEvidenceAvailable
-      ? acceptedEvidenceCards
-      : null;
+  const evidenceDiagnostics = useMemo(
+    () => analyzeEvidenceExtraction(acceptedSources, acceptedEvidenceCards),
+    [acceptedEvidenceCards, acceptedSources],
+  );
+  const readinessEvidenceCards = usableEvidenceCards;
   const readiness = generationReadiness(
     acceptedSources,
     input.researchDepth,
     readinessEvidenceCards,
   );
-  const literatureReviewEvidenceCount = useMemo(
-    () =>
-      acceptedEvidenceCards.filter(
-        (card) =>
-          card.usableSections.includes("文獻探討") ||
-          card.sectionTargets.includes("literature_review"),
-      ).length,
-    [acceptedEvidenceCards],
-  );
   const sectionSufficiency = useMemo(
-    () => buildUiSectionSufficiency(acceptedEvidenceCards),
-    [acceptedEvidenceCards],
+    () => buildUiSectionSufficiency(usableEvidenceCards),
+    [usableEvidenceCards],
   );
   const limitedReadableSourceWarning = useMemo(() => {
     if (acceptedSources.length === 0) return null;
@@ -6284,45 +6325,19 @@ export function Generator() {
         !source.accessLevel,
     ).length;
     if (fullTextCount === 0 && abstractOrMetadataCount > 0) {
-      return "目前多數來源未取得全文，報告會以摘要與 metadata 為主，不能形成完整文獻探討。";
+      return "目前多數來源未取得全文，報告會以摘要與書目資訊為主，不能形成完整文獻探討。";
     }
     if (abstractOrMetadataCount > fullTextCount) {
       return "目前可用全文來源偏少，文獻探討與討論段會保留證據限制。";
     }
     return null;
   }, [acceptedSources]);
-  const peerReviewedAcceptedSourceCount = useMemo(
-    () =>
-      acceptedSources.filter((source) =>
-        Boolean(
-          source.isPeerReviewed ||
-            source.doi ||
-            source.sourceKind === "journal" ||
-            source.sourceKind === "conference" ||
-            /crossref|openalex|semantic scholar|journal|conference|academic/i.test(
-              `${source.provider ?? ""} ${source.sourceType ?? ""} ${source.containerTitle ?? ""}`,
-            ),
-        ),
-      ).length,
-    [acceptedSources],
-  );
-  const needsSupplementalCoverage = shouldRunSupplementalCoverageSearch({
-    acceptedSourceCount: acceptedSources.length,
-    literatureReviewEvidenceCount,
-    peerReviewedAcceptedSourceCount,
-    canonicalEvidenceCardCount: acceptedEvidenceCards.length,
-    serverDerivableEvidenceAvailable,
-  });
   const blockingReason = reportGenerationBlockingReason({
     topic: activeReportTopic,
     acceptedSources,
     hasWorkspaceTopicMismatch,
-    evidenceCardCount:
-      acceptedEvidenceCards.length > 0
-        ? acceptedEvidenceCards.length
-        : serverDerivableEvidenceAvailable
-          ? 1
-          : 0,
+    evidenceCardCount: usableEvidenceCards.length,
+    evidenceFailureReason: evidenceDiagnostics.blockingMessage,
     workflowId: sourceWorkflowLock?.workflowId ?? null,
     topicHash: sourceWorkflowLock?.topicHash ?? null,
   });
@@ -6447,10 +6462,10 @@ export function Generator() {
             smokeOk && healthOk && modelConfigured
               ? null
               : !modelConfigured && healthOk
-                ? "LLM credentials configured, but model is not explicitly configured. Smoke test can infer a model from /models, or set SCHOOL_LLM_MODEL."
+                ? "模型服務已連線，但尚未指定模型名稱。"
                 : [health.errorMessage, smoke.errorMessage]
                   .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-                  .join("；") || "LLM health/smoke failed",
+                  .join("；") || "模型服務連線檢查失敗",
         });
       } catch (error) {
         if (cancelled) return;
@@ -6458,7 +6473,7 @@ export function Generator() {
           ...DEFAULT_LLM_STATUS,
           loading: false,
           errorMessage:
-            error instanceof Error ? error.message : "LLM status request failed",
+            error instanceof Error ? error.message : "模型服務狀態讀取失敗",
         });
       }
     };
@@ -6643,6 +6658,17 @@ export function Generator() {
     transitionToStep(step, { pushCurrentStep: true, historyMode: "push" });
   };
 	  const goBackStep = () => {
+	    if (activeStep === "manage" && typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("from") === "paper-search") {
+        navigate(
+          originalTopicValue
+            ? `/generator?q=${encodeURIComponent(originalTopicValue)}`
+            : "/generator",
+        );
+        return;
+      }
+    }
 	    let previousStep: GeneratorRouteStep | null =
 	      stepHistory[stepHistory.length - 1] ?? null;
 	    setStepHistory((history) => {
@@ -6844,12 +6870,151 @@ export function Generator() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const fromPaperSearch = params.get("from") === "paper-search";
+    const hasSavedReport = Boolean(params.get("reportId"));
+    const hasGroundingContext = Boolean(
+      params.get("workflowId") && params.get("topicHash") && params.get("runId"),
+    );
+    if (fromPaperSearch || hasSavedReport || hasGroundingContext) return;
+    navigate("/generator", { replace: true });
+  }, [navigate]);
+
+  useEffect(() => {
+    const context = paperSearchReviewContextRef.current;
+    if (!context || sources.length === 0) return;
+    if (
+      generatorRunId !== context.runId ||
+      sourceWorkflowId !== context.workflowId ||
+      sourceWorkspaceFingerprint !== context.topicHash
+    ) {
+      return;
+    }
+    if (
+      sources.some(
+        (source) =>
+          source.workflowId !== context.workflowId ||
+          source.topicHash !== context.topicHash,
+      )
+    ) {
+      return;
+    }
+    try {
+      savePaperSearchSourceReviews(context, sources);
+    } catch {
+      // Keep review interactive when localStorage is disabled or full.
+    }
+  }, [
+    generatorRunId,
+    sourceWorkflowId,
+    sourceWorkspaceFingerprint,
+    sources,
+  ]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("from") !== "paper-search") return;
+    if (paperSearchHandoffLoadedRef.current) return;
+    paperSearchHandoffLoadedRef.current = true;
+
+    const handoff = loadPaperSearchHandoff();
+    if (!handoff) {
+      const query = params.get("q")?.trim();
+      navigate(
+        query ? `/generator?q=${encodeURIComponent(query)}` : "/generator",
+        { replace: true },
+      );
+      return;
+    }
+
+    const topicHash = reportTopicFingerprint(handoff.query);
+    const queryPlanHash = reportTopicFingerprint(handoff.queries.join(" | "));
+    const workflowLock: SourceWorkflowLock = {
+      workflowId: handoff.workflowId,
+      topicHash,
+      queryPlanHash,
+    };
+    const reviewContext: PaperSearchSourceReviewContext = {
+      workflowId: handoff.workflowId,
+      topicHash,
+      runId: handoff.runId,
+    };
+    const freshHandedOffSources = applyWorkflowLockToSources(
+      paperSearchHandoffToSources(handoff, { topicHash, queryPlanHash }),
+      workflowLock,
+      handoff.query,
+    );
+    let handedOffSources = freshHandedOffSources;
+    try {
+      handedOffSources = restorePaperSearchSourceReviews(
+        reviewContext,
+        freshHandedOffSources,
+      );
+    } catch {
+      // Storage may be unavailable in privacy-restricted contexts. The handoff
+      // is still usable for this live session.
+    }
+    paperSearchReviewContextRef.current = reviewContext;
+
+    clearStepTransition();
+    setInput((current) => ({
+      ...current,
+      topic: handoff.query,
+      acceptedSources: handedOffSources,
+    }));
+    setDraftTopic(handoff.query);
+    setDebouncedDraftTopic(handoff.query);
+    setSearchTopic("");
+    setDisplayTitle(handoff.query);
+    setSelectedDirection(null);
+    setSelectedDomain(null);
+    setTopicWorkflowStatus("ready");
+    setTopicExpansionStatus("idle");
+    setTopicExpansionMessage(null);
+    setGroundingJobMeta(null);
+    setGroundingJob(null);
+    setGroundingRequestState("ready_for_review");
+    setGroundingError(null);
+    setSources(handedOffSources);
+    setSourceWorkflowId(handoff.workflowId);
+    setSourceWorkspaceFingerprint(topicHash);
+    setSourceQueryPlanHash(queryPlanHash);
+    setSourceSearchStatus("done");
+    setSourceSearchMessage(
+      `已沿用前頁搜尋完成的 ${handedOffSources.length} 篇論文，不會再次搜尋。`,
+    );
+    setGenerateStatus("idle");
+    setGenerateErrorMessage(null);
+    setIsGenerating(false);
+    setIsSearchingSources(false);
+    setGeneratorRunId(handoff.runId);
+    setStepHistory([]);
+    setRestoreMessage(null);
+    setActiveStep("manage");
+    activeRunContextRef.current = {
+      runId: handoff.runId,
+      workflowId: handoff.workflowId,
+      topicHash,
+    };
+    syncGeneratorUrl({
+      step: "source_review",
+      workflowId: handoff.workflowId,
+      topicHash,
+      runId: handoff.runId,
+      jobId: null,
+      mode: "replace",
+    });
+  }, [navigate]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
     const reportId = params.get("reportId");
     if (!reportId || workspaceResume?.loaded) return;
 
     const workspace = loadReportWorkspace(reportId);
     if (!workspace) return;
-    if (!workspaceMatchesTopic(workspace, workspace.input.topic)) return;
+    const resumedOriginalTopic =
+      workspace.generationPayload?.originalTopic?.trim() || workspace.input.topic;
+    if (!workspaceMatchesTopic(workspace, resumedOriginalTopic)) return;
 
     const resumeLock = {
       workflowId: workspace.workflowId,
@@ -6859,9 +7024,9 @@ export function Generator() {
           ?.queryPlanHash ?? workspace.topicHash,
     };
     setWorkspaceResume({ reportId, loaded: true });
-    setInput(workspace.input);
-    setDraftTopic(workspace.input.topic);
-    setDebouncedDraftTopic(workspace.input.topic.trim());
+    setInput({ ...workspace.input, topic: resumedOriginalTopic });
+    setDraftTopic(resumedOriginalTopic);
+    setDebouncedDraftTopic(resumedOriginalTopic);
     setDisplayTitle(workspace.generationPayload?.displayTitle ?? workspace.draft.title);
     setTopicWorkflowStatus("ready");
     setSearchTopic(
@@ -6913,6 +7078,7 @@ export function Generator() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    if (params.get("from") === "paper-search") return;
     const workflowId = params.get("workflowId");
     const topicHash = params.get("topicHash");
     const runId = params.get("runId");
@@ -7019,7 +7185,11 @@ export function Generator() {
         setInput((current) => ({ ...current, topic: result.originalTopic }));
         setDraftTopic(result.originalTopic);
         setDebouncedDraftTopic(result.originalTopic);
-        setSearchTopic("");
+        setSearchTopic(
+          result.normalizedTopic.trim() !== result.originalTopic.trim()
+            ? result.normalizedTopic
+            : "",
+        );
         setDisplayTitle(result.originalTopic);
         setTopicWorkflowStatus("ready");
         setGroundingJobMeta({
@@ -7042,7 +7212,7 @@ export function Generator() {
         );
         setGroundingError(
           result.status === "failed"
-            ? result.warnings[0] ?? "Research grounding job 失敗。"
+            ? sanitizeReaderFacingInternalLanguage(result.warnings[0] ?? "來源搜尋任務失敗。")
             : null,
         );
         setGeneratorRunId(runId);
@@ -7066,12 +7236,12 @@ export function Generator() {
         );
         setSourceSearchMessage(
           restoredSources.length > 0 && restoredCanProceedToSourceReview
-            ? "已從 research grounding job 還原目前可用結果。"
+            ? "已還原目前可用的來源搜尋結果。"
             : restoredSources.length > 0
               ? result.groundingDiagnostics?.userVisibleStatus ??
                 `只找到 ${restoredReviewableCount} 筆可審查來源，未達最低 ${MIN_REVIEWABLE_SOURCE_COUNT} 筆；請放寬搜尋或重新搜尋。`
             : resultTerminal
-              ? "已還原 query plan，但來源審查狀態已失效，請重新搜尋。"
+              ? "已還原搜尋規劃，但來源審查狀態已失效，請重新搜尋。"
               : GROUNDING_STATUS_LABELS[result.status],
         );
         setIsSearchingSources(!resultTerminal);
@@ -7169,12 +7339,19 @@ export function Generator() {
         };
 
         setGroundingJob(result);
+        setSearchTopic(
+          result.normalizedTopic.trim() !== result.originalTopic.trim()
+            ? result.normalizedTopic
+            : "",
+        );
         setKeywordSearchDebug(keywordSearchDebugFromGroundingJob(result));
         if (result.groundingDiagnostics) {
           console.info("[ResearchForge][grounding-diagnostics]", result.groundingDiagnostics);
         }
         setGroundingError(
-          result.status === "failed" ? result.warnings[0] ?? "Research grounding job 失敗。" : null,
+          result.status === "failed"
+            ? sanitizeReaderFacingInternalLanguage(result.warnings[0] ?? "來源搜尋任務失敗。")
+            : null,
         );
         setSourceWorkflowId(result.workflowId);
         setSourceWorkspaceFingerprint(result.topicHash);
@@ -7205,7 +7382,7 @@ export function Generator() {
               setSourceSearchMessage(
                 result.groundingDiagnostics?.finalUiState === "raw_results_filtered_relaxed_review_fallback"
                   ? "找到資料但被篩選器全部排除，已自動放寬條件並保留最高分來源供審查。"
-                  : "已收到來源回應，但目前沒有可審查來源通過篩選；請查看 diagnostics 後放寬條件重試。",
+                  : "已收到來源回應，但目前沒有可審查來源通過篩選；請查看搜尋狀態後放寬條件重試。",
               );
               return;
             }
@@ -7229,10 +7406,10 @@ export function Generator() {
             setSourceSearchStatus("empty");
             setSourceSearchMessage(
               result.groundingDiagnostics?.finalUiState === "provider_failed"
-                ? "來源服務暫時無法取得資料，請稍後重試。已記錄 provider error。"
+                ? "來源服務暫時無法取得資料，請稍後重試。系統已記錄錯誤狀態。"
                 : result.groundingDiagnostics?.finalUiState === "no_sources_after_fallback" ||
                     result.status === "no_sources_after_fallback"
-                  ? "所有自動 fallback 查詢完成後，仍未取得可審查來源。"
+                  ? "所有自動備援查詢完成後，仍未取得可審查來源。"
                   : result.groundingDiagnostics?.finalUiState === "searching_fallback" ||
                       result.status === "searching_fallback"
                     ? "系統正在改用更精確的學術查詢重新搜尋……"
@@ -7383,7 +7560,7 @@ export function Generator() {
     if (nextSubmittedTopic.length < 2) {
       toast({
         title: "請先輸入主題",
-        description: "主題至少需要 2 個字，才能建立 research grounding job。",
+        description: "主題至少需要 2 個字，才能建立來源搜尋任務。",
         variant: "destructive",
       });
       return;
@@ -7474,7 +7651,11 @@ export function Generator() {
     setExpansions([]);
     setTopicExpansionDiagnostics(null);
     setDisplayTitle(options?.displayTitleOverride?.trim() ?? "");
-    setSearchTopic("");
+    setSearchTopic(
+      requestNormalizedTopic && requestNormalizedTopic !== nextSubmittedTopic
+        ? requestNormalizedTopic
+        : "",
+    );
     setSelectedTitleSearchSeed(null);
     setTopicExpansionMessage(null);
     setTitleSemanticComparison(null);
@@ -7495,7 +7676,7 @@ export function Generator() {
     setSearchRequestDebug(null);
     setKeywordSearchDebug(null);
     setSourceSearchStatus("loading");
-    setSourceSearchMessage("正在建立搜尋任務，provider 尚未開始。");
+    setSourceSearchMessage("正在建立搜尋任務，來源服務尚未開始。");
     setGenerateStatus("idle");
     setGenerateErrorMessage(null);
     setIsGenerating(false);
@@ -7579,7 +7760,7 @@ export function Generator() {
       );
       setIsSearchingSources(false);
       setSourceSearchStatus("error");
-      setSourceSearchMessage("無法建立搜尋任務；provider 尚未開始。");
+      setSourceSearchMessage("無法建立搜尋任務；來源服務尚未開始。");
     }
   };
 
@@ -7994,110 +8175,6 @@ export function Generator() {
 
   // ── Generate ────────────────────────────────────────────────────────────────
 
-  const runSectionCoverageSupplementalSearch = async (): Promise<boolean> => {
-    const topic = activeReportTopic.trim();
-    if (!topic) return false;
-    const attemptKey = topic;
-    if (!needsSupplementalCoverage || supplementalCoverageAttemptKey === attemptKey) {
-      return false;
-    }
-
-    setSupplementalCoverageAttemptKey(attemptKey);
-    setSourceSearchStatus("loading");
-    setSourceSearchMessage("文獻探討來源不足，正在補充查詢可審查來源。");
-
-    const workflowIdForSearch = sourceWorkflowId ?? createClientWorkflowId();
-    const supplementalZh = [
-      topic,
-      `${topic} 文獻探討`,
-      `${topic} 機制`,
-      `${topic} 實證研究`,
-      `${topic} 期刊 論文 DOI`,
-    ];
-    const supplementalEn = [
-      `${topic} literature review`,
-      `${topic} mechanism`,
-      `${topic} empirical study`,
-      `${topic} review journal DOI`,
-      `${topic} academic source`,
-    ];
-
-    try {
-      const result = await searchSources({
-        originalTopic: originalTopicValue || topic,
-        refinedTopic: topic !== originalTopicValue ? topic : undefined,
-        topic,
-        displayTitle: displayTitleValue || topic,
-        querySeedZh: supplementalZh,
-        querySeedEn: supplementalEn,
-        excludeTerms: ["攝影", "旅遊", "作文", "商業", "購物", "廣告", "SEO"],
-        workflowId: workflowIdForSearch,
-        searchProfile: input.researchDepth,
-        sourceMixProfile: sourceMixProfileForGeneratorInput(input),
-        reportType: input.reportType,
-        audience: input.targetAudience || input.academicLevel,
-        sourceMode: input.sourceRequirement,
-        language: input.outputLanguage,
-      });
-      const workflowLock: SourceWorkflowLock = {
-        workflowId:
-          result.workflowId ??
-          result.searchTrace?.workflowId ??
-          workflowIdForSearch,
-        topicHash:
-          result.topicHash ??
-          result.searchTrace?.topicHash ??
-          reportTopicFingerprint(topic),
-        queryPlanHash:
-          result.queryPlanHash ??
-          result.searchTrace?.queryPlanHash ??
-          reportTopicFingerprint([...supplementalZh, ...supplementalEn].join(" ")),
-      };
-      const normalizedSources = applySourceAuthorityAndLanguage(
-        applySourceRelevanceAssessments(
-          dedupeSourceRecords(result.sources.map(normalizeSourceForReview)),
-          topic,
-        ),
-      );
-      const workflowSources = applyWorkflowLockToSources(
-        normalizedSources,
-        workflowLock,
-        topic,
-      );
-      setSources((current) =>
-        mergeLocalSourceReviewState(
-          dedupeSourceRecords([...current, ...workflowSources]),
-          current,
-        ),
-      );
-      setSourceWorkflowId(workflowLock.workflowId);
-      setSourceWorkspaceFingerprint(workflowLock.topicHash);
-      setSourceQueryPlanHash(workflowLock.queryPlanHash);
-      setKeywordSearchDebug(keywordSearchDebugFromResult(result));
-      const reviewableCount = visibleReviewCandidateSources(workflowSources).length;
-      const message =
-        reviewableCount > 0
-          ? `已補充 ${reviewableCount} 筆可審查來源。請先接受適合的學術來源，再生成報告。`
-          : "已補查但仍缺少可審查來源；報告會維持保守語氣。";
-      setSourceSearchStatus(reviewableCount > 0 ? "done" : "empty");
-      setSourceSearchMessage(message);
-      toast({
-        title: "已完成補充來源檢查",
-        description: message,
-      });
-      return reviewableCount > 0;
-    } catch (error) {
-      setSourceSearchStatus("error");
-      setSourceSearchMessage(sourceErrorMessage(error));
-      toast({
-        title: "補充來源搜尋失敗",
-        description: sourceErrorMessage(error),
-        variant: "destructive",
-      });
-      return false;
-    }
-  };
-
   const handleGenerate = async () => {
     const isDevelopment =
       typeof import.meta !== "undefined" && Boolean(import.meta.env?.DEV);
@@ -8114,14 +8191,6 @@ export function Generator() {
       });
       return;
     }
-    if (needsSupplementalCoverage) {
-      const supplemented = await runSectionCoverageSupplementalSearch();
-      if (supplemented) {
-        setGenerateStatus("idle");
-        setActiveStep("manage");
-        return;
-      }
-    }
     const currentReadiness = generationReadiness(
       acceptedSources,
       input.researchDepth,
@@ -8133,12 +8202,8 @@ export function Generator() {
           topic: activeReportTopic,
           acceptedSources,
           hasWorkspaceTopicMismatch,
-          evidenceCardCount:
-            acceptedEvidenceCards.length > 0
-              ? acceptedEvidenceCards.length
-              : serverDerivableEvidenceAvailable
-                ? 1
-                : 0,
+          evidenceCardCount: usableEvidenceCards.length,
+          evidenceFailureReason: evidenceDiagnostics.blockingMessage,
           workflowId: sourceWorkflowLock?.workflowId ?? null,
           topicHash: sourceWorkflowLock?.topicHash ?? null,
         });
@@ -8155,19 +8220,19 @@ export function Generator() {
       const message =
         llmStatus.errorMessage ??
         (!llmStatus.apiKeyPresent
-          ? "LLM provider API key 未設定"
+          ? "模型服務金鑰未設定"
           : !llmStatus.modelConfigured
-            ? "LLM credentials configured, but model is not explicitly configured. Set SCHOOL_LLM_MODEL or OPENAI_MODEL."
+            ? "模型服務已連線，但尚未指定模型名稱。"
             : `目前模型不可用：${llmStatus.model}`);
       toast({
         title: "將生成保守草稿",
-        description: `${message}；系統會改用 evidence-grounded fallback 草稿並標示證據不足處。`,
+        description: `${sanitizeReaderFacingInternalLanguage(message)}；系統會改用保守草稿並標示證據不足處。`,
       });
     }
 
     const effectiveInput: ReportInput = {
       ...input,
-      topic: originalTopicValue,
+      topic: activeResearchTopic,
       targetAudience:
         input.targetAudience || academicToAudience(input.academicLevel),
       purpose: academicToPurpose(input.academicLevel),
@@ -8183,7 +8248,7 @@ export function Generator() {
       {
         title: "正在建立報告工作區",
         description:
-          "正在整理已接受來源、呼叫 LLM 生成正式中文段落，完成後會自動前往報告頁。",
+          "正在整理已接受來源、使用模型服務生成正式中文段落，完成後會自動前往報告頁。",
       },
       650,
       async () => {
@@ -8204,19 +8269,38 @@ export function Generator() {
             setIsGenerating(false);
             return;
           }
+          const workspaceWorkflowId =
+            sourceWorkflowLock?.workflowId ?? groundingJob?.workflowId ?? null;
+          const workspaceTopicHash =
+            sourceWorkflowLock?.topicHash ?? groundingJob?.topicHash ?? null;
+          const structuredReportPlan =
+            groundingJob?.reportPlan ??
+            (workspaceWorkflowId && workspaceTopicHash
+              ? buildStructuredReportPlan({
+                  workflowId: workspaceWorkflowId,
+                  topicHash: workspaceTopicHash,
+                  title: displayTitleValue || activeResearchTopic,
+                  researchQuestion: activeResearchTopic,
+                  reportType: effectiveInput.reportType,
+                  audience: effectiveInput.targetAudience || effectiveInput.academicLevel,
+                  evidenceCards: acceptedEvidenceCards,
+                  academicSafetyReview,
+                })
+              : null);
           let workspace = createReportWorkspace(
             effectiveInput,
             acceptedSources,
             generationMode,
             undefined,
             {
-              workflowId: sourceWorkflowLock?.workflowId ?? groundingJob?.workflowId ?? null,
-              topicHash: sourceWorkflowLock?.topicHash ?? groundingJob?.topicHash ?? null,
+              workflowId: workspaceWorkflowId,
+              topicHash: workspaceTopicHash,
               originalTopic: originalTopicValue,
               researchTopic: activeResearchTopic,
               displayTitle: displayTitleValue,
               evidenceCards: acceptedEvidenceCards,
               academicSafetyReview,
+              reportPlan: structuredReportPlan,
             },
           );
           workspace = {
@@ -8233,9 +8317,11 @@ export function Generator() {
             acceptedSources,
             evidenceCards: workspace.evidenceCards,
             academicSafetyReview,
+            reportPlan: workspace.generationPayload.reportPlan ?? null,
             generationMode: workspace.generationMode,
+            outline: workspace.outline.sections,
           });
-          if (!llmDraft.ok) {
+          if (!llmDraft.ok && llmDraft.status === "invalid_input") {
             const message =
               llmDraft.message ??
               llmDraft.warning ??
@@ -8251,10 +8337,25 @@ export function Generator() {
             });
             return;
           }
-          workspace = mergeLlmReportDraft(workspace, llmDraft);
+          workspace = applyDetailedReportSummary(
+            mergeLlmReportDraft(workspace, llmDraft),
+          );
           saveReportWorkspace(workspace);
 
           setGenerateStatus("done");
+          setIsGenerating(false);
+          if (
+            llmDraft.fallbackUsed ||
+            llmDraft.degradedMode ||
+            llmDraft.reportGenerationStatus !== "success"
+          ) {
+            toast({
+              title: "已建立可閱讀的保守完整草稿",
+              description:
+                llmDraft.message ??
+                "AI 段落強化暫時不可用；本次已保留本地 evidence-grounded 完整段落，可直接檢視與編輯。",
+            });
+          }
           navigate(
             reportWorkspacePath(workspace.id, {
               workflowId: workspace.workflowId,
@@ -8526,15 +8627,8 @@ export function Generator() {
     setSearchTopic("");
     setDeveloperDebugOpen(false);
     setRestoreMessage(null);
-    setActiveStep("topic");
-    syncGeneratorUrl({
-      step: "topic_input",
-      workflowId: null,
-      topicHash: null,
-      runId: null,
-      jobId: null,
-      mode: "replace",
-    });
+    setActiveStep("search");
+    navigate("/generator", { replace: true });
   };
 
   const shortTopicHint =
@@ -8671,15 +8765,34 @@ export function Generator() {
       routeStep: "source_review",
     });
   };
-  const goToGenerateStep = () =>
-    transitionToStep("generate", {
-      pushCurrentStep: true,
-      historyMode: "push",
-      routeStep: "report_draft",
+  const goToGenerateStep = () => {
+    // Source review can be restored from a completed paper-search handoff while a
+    // stale search-loading flag is still settling. Once the review gate says the
+    // accepted evidence is ready, that unrelated flag must not silently swallow
+    // the user's explicit request to continue.
+    if (
+      isStepTransitioning ||
+      isGenerating ||
+      activeStep === "generate" ||
+      !canGenerateReport ||
+      hasWorkspaceTopicMismatch
+    ) {
+      return;
+    }
+    setStepHistory((history) => [...history, routeStepForInternal(activeStep)]);
+    syncGeneratorUrl({
+      step: "report_draft",
+      mode: "push",
     });
+    beginStepTransition(
+      "generate",
+      workflowTransitionCopy(activeStep, "generate"),
+      520,
+    );
+  };
   const currentStepLabel =
     WORKFLOW_STEPS.find((step) => step.value === visibleStep)?.label ??
-    "設定主題";
+    "研究工作台";
 
   return (
     <div className="min-h-screen flex flex-col bg-muted/20">
@@ -8696,7 +8809,7 @@ export function Generator() {
                 <BrandWordmark className="text-inherit" />
               </h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-                從主題設定、來源搜尋、來源審查到報告生成，依序完成可匯出的研究工作區。
+                沿用前頁論文搜尋結果，完成來源審查後直接生成可匯出的研究報告。
               </p>
             </div>
             <Button
@@ -8762,55 +8875,11 @@ export function Generator() {
             </div>
           ) : null}
 
-          {shortTopicHint && visibleStep === "topic" && !isStepTransitioning && (
-            <div className="mx-auto flex max-w-3xl gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              <Lightbulb className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>
-                這個主題偏短或範圍較廣；請先選擇研究領域，系統會依領域搜尋主要來源。
-              </span>
-            </div>
-          )}
-
           {isStepTransitioning ? (
             <StepTransitionScreen
               title={transitionMessage.title}
               description={transitionMessage.description}
               targetStep={transitionTargetStep}
-            />
-          ) : visibleStep === "topic" ? (
-            <TopicStepPanel
-              input={input}
-              topicValue={draftTopic}
-              parsedInput={parsedDraftResearchInput}
-              expansions={visibleExpansions}
-              topicExpansionDiagnostics={topicExpansionDiagnostics}
-              topicExpansionMessage={topicExpansionMessage}
-              topicExpansionStatus={topicExpansionStatus}
-              topicWorkflowStatus={topicWorkflowStatus}
-              titleSemanticComparison={titleSemanticComparison}
-              topicDiagnosticsOpen={topicDiagnosticsOpen}
-              detectedCategory={detectedCategory}
-              needsClarification={Boolean(topicUnderstanding?.needsClarification)}
-              autoSearchEnabled={autoSearchEnabled}
-              displayTitle={displayTitleValue}
-              selectedDirection={selectedDirection}
-              selectedDomain={selectedDomain}
-              recommendedDomain={recommendedDomain}
-              workspaceResume={workspaceResume}
-              researchDepthLabel={`${selectedDepthOption.label} / 建議 ${recommendedAcceptedSourceCount} 筆`}
-              canContinueToSearch={canContinueToSearch}
-              onInputChange={updateInput}
-              onTopicChange={handleTopicChange}
-              onTopicInputKeyDown={handleTopicInputKeyDown}
-              onTopicCompositionStart={() => setIsTopicComposing(true)}
-              onTopicCompositionEnd={() => setIsTopicComposing(false)}
-              onApplyExpansion={applyExpansion}
-              onRerunWithExpansion={rerunGroundingWithExpansion}
-              onUseParsedTopicOption={handleUseParsedTopicOption}
-              onDomainChange={handleDomainChange}
-              onTopicDiagnosticsOpenChange={setTopicDiagnosticsOpen}
-              onNext={goToSearchStep}
-              onClearWorkspace={handleClear}
             />
           ) : visibleStep === "search" ? (
             <SearchStepPanel
@@ -8839,6 +8908,7 @@ export function Generator() {
               }
               onNext={goToManageStep}
               onBack={goBackStep}
+              showTechnicalDetails={workflowVisibility.showTechnicalLogs}
             />
           ) : visibleStep === "manage" ? (
           <ManageStepPanel
@@ -8866,6 +8936,7 @@ export function Generator() {
               recommendedAcceptedSourceCount={recommendedAcceptedSourceCount}
               readiness={readiness}
               sectionSufficiency={sectionSufficiency}
+              evidenceDiagnostics={evidenceDiagnostics}
               limitedReadableSourceWarning={limitedReadableSourceWarning}
               canGenerateReport={canGenerateReport}
               blockingReason={effectiveBlockingReason}

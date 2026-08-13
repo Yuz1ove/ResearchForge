@@ -16,6 +16,7 @@
     "./domain-synonyms": "./src/domain-synonyms.ts",
     "./topic-expansion": "./src/topic-expansion.ts",
     "./topic-understanding": "./src/topic-understanding.ts"
+    ,"./research-topic-facets": "./src/research-topic-facets.ts"
   },
   "dependencies": {
     "zod": "catalog:"

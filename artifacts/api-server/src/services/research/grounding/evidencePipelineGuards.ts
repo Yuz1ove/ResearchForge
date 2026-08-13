@@ -14,6 +14,8 @@ export interface CleanedChunkResult {
 
 export interface EvidenceRelevanceResult {
   accepted: boolean;
+  decision: "accepted" | "rejected" | "indeterminate";
+  indeterminate: boolean;
   score: number;
   titleRelevance: number;
   bodyRelevance: number;
@@ -21,6 +23,7 @@ export interface EvidenceRelevanceResult {
   boilerplatePenalty: number;
   unrelatedPenalty: number;
   overlapTerms: string[];
+  bridgeOverlapTerms: string[];
   diagnostics: string[];
   reason: string;
 }
@@ -30,7 +33,7 @@ const BOILERPLATE_LINE_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
   { label: "springer_moved_notice", pattern: /SpringerOpen journals have moved to Springer Nature Link/iu },
   { label: "browse_subject_areas", pattern: /^\s*Browse Subject Areas\s*$/iu },
   { label: "navigation", pattern: /^\s*(menu|navigation|nav|home|search|login|sign in|register|subscribe)\s*$/iu },
-  { label: "footer", pattern: /\b(footer|privacy policy|terms(?: of use)?|cookie|cookies|permissions|share|download citation|article metrics)\b/iu },
+  { label: "footer", pattern: /^\s*(footer|privacy policy|terms\s+of\s+(?:use|service)|cookie|cookies|permissions|share|download citation|article metrics)\s*$/iu },
   { label: "journal_shell", pattern: /\b(journal information|about this journal|submit manuscript|editorial board|support center)\b/iu },
   { label: "plos_shell", pattern: /\b(PLOS|Public Library of Science)\b.*\b(Browse Subject Areas|article metrics|share|download citation)\b/iu },
 ];
@@ -41,7 +44,7 @@ const NOISE_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
   { label: "browse_subject_areas", pattern: /Browse Subject Areas/iu },
   { label: "healthcare_big_data", pattern: /big data in healthcare|healthcare:\s*management,?\s*analysis/i },
   { label: "deep_sea_wilderness", pattern: /deep sea|wilderness/i },
-  { label: "site_shell", pattern: /\b(cookie|privacy policy|terms of use|login|sign in|download citation|article metrics|share|permissions)\b/i },
+  { label: "site_shell", pattern: /\b(cookie (?:policy|preferences|settings|consent)|privacy policy|terms\s+of\s+(?:use|service)|login|sign in|download citation|article metrics)\b/i },
 ];
 
 const LITHIUM_TOPIC_TERMS = {
@@ -84,20 +87,57 @@ const LITHIUM_TOPIC_TERMS = {
 
 const TOPIC_ALIAS_GROUPS: Array<{ pattern: RegExp; terms: string[] }> = [
   {
-    pattern: /藍光|蓝光|睡眠|sleep|blue light/i,
+    pattern: /藍光|蓝光|blue light|screen light/i,
     terms: [
       "blue light",
       "screen light",
       "light exposure",
+      "藍光",
+      "蓝光",
+    ],
+  },
+  {
+    pattern: /睡眠|sleep|circadian|melatonin/i,
+    terms: [
       "sleep",
       "sleep quality",
       "sleep duration",
       "circadian",
       "melatonin",
-      "adolescent",
-      "high school students",
-      "高中生",
+      "睡眠",
       "睡眠品質",
+      "睡眠质量",
+    ],
+  },
+  {
+    pattern: /青少年|高中生|adolescent|teenager|high school student/i,
+    terms: [
+      "adolescent",
+      "adolescents",
+      "teenager",
+      "teenagers",
+      "high school students",
+      "青少年",
+      "高中生",
+    ],
+  },
+  {
+    pattern: /腸道菌相|肠道菌相|腸道菌群|肠道菌群|腸道微生物|肠道微生物|gut microbiota|gut microbiome|gut-brain|gut brain/i,
+    terms: [
+      "gut microbiota",
+      "gut microbiome",
+      "intestinal microbiota",
+      "intestinal microbiome",
+      "microbiota-gut-brain axis",
+      "microbiome-gut-brain axis",
+      "gut-brain axis",
+      "gut brain axis",
+      "腸道菌相",
+      "肠道菌相",
+      "腸道微生物群",
+      "肠道微生物群",
+      "腸腦軸",
+      "肠脑轴",
     ],
   },
   {
@@ -179,6 +219,11 @@ function uniqueStrings(values: string[]): string[] {
 
 function containsLithiumTopic(topic: string): boolean {
   return /鋰|锂|lithium|li-ion/i.test(topic);
+}
+
+function hasBuiltInCrossLanguageAliases(topic: string): boolean {
+  return containsLithiumTopic(topic) ||
+    TOPIC_ALIAS_GROUPS.some((group) => group.pattern.test(topic));
 }
 
 function tokenizeLatin(value: string): string[] {
@@ -332,6 +377,15 @@ function sourceQualityScore(source?: Partial<SourceCandidate> | null): number {
   return Math.max(0, Math.min(1, score));
 }
 
+function sourceIsMetadataOnly(source?: Partial<SourceCandidate> | null): boolean {
+  if (!source) return false;
+  return source.accessLevel === "metadata_only" ||
+    source.extractionMode === "metadata_only" ||
+    source.sourceUseLevel === "metadata_context_only" ||
+    source.evidenceGrounding === "metadata_only" ||
+    source.canUseForClaims === false;
+}
+
 function relevanceFraction(topic: string, text: string): number {
   const terms = topicTermsForEvidence(topic);
   if (terms.length === 0) return 0.5;
@@ -340,21 +394,113 @@ function relevanceFraction(topic: string, text: string): number {
   return Math.min(1, overlap.length / denominator);
 }
 
+const GENERIC_BRIDGE_TERMS = new Set([
+  "analysis",
+  "application",
+  "applications",
+  "data",
+  "education",
+  "effect",
+  "effects",
+  "fall",
+  "method",
+  "methods",
+  "paper",
+  "relationship",
+  "report",
+  "research",
+  "result",
+  "results",
+  "study",
+  "topic",
+]);
+
+function bridgeSeeds(input: {
+  aliases?: string[];
+  matchedConcepts?: string[];
+  queryUsed?: string | null;
+}): { trusted: string[]; query: string[]; all: string[] } {
+  const trusted = uniqueStrings([
+    ...(input.aliases ?? []).map(cleanString),
+    ...(input.matchedConcepts ?? []).map(cleanString),
+  ]);
+  const query = uniqueStrings([cleanString(input.queryUsed)]);
+  return { trusted, query, all: uniqueStrings([...trusted, ...query]) };
+}
+
+function specificBridgeTerms(seeds: string[]): string[] {
+  return uniqueStrings(
+    seeds.flatMap((seed) => topicTermsForEvidence(seed)),
+  ).filter((term) => {
+    const normalized = term.toLowerCase();
+    return !GENERIC_BRIDGE_TERMS.has(normalized) &&
+      (/[^\x00-\x7f]/u.test(term) ? term.length >= 2 : term.length >= 4);
+  });
+}
+
+function relevanceFractionForTerms(terms: string[], text: string): number {
+  if (terms.length === 0) return 0;
+  const overlap = terms.filter((term) => termInText(term, text));
+  return Math.min(1, overlap.length / Math.min(Math.max(terms.length, 1), 12));
+}
+
+function seedHasDirectEvidenceMatch(seed: string, text: string): boolean {
+  const terms = specificBridgeTerms([seed]);
+  if (terms.length === 0) return false;
+  const normalizedSeed = compactWhitespace(seed);
+  const latinTokenCount = tokenizeLatin(normalizedSeed).length;
+  if ((latinTokenCount >= 2 || /[\u3400-\u9fff]{2,}/u.test(normalizedSeed)) && termInText(normalizedSeed, text)) {
+    return true;
+  }
+  const overlap = terms.filter((term) => termInText(term, text));
+  return overlap.length >= Math.min(2, terms.length) ||
+    (terms.length === 1 && terms[0]!.length >= 6 && overlap.length === 1);
+}
+
+function hasCrossLanguageMismatch(topic: string, evidence: string): boolean {
+  const topicHasCjk = /[\u3400-\u9fff]/u.test(topic);
+  const evidenceHasCjk = /[\u3400-\u9fff]/u.test(evidence);
+  const topicHasLatin = /[A-Za-z]{3,}/u.test(topic);
+  const evidenceHasLatin = /[A-Za-z]{3,}/u.test(evidence);
+  return (topicHasCjk && !evidenceHasCjk && evidenceHasLatin) ||
+    (topicHasLatin && !topicHasCjk && evidenceHasCjk && !evidenceHasLatin);
+}
+
 export function scoreEvidenceRelevance(input: {
   topic: string;
   title?: string | null;
   body: string;
   source?: Partial<SourceCandidate> | null;
   boilerplateRatio?: number;
+  aliases?: string[];
+  matchedConcepts?: string[];
+  queryUsed?: string | null;
 }): EvidenceRelevanceResult {
   const topic = compactWhitespace(input.topic);
   const title = cleanString(input.title);
   const body = cleanString(input.body);
   const combined = `${title} ${body}`;
   const flags = noiseFlags(combined);
-  const titleRelevance = relevanceFraction(topic, title);
-  const bodyRelevance = relevanceFraction(topic, body);
+  const literalTitleRelevance = relevanceFraction(topic, title);
+  const literalBodyRelevance = relevanceFraction(topic, body);
+  const explicitBridge = bridgeSeeds(input);
+  const bridgeTerms = specificBridgeTerms(explicitBridge.all);
+  const bridgeOverlapTerms = uniqueStrings(
+    bridgeTerms.filter((term) => termInText(term, combined)),
+  );
+  const trustedBridgeMatched = explicitBridge.trusted.some((seed) => seedHasDirectEvidenceMatch(seed, combined));
+  const queryBridgeMatched = explicitBridge.query.some((seed) => seedHasDirectEvidenceMatch(seed, combined));
+  const bridgeMatched = trustedBridgeMatched || queryBridgeMatched;
+  const titleRelevance = Math.max(
+    literalTitleRelevance,
+    bridgeMatched ? relevanceFractionForTerms(bridgeTerms, title) : 0,
+  );
+  const bodyRelevance = Math.max(
+    literalBodyRelevance,
+    bridgeMatched ? relevanceFractionForTerms(bridgeTerms, body) : 0,
+  );
   const quality = sourceQualityScore(input.source);
+  const metadataOnly = sourceIsMetadataOnly(input.source);
   const exactBonus = topicOverlapTerms(topic, combined).some((term) => term.length >= 4) ? 0.12 : 0;
   const boilerplatePenalty = Math.min(0.45, input.boilerplateRatio ?? 0);
   let unrelatedPenalty = 0;
@@ -371,19 +517,45 @@ export function scoreEvidenceRelevance(input: {
     boilerplatePenalty -
     unrelatedPenalty;
   const overlapTerms = topicOverlapTerms(topic, combined);
+  const relevanceMatched = overlapTerms.length > 0 || bridgeMatched;
   const diagnostics = uniqueStrings([
     ...flags.map((flag) => `boilerplate:${flag}`),
     ...overlapTerms.map((term) => `topic_overlap:${term}`),
+    ...bridgeOverlapTerms.map((term) => `bridge_overlap:${term}`),
+    bridgeMatched ? "relevance_bridge:matched" : "",
+    explicitBridge.all.length > 0 && !bridgeMatched ? "relevance_bridge:not_matched" : "",
+    metadataOnly ? "rejected:metadata_only_source" : "",
     `source_quality:${quality.toFixed(2)}`,
   ]);
   const threshold = containsLithiumTopic(topic) ? 0.22 : 0.16;
   const accepted =
     score >= threshold &&
     flags.length === 0 &&
-    overlapTerms.length > 0 &&
-    !topicSpecificReject;
+    relevanceMatched &&
+    !topicSpecificReject &&
+    !metadataOnly;
+  const indeterminate =
+    !accepted &&
+    flags.length === 0 &&
+    !topicSpecificReject &&
+    !metadataOnly &&
+    overlapTerms.length === 0 &&
+    explicitBridge.all.length === 0 &&
+    !hasBuiltInCrossLanguageAliases(topic) &&
+    hasCrossLanguageMismatch(topic, combined);
+  const decision: EvidenceRelevanceResult["decision"] = accepted
+    ? "accepted"
+    : indeterminate
+      ? "indeterminate"
+      : "rejected";
   const reason = accepted
-    ? `accepted: relevance ${score.toFixed(2)} with ${overlapTerms.length} topic overlaps`
+    ? bridgeMatched && overlapTerms.length === 0
+      ? `accepted: relevance ${score.toFixed(2)} via explicit bridge (${bridgeOverlapTerms.join(",")})`
+      : `accepted: relevance ${score.toFixed(2)} with ${overlapTerms.length} topic overlaps`
+    : indeterminate
+      ? "indeterminate: cross-language relevance requires an explicit alias, matchedConcept, or queryUsed bridge"
+    : metadataOnly
+      ? "rejected: metadata-only source cannot support evidence claims"
     : flags.length > 0
       ? `rejected: boilerplate/noise ${flags.join(",")}`
       : topicSpecificReject
@@ -391,6 +563,8 @@ export function scoreEvidenceRelevance(input: {
       : `rejected: low topic relevance ${score.toFixed(2)}`;
   return {
     accepted,
+    decision,
+    indeterminate,
     score: Math.max(0, Math.min(1, score)),
     titleRelevance,
     bodyRelevance,
@@ -398,7 +572,8 @@ export function scoreEvidenceRelevance(input: {
     boilerplatePenalty,
     unrelatedPenalty,
     overlapTerms,
-    diagnostics,
+    bridgeOverlapTerms,
+    diagnostics: uniqueStrings([...diagnostics, `decision:${decision}`]),
     reason,
   };
 }
@@ -407,6 +582,9 @@ export function cleanExtractedTextChunk(input: {
   topic: string;
   chunk: ExtractedChunk;
   source?: Partial<SourceCandidate> | null;
+  aliases?: string[];
+  matchedConcepts?: string[];
+  queryUsed?: string | null;
   minMeaningfulTokens?: number;
 }): CleanedChunkResult {
   const originalText = cleanString(input.chunk.text);
@@ -459,6 +637,9 @@ export function cleanExtractedTextChunk(input: {
     body: cleanedText,
     source: input.source,
     boilerplateRatio,
+    aliases: input.aliases,
+    matchedConcepts: input.matchedConcepts ?? input.source?.matchedConcepts,
+    queryUsed: input.queryUsed ?? input.source?.queryUsed,
   });
   if (!relevance.accepted) {
     return {

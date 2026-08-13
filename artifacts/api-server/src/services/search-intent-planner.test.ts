@@ -14,6 +14,7 @@ import { understandTopic } from "@workspace/api-zod/topic-understanding";
 
 const shortVideoTopic = "短影音使用對高中生注意力與睡眠品質之影響";
 const urbanHeatTopic = "都市熱島效應對校園環境與學生學習舒適度之影響";
+const greenRoofEnergyTopic = "綠屋頂對建築降溫與能源消耗的影響";
 const dumplingTopic = "水餃";
 const friesTopic = "薯條";
 const colaPlainTopic = "可樂";
@@ -96,6 +97,77 @@ test("rule fallback returns digital media, sleep, and attention concepts for sho
   assert.ok(plan.chineseQueries.some((query) => query.includes("短影音")));
   assert.equal(plan.plannerStatus, "rule_fallback");
   assert.equal(plan.fallbackUsed, true);
+});
+
+test("English short-video sleep topics retain anchored provider queries when generic expansion is filtered", async () => {
+  const result = await searchIntentSources(
+    {
+      topic: "Short-form video use and sleep quality among high school students",
+      reportType: "研究報告",
+      audience: "大學",
+      language: "zh-TW",
+    },
+    {
+      llm: { apiKey: "" },
+      queryLimit: 1,
+      webFallback: { enabled: false },
+      sourceSearch: {
+        providerConfigs: {
+          OpenAlex: {
+            provider: "OpenAlex",
+            endpoint: "https://example.test/openalex/works",
+            timeoutMs: 50,
+            queryLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+          Crossref: {
+            provider: "Crossref",
+            endpoint: "https://example.test/works",
+            timeoutMs: 50,
+            queryLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+          "Semantic Scholar": {
+            provider: "Semantic Scholar",
+            endpoint: "https://example.test/paper/search",
+            timeoutMs: 50,
+            queryLimit: 1,
+            headers: { Accept: "application/json" },
+          },
+        },
+        fetchImpl: async () => new Response(JSON.stringify({ results: [] })),
+      },
+      fetchImpl: async () => new Response("provider unavailable", { status: 500 }),
+    },
+  );
+
+  const expandedQueries = result.expandedQueries ?? [];
+  const queryCount = result.queryCount ?? 0;
+  assert.ok(expandedQueries.length > 0);
+  assert.ok(queryCount > 0);
+  assert.ok(expandedQueries.some((query) =>
+    /short.?form video|short video|tiktok/iu.test(query.query) && /sleep/iu.test(query.query)
+  ));
+});
+
+test("rule fallback keeps green roofs coupled to building thermal and energy outcomes", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: greenRoofEnergyTopic,
+    reportType: "研究報告",
+    audience: "大學",
+    language: "zh-TW",
+  });
+
+  assert.equal(plan.topicType, "environmental_issue");
+  assert.ok(plan.primaryConcepts.includes("green roof"));
+  assert.ok(plan.primaryConcepts.includes("building energy consumption"));
+  assert.ok(plan.englishQueries.some((query) =>
+    /green roof/iu.test(query) && /energy|cooling/iu.test(query)
+  ));
+  assert.ok(plan.chineseQueries.some((query) =>
+    /綠屋頂/iu.test(query) && /能源|降溫/iu.test(query)
+  ));
+  assert.ok(!plan.englishQueries.some((query) => /social issue policy/iu.test(query)));
 });
 
 test("school_report_balanced builds parallel source-role query buckets for acceptance topics", () => {

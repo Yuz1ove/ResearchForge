@@ -1,6 +1,9 @@
 // generateReport.ts
 // ─────────────────────────────────────────────────────────────────────────────
-// Mock report generation engine for Report Factory AI.
+// Mock report generation engine for ResearchForge.
+// AI assistance disclosure: Portions of this module were drafted or refactored
+// with Replit Agent and OpenAI Codex. See /AI_ASSISTANCE.md for scope and
+// verification details.
 // TODO(researchforge-report-pipeline): keep report generation aligned with the
 // same staged planner architecture used by topic expansion:
 // acceptedSources / evidenceCards -> candidateClaims -> claimMergeAndRerank ->
@@ -233,16 +236,24 @@ export type BlockType =
   | "note"
   | "suggestions"
   | "dataTable"
+  | "formalTable"
+  | "formalFigure"
   | "quality"
   | "slides";
 
 export interface ContentBlock {
   type: BlockType;
   text?: string;
+  citationIds?: string[];
+  /** Sentence/claim-level reader citation mapping preserved from the canonical model. */
+  citationSegments?: import("./formalReportDocument.ts").FormalReportCitationSegment[];
+  paragraphRole?: import("./formalReportDocument.ts").FormalReportBlock["paragraphRole"];
   items?: string[];
   suggestions?: SuggestionBlock[];
   suggestionKind?: "圖表" | "圖片" | "流程圖";
   rows?: DataRequirementRow[];
+  table?: import("./formalReportDocument.ts").FormalReportTable;
+  figure?: import("./formalReportDocument.ts").FigureSpec;
   checks?: QualityCheck[];
   slides?: SlideItem[];
 }
@@ -263,6 +274,35 @@ export interface ReportMeta {
   researchDraft?: unknown;
   qualityReport?: unknown;
   evidenceCards?: unknown;
+  formalReportDocument?: import("./formalReportDocument.ts").FormalReportDocument;
+  readerFacingAudit?: {
+    status: "pass" | "blocked";
+    forbiddenTokens: string[];
+    abstractValidation: import("./formalReportDocument.ts").FormalReportAbstractValidation;
+  };
+  citationIntegrity?: {
+    status: "pass" | "blocked";
+    unknownMarkers: string[];
+    ambiguousMarkers: string[];
+    rewrites: Array<{
+      inputMarker: string;
+      canonicalMarker: string;
+      sourceId: string;
+      canonicalSourceKey: string;
+    }>;
+  };
+  formalExportProof?: {
+    planBuildStatus: "plan_built" | "plan_invalidated";
+    readinessStatus:
+      | "ready_complete_report"
+      | "ready_limited_report"
+      | "needs_targeted_search"
+      | "blocked_insufficient_evidence"
+      | "invalid_evidence_set";
+    evidenceSetHash: string;
+    writerEvidenceSetHash: string;
+    filteredAfterPlanCount: number;
+  };
 }
 
 export interface GeneratedReport {
@@ -2705,7 +2745,7 @@ function buildReferenceBlocks(input: ReportInput): ContentBlock[] {
         ? [
             {
               type: "note",
-              text: `${incompleteCount} 筆已接受來源的 metadata 不完整；已標示 incomplete，請補齊作者、年份、標題或 DOI／網址後再正式提交。`,
+              text: `${incompleteCount} 筆已接受來源的書目資料待補；請補齊作者、年份、標題或 DOI／網址後再正式提交。`,
             } as ContentBlock,
           ]
         : []),
@@ -3029,7 +3069,7 @@ function buildSourceSafetySection(input: ReportInput): ReportSection {
     blocks: [
       {
         type: "note",
-        text: "本工具只會把你接受的搜尋結果或你貼上的來源線索納入引用規劃；未接受或遭拒絕的來源不得進入參考文獻。若 metadata 不完整，系統不得捏造作者、年份、文章名稱或網址。",
+        text: "本工具只會把你接受的搜尋結果或你貼上的來源線索納入引用規劃；未接受或遭拒絕的來源不得進入參考文獻。若書目資料尚未齊全，系統不得捏造作者、年份、文章名稱或網址。",
       },
       {
         type: "list",

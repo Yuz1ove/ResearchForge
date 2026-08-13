@@ -1,0 +1,60 @@
+{
+  "capturedAt": "2026-08-13",
+  "requiredLiveCases": 7,
+  "completeCurrentArchitectureRuns": 0,
+  "overallStatus": "BLOCKED",
+  "blockingReasons": [
+    "The requested project_sources directory and its 13 DOCX/PDF reference files are not present in the workspace or supplied attachment directory.",
+    "No seven-case live rerun was completed after this report-intelligence slice.",
+    "The latest actual current-model short-video run was correctly blocked by sentence-level claim/citation entailment and fallback-section checks.",
+    "A live Image2 provider path is not configured; only truthful deterministic fallback records are available."
+  ],
+  "cases": [
+    {
+      "id": "short_video_sleep",
+      "requiredType": "比例、OR、相關與中介路徑",
+      "currentArchitectureStatus": "BLOCKED",
+      "evidence": "Latest actual Ollama run: provider=ollama, model=qwen2.5:3b, reportGenerationStatus=failed, exportSuppressed=true.",
+      "priorAcceptedArtifact": "artifacts/qa/researchforge-fusion-accepted-20260813/short_video_sleep",
+      "priorArtifactCaveat": "The prior Preview/Markdown/DOCX/PDF bundle predates this slice and is retained as a baseline, not claimed as a new current-architecture run."
+    },
+    {
+      "id": "urban_heat",
+      "requiredType": "跨場域、跨指標與近直接證據",
+      "currentArchitectureStatus": "BLOCKED",
+      "evidence": "No post-slice live rerun.",
+      "priorAcceptedArtifact": "artifacts/qa/researchforge-fusion-accepted-20260813/urban_heat",
+      "priorArtifactCaveat": "The prior Preview/Markdown/DOCX/PDF bundle predates this slice and is retained as a baseline."
+    },
+    {
+      "id": "contradictory_topic",
+      "requiredType": "結果互相矛盾",
+      "currentArchitectureStatus": "BLOCKED",
+      "evidence": "Deterministic Benchmark C passed; no live report bundle was generated."
+    },
+    {
+      "id": "full_text_sufficient",
+      "requiredType": "足夠全文證據",
+      "currentArchitectureStatus": "BLOCKED",
+      "evidence": "No supplied full-text acceptance corpus and no live report bundle."
+    },
+    {
+      "id": "abstract_only",
+      "requiredType": "只有摘要的有限證據",
+      "currentArchitectureStatus": "BLOCKED",
+      "evidence": "Deterministic Benchmark D passed; no post-slice live report bundle."
+    },
+    {
+      "id": "no_direct_evidence",
+      "requiredType": "幾乎沒有直接證據",
+      "currentArchitectureStatus": "BLOCKED",
+      "evidence": "Deterministic Benchmark F passed; no post-slice live report bundle."
+    },
+    {
+      "id": "non_literature_review",
+      "requiredType": "實驗設計或技術比較",
+      "currentArchitectureStatus": "BLOCKED",
+      "evidence": "Deterministic Benchmark G passed; no post-slice live report bundle."
+    }
+  ]
+}

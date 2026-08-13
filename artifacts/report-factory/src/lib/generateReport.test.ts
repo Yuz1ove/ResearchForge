@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { expandTopicCards } from "./generateReport.ts";
+import {
+  expandTopicCards,
+  generateReport,
+  type ReportInput,
+} from "./generateReport.ts";
+import { readerFacingInternalTerms } from "./reportPreviewGuards.ts";
+import type { SourceRecord } from "./sourceRecords.ts";
 
 const TEMPLATE_PHRASES = ["背景與重要性", "現況分析", "主要面向"];
 const OLD_TEMPLATE_TERMS = ["academic research", "evidence", "source"];
@@ -10,6 +16,13 @@ function joinedCards(topic: string): string {
   return expandTopicCards(topic)
     .map((card) => `${card.title} ${card.angle} ${card.reason} ${card.chineseKeywords?.join(" ")} ${card.englishKeywords?.join(" ")} ${card.suggestedQuery}`)
     .join("\n");
+}
+
+function stringValues(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(stringValues);
+  if (value && typeof value === "object") return Object.values(value).flatMap(stringValues);
+  return [];
 }
 
 test("expands flower topics into ecology, pollination, culture, or observation directions", () => {
@@ -142,4 +155,54 @@ test("expands airplane topics into mechanics, aviation, and construction directi
   assert.match(text, /機翼|機身|升力|民航|飛航安全|材料|製造|組裝/);
   assert.match(text, /aircraft|aviation|manufacturing/i);
   assert.ok(!/背景與重要性|現況分析|主要面向|生活連結|資料策略|研究限制/.test(text));
+});
+
+test("generated reader blocks and bibliography contain no internal pipeline terms", () => {
+  const acceptedSource: SourceRecord = {
+    id: "source-1",
+    title: "Citation Enforced Prompting for Faithful Question Answering",
+    authors: [],
+    year: null,
+    abstract: "This study evaluates grounded generation.",
+    doi: null,
+    url: null,
+    sourceType: "Crossref",
+    reviewState: "accepted",
+    publisher: null,
+    containerTitle: null,
+    accessedAt: null,
+  };
+  const input: ReportInput = {
+    topic: "檢索增強生成的回答忠實度",
+    reportType: "研究報告",
+    academicLevel: "高中",
+    targetAudience: "高中",
+    researchDepth: "standard",
+    purpose: "學校作業",
+    domainOverride: "",
+    mode: "直接生成完整報告",
+    sourceRequirement: "需要",
+    citationFormat: "APA",
+    chartRequirement: "不需要",
+    style: "正式、清楚、有邏輯",
+    length: "一般報告",
+    wordCount: "",
+    formalTone: "需要",
+    conversationalTone: "不需要",
+    specifiedStructure: "",
+    rubric: "",
+    personalStyle: "",
+    supplementalMaterials: "",
+    outputLanguage: "繁體中文",
+    rewriteSection: "",
+    additionalInfo: "",
+    acceptedSources: [acceptedSource],
+  };
+
+  const report = generateReport(input);
+  const readerText = stringValues(report.sections).join("\n");
+
+  assert.deepEqual(readerFacingInternalTerms(readerText), []);
+  assert.match(readerText, /Citation Enforced Prompting for Faithful Question Answering/u);
+  assert.match(readerText, /書目資料待補/u);
 });

@@ -1,6 +1,12 @@
 import type { EvidenceCard } from "./evidenceCards.ts";
+import {
+  sanitizeZhTwReportProse,
+  UNTRANSLATED_EVIDENCE_NOTICE,
+  verifiedZhTwReportText,
+} from "./zhTwReportText.ts";
 import type { ResearchSectionKey } from "./qualityJudge.ts";
 import type { SourceRecord } from "./sourceRecords.ts";
+import { extractInternalCitationTokens } from "./formalReportDocument.ts";
 
 export type ClaimType =
   | "background"
@@ -283,17 +289,75 @@ function chunk<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
-function sourceIdForMarker(source: SourceRecord, index: number): string {
-  return source.id || [source.sourceType, source.doi, source.url, source.title, index + 1]
-    .filter(Boolean)
-    .join(":");
+type CitationIdentitySource = SourceRecord & {
+  canonicalSourceKey?: string | null;
+};
+
+function normalizeCitationIdentity(value: string | null | undefined): string {
+  return value
+    ?.normalize("NFKC")
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//iu, "doi:")
+    .replace(/\s+/gu, " ") ?? "";
+}
+
+function normalizedCitationDoi(value: string | null | undefined): string {
+  const normalized = normalizeCitationIdentity(value)
+    .replace(/^doi:\s*/iu, "")
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//iu, "");
+  return normalized ? `doi:${normalized}` : "";
+}
+
+function normalizedCitationName(value: string | null | undefined): string {
+  return normalizeCitationIdentity(value)
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function stableCitationIdentity(source: CitationIdentitySource): string {
+  const canonicalIdentity = normalizeCitationIdentity(source.canonicalSourceIdentity);
+  if (canonicalIdentity) return canonicalIdentity;
+
+  const canonicalSourceKey = normalizeCitationIdentity(source.canonicalSourceKey);
+  if (canonicalSourceKey) return canonicalSourceKey;
+
+  const dedupeKey = normalizeCitationIdentity(source.dedupeKey);
+  if (dedupeKey) return dedupeKey;
+
+  const doi = normalizedCitationDoi(source.doi);
+  if (doi) return doi;
+
+  const title = normalizedCitationName(source.title);
+  const firstAuthor = normalizedCitationName(source.authors?.[0]);
+  const year = Number.isFinite(source.year) ? String(source.year) : "";
+  if (title) return `title:${title}|author:${firstAuthor}|year:${year}`;
+
+  return `source:${normalizeCitationIdentity(source.id || source.url || source.sourceType)}`;
+}
+
+function compareStableText(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+function sourceIdForMarker(source: SourceRecord): string {
+  return source.id || stableCitationIdentity(source);
 }
 
 export function buildStableCitationMarkerMap(sources: SourceRecord[]): Map<string, string> {
   return new Map(
     sources
-      .map((source, index) => [sourceIdForMarker(source, index), `[S${index + 1}]`] as const)
-      .filter(([id]) => Boolean(id)),
+      .map((source) => ({
+        source,
+        id: sourceIdForMarker(source),
+        identity: stableCitationIdentity(source),
+      }))
+      .filter(({ id }) => Boolean(id))
+      .sort((left, right) =>
+        compareStableText(left.identity, right.identity) || compareStableText(left.id, right.id),
+      )
+      .map(({ id }, index) => [id, `[S${index + 1}]`] as const),
   );
 }
 
@@ -305,7 +369,7 @@ export function citationMarkersForSourceIds(
 }
 
 export function extractCitationMarkers(text: string): string[] {
-  return dedupe(text.match(/\[S\d+\]/gu) ?? []);
+  return dedupe(extractInternalCitationTokens(text).map((token) => token.canonicalMarker));
 }
 
 export function sourceIdsFromCitationMarkers(
@@ -374,6 +438,18 @@ function sourceTypeForClaim(card: EvidenceCard): string {
   return card.sourceType || "unknown";
 }
 
+function evidenceCardHasTraceableSupport(card: EvidenceCard): boolean {
+  return Boolean(
+    card.sourceId?.trim() &&
+      card.derivation === "abstract-derived" &&
+      (
+        card.supportSpan?.trim() ||
+        card.supportedByText?.trim() ||
+        card.evidence?.trim()
+      ),
+  );
+}
+
 function confidenceForCards(cards: EvidenceCard[]): number {
   if (cards.length === 0) return 0;
   const average = cards.reduce((sum, card) => sum + (card.confidenceScore ?? 0.4), 0) / cards.length;
@@ -392,16 +468,19 @@ function claimTextFromCards(cards: EvidenceCard[], type: ClaimType): string {
   const points = dedupe(
     cards.map((card) =>
       stripEnding(
-        card.claimTextZhTw ||
-          card.mainClaim ||
-          card.evidencePointZhTw ||
-          card.sourceSummaryZhTw ||
-          card.summary ||
-          card.sourceTitle,
+        verifiedZhTwReportText(
+          card.claimTextZhTw,
+          card.mainClaimZhTw,
+          card.evidencePointZhTw,
+          card.sourceSummaryZhTw,
+          card.mainClaim,
+          card.summary,
+          card.claim,
+        ),
       ),
     ),
   ).slice(0, 3);
-  if (points.length === 0) return "目前來源只能提供有限的研究線索";
+  if (points.length === 0) return UNTRANSLATED_EVIDENCE_NOTICE;
   if (type === "comparison") {
     return `不同來源可比較的重點包括${points.join("、")}`;
   }
@@ -465,7 +544,14 @@ export function buildSupportedClaimsFromEvidenceCards(
       claimCards.map((card) => card.sourceId),
       options.markerMap,
     );
-    const academic = claimCards.some(evidenceCardIsScholarly) && !claimCards.every(evidenceCardIsAbstractOnly);
+    const scholarly = claimCards.some(evidenceCardIsScholarly);
+    const abstractOnly = claimCards.every(evidenceCardIsAbstractOnly);
+    // Abstract-only papers can still support a conservative finding when the
+    // exact source span is retained.  They remain weak and caveated below, so
+    // this never upgrades an abstract into a full-text or causal conclusion.
+    const academic =
+      scholarly &&
+      (!abstractOnly || claimCards.every(evidenceCardHasTraceableSupport));
     const limitations = dedupe([
       ...claimCards.flatMap((card) => card.limitationsZhTw ?? []),
       ...claimCards.flatMap((card) => card.limitations ?? []),
@@ -473,7 +559,7 @@ export function buildSupportedClaimsFromEvidenceCards(
         ? "官方、教育或機構資料只能支撐背景與概念，不能單獨支撐強研究結論。"
         : null,
       claimCards.some(evidenceCardIsAbstractOnly)
-        ? "部分來源僅依摘要或 metadata 整理，支持力需降級。"
+        ? "部分來源僅依摘要或書目資訊整理，支持力需降級。"
         : null,
     ]);
     const supportLevel = evidenceCardIsAbstractOnly(claimCards[0]!) && claimCards.length === 1
@@ -554,7 +640,7 @@ function sourceTypeSummary(claims: SupportedClaim[]): string {
   if (hasScholarly && hasOfficial) return "同儕審查或學術來源與官方／教育背景資料並存";
   if (hasScholarly) return "主要包含學術或同儕審查來源";
   if (hasOfficial) return "主要包含官方、教育或機構背景資料";
-  if (hasMetadata) return "部分來源只有摘要或 metadata";
+  if (hasMetadata) return "部分來源只有摘要或書目資訊";
   return "來源類型仍需人工確認";
 }
 
@@ -604,10 +690,10 @@ export function synthesizeSectionParagraph(input: {
   } else if (input.sectionKey === "methodology") {
     const metadataOnlyCount = input.evidenceCards.filter(evidenceCardIsAbstractOnly).length;
     body = [
-      `本報告採資料檢索、來源篩選、證據卡整理與文獻綜合方式撰寫「${input.topic}」。`,
-      `正文只使用已接受來源能追溯的證據卡，不把沒有證據編號或已接受來源的想法寫成正式主張${markers}。`,
+      `本報告採資料檢索、來源篩選、可追溯摘錄整理與文獻綜合方式撰寫「${input.topic}」。`,
+      `正文只使用已核可來源中可追溯的內容，不把缺少來源依據的想法寫成正式主張${markers}。`,
       metadataOnlyCount > 0
-        ? "因部分來源僅有摘要或 metadata，本報告只說明可由摘要與書目資料整理出的內容，不能宣稱已分析全文。"
+        ? "因部分來源僅有摘要或書目資訊，本報告只說明可由這些資料整理出的內容，不能宣稱已分析全文。"
         : "若來源未提供全文，本報告仍以摘要、書目與可讀摘錄作為保守整理基礎。",
     ].join("");
   } else if (input.sectionKey === "limitations") {
@@ -617,7 +703,7 @@ export function synthesizeSectionParagraph(input: {
     body = [
       `目前來源結構顯示，官方、教育或機構背景資料約 ${officialCount} 筆，較適合支撐背景與概念整理。`,
       `可視為學術或同儕審查證據的來源約 ${peerReviewedCount} 筆，因此強研究結論仍需更多論文或正式研究報告支撐。`,
-      `摘要或 metadata 層級來源約 ${abstractOnlyCount} 筆，代表本報告不能宣稱已完成全文分析，也不能直接做因果、統計顯著或實驗結果結論。`,
+      `僅有摘要或書目資訊的來源約 ${abstractOnlyCount} 筆，代表本報告不能宣稱已完成全文分析，也不能直接做因果、統計顯著或實驗結果結論。`,
     ].join("");
   } else if (claims.length === 0 || evidenceCardIds.length < policy.minEvidenceCards) {
     warnings.push("目前此段來源不足，已改為保守敘述。");
@@ -625,7 +711,7 @@ export function synthesizeSectionParagraph(input: {
       body = "目前來源不足，建議回到來源審查補充同儕審查文獻、全文或可比較的學術來源後，再生成正式文獻探討。";
     } else if (input.sectionKey === "literature_review") {
       body = [
-        `初步文獻整理：目前可用來源仍少於正式文獻探討所需的 5 張證據卡，因此本節只整理已能追溯的背景與缺口${markers}。`,
+        `初步文獻整理：目前可用來源仍少於正式文獻探討所需的多組可追溯證據，因此本節只整理已能追溯的背景與缺口${markers}。`,
         `${sourceTypeSummary(claims)}，其中官方或教育資料可協助說明概念，但不能單獨支撐正式研究結論${markers}。`,
         "後續應補充同儕審查論文、全文或可比較的方法資料，再形成更完整的文獻比較。",
       ].join("\n\n");
@@ -671,9 +757,9 @@ export function synthesizeSectionParagraph(input: {
       ? "可支持的初步方向"
       : "主要發現";
     body = [
-      sentenceWithMarkers(`${titlePrefix}應限於已接受證據卡能追溯的內容`, markers),
+      sentenceWithMarkers(`${titlePrefix}應限於已核可且能追溯的來源內容`, markers),
       sentenceWithMarkers(`目前較可成立的主張包括${claims.slice(0, 3).map((claim) => stripEnding(claim.claimTextZh)).join("；")}`, markers),
-      sentenceWithMarkers("若主張需要因果或顯著差異語氣，仍必須補充更多 peer-reviewed evidence 後才能升級", markers),
+      sentenceWithMarkers("若主張需要因果或顯著差異語氣，仍必須補充更多同儕審查研究證據後才能提高結論強度", markers),
     ].join("");
   } else if (input.sectionKey === "discussion") {
     body = [
@@ -693,7 +779,7 @@ export function synthesizeSectionParagraph(input: {
 
   const guarded = guardUnsupportedSectionClaims({
     sectionKey: input.sectionKey,
-    text: body,
+    text: sanitizeZhTwReportProse(body),
     availableCitationMarkers: allMarkers,
   });
   warnings.push(...guarded.warnings);
@@ -728,9 +814,40 @@ function sentenceIsAssertive(sentence: string): boolean {
   return ASSERTIVE_SENTENCE_PATTERN.test(sentence);
 }
 
+function sentenceDoesNotRequireEvidenceCitation(
+  sectionKey: ResearchSectionKey,
+  sentence: string,
+): boolean {
+  if (/[？?](?:\s|$)/u.test(sentence)) return true;
+  if (
+    sectionKey === "methodology" &&
+    /^(?:本報告|本文)採(?:用)?(?:資料檢索|文獻整理|文獻綜合|來源篩選)/u.test(sentence)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function sentenceHasCitation(sentence: string, allowedMarkers: string[]): boolean {
   const markers = extractCitationMarkers(sentence);
   return markers.some((marker) => allowedMarkers.includes(marker));
+}
+
+function removeUnavailableCitationMarkers(
+  sentence: string,
+  allowedMarkers: string[],
+): { text: string; removedMarkers: string[] } {
+  const removedMarkers: string[] = [];
+  const text = sentence
+    .replace(/[\[［]\s*[SＳsｓ]([0-9０-９]+)\s*[\]］]/giu, (rawMarker) => {
+      const marker = extractCitationMarkers(rawMarker)[0];
+      if (marker && allowedMarkers.includes(marker)) return marker;
+      if (marker) removedMarkers.push(marker);
+      return "";
+    })
+    .replace(/[ \t]{2,}/gu, " ")
+    .trim();
+  return { text, removedMarkers: dedupe(removedMarkers) };
 }
 
 function rewriteStrongBackgroundClaim(sentence: string): string {
@@ -749,18 +866,27 @@ export function guardUnsupportedSectionClaims(input: {
   availableCitationMarkers: string[];
 }): UnsupportedClaimGuardResult {
   const policy = getSectionEvidencePolicy(input.sectionKey);
-  const allowedMarkers = dedupe(input.availableCitationMarkers);
+  const allowedMarkers = dedupe(
+    input.availableCitationMarkers.flatMap((marker) => extractCitationMarkers(marker)),
+  );
   const warnings: string[] = [];
   const diagnostics: string[] = [];
   const guardedSentences = splitSentences(input.text)
     .map((sentence) => {
       if (RAW_EVIDENCE_LEAK_PATTERNS.some((pattern) => pattern.test(sentence))) {
-        warnings.push("已移除 evidence card/debug 原文洩漏。");
+        warnings.push("已移除內部追蹤文字。");
         diagnostics.push(`raw_leak_removed:${input.sectionKey}`);
         return "";
       }
 
-      let nextSentence = sentence;
+      const citationCleanup = removeUnavailableCitationMarkers(sentence, allowedMarkers);
+      let nextSentence = citationCleanup.text;
+      if (citationCleanup.removedMarkers.length > 0) {
+        warnings.push("已移除無法對應本節允許來源的引用標記。");
+        diagnostics.push(
+          `unsupported_marker_removed:${input.sectionKey}:${citationCleanup.removedMarkers.join(",")}`,
+        );
+      }
       if (policy.forbiddenClaimPatterns.some((pattern) => pattern.test(nextSentence))) {
         nextSentence = rewriteStrongBackgroundClaim(nextSentence);
         warnings.push("已將不符合章節政策的強主張改為保守語氣。");
@@ -770,17 +896,16 @@ export function guardUnsupportedSectionClaims(input: {
       if (
         sentenceIsAssertive(nextSentence) &&
         !sentenceHasCitation(nextSentence, allowedMarkers) &&
+        !sentenceDoesNotRequireEvidenceCitation(input.sectionKey, nextSentence) &&
         !policy.allowUncitedAssertiveSentences
       ) {
-        const marker = allowedMarkers[0];
-        if (marker) {
-          nextSentence = `${stripEnding(nextSentence)}${marker}。`;
-          diagnostics.push(`citation_marker_added:${input.sectionKey}`);
-        } else {
-          nextSentence = "目前來源尚不足以支持此結論。";
-          warnings.push("已阻擋無引用標記的正式主張。");
-          diagnostics.push(`unsupported_claim_blocked:${input.sectionKey}`);
-        }
+        // A marker that happens to be available for the section is not proof
+        // that its source supports this sentence.  Keep the claim blocked
+        // until the writer supplies an inline marker backed by the matching
+        // claim/evidence binding.
+        nextSentence = "目前來源尚不足以支持此結論。";
+        warnings.push("已阻擋缺少可驗證引用的正式主張。");
+        diagnostics.push(`unsupported_claim_blocked:${input.sectionKey}`);
       }
       return nextSentence;
     })

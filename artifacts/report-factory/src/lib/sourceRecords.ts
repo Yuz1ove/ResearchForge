@@ -1,3 +1,8 @@
+/**
+ * AI assistance disclosure: Portions of this source model and its validation
+ * helpers were drafted or refactored with Replit Agent and OpenAI Codex. See
+ * /AI_ASSISTANCE.md.
+ */
 import type { SourceRecord as ApiSourceRecord, SourceReviewState } from "@workspace/api-client-react";
 
 export type { SourceReviewState };
@@ -246,7 +251,23 @@ export interface SourceRecordMetadata {
   language?: string | null;
   abstractMissing?: boolean | null;
   dedupeKey?: string | null;
+  canonicalSourceIdentity?: string | null;
+  providerIds?: Record<string, string> | null;
+  contentLevel?: "fulltext" | "abstract" | "metadata" | null;
+  enrichmentAttempted?: boolean | null;
+  enrichmentProviders?: string[] | null;
+  enrichmentStatus?: string | null;
+  enrichmentFailureReason?: string | null;
+  enrichmentProvenance?: unknown[] | null;
+  enrichedAt?: string | null;
   sourceKind?: SourceKind | string | null;
+  volume?: string | null;
+  issue?: string | null;
+  pages?: string | null;
+  articleNumber?: string | null;
+  conferenceName?: string | null;
+  conferenceLocation?: string | null;
+  conferenceDate?: string | null;
   citationCount?: number | null;
   isOpenAccess?: boolean | null;
   accessLevel?: SourceContentAccessLevel | null;
@@ -305,6 +326,14 @@ export interface SourceRecordMetadata {
   missingCoreConcepts?: string[] | null;
   matchedFacets?: string[] | null;
   missingRequiredFacets?: string[] | null;
+  researchDirectnessTier?: "A" | "B" | "C" | "D" | null;
+  researchDirectnessScore?: number | null;
+  matchedResearchFacets?: string[] | null;
+  missingResearchFacets?: string[] | null;
+  exactSearchCompleted?: boolean | null;
+  gapFillSearchAttempted?: boolean | null;
+  gapFillSearchCompleted?: boolean | null;
+  gapFillQueries?: string[] | null;
   evidenceGrounding?: EvidenceGroundingStatus | null;
   sourceRelevanceReasonZhTw?: string | null;
   shouldShowInMainList?: boolean | null;
@@ -400,13 +429,22 @@ export interface BibliographyEntry {
 }
 
 export interface ExportReadinessWarning {
-  code: "no-accepted-sources" | "incomplete-source-metadata" | "citation-placeholders";
+  code:
+    | "no-accepted-sources"
+    | "incomplete-source-metadata"
+    | "citation-placeholders"
+    | "citation-integrity-blocked";
   message: string;
 }
 
 type ReportLike = {
   meta?: {
     acceptedSources?: SourceRecord[];
+    citationIntegrity?: {
+      status?: "pass" | "blocked";
+      unknownMarkers?: string[];
+      ambiguousMarkers?: string[];
+    };
   };
   sections?: Array<{
     heading?: string;
@@ -435,6 +473,31 @@ type SourceRecordWithReviewAliases = SourceRecord & {
 function cleanText(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+const RETRIEVAL_AGGREGATOR_NAMES = new Set([
+  "semantic scholar",
+  "openalex",
+  "crossref",
+  "core",
+  "google scholar",
+]);
+
+function cleanPublicationVenue(
+  value: string | null | undefined,
+  provider?: string | null,
+  sourceType?: string | null,
+): string | null {
+  const cleaned = sanitizeReviewText(value);
+  if (!cleaned) return null;
+  const normalized = cleaned.toLocaleLowerCase();
+  const providerNames = [provider, sourceType]
+    .map((item) => cleanText(item)?.toLocaleLowerCase())
+    .filter((item): item is string => Boolean(item));
+  if (RETRIEVAL_AGGREGATOR_NAMES.has(normalized) || providerNames.includes(normalized)) {
+    return null;
+  }
+  return cleaned;
 }
 
 function cleanUnknownText(value: unknown): string | null {
@@ -914,6 +977,23 @@ function sanitizeReviewText(value: string | null | undefined): string | null {
     .trim() || null;
 }
 
+export function longestAbstractAlias(source: {
+  abstract?: string | null;
+  abstractOriginal?: string | null;
+  originalAbstract?: string | null;
+  extractedAbstract?: string | null;
+}): string | null {
+  return [
+    source.abstract,
+    source.abstractOriginal,
+    source.originalAbstract,
+    source.extractedAbstract,
+  ]
+    .map(sanitizeReviewText)
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => right.length - left.length)[0] ?? null;
+}
+
 function normalizeSummaryConfidence(value: unknown): SourceSummaryConfidence | null {
   if (value === "high" || value === "medium" || value === "low") return value;
   return null;
@@ -1027,14 +1107,17 @@ function normalizeReviewState(value: unknown): SourceReviewAlias | null {
 
 export function sourceReviewState(source: SourceRecord): SourceReviewState {
   const sourceWithAliases = source as SourceRecordWithReviewAliases;
-  const states = [
-    normalizeReviewState(sourceWithAliases.reviewState),
+  const canonicalState = normalizeReviewState(sourceWithAliases.reviewState);
+  if (canonicalState === "accepted") return "accepted";
+  if (canonicalState === "rejected" || canonicalState === "dismissed") return "rejected";
+
+  const legacyStates = [
     normalizeReviewState(sourceWithAliases.status),
     normalizeReviewState(sourceWithAliases.reviewStatus),
   ];
 
-  if (states.includes("accepted")) return "accepted";
-  if (states.includes("rejected") || states.includes("dismissed")) return "rejected";
+  if (legacyStates.includes("rejected") || legacyStates.includes("dismissed")) return "rejected";
+  if (legacyStates.includes("accepted")) return "accepted";
   return "pending";
 }
 
@@ -1165,31 +1248,45 @@ export function calculateSourceConfidence(source: SourceRecord): SourceConfidenc
 }
 
 export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
+  const preservedAbstract =
+    longestAbstractAlias(source) ??
+    sanitizeReviewText(source.snippet ?? source.originalSnippet);
   const normalized: SourceRecord = {
     ...source,
     id: cleanText(source.id) ?? "",
     title: sanitizeReviewText(source.title) ?? "",
-    authors: source.authors.map((author) => sanitizeReviewText(author)).filter((author): author is string => Boolean(author)),
+    authors: (source.authors ?? []).map((author) => sanitizeReviewText(author)).filter((author): author is string => Boolean(author)),
     year: typeof source.year === "number" && Number.isFinite(source.year) ? Math.trunc(source.year) : null,
-    abstract: sanitizeReviewText(source.abstract),
+    // Provider payloads and restored snapshots have historically used several
+    // aliases for the exact provider abstract. Collapse them before persistence.
+    abstract: preservedAbstract,
     snippet: sanitizeReviewText(source.snippet),
     language: cleanText(source.language),
     abstractMissing:
-      typeof source.abstractMissing === "boolean"
+      preservedAbstract
+        ? false
+        : typeof source.abstractMissing === "boolean"
         ? source.abstractMissing
-        : !cleanText(source.abstract),
+        : true,
     doi: normalizeDoi(source.doi),
     url: cleanText(source.url),
     sourceType: source.sourceType,
     reviewState: sourceReviewState(source),
-    publisher: sanitizeReviewText(source.publisher),
-    containerTitle: sanitizeReviewText(source.containerTitle),
+    publisher: cleanPublicationVenue(source.publisher, source.provider, source.sourceType),
+    containerTitle: cleanPublicationVenue(source.containerTitle, source.provider, source.sourceType),
     accessedAt: cleanText(source.accessedAt),
     provider: cleanText(source.provider),
     queryUsed: cleanText(source.queryUsed),
     retrievedAt: cleanText(source.retrievedAt),
     dedupeKey: cleanText(source.dedupeKey) ?? "",
     sourceKind: normalizeSourceKind(source.sourceKind),
+    volume: sanitizeReviewText(source.volume),
+    issue: sanitizeReviewText(source.issue),
+    pages: sanitizeReviewText(source.pages),
+    articleNumber: sanitizeReviewText(source.articleNumber),
+    conferenceName: sanitizeReviewText(source.conferenceName),
+    conferenceLocation: sanitizeReviewText(source.conferenceLocation),
+    conferenceDate: sanitizeReviewText(source.conferenceDate),
     citationCount: normalizeNonNegativeInteger(source.citationCount),
     isOpenAccess: typeof source.isOpenAccess === "boolean" ? source.isOpenAccess : null,
     accessLevel: normalizeContentAccessLevel(source.accessLevel),
@@ -1262,6 +1359,21 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     missingCoreConcepts: normalizeStringList(source.missingCoreConcepts),
     matchedFacets: normalizeStringList(source.matchedFacets),
     missingRequiredFacets: normalizeStringList(source.missingRequiredFacets),
+    researchDirectnessTier:
+      source.researchDirectnessTier === "A" || source.researchDirectnessTier === "B" ||
+      source.researchDirectnessTier === "C" || source.researchDirectnessTier === "D"
+        ? source.researchDirectnessTier
+        : null,
+    researchDirectnessScore: normalizeOptionalScore(source.researchDirectnessScore),
+    matchedResearchFacets: normalizeStringList(source.matchedResearchFacets),
+    missingResearchFacets: normalizeStringList(source.missingResearchFacets),
+    exactSearchCompleted:
+      typeof source.exactSearchCompleted === "boolean" ? source.exactSearchCompleted : null,
+    gapFillSearchAttempted:
+      typeof source.gapFillSearchAttempted === "boolean" ? source.gapFillSearchAttempted : null,
+    gapFillSearchCompleted:
+      typeof source.gapFillSearchCompleted === "boolean" ? source.gapFillSearchCompleted : null,
+    gapFillQueries: normalizeStringList(source.gapFillQueries),
     evidenceGrounding: normalizeEvidenceGrounding(source.evidenceGrounding),
     sourceRelevanceReasonZhTw: cleanText(source.sourceRelevanceReasonZhTw),
     shouldShowInMainList: typeof source.shouldShowInMainList === "boolean" ? source.shouldShowInMainList : null,
@@ -1273,8 +1385,8 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     relevanceReasonZhTW: sanitizeReviewText(source.relevanceReasonZhTW ?? source.relevanceReasonZhTw),
     relevanceReasonZhTw: sanitizeReviewText(source.relevanceReasonZhTw ?? source.relevanceReasonZhTW),
     summaryWarnings: normalizeStringList(source.summaryWarnings),
-    originalAbstract: sanitizeReviewText(source.originalAbstract ?? source.abstractOriginal),
-    abstractOriginal: sanitizeReviewText(source.abstractOriginal ?? source.originalAbstract),
+    originalAbstract: sanitizeReviewText(source.originalAbstract) ?? preservedAbstract,
+    abstractOriginal: sanitizeReviewText(source.abstractOriginal) ?? preservedAbstract,
     abstractZhTw: sanitizeReviewText(source.abstractZhTw),
     originalSnippet: sanitizeReviewText(source.originalSnippet),
     extractedText: sanitizeReviewText(source.extractedText),
@@ -1342,13 +1454,73 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     researchRelevanceScore: source.researchRelevanceScore ?? null,
     sourceSummary: source.sourceSummary ?? null,
   };
+  const canonicalSourceIdentity = sourceRecordKey(normalized);
   return {
     ...normalized,
-    id: normalized.id || sourceRecordKey(normalized),
-    dedupeKey: normalized.dedupeKey || sourceRecordKey(normalized),
+    id: normalized.id || canonicalSourceIdentity,
+    dedupeKey: canonicalSourceIdentity,
+    canonicalSourceIdentity,
     sourceCategory: normalized.sourceCategory ?? classifySourceRecord(normalized),
     confidence: normalized.confidence ?? calculateSourceConfidence(normalized),
   };
+}
+
+export function canonicalSourceKeyForSource(source: SourceRecord): string {
+  return cleanText(source.canonicalSourceIdentity) ??
+    cleanText(source.dedupeKey) ??
+    sourceRecordKey(source);
+}
+
+function strictMetadataIdentityMatch(left: SourceRecord, right: SourceRecord): boolean {
+  const normalizedIdentityTitle = (value: string) =>
+    normalizeTitle(value)
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .trim();
+  const leftTitle = normalizedIdentityTitle(left.title);
+  const rightTitle = normalizedIdentityTitle(right.title);
+  const leftAuthor = normalizedAuthorKey(left.authors[0]);
+  const rightAuthor = normalizedAuthorKey(right.authors[0]);
+  return Boolean(
+    leftTitle &&
+      leftTitle === rightTitle &&
+      leftAuthor &&
+      leftAuthor === rightAuthor &&
+      left.year != null &&
+      left.year === right.year,
+  );
+}
+
+const PREPRINT_DOI_PATTERNS = [
+  /^10\.1101\//u,
+  /^10\.21203\/rs\./u,
+  /^10\.2139\/ssrn\./u,
+  /^10\.48550\/arxiv\./u,
+];
+
+function isPreprintDoi(value: string | null | undefined): boolean {
+  const doi = normalizeDoi(value);
+  return Boolean(doi && PREPRINT_DOI_PATTERNS.some((pattern) => pattern.test(doi)));
+}
+
+function sameResearchVersionMatch(left: SourceRecord, right: SourceRecord): boolean {
+  const leftDoi = normalizeDoi(left.doi);
+  const rightDoi = normalizeDoi(right.doi);
+  if (!leftDoi || !rightDoi || leftDoi === rightDoi) return false;
+  if (!isPreprintDoi(leftDoi) && !isPreprintDoi(rightDoi)) return false;
+  if (!strictMetadataIdentityMatch(left, right)) return false;
+  const leftAuthors = left.authors.map(normalizedAuthorKey).filter(Boolean);
+  const rightAuthors = right.authors.map(normalizedAuthorKey).filter(Boolean);
+  return leftAuthors.length > 0 &&
+    leftAuthors.length === rightAuthors.length &&
+    leftAuthors.every((author, index) => author === rightAuthors[index]);
+}
+
+function canonicalVersionDoi(left: SourceRecord, right: SourceRecord): string | null {
+  const dois = [normalizeDoi(left.doi), normalizeDoi(right.doi)]
+    .filter((value): value is string => Boolean(value));
+  const published = dois.filter((doi) => !isPreprintDoi(doi));
+  return (published.length > 0 ? published : dois).sort()[0] ?? null;
 }
 
 export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
@@ -1358,11 +1530,21 @@ export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
   for (const source of sources) {
     const normalized = normalizeSourceForReview(source);
     const key = sourceRecordKey(normalized);
-    const existing = seen.get(key);
+    const existing = seen.get(key) ?? deduped.find((candidate) => {
+      // Preserve distinct journal works, but collapse a recognized preprint or
+      // version only when title, full author list, and year are identical.
+      if (normalized.doi && candidate.doi) {
+        return sameResearchVersionMatch(normalized, candidate);
+      }
+      return strictMetadataIdentityMatch(normalized, candidate);
+    });
     if (existing) {
       const existingAbstractLength = existing.abstract?.length ?? 0;
       const incomingAbstractLength = normalized.abstract?.length ?? 0;
-      const doi = existing.doi ?? normalized.doi;
+      const isVersionMerge = sameResearchVersionMatch(existing, normalized);
+      const doi = isVersionMerge
+        ? canonicalVersionDoi(existing, normalized)
+        : existing.doi ?? normalized.doi;
       const doiUrl = doi ? `https://doi.org/${doi}` : null;
       const merged: SourceRecord = normalizeSourceForReview({
         ...existing,
@@ -1381,11 +1563,18 @@ export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
               : "pending",
         publisher: existing.publisher ?? normalized.publisher,
         containerTitle: existing.containerTitle ?? normalized.containerTitle,
+        volume: existing.volume ?? normalized.volume,
+        issue: existing.issue ?? normalized.issue,
+        pages: existing.pages ?? normalized.pages,
+        articleNumber: existing.articleNumber ?? normalized.articleNumber,
+        conferenceName: existing.conferenceName ?? normalized.conferenceName,
+        conferenceLocation: existing.conferenceLocation ?? normalized.conferenceLocation,
+        conferenceDate: existing.conferenceDate ?? normalized.conferenceDate,
         accessedAt: existing.accessedAt ?? normalized.accessedAt,
         provider: existing.provider ?? normalized.provider ?? existing.sourceType,
         queryUsed: existing.queryUsed ?? normalized.queryUsed,
         retrievedAt: existing.retrievedAt ?? normalized.retrievedAt,
-        dedupeKey: existing.dedupeKey ?? normalized.dedupeKey,
+        dedupeKey: doi ? `doi:${doi}` : existing.dedupeKey ?? normalized.dedupeKey,
         sourceKind: existing.sourceKind ?? normalized.sourceKind,
         citationCount: mergeScore(existing.citationCount, normalized.citationCount),
         isOpenAccess:
@@ -1451,6 +1640,19 @@ export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
         institutionType: existing.institutionType ?? normalized.institutionType,
         evidencePoints: mergeStringList(existing.evidencePoints, normalized.evidencePoints),
         providerHealthSnapshot: existing.providerHealthSnapshot ?? normalized.providerHealthSnapshot,
+        providerIds: isVersionMerge
+          ? {
+              ...(existing.providerIds ?? {}),
+              ...(normalized.providerIds ?? {}),
+              ...[existing.doi, normalized.doi]
+                .map(normalizeDoi)
+                .filter((value): value is string => Boolean(value))
+                .reduce<Record<string, string>>((aliases, value) => {
+                  aliases[`version-doi:${value}`] = `https://doi.org/${value}`;
+                  return aliases;
+                }, {}),
+            }
+          : existing.providerIds ?? normalized.providerIds,
         acceptedByUser:
           typeof existing.acceptedByUser === "boolean" || typeof normalized.acceptedByUser === "boolean"
             ? Boolean(existing.acceptedByUser ?? normalized.acceptedByUser)
@@ -1467,8 +1669,16 @@ export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
               ],
         ),
       });
-      const withStableId = { ...merged, id: existing.id || key };
+      const canonicalKey = sourceRecordKey(merged);
+      const withStableId = {
+        ...merged,
+        id: existing.id || key,
+        dedupeKey: canonicalKey,
+        canonicalSourceIdentity: canonicalKey,
+      };
       seen.set(key, withStableId);
+      seen.set(canonicalKey, withStableId);
+      seen.set(sourceRecordKey(existing), withStableId);
       const index = deduped.findIndex((item) => item.id === existing.id);
       if (index >= 0) deduped[index] = withStableId;
       continue;
@@ -1591,9 +1801,16 @@ function formatApaAuthor(author: string): string {
   const parts = author.trim().split(/\s+/).filter(Boolean);
   if (parts.length <= 1) return author.trim();
 
-  const family = parts[parts.length - 1];
-  const initials = parts
-    .slice(0, -1)
+  const providerUsesFamilyNameFirst =
+    parts.length === 2 &&
+    /^[A-Z]{1,4}$/u.test(parts[1] ?? "") &&
+    /[A-Za-z]{2,}/u.test(parts[0] ?? "");
+  const family = providerUsesFamilyNameFirst ? parts[0] : parts[parts.length - 1];
+  const givenParts = providerUsesFamilyNameFirst ? parts.slice(1) : parts.slice(0, -1);
+  const initialTokens = providerUsesFamilyNameFirst
+    ? givenParts.flatMap((part) => part.replace(/[^A-Za-z]/gu, "").split(""))
+    : givenParts.map((part) => part.charAt(0));
+  const initials = initialTokens
     .map((part) => `${part.charAt(0).toUpperCase()}.`)
     .join(" ");
   return `${family}, ${initials}`;
@@ -1611,16 +1828,42 @@ export function formatApaReference(source: SourceRecord): BibliographyEntry {
   const normalized = normalizeSourceForReview(source);
   const missingFields = sourceMetadataIssues(normalized);
   const year = normalized.year ? `(${normalized.year})` : "(年份未提供)";
-  const title = normalized.title || "標題未提供";
-  const container = normalized.containerTitle || normalized.publisher;
+  const title = (normalized.title || "標題未提供").replace(/[.!?。！？]+$/u, "");
+  const container =
+    cleanPublicationVenue(normalized.containerTitle, normalized.provider, normalized.sourceType) ||
+    cleanPublicationVenue(normalized.publisher, normalized.provider, normalized.sourceType);
   const locator = normalized.doi ? `https://doi.org/${normalized.doi}` : normalized.url;
+  const journalDetails = normalized.sourceKind === "journal"
+    ? [
+        container,
+        normalized.volume
+          ? `${normalized.volume}${normalized.issue ? `(${normalized.issue})` : ""}`
+          : normalized.issue
+            ? `(${normalized.issue})`
+            : null,
+        normalized.pages ?? normalized.articleNumber,
+      ].filter(Boolean).join(", ")
+    : null;
+  const conferenceDetails = normalized.sourceKind === "conference"
+    ? [
+        normalized.conferenceName ?? container ?? "會議論文集",
+        normalized.conferenceLocation,
+        normalized.conferenceDate,
+      ].filter(Boolean).join(", ")
+    : null;
   const parts = [
     `${formatApaAuthors(normalized.authors)} ${year}.`,
     `${title}.`,
-    container ? `${container}.` : null,
+    journalDetails
+      ? `${journalDetails}.`
+      : conferenceDetails
+        ? `In ${conferenceDetails}.`
+        : container
+          ? `${container}.`
+          : null,
     locator,
   ].filter((part): part is string => Boolean(part));
-  const incompleteLabel = missingFields.length ? `（metadata incomplete: ${missingFields.join("、")}）` : "";
+  const incompleteLabel = missingFields.length ? `（書目資料待補：${missingFields.join("、")}）` : "";
 
   return {
     sourceId: normalized.id,
@@ -1658,6 +1901,22 @@ export function buildExportReadinessWarnings(report: ReportLike): ExportReadines
   const acceptedSources = report.meta?.acceptedSources ?? [];
   const incompleteSources = acceptedSources.filter(sourceHasIncompleteMetadata);
   const warnings: ExportReadinessWarning[] = [];
+  const citationIntegrity = report.meta?.citationIntegrity;
+
+  if (citationIntegrity?.status === "blocked") {
+    const diagnostics = [
+      citationIntegrity.unknownMarkers?.length
+        ? `無法解析：${citationIntegrity.unknownMarkers.join("、")}`
+        : null,
+      citationIntegrity.ambiguousMarkers?.length
+        ? `對應不唯一：${citationIntegrity.ambiguousMarkers.join("、")}`
+        : null,
+    ].filter(Boolean).join("；");
+    warnings.push({
+      code: "citation-integrity-blocked",
+      message: `引用完整性檢查未通過，正式匯出已阻擋${diagnostics ? `（${diagnostics}）` : ""}。`,
+    });
+  }
 
   if (acceptedSources.length === 0) {
     warnings.push({
@@ -1669,7 +1928,7 @@ export function buildExportReadinessWarnings(report: ReportLike): ExportReadines
   if (incompleteSources.length > 0) {
     warnings.push({
       code: "incomplete-source-metadata",
-      message: `有 ${incompleteSources.length} 筆已接受來源的 metadata 不完整，參考文獻會標示 incomplete。`,
+      message: `有 ${incompleteSources.length} 筆已接受來源的書目資料待補，參考文獻會標示需補齊的欄位。`,
     });
   }
 

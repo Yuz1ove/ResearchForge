@@ -70,7 +70,13 @@ export function sourceRecordToNormalizedSource(
     ...(typeof normalized.isOpenAccess === "boolean"
       ? { isOpenAccess: normalized.isOpenAccess }
       : {}),
-    ...(cleanWhitespace(normalized.url) ? { fullTextUrl: cleanWhitespace(normalized.url) } : {}),
+    ...(cleanWhitespace(normalized.fullTextUrl ?? normalized.readableUrl ?? normalized.url)
+      ? {
+          fullTextUrl: cleanWhitespace(
+            normalized.fullTextUrl ?? normalized.readableUrl ?? normalized.url,
+          ),
+        }
+      : {}),
     ...(typeof normalized.relevanceScore === "number"
       ? { relevanceScore: normalized.relevanceScore }
       : {}),
@@ -100,6 +106,7 @@ export function normalizedSourceToSourceRecord(
     language: source.language ?? null,
     doi: source.doi ?? null,
     url: source.url ?? source.fullTextUrl ?? null,
+    fullTextUrl: source.fullTextUrl ?? null,
     sourceType:
       source.provider === "Official Source" ||
       source.provider === "Institutional Source" ||

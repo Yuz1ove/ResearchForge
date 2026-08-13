@@ -110,3 +110,80 @@ test("quality judge flags unsupported sections and causal overclaims", () => {
   assert.ok(quality.overclaimWarnings.some((warning) => warning.includes("因果語氣")));
   assert.ok(quality.unsupportedClaimWarnings.some((warning) => warning.includes("quick")));
 });
+
+test("quality judge treats placeholders, internal language, and cross-section repetition as hard errors", () => {
+  const acceptedSources = Array.from({ length: 11 }, (_, index) => source(index + 1));
+  const evidenceCards = acceptedSources.map((_, index) => card(index + 1));
+  const repeatedFinding =
+    "短影音使用與高中生睡眠品質的關聯尚需以多來源資料進一步比較。";
+  const draftSections = sections(evidenceCards).map((section) => {
+    if (section.key === "literature_review") {
+      return { ...section, content: "本節尚未完成，請補充內容。" };
+    }
+    if (section.key === "findings" || section.key === "discussion") {
+      return { ...section, content: repeatedFinding };
+    }
+    if (section.key === "conclusion") {
+      return {
+        ...section,
+        content:
+          "短影音使用對高中生睡眠品質的結論尚待複核 exact supportSpan 與 grounding verifier。",
+      };
+    }
+    return section;
+  });
+
+  const quality = buildQualityReport({
+    topic: "短影音使用對高中生睡眠品質之影響",
+    depth: "deep",
+    acceptedSources,
+    evidenceCards,
+    sections: draftSections,
+  });
+
+  assert.equal(quality.readiness, "preliminary");
+  assert.ok(quality.unsupportedClaimWarnings.some((warning) => warning.includes("placeholder")));
+  assert.ok(quality.unsupportedClaimWarnings.some((warning) => warning.includes("實質內容")));
+  assert.ok(quality.unsupportedClaimWarnings.some((warning) => warning.includes("內部工作語言")));
+  assert.ok(quality.unsupportedClaimWarnings.some((warning) => warning.includes("重複相同")));
+});
+
+test("quality judge rejects unknown, outside-accepted, and non-closing inline citations", () => {
+  const acceptedSources = Array.from({ length: 11 }, (_, index) => source(index + 1));
+  const evidenceCards = acceptedSources.map((_, index) => card(index + 1));
+  const draftSections = sections(evidenceCards).map((section) =>
+    section.key === "findings"
+      ? {
+          ...section,
+          content:
+            "短影音使用與高中生睡眠品質可能相關[S1]，但另一項結論使用無法解析的標記［Ｓ９９］。",
+          citationIds: ["source-2", "outside-source"],
+        }
+      : section,
+  );
+
+  const quality = buildQualityReport({
+    topic: "短影音使用對高中生睡眠品質之影響",
+    depth: "deep",
+    acceptedSources,
+    evidenceCards,
+    sections: draftSections,
+  });
+
+  assert.equal(quality.readiness, "preliminary");
+  assert.ok(
+    quality.missingCitationWarnings.some((warning) =>
+      warning.includes("不在 accepted sources 中的引用：outside-source"),
+    ),
+  );
+  assert.ok(
+    quality.missingCitationWarnings.some((warning) =>
+      warning.includes("[S99]") && warning.includes("無法對應"),
+    ),
+  );
+  assert.ok(
+    quality.missingCitationWarnings.some((warning) =>
+      warning.includes("[S1]") && warning.includes("source-1") && warning.includes("閉合"),
+    ),
+  );
+});

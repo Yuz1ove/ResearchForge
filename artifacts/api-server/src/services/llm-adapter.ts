@@ -1,3 +1,5 @@
+import { request as requestHttp } from "node:http";
+import { request as requestHttps } from "node:https";
 import { logger } from "../lib/logger";
 import { resolvePrivateLlmProviderConfig } from "../config/llm-provider-config";
 import {
@@ -43,7 +45,7 @@ export interface ResolvedLlmConfig {
   model: string;
   timeoutMs: number;
   disabled: boolean;
-  providerKind?: "school" | "openai" | "generic";
+  providerKind?: "school" | "openai" | "ollama" | "generic";
   providerName?: string;
   configError?: string;
 }
@@ -71,7 +73,8 @@ export class LlmAdapterError extends Error {
   }
 }
 
-const DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1";
+const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
+const DEFAULT_BASE_URL = `${DEFAULT_OLLAMA_BASE_URL}/v1`;
 const DEFAULT_MODEL = "qwen3:4b";
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 export const DEFAULT_OPENAI_MODEL = "gpt-5.4";
@@ -202,6 +205,19 @@ function normalizeOllamaBaseUrl(baseUrl: string): string {
   return trimmed;
 }
 
+function normalizeNativeOllamaBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  if (!trimmed) return DEFAULT_OLLAMA_BASE_URL;
+
+  try {
+    const url = new URL(trimmed);
+    url.pathname = url.pathname.replace(/\/v1$/i, "").replace(/\/+$/, "");
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return trimmed.replace(/\/v1$/i, "");
+  }
+}
+
 export function resolveLlmConfig(
   purpose: LlmRequestPurpose,
   overrides: Partial<OpenAICompatibleLlmConfig> = {},
@@ -210,6 +226,35 @@ export function resolveLlmConfig(
   const explicitlyDisabled =
     Object.prototype.hasOwnProperty.call(overrides, "apiKey") &&
     !overrides.apiKey?.trim();
+  if (providerRequested(env, "ollama")) {
+    const model =
+      overrides.model ??
+      envValue(env, "OLLAMA_MODEL") ??
+      envValue(env, "LLM_MODEL") ??
+      "";
+    const baseUrl =
+      overrides.baseUrl ??
+      envValue(env, "OLLAMA_BASE_URL") ??
+      envValue(env, "LLM_BASE_URL") ??
+      DEFAULT_OLLAMA_BASE_URL;
+    const timeoutMs =
+      overrides.timeoutMs ??
+      envNumber(env, [...PURPOSE_TIMEOUT_ENV_KEYS[purpose], "OLLAMA_TIMEOUT_MS", "LLM_TIMEOUT_MS"]) ??
+      PURPOSE_TIMEOUT_MS[purpose];
+
+    return {
+      baseUrl: normalizeNativeOllamaBaseUrl(baseUrl),
+      apiKey: overrides.apiKey?.trim() || envValue(env, "OLLAMA_API_KEY"),
+      model,
+      timeoutMs,
+      disabled: !model,
+      providerKind: "ollama",
+      providerName: "ollama",
+      configError: model
+        ? undefined
+        : "MODEL_MISSING: Ollama is configured, but no model is set. Set OLLAMA_MODEL.",
+    };
+  }
   const providerOverride = providerRequested(env, "openai")
     ? "openai"
     : providerRequested(env, "school_llm")
@@ -304,6 +349,86 @@ export function resolveLlmConfig(
 function chatCompletionsUrl(baseUrl: string): URL {
   const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
   return new URL("chat/completions", normalizedBase);
+}
+
+export function ollamaChatUrl(baseUrl: string): URL {
+  const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  return new URL("api/chat", normalizedBase);
+}
+
+function requestWithNodeHttp(
+  input: string | URL,
+  init: RequestInit = {},
+): Promise<Response> {
+  const url = input instanceof URL ? input : new URL(input);
+  const request = url.protocol === "https:"
+    ? requestHttps
+    : url.protocol === "http:"
+      ? requestHttp
+      : null;
+  if (!request) {
+    return Promise.reject(new TypeError(`Unsupported native Ollama URL protocol: ${url.protocol}`));
+  }
+
+  const requestBody = init.body;
+  if (
+    requestBody != null &&
+    typeof requestBody !== "string" &&
+    !(requestBody instanceof Uint8Array)
+  ) {
+    return Promise.reject(new TypeError("Native Ollama transport requires a string or byte request body."));
+  }
+
+  return new Promise<Response>((resolve, reject) => {
+    let settled = false;
+    const resolveOnce = (response: Response): void => {
+      if (settled) return;
+      settled = true;
+      resolve(response);
+    };
+    const rejectOnce = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    const nodeRequest = request(
+      url,
+      {
+        method: init.method ?? "GET",
+        headers: Object.fromEntries(new Headers(init.headers).entries()),
+        signal: init.signal ?? undefined,
+      },
+      (nodeResponse) => {
+        const chunks: Buffer[] = [];
+        nodeResponse.on("data", (chunk: Buffer | string) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        nodeResponse.once("aborted", () => {
+          rejectOnce(new Error("Native Ollama response was aborted."));
+        });
+        nodeResponse.once("error", rejectOnce);
+        nodeResponse.once("end", () => {
+          const responseHeaders = new Headers();
+          for (let index = 0; index < nodeResponse.rawHeaders.length; index += 2) {
+            const name = nodeResponse.rawHeaders[index];
+            const value = nodeResponse.rawHeaders[index + 1];
+            if (name && value != null) responseHeaders.append(name, value);
+          }
+          const status = nodeResponse.statusCode ?? 500;
+          const body = status === 204 || status === 205 || status === 304
+            ? null
+            : Buffer.concat(chunks);
+          resolveOnce(new Response(body, {
+            status,
+            statusText: nodeResponse.statusMessage,
+            headers: responseHeaders,
+          }));
+        });
+      },
+    );
+    nodeRequest.once("error", rejectOnce);
+    nodeRequest.end(requestBody);
+  });
 }
 
 function responsesUrl(baseUrl: string): URL {
@@ -561,6 +686,16 @@ export function extractModelText(raw: unknown): string {
   ) || firstJsonObjectFromReasoning(message.reasoning, data.reasoning);
 }
 
+function extractOllamaStreamText(body: string): string {
+  const chunks = body
+    .split(/\r?\n/gu)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => extractModelText(safeJsonParse(line)))
+    .filter(Boolean);
+  return chunks.join("").trim();
+}
+
 function errorCode(error: unknown): string {
   if (error instanceof LlmAdapterError) return error.code;
   if (error instanceof Error) return error.name || "Error";
@@ -583,7 +718,7 @@ export async function requestOpenAICompatibleChatCompletion({
   maxTokens = 1_200,
   responseFormat,
   llm,
-  fetchImpl = fetch,
+  fetchImpl,
   env = process.env,
 }: ChatCompletionRequest): Promise<string> {
   const config = resolveLlmConfig(purpose, llm, env);
@@ -636,7 +771,15 @@ export async function requestOpenAICompatibleChatCompletion({
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
-  const endpoint = chatCompletionsUrl(config.baseUrl).toString();
+  const endpoint =
+    config.providerKind === "ollama"
+      ? ollamaChatUrl(config.baseUrl).toString()
+      : chatCompletionsUrl(config.baseUrl).toString();
+  const providerFetch = fetchImpl ?? (
+    config.providerKind === "ollama"
+      ? requestWithNodeHttp
+      : fetch
+  );
 
   try {
     if (config.providerKind === "openai") {
@@ -644,7 +787,7 @@ export async function requestOpenAICompatibleChatCompletion({
         config,
         messages,
         maxTokens,
-        fetchImpl,
+        fetchImpl: providerFetch,
         signal: controller.signal,
         responseFormat,
       });
@@ -670,20 +813,41 @@ export async function requestOpenAICompatibleChatCompletion({
       headers.Authorization = `Bearer ${config.apiKey}`;
     }
 
-    const response = await fetchImpl(endpoint, {
+    const response = await providerFetch(endpoint, {
       method: "POST",
       signal: controller.signal,
       headers,
-      body: JSON.stringify({
-        model: config.model,
-        messages: messagesForProvider(messages, config),
-        temperature,
-        max_tokens: maxTokens,
-        ...(shouldDisableReasoning(config) ? { think: false } : {}),
-        ...(responseFormat && !shouldDisableReasoning(config)
-          ? { response_format: { type: responseFormat } }
-          : {}),
-      }),
+      body: JSON.stringify(
+        config.providerKind === "ollama"
+          ? {
+              model: config.model,
+              messages,
+              // The native Node transport has no hidden Undici headers
+              // deadline, so a single response preserves JSON string
+              // boundaries exactly. The explicit AbortController remains the
+              // authoritative per-purpose deadline.
+              stream: false,
+              think: false,
+              ...(responseFormat === "json_object" ? { format: "json" } : {}),
+              options: {
+                temperature,
+                num_predict: maxTokens,
+                ...(envNumber(env, ["OLLAMA_NUM_CTX"]) != null
+                  ? { num_ctx: envNumber(env, ["OLLAMA_NUM_CTX"]) }
+                  : {}),
+              },
+            }
+          : {
+              model: config.model,
+              messages: messagesForProvider(messages, config),
+              temperature,
+              max_tokens: maxTokens,
+              ...(shouldDisableReasoning(config) ? { think: false } : {}),
+              ...(responseFormat && !shouldDisableReasoning(config)
+                ? { response_format: { type: responseFormat } }
+                : {}),
+            },
+      ),
     });
     const body = await response.text();
 
@@ -696,8 +860,9 @@ export async function requestOpenAICompatibleChatCompletion({
       );
     }
 
-    const payload = safeJsonParse(body);
-    const content = extractModelText(payload);
+    const content = config.providerKind === "ollama"
+      ? extractModelText(safeJsonParse(body)) || extractOllamaStreamText(body)
+      : extractModelText(safeJsonParse(body));
     if (!content) {
       throw new LlmAdapterError(
         "invalid-json",

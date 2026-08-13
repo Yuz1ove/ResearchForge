@@ -70,6 +70,32 @@ test("SCHOOL_LLM wins over OPENAI by default, explicit openai override wins when
   assert.equal(openai.baseURL, "https://api.openai.com/v1");
 });
 
+test("explicit Ollama config is available without an API key and ignores empty remote provider vars", () => {
+  const config = resolvePrivateLlmProviderConfig({
+    env: {
+      LLM_PROVIDER: "ollama",
+      OLLAMA_BASE_URL: "http://127.0.0.1:11434",
+      OLLAMA_MODEL: "cached-qwen-model",
+      SCHOOL_LLM_API_KEY: "",
+      SCHOOL_LLM_BASE_URL: "",
+      SCHOOL_LLM_MODEL: "",
+      OPENAI_API_KEY: "",
+      OPENAI_BASE_URL: "",
+      OPENAI_MODEL: "",
+    },
+  });
+
+  assert.equal(config.provider, "ollama");
+  assert.equal(config.available, true);
+  assert.equal(config.status, "configured");
+  assert.equal(config.apiKeyConfigured, false);
+  assert.equal(config.baseURL, "http://127.0.0.1:11434");
+  assert.equal(config.model, "cached-qwen-model");
+  assert.equal(config.compatibleMode, "ollama_chat");
+  assert.deepEqual(config.missing, []);
+  assert.equal(config.source, "ollama_env");
+});
+
 test("safe provider config never exposes the full credential", () => {
   const safe = resolveSafeLlmProviderConfig({
     env: {

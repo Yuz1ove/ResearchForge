@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildEvidenceCards, summarizeEvidenceCoverage } from "./evidenceCards.ts";
+import {
+  analyzeEvidenceExtraction,
+  buildEvidenceCards,
+  evidenceCardHasUsableSupport,
+  summarizeEvidenceCoverage,
+} from "./evidenceCards.ts";
 import type { SourceRecord } from "./sourceRecords.ts";
 
 function source(overrides: Partial<SourceRecord> = {}): SourceRecord {
@@ -34,10 +39,14 @@ test("builds evidence cards from accepted sources and inherits metadata", () => 
 
   assert.equal(cards.length, 1);
   assert.equal(cards[0]?.sourceId, "source-1");
+  assert.equal(cards[0]?.canonicalSourceKey, "doi:10.1000/sleep");
+  assert.equal(cards[0]?.dedupeKey, "doi:10.1000/sleep");
+  assert.equal(cards[0]?.citationKey, "doi:10.1000/sleep");
   assert.equal(cards[0]?.sourceCategory, "學術論文");
   assert.equal(cards[0]?.doi, "10.1000/sleep");
   assert.equal(cards[0]?.abstract, "Students report lower sleep quality when screen time is high.");
   assert.equal(cards[0]?.provider, "Crossref");
+  assert.deepEqual(cards[0]?.authors, ["Ada Lovelace"]);
   assert.equal(cards[0]?.sourceQualityScore, 92);
   assert.equal(cards[0]?.relevanceScore, 84);
   assert.equal(cards[0]?.finalScore, 87);
@@ -47,6 +56,23 @@ test("builds evidence cards from accepted sources and inherits metadata", () => 
   assert.equal(cards[0]?.pageOrLocation, "abstract");
   assert.equal(cards[0]?.confidenceScore <= 0.74, true);
   assert.equal(cards[0]?.notes, "樣本描述清楚。");
+});
+
+test("local fallback claimText stays aligned to the exact source span", () => {
+  const exactAbstract =
+    "Lithium-ion batteries are widely used in phones and electric vehicles.";
+  const cards = buildEvidenceCards([
+    source({
+      id: "lithium-alignment",
+      abstract: exactAbstract,
+      originalAbstract: exactAbstract,
+      evidenceSummaryZhTw: "鋰電池可以治療疾病並改善醫療管理。",
+    }),
+  ]);
+
+  assert.equal(cards[0]?.claimText, exactAbstract.replace(/[.]$/u, ""));
+  assert.equal(cards[0]?.supportSpan, exactAbstract);
+  assert.doesNotMatch(cards[0]?.claimText ?? "", /治療疾病|醫療管理/u);
 });
 
 test("builds evidence cards from sourceFacts before fallback summaries", () => {
@@ -72,6 +98,30 @@ test("builds evidence cards from sourceFacts before fallback summaries", () => {
   assert.equal(cards[0]?.pageOrLocation, "sourceFact");
   assert.match(cards[0]?.sourceExcerptOriginal ?? "", /electron transfer/);
   assert.match(cards[0]?.evidence ?? "", /氧化還原反應|電子轉移/u);
+});
+
+test("traceable extracted full text produces fulltext-derived evidence cards", () => {
+  const fullText =
+    "The full-text results report a negative association between vegetation cover and land surface temperature.";
+  const cards = buildEvidenceCards([
+    source({
+      id: "fulltext-urban-heat",
+      accessLevel: "full_text",
+      contentLevel: "fulltext",
+      extractedText: fullText,
+      sourceFacts: [{
+        sourceId: "fulltext-urban-heat",
+        fact: "全文結果指出植被覆蓋與地表溫度呈負向關聯。",
+        category: "finding",
+        relevanceToTopic: 0.95,
+        supportedByText: fullText,
+      }],
+    }),
+  ]);
+
+  assert.equal(cards[0]?.derivation, "fulltext-derived");
+  assert.equal(cards[0]?.abstractOnly, false);
+  assert.equal(cards[0]?.limitation, null);
 });
 
 test("english sourceFacts fall back to zh-TW summary fields for user-facing evidence text", () => {
@@ -102,6 +152,37 @@ test("english sourceFacts fall back to zh-TW summary fields for user-facing evid
   assert.match(cards[0]?.sourceExcerptOriginal ?? "", /strong oxidizing agent/i);
 });
 
+test("raw English Abstract remains traceable but never becomes reader-facing evidence prose", () => {
+  const rawAbstract =
+    "Abstract The aim is to evaluate the mutual influences between sleep duration and adolescent risk behaviours. `This review explores the issue of sleep deprivation among children and adolescents in Japan.`";
+  const cards = buildEvidenceCards([
+    source({
+      id: "sleep-raw-abstract",
+      abstract: rawAbstract,
+      originalAbstract: rawAbstract,
+      sourceFacts: [],
+      readableSummaryZhTw: null,
+      mainEvidencePointZhTw: null,
+      evidenceSummaryZhTw: null,
+      abstractZhTw: null,
+    }),
+  ]);
+
+  assert.equal(cards.length, 1);
+  assert.match(cards[0]?.supportSpan ?? "", /Abstract The aim/iu);
+  for (const text of [
+    cards[0]?.claimTextZhTw,
+    cards[0]?.mainClaim,
+    cards[0]?.evidencePointZhTw,
+    cards[0]?.usableEvidence,
+    cards[0]?.summary,
+    cards[0]?.sourceSummaryZhTw,
+  ]) {
+    assert.doesNotMatch(text ?? "", /Abstract The aim|This review explores|`/iu);
+    assert.match(text ?? "", /繁中重點|缺少足夠摘要|可驗證內容/u);
+  }
+});
+
 test("ignores pending and rejected sources", () => {
   const cards = buildEvidenceCards([
     source({ id: "accepted", reviewState: "accepted" }),
@@ -121,6 +202,26 @@ test("keeps rejected-off-topic accepted sources out of evidence cards", () => {
       topicalRelevanceLabel: "irrelevant",
     }),
     source({ id: "accepted-usable", reviewState: "accepted", doi: "10.1000/usable" }),
+  ]);
+
+  assert.deepEqual(cards.map((card) => card.sourceId), ["accepted-usable"]);
+});
+
+test("explicit rejected signals block evidence even when an accepted alias remains", () => {
+  const cards = buildEvidenceCards([
+    source({
+      id: "review-conflict",
+      reviewState: "accepted",
+      userDecision: "rejected",
+      acceptedByUser: false,
+    }),
+    source({
+      id: "legacy-conflict",
+      reviewState: "accepted",
+      reviewStatus: "rejected",
+      doi: "10.1000/legacy-conflict",
+    } as Partial<SourceRecord>),
+    source({ id: "accepted-usable", doi: "10.1000/usable" }),
   ]);
 
   assert.deepEqual(cards.map((card) => card.sourceId), ["accepted-usable"]);
@@ -201,6 +302,29 @@ test("metadata-only evidence is bibliographic and low confidence", () => {
   assert.equal(cards[0]?.derivation, "metadata-derived");
   assert.equal(cards[0]?.confidenceScore, 0.35);
   assert.match(cards[0]?.limitation ?? "", /不可產生具體研究結論|僅能作為書目/);
+  assert.equal(evidenceCardHasUsableSupport(cards[0]!), false);
+
+  const diagnostics = analyzeEvidenceExtraction(
+    [source({ id: "metadata-only", abstract: null, evidenceGrounding: "metadata_only" })],
+    cards,
+  );
+  assert.equal(diagnostics.evidenceCardCount, 1);
+  assert.equal(diagnostics.usableEvidenceCardCount, 0);
+  assert.equal(diagnostics.bibliographicCardCount, 1);
+  assert.equal(diagnostics.issues[0]?.stage, "abstract_extraction");
+  assert.match(diagnostics.blockingMessage ?? "", /書目背景卡|abstract/iu);
+});
+
+test("evidence diagnostics distinguish a saved abstract from a card-builder failure", () => {
+  const accepted = source({
+    id: "saved-abstract-no-card",
+    abstract: "A traceable abstract remains saved after accepting and reloading the source.",
+  });
+  const diagnostics = analyzeEvidenceExtraction([accepted], []);
+
+  assert.equal(diagnostics.usableEvidenceCardCount, 0);
+  assert.equal(diagnostics.issues[0]?.stage, "evidence_card_builder");
+  assert.match(diagnostics.issues[0]?.message ?? "", /abstract 已保存|identity mapping/iu);
 });
 
 test("preserves source governance fields on evidence cards", () => {

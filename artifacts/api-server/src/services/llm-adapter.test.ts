@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import test from "node:test";
 import {
   LlmAdapterError,
@@ -9,6 +11,24 @@ import {
   resolveLlmConfig,
   safeJsonParse,
 } from "./llm-adapter";
+
+async function listenTestServer(server: Server): Promise<string> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function closeTestServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  });
+}
 
 test("resolveLlmConfig prefers LLM env over OLLAMA env and normalizes local Ollama /v1", () => {
   const config = resolveLlmConfig(
@@ -51,6 +71,31 @@ test("resolveLlmConfig falls back to OLLAMA env and supports explicit disable", 
   assert.equal(config.model, "qwen3:4b");
   assert.equal(config.timeoutMs, 60_000);
   assert.equal(config.disabled, true);
+});
+
+test("resolveLlmConfig selects native Ollama when explicitly requested despite empty remote provider vars", () => {
+  const config = resolveLlmConfig(
+    "section_writer",
+    {},
+    {
+      LLM_PROVIDER: "ollama",
+      OLLAMA_BASE_URL: "http://127.0.0.1:11434/v1/",
+      OLLAMA_MODEL: "cached-qwen-model",
+      SCHOOL_LLM_API_KEY: "",
+      SCHOOL_LLM_BASE_URL: "",
+      SCHOOL_LLM_MODEL: "",
+      OPENAI_API_KEY: "",
+      OPENAI_BASE_URL: "",
+      OPENAI_MODEL: "",
+    },
+  );
+
+  assert.equal(config.baseUrl, "http://127.0.0.1:11434");
+  assert.equal(config.model, "cached-qwen-model");
+  assert.equal(config.apiKey, undefined);
+  assert.equal(config.providerKind, "ollama");
+  assert.equal(config.providerName, "ollama");
+  assert.equal(config.disabled, false);
 });
 
 test("resolveLlmConfig prefers complete school LLM env on the backend", () => {
@@ -217,6 +262,134 @@ test("requestOpenAICompatibleChatCompletion can read Ollama response field when 
   });
 
   assert.deepEqual(safeJsonParse(content), { ok: true });
+});
+
+test("requestOpenAICompatibleChatCompletion uses native Ollama chat schema and response", async () => {
+  let capturedUrl = "";
+  let capturedAuthorization: string | null = "unexpected";
+  let capturedBody: Record<string, unknown> | null = null;
+
+  const content = await requestOpenAICompatibleChatCompletion({
+    purpose: "report_writer",
+    messages: [
+      { role: "system", content: "Return JSON." },
+      { role: "user", content: "{\"topic\":\"sleep\"}" },
+    ],
+    temperature: 0.2,
+    maxTokens: 2_400,
+    responseFormat: "json_object",
+    env: {
+      LLM_PROVIDER: "ollama",
+      OLLAMA_BASE_URL: "http://127.0.0.1:11434",
+      OLLAMA_MODEL: "cached-qwen-model",
+      OLLAMA_NUM_CTX: "8192",
+      SCHOOL_LLM_API_KEY: "",
+      SCHOOL_LLM_BASE_URL: "",
+      OPENAI_API_KEY: "",
+      OPENAI_BASE_URL: "",
+    },
+    fetchImpl: async (input, init) => {
+      capturedUrl = input.toString();
+      capturedAuthorization = new Headers(init?.headers).get("Authorization");
+      capturedBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({
+        model: "cached-qwen-model",
+        message: { role: "assistant", content: "{\"ok\":true}" },
+        done: true,
+      }));
+    },
+  });
+
+  assert.equal(content, "{\"ok\":true}");
+  assert.equal(capturedUrl, "http://127.0.0.1:11434/api/chat");
+  assert.equal(capturedAuthorization, null);
+  const requestBody = capturedBody as Record<string, unknown> | null;
+  assert.ok(requestBody);
+  assert.equal(requestBody.model, "cached-qwen-model");
+  assert.equal(requestBody.stream, false);
+  assert.equal(requestBody.think, false);
+  assert.equal(requestBody.format, "json");
+  assert.deepEqual(requestBody.options, {
+    temperature: 0.2,
+    num_predict: 2_400,
+    num_ctx: 8_192,
+  });
+  assert.deepEqual(requestBody.messages, [
+    { role: "system", content: "Return JSON." },
+    { role: "user", content: "{\"topic\":\"sleep\"}" },
+  ]);
+  assert.equal("max_tokens" in requestBody, false);
+  assert.equal("response_format" in requestBody, false);
+});
+
+test("default native Ollama transport uses Node HTTP and preserves delayed JSON response", async () => {
+  let requestPath = "";
+  let requestBody = "";
+  const server = createServer((request, response) => {
+    requestPath = request.url ?? "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk: string) => {
+      requestBody += chunk;
+    });
+    request.on("end", () => {
+      setTimeout(() => {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({
+          message: { role: "assistant", content: "native transport" },
+          done: true,
+        }));
+      }, 20);
+    });
+  });
+  const baseUrl = await listenTestServer(server);
+
+  try {
+    const content = await requestOpenAICompatibleChatCompletion({
+      purpose: "report_writer",
+      messages: [{ role: "user", content: "Write." }],
+      maxTokens: 32,
+      env: {
+        LLM_PROVIDER: "ollama",
+        OLLAMA_BASE_URL: baseUrl,
+        OLLAMA_MODEL: "cached-qwen-model",
+        REPORT_WRITER_LLM_TIMEOUT_MS: "1000",
+      },
+    });
+
+    assert.equal(content, "native transport");
+    assert.equal(requestPath, "/api/chat");
+    const parsedBody = JSON.parse(requestBody) as Record<string, unknown>;
+    assert.equal(parsedBody.stream, false);
+    assert.equal(parsedBody.think, false);
+  } finally {
+    await closeTestServer(server);
+  }
+});
+
+test("default native Ollama transport is stopped by the configured AbortController deadline", async () => {
+  const server = createServer(() => {
+    // Intentionally withhold response headers until the adapter aborts.
+  });
+  const baseUrl = await listenTestServer(server);
+
+  try {
+    await assert.rejects(
+      requestOpenAICompatibleChatCompletion({
+        purpose: "planner",
+        messages: [{ role: "user", content: "Wait." }],
+        env: {
+          LLM_PROVIDER: "ollama",
+          OLLAMA_BASE_URL: baseUrl,
+          OLLAMA_MODEL: "cached-qwen-model",
+          PLANNER_LLM_TIMEOUT_MS: "50",
+        },
+      }),
+      (error) =>
+        error instanceof LlmAdapterError && error.code === "provider-timeout",
+    );
+  } finally {
+    await closeTestServer(server);
+  }
 });
 
 test("requestOpenAICompatibleChatCompletion disables qwen3 reasoning on local Ollama-compatible endpoint", async () => {

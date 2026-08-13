@@ -158,6 +158,29 @@ export const SOURCE_USE_LEVELS = [
 ] as const;
 export type SourceUseLevel = (typeof SOURCE_USE_LEVELS)[number];
 
+export const SOURCE_CONTENT_LEVELS = ["fulltext", "abstract", "metadata"] as const;
+export type SourceContentLevel = (typeof SOURCE_CONTENT_LEVELS)[number];
+
+export const SOURCE_ENRICHMENT_STATUSES = [
+  "not_attempted",
+  "success",
+  "partial",
+  "permanent_no_content",
+  "temporary_failure",
+  "skipped",
+] as const;
+export type SourceEnrichmentStatus = (typeof SOURCE_ENRICHMENT_STATUSES)[number];
+
+export interface SourceEnrichmentProvenance {
+  provider: string;
+  method: string;
+  status: string;
+  contentLevel: SourceContentLevel;
+  retrievedAt: string;
+  url?: string;
+  failureReason?: string;
+}
+
 export interface ExtractedSourceSection {
   heading: string;
   text: string;
@@ -224,6 +247,13 @@ export interface SourceRecord {
   reviewState: SourceReviewState;
   publisher: string | null;
   containerTitle: string | null;
+  volume?: string | null;
+  issue?: string | null;
+  pages?: string | null;
+  articleNumber?: string | null;
+  conferenceName?: string | null;
+  conferenceLocation?: string | null;
+  conferenceDate?: string | null;
   accessedAt: string | null;
   provider?: string | null;
   queryUsed?: string | null;
@@ -266,6 +296,14 @@ export interface SourceRecord {
   missingCoreConcepts?: string[] | null;
   matchedFacets?: string[] | null;
   missingRequiredFacets?: string[] | null;
+  researchDirectnessTier?: "A" | "B" | "C" | "D" | null;
+  researchDirectnessScore?: number | null;
+  matchedResearchFacets?: string[] | null;
+  missingResearchFacets?: string[] | null;
+  exactSearchCompleted?: boolean | null;
+  gapFillSearchAttempted?: boolean | null;
+  gapFillSearchCompleted?: boolean | null;
+  gapFillQueries?: string[] | null;
   evidenceGrounding?: SourceEvidenceGroundingStatus | null;
   claimExtractionStatus?: SourceClaimExtractionStatus | null;
   claimExtractionMode?: SourceClaimExtractionMode | null;
@@ -342,6 +380,15 @@ export interface SourceRecord {
   sourceFacts?: SourceFact[] | null;
   researchRelevanceScore?: RelevanceScore | null;
   sourceSummary?: SourceSummary | null;
+  canonicalSourceIdentity?: string | null;
+  providerIds?: Record<string, string> | null;
+  contentLevel?: SourceContentLevel | null;
+  enrichmentAttempted?: boolean | null;
+  enrichmentProviders?: string[] | null;
+  enrichmentStatus?: SourceEnrichmentStatus | null;
+  enrichmentFailureReason?: string | null;
+  enrichmentProvenance?: SourceEnrichmentProvenance[] | null;
+  enrichedAt?: string | null;
 }
 
 export type SourceRecordInput = Partial<SourceRecord> & {
@@ -353,6 +400,122 @@ export type SourceRecordInput = Partial<SourceRecord> & {
 function cleanText(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+const RETRIEVAL_AGGREGATOR_NAMES = new Set([
+  "semantic scholar",
+  "openalex",
+  "crossref",
+  "core",
+  "google scholar",
+]);
+
+function cleanPublicationVenue(
+  value: string | null | undefined,
+  provider?: string | null,
+  sourceType?: string | null,
+): string | null {
+  const cleaned = cleanText(value);
+  if (!cleaned) return null;
+  const normalized = cleaned.toLocaleLowerCase();
+  const providerNames = [provider, sourceType]
+    .map((item) => cleanText(item)?.toLocaleLowerCase())
+    .filter((item): item is string => Boolean(item));
+  if (RETRIEVAL_AGGREGATOR_NAMES.has(normalized) || providerNames.includes(normalized)) {
+    return null;
+  }
+  return cleaned;
+}
+
+function cleanAbstractText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const cleaned = value
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || null;
+}
+
+/** Restore OpenAlex-style inverted abstracts without assuming a provider shape. */
+export function restoreAbstractFromInvertedIndex(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const words: Array<{ word: string; position: number }> = [];
+  for (const [word, positions] of Object.entries(value as Record<string, unknown>)) {
+    if (!Array.isArray(positions)) continue;
+    for (const position of positions) {
+      if (typeof position === "number" && Number.isFinite(position) && position >= 0) {
+        words.push({ word, position });
+      }
+    }
+  }
+  if (words.length === 0) return null;
+  return cleanAbstractText(
+    words
+      .sort((left, right) => left.position - right.position)
+      .map((item) => item.word)
+      .join(" ")
+      .replace(/\s+([,.;:!?%)])/g, "$1")
+      .replace(/([(])\s+/g, "$1"),
+  );
+}
+
+const ABSTRACT_ALIAS_KEYS = new Set([
+  "abstract",
+  "abstractoriginal",
+  "originalabstract",
+  "extractedabstract",
+  "abstracttext",
+  "abstract_text",
+  "paperabstract",
+  "summaryabstract",
+]);
+
+function abstractCandidatesFromUnknown(
+  value: unknown,
+  depth = 0,
+  seen = new Set<unknown>(),
+): string[] {
+  if (!value || typeof value !== "object" || depth > 3 || seen.has(value)) return [];
+  seen.add(value);
+  const candidates: string[] = [];
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    const normalizedKey = key.toLowerCase().replace(/[-\s]/g, "");
+    if (ABSTRACT_ALIAS_KEYS.has(normalizedKey)) {
+      const cleaned = cleanAbstractText(nested);
+      if (cleaned) candidates.push(cleaned);
+      continue;
+    }
+    if (normalizedKey === "abstract_inverted_index" || normalizedKey === "abstractinvertedindex") {
+      const restored = restoreAbstractFromInvertedIndex(nested);
+      if (restored) candidates.push(restored);
+      continue;
+    }
+    if (depth < 3 && nested && typeof nested === "object") {
+      candidates.push(...abstractCandidatesFromUnknown(nested, depth + 1, seen));
+    }
+  }
+  return candidates;
+}
+
+/** Return the most informative real abstract found across supported aliases. */
+export function canonicalAbstractFromSource(source: SourceRecordInput): string | null {
+  const record = source as SourceRecordInput & Record<string, unknown>;
+  const direct = [
+    record.abstract,
+    record.abstractOriginal,
+    record.originalAbstract,
+    record.extractedAbstract,
+  ]
+    .map(cleanAbstractText)
+    .filter((item): item is string => Boolean(item));
+  const nested = abstractCandidatesFromUnknown(record.rawProviderPayload);
+  return [...direct, ...nested].sort((left, right) => right.length - left.length)[0] ?? null;
 }
 
 function normalizeWhitespace(value: string): string {
@@ -472,34 +635,60 @@ function normalizedTitleKey(title: string): string {
     .trim();
 }
 
-function titleTokens(title: string): Set<string> {
-  return new Set(
-    normalizedTitleKey(title)
-      .split(" ")
-      .map((token) => token.trim())
-      .filter((token) => token.length >= 3),
-  );
-}
-
-function titleSimilarity(a: string, b: string): number {
-  const aTokens = titleTokens(a);
-  const bTokens = titleTokens(b);
-  if (aTokens.size === 0 || bTokens.size === 0) return 0;
-
-  let intersection = 0;
-  for (const token of aTokens) {
-    if (bTokens.has(token)) intersection += 1;
-  }
-
-  const union = new Set([...aTokens, ...bTokens]).size;
-  return union ? intersection / union : 0;
-}
-
 function normalizedAuthorKey(author: string | null | undefined): string {
   return normalizeWhitespace(author ?? "")
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
+}
+
+function strictMetadataIdentityMatch(left: SourceRecord, right: SourceRecord): boolean {
+  const leftTitle = normalizedTitleKey(left.title);
+  const rightTitle = normalizedTitleKey(right.title);
+  const leftAuthor = normalizedAuthorKey(left.authors[0]);
+  const rightAuthor = normalizedAuthorKey(right.authors[0]);
+  const leftYear = normalizeYearValue(left.year);
+  const rightYear = normalizeYearValue(right.year);
+  return Boolean(
+    leftTitle &&
+      leftTitle === rightTitle &&
+      leftAuthor &&
+      leftAuthor === rightAuthor &&
+      leftYear != null &&
+      leftYear === rightYear,
+  );
+}
+
+const PREPRINT_DOI_PATTERNS = [
+  /^10\.1101\//u, // bioRxiv / medRxiv
+  /^10\.21203\/rs\./u, // Research Square
+  /^10\.2139\/ssrn\./u, // SSRN
+  /^10\.48550\/arxiv\./u, // arXiv DOI registrations
+];
+
+function isPreprintDoi(value: string | null | undefined): boolean {
+  const doi = normalizeDoiValue(value);
+  return Boolean(doi && PREPRINT_DOI_PATTERNS.some((pattern) => pattern.test(doi)));
+}
+
+function sameResearchVersionMatch(left: SourceRecord, right: SourceRecord): boolean {
+  const leftDoi = normalizeDoiValue(left.doi);
+  const rightDoi = normalizeDoiValue(right.doi);
+  if (!leftDoi || !rightDoi || leftDoi === rightDoi) return false;
+  if (!isPreprintDoi(leftDoi) && !isPreprintDoi(rightDoi)) return false;
+  if (!strictMetadataIdentityMatch(left, right)) return false;
+  const leftAuthors = left.authors.map(normalizedAuthorKey).filter(Boolean);
+  const rightAuthors = right.authors.map(normalizedAuthorKey).filter(Boolean);
+  return leftAuthors.length > 0 &&
+    leftAuthors.length === rightAuthors.length &&
+    leftAuthors.every((author, index) => author === rightAuthors[index]);
+}
+
+function canonicalVersionDoi(left: SourceRecord, right: SourceRecord): string | null {
+  const dois = [normalizeDoiValue(left.doi), normalizeDoiValue(right.doi)]
+    .filter((value): value is string => Boolean(value));
+  const published = dois.filter((doi) => !isPreprintDoi(doi));
+  return (published.length > 0 ? published : dois).sort()[0] ?? null;
 }
 
 export function sourceRecordKey(
@@ -633,6 +822,59 @@ function normalizeContentAccessLevel(
     return value as SourceContentAccessLevel;
   }
   return null;
+}
+
+function normalizeContentLevel(
+  value: SourceRecordInput["contentLevel"],
+): SourceContentLevel | null {
+  return (SOURCE_CONTENT_LEVELS as readonly unknown[]).includes(value)
+    ? (value as SourceContentLevel)
+    : null;
+}
+
+function normalizeEnrichmentStatus(
+  value: SourceRecordInput["enrichmentStatus"],
+): SourceEnrichmentStatus | null {
+  return (SOURCE_ENRICHMENT_STATUSES as readonly unknown[]).includes(value)
+    ? (value as SourceEnrichmentStatus)
+    : null;
+}
+
+function normalizeProviderIds(
+  value: SourceRecordInput["providerIds"],
+): Record<string, string> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entries = Object.entries(value)
+    .map(([key, item]) => [cleanText(key), cleanText(item)] as const)
+    .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1]));
+  return entries.length ? Object.fromEntries(entries) : null;
+}
+
+function normalizeEnrichmentProvenance(
+  value: SourceRecordInput["enrichmentProvenance"],
+): SourceEnrichmentProvenance[] | null {
+  if (!Array.isArray(value)) return null;
+  const normalized = value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const provider = cleanText(item.provider);
+    const method = cleanText(item.method);
+    const status = cleanText(item.status);
+    const retrievedAt = cleanText(item.retrievedAt);
+    const contentLevel = normalizeContentLevel(item.contentLevel);
+    if (!provider || !method || !status || !retrievedAt || !contentLevel) return [];
+    return [{
+      provider,
+      method,
+      status,
+      contentLevel,
+      retrievedAt,
+      ...(cleanText(item.url) ? { url: cleanText(item.url)! } : {}),
+      ...(cleanText(item.failureReason)
+        ? { failureReason: cleanText(item.failureReason)! }
+        : {}),
+    }];
+  });
+  return normalized.length ? normalized : null;
 }
 
 function normalizeExtractionStatus(
@@ -891,7 +1133,61 @@ function mergeOptionalScore(
   return existing ?? incoming ?? null;
 }
 
-function metadataFields(source: Pick<
+function contentLevelRank(value: SourceContentLevel | null | undefined): number {
+  if (value === "fulltext") return 3;
+  if (value === "abstract") return 2;
+  return 1;
+}
+
+function richerContentLevel(
+  existing: SourceRecord,
+  incoming: SourceRecord,
+): SourceContentLevel {
+  const existingLevel = existing.contentLevel ?? (existing.abstract ? "abstract" : "metadata");
+  const incomingLevel = incoming.contentLevel ?? (incoming.abstract ? "abstract" : "metadata");
+  return contentLevelRank(incomingLevel) > contentLevelRank(existingLevel)
+    ? incomingLevel
+    : existingLevel;
+}
+
+function accessLevelRank(value: SourceContentAccessLevel | null | undefined): number {
+  if (value === "full_text") return 5;
+  if (value === "abstract_only") return 4;
+  if (value === "failed_extraction") return 3;
+  if (value === "blocked_or_paywalled") return 2;
+  return 1;
+}
+
+function richerAccessLevel(
+  existing: SourceRecord["accessLevel"],
+  incoming: SourceRecord["accessLevel"],
+): SourceRecord["accessLevel"] {
+  return accessLevelRank(incoming) > accessLevelRank(existing) ? incoming : existing;
+}
+
+function mergeProviderIds(
+  existing: SourceRecord["providerIds"],
+  incoming: SourceRecord["providerIds"],
+): Record<string, string> | null {
+  const merged = { ...(existing ?? {}), ...(incoming ?? {}) };
+  return Object.keys(merged).length ? merged : null;
+}
+
+function mergeEnrichmentProvenance(
+  existing: SourceRecord["enrichmentProvenance"],
+  incoming: SourceRecord["enrichmentProvenance"],
+): SourceEnrichmentProvenance[] | null {
+  const byKey = new Map<string, SourceEnrichmentProvenance>();
+  for (const item of [...(existing ?? []), ...(incoming ?? [])]) {
+    byKey.set(
+      [item.provider, item.method, item.status, item.retrievedAt, item.url ?? ""].join("|"),
+      item,
+    );
+  }
+  return byKey.size ? Array.from(byKey.values()) : null;
+}
+
+function metadataFields(source: Partial<Pick<
   SourceRecord,
   | "provider"
   | "queryUsed"
@@ -934,6 +1230,14 @@ function metadataFields(source: Pick<
   | "missingCoreConcepts"
   | "matchedFacets"
   | "missingRequiredFacets"
+  | "researchDirectnessTier"
+  | "researchDirectnessScore"
+  | "matchedResearchFacets"
+  | "missingResearchFacets"
+  | "exactSearchCompleted"
+  | "gapFillSearchAttempted"
+  | "gapFillSearchCompleted"
+  | "gapFillQueries"
   | "evidenceGrounding"
   | "claimExtractionStatus"
   | "claimExtractionMode"
@@ -949,6 +1253,7 @@ function metadataFields(source: Pick<
   | "relevanceReasonZhTW"
   | "summaryWarnings"
   | "originalAbstract"
+  | "abstractOriginal"
   | "originalSnippet"
   | "extractedText"
   | "llmSummaryStatus"
@@ -1006,7 +1311,16 @@ function metadataFields(source: Pick<
   | "sourceFacts"
   | "researchRelevanceScore"
   | "sourceSummary"
->): Partial<SourceRecord> {
+  | "canonicalSourceIdentity"
+  | "providerIds"
+  | "contentLevel"
+  | "enrichmentAttempted"
+  | "enrichmentProviders"
+  | "enrichmentStatus"
+  | "enrichmentFailureReason"
+  | "enrichmentProvenance"
+  | "enrichedAt"
+>>): Partial<SourceRecord> {
   return {
     ...(source.sourceLinkInfo != null ? { sourceLinkInfo: source.sourceLinkInfo } : {}),
     ...(source.sourceValidation != null ? { sourceValidation: source.sourceValidation } : {}),
@@ -1071,6 +1385,28 @@ function metadataFields(source: Pick<
     ...(source.missingRequiredFacets != null
       ? { missingRequiredFacets: source.missingRequiredFacets }
       : {}),
+    ...(source.researchDirectnessTier != null
+      ? { researchDirectnessTier: source.researchDirectnessTier }
+      : {}),
+    ...(source.researchDirectnessScore != null
+      ? { researchDirectnessScore: source.researchDirectnessScore }
+      : {}),
+    ...(source.matchedResearchFacets != null
+      ? { matchedResearchFacets: source.matchedResearchFacets }
+      : {}),
+    ...(source.missingResearchFacets != null
+      ? { missingResearchFacets: source.missingResearchFacets }
+      : {}),
+    ...(source.exactSearchCompleted != null
+      ? { exactSearchCompleted: source.exactSearchCompleted }
+      : {}),
+    ...(source.gapFillSearchAttempted != null
+      ? { gapFillSearchAttempted: source.gapFillSearchAttempted }
+      : {}),
+    ...(source.gapFillSearchCompleted != null
+      ? { gapFillSearchCompleted: source.gapFillSearchCompleted }
+      : {}),
+    ...(source.gapFillQueries != null ? { gapFillQueries: source.gapFillQueries } : {}),
     ...(source.evidenceGrounding != null ? { evidenceGrounding: source.evidenceGrounding } : {}),
     ...(source.claimExtractionStatus != null
       ? { claimExtractionStatus: source.claimExtractionStatus }
@@ -1100,6 +1436,7 @@ function metadataFields(source: Pick<
     ...(source.relevanceReasonZhTW != null ? { relevanceReasonZhTW: source.relevanceReasonZhTW } : {}),
     ...(source.summaryWarnings != null ? { summaryWarnings: source.summaryWarnings } : {}),
     ...(source.originalAbstract != null ? { originalAbstract: source.originalAbstract } : {}),
+    ...(source.abstractOriginal != null ? { abstractOriginal: source.abstractOriginal } : {}),
     ...(source.originalSnippet != null ? { originalSnippet: source.originalSnippet } : {}),
     ...(source.extractedText != null ? { extractedText: source.extractedText } : {}),
     ...(source.llmSummaryStatus != null ? { llmSummaryStatus: source.llmSummaryStatus } : {}),
@@ -1171,6 +1508,27 @@ function metadataFields(source: Pick<
     ...(source.acceptedAs != null ? { acceptedAs: source.acceptedAs } : {}),
     ...(source.lowConfidence != null ? { lowConfidence: source.lowConfidence } : {}),
     ...(source.needsReview != null ? { needsReview: source.needsReview } : {}),
+    ...(source.canonicalSourceIdentity != null
+      ? { canonicalSourceIdentity: source.canonicalSourceIdentity }
+      : {}),
+    ...(source.providerIds != null ? { providerIds: source.providerIds } : {}),
+    ...(source.contentLevel != null ? { contentLevel: source.contentLevel } : {}),
+    ...(source.enrichmentAttempted != null
+      ? { enrichmentAttempted: source.enrichmentAttempted }
+      : {}),
+    ...(source.enrichmentProviders != null
+      ? { enrichmentProviders: source.enrichmentProviders }
+      : {}),
+    ...(source.enrichmentStatus != null
+      ? { enrichmentStatus: source.enrichmentStatus }
+      : {}),
+    ...(source.enrichmentFailureReason != null
+      ? { enrichmentFailureReason: source.enrichmentFailureReason }
+      : {}),
+    ...(source.enrichmentProvenance != null
+      ? { enrichmentProvenance: source.enrichmentProvenance }
+      : {}),
+    ...(source.enrichedAt != null ? { enrichedAt: source.enrichedAt } : {}),
   };
 }
 
@@ -1181,6 +1539,7 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
     incomingAbstractLength > existingAbstractLength
       ? incoming.abstract
       : existing.abstract;
+  const contentLevel = richerContentLevel(existing, incoming);
   const sourceType = existing.sourceType;
 
   const metadata = metadataFields({
@@ -1233,7 +1592,14 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
       existing.summaryWarnings,
       incoming.summaryWarnings,
     ),
-    originalAbstract: existing.originalAbstract ?? incoming.originalAbstract ?? null,
+    originalAbstract:
+      textLength(incoming.originalAbstract ?? null) > textLength(existing.originalAbstract ?? null)
+        ? incoming.originalAbstract ?? null
+        : existing.originalAbstract ?? null,
+    abstractOriginal:
+      textLength(incoming.abstractOriginal ?? null) > textLength(existing.abstractOriginal ?? null)
+        ? incoming.abstractOriginal ?? null
+        : existing.abstractOriginal ?? null,
     originalSnippet: existing.originalSnippet ?? incoming.originalSnippet ?? null,
     extractedText: existing.extractedText ?? incoming.extractedText ?? null,
     llmSummaryStatus: existing.llmSummaryStatus ?? incoming.llmSummaryStatus ?? null,
@@ -1285,10 +1651,7 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
     ),
     abstractQuality: mergeOptionalScore(existing.abstractQuality, incoming.abstractQuality),
     sourceTrust: mergeOptionalScore(existing.sourceTrust, incoming.sourceTrust),
-    isMetadataOnly:
-      typeof existing.isMetadataOnly === "boolean" || typeof incoming.isMetadataOnly === "boolean"
-        ? Boolean(existing.isMetadataOnly || incoming.isMetadataOnly)
-        : null,
+    isMetadataOnly: contentLevel === "metadata",
     isPrimaryEvidence:
       typeof existing.isPrimaryEvidence === "boolean" || typeof incoming.isPrimaryEvidence === "boolean"
         ? Boolean(existing.isPrimaryEvidence || incoming.isPrimaryEvidence)
@@ -1336,7 +1699,7 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
       typeof existing.isOpenAccess === "boolean" || typeof incoming.isOpenAccess === "boolean"
         ? Boolean(existing.isOpenAccess || incoming.isOpenAccess)
         : null,
-    accessLevel: existing.accessLevel ?? incoming.accessLevel ?? null,
+    accessLevel: richerAccessLevel(existing.accessLevel, incoming.accessLevel) ?? null,
     fullTextUrl: existing.fullTextUrl ?? incoming.fullTextUrl ?? null,
     readableUrl: existing.readableUrl ?? incoming.readableUrl ?? null,
     extractionStatus: existing.extractionStatus ?? incoming.extractionStatus ?? null,
@@ -1388,6 +1751,30 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
         : null,
     sourceQualityScore: mergeOptionalScore(existing.sourceQualityScore, incoming.sourceQualityScore),
     scoreReasons: mergeOptionalStringLists(existing.scoreReasons, incoming.scoreReasons),
+    canonicalSourceIdentity:
+      existing.canonicalSourceIdentity ?? incoming.canonicalSourceIdentity ?? null,
+    providerIds: mergeProviderIds(existing.providerIds, incoming.providerIds),
+    contentLevel,
+    enrichmentAttempted: Boolean(
+      existing.enrichmentAttempted || incoming.enrichmentAttempted,
+    ),
+    enrichmentProviders: mergeOptionalStringLists(
+      existing.enrichmentProviders,
+      incoming.enrichmentProviders,
+    ),
+    enrichmentStatus:
+      existing.enrichmentStatus === "success" || incoming.enrichmentStatus === "success"
+        ? "success"
+        : existing.enrichmentStatus ?? incoming.enrichmentStatus ?? null,
+    enrichmentFailureReason:
+      contentLevel === "metadata"
+        ? existing.enrichmentFailureReason ?? incoming.enrichmentFailureReason ?? null
+        : null,
+    enrichmentProvenance: mergeEnrichmentProvenance(
+      existing.enrichmentProvenance,
+      incoming.enrichmentProvenance,
+    ),
+    enrichedAt: existing.enrichedAt ?? incoming.enrichedAt ?? null,
   });
 
   const doi = existing.doi ?? incoming.doi;
@@ -1401,6 +1788,7 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
     authors: uniqueStrings([...existing.authors, ...incoming.authors]),
     year: existing.year ?? incoming.year,
     abstract,
+    abstractMissing: !abstract,
     doi,
     url: doiUrl ?? existing.url ?? incoming.url,
     sourceLinkInfo: normalizeSourceLinkInfo({
@@ -1420,6 +1808,16 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
     containerTitle: existing.containerTitle ?? incoming.containerTitle,
     accessedAt: existing.accessedAt ?? incoming.accessedAt,
     ...metadata,
+    contentLevel,
+    isMetadataOnly: contentLevel === "metadata",
+    failureReason:
+      contentLevel === "metadata"
+        ? metadata.failureReason ?? existing.failureReason ?? incoming.failureReason ?? null
+        : null,
+    enrichmentFailureReason:
+      contentLevel === "metadata"
+        ? metadata.enrichmentFailureReason ?? null
+        : null,
   };
   const quality = sourceQualityAssessment(mergedBase);
   const mergedProviders =
@@ -1430,6 +1828,7 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
   return {
     ...mergedBase,
     dedupeKey: sourceRecordKey(mergedBase),
+    canonicalSourceIdentity: sourceRecordKey(mergedBase),
     sourceKind: quality.sourceKind,
     sourceQualityScore: quality.sourceQualityScore,
     scoreReasons: uniqueStrings([
@@ -1447,12 +1846,22 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     .filter((author): author is string => Boolean(author));
   const doi = normalizeDoiValue(source.doi);
   const url = cleanText(source.url);
+  const canonicalAbstract = canonicalAbstractFromSource(source);
+  const inferredContentLevel: SourceContentLevel =
+    (source.fullTextCharCount ?? 0) > 0 ||
+    Boolean(source.extractedText?.trim()) ||
+    (source.extractedSections?.length ?? 0) > 0
+      ? "fulltext"
+      : canonicalAbstract
+        ? "abstract"
+        : "metadata";
+  const contentLevel = normalizeContentLevel(source.contentLevel) ?? inferredContentLevel;
   const sourceLinkInfo = normalizeSourceLinkInfo({
     sourceLinkInfo: source.sourceLinkInfo ?? null,
     sourceType: source.sourceType,
     doi,
     url,
-    abstract: cleanText(source.abstract),
+    abstract: canonicalAbstract,
     abstractMissing: source.abstractMissing,
   });
   const record: SourceRecord = {
@@ -1460,20 +1869,27 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     title,
     authors,
     year: normalizeYearValue(source.year),
-    abstract: cleanText(source.abstract),
+    abstract: canonicalAbstract,
     snippet: cleanText(source.snippet),
     language: cleanText(source.language),
     abstractMissing:
       typeof source.abstractMissing === "boolean"
         ? source.abstractMissing
-        : !cleanText(source.abstract),
+        : !canonicalAbstract,
     doi,
     url,
     sourceLinkInfo,
     sourceType: source.sourceType,
     reviewState: source.reviewState ?? "pending",
-    publisher: cleanText(source.publisher),
-    containerTitle: cleanText(source.containerTitle),
+    publisher: cleanPublicationVenue(source.publisher, source.provider, source.sourceType),
+    containerTitle: cleanPublicationVenue(source.containerTitle, source.provider, source.sourceType),
+    volume: cleanText(source.volume),
+    issue: cleanText(source.issue),
+    pages: cleanText(source.pages),
+    articleNumber: cleanText(source.articleNumber),
+    conferenceName: cleanText(source.conferenceName),
+    conferenceLocation: cleanText(source.conferenceLocation),
+    conferenceDate: cleanText(source.conferenceDate),
     accessedAt: cleanText(source.accessedAt),
   };
   const citationCount = nonNegativeInteger(source.citationCount);
@@ -1497,7 +1913,13 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     sourceKind: quality.sourceKind,
     citationCount,
     isOpenAccess,
-    accessLevel: normalizeContentAccessLevel(source.accessLevel),
+    accessLevel:
+      normalizeContentAccessLevel(source.accessLevel) ??
+      (contentLevel === "fulltext"
+        ? "full_text"
+        : contentLevel === "abstract"
+          ? "abstract_only"
+          : "metadata_only"),
     fullTextUrl: cleanText(source.fullTextUrl),
     readableUrl: cleanText(source.readableUrl),
     extractionStatus: normalizeExtractionStatus(source.extractionStatus),
@@ -1509,9 +1931,17 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     failureReason: cleanText(source.failureReason),
     userFacingMessage: cleanText(source.userFacingMessage),
     canUseForClaims:
-      typeof source.canUseForClaims === "boolean" ? source.canUseForClaims : null,
+      typeof source.canUseForClaims === "boolean"
+        ? source.canUseForClaims
+        : contentLevel !== "metadata",
     canUseForReport:
-      typeof source.canUseForReport === "boolean" ? source.canUseForReport : null,
+      typeof source.canUseForReport === "boolean"
+        ? source.canUseForReport
+        : contentLevel !== "metadata" ||
+          (source.recommendationBucket === "official_background" &&
+            (source.acceptedByUser === true ||
+              source.userDecision === "accepted_as_background" ||
+              source.acceptedAs === "background")),
     toolVersions: source.toolVersions ?? null,
     processingStartedAt: cleanText(source.processingStartedAt),
     processingEndedAt: cleanText(source.processingEndedAt),
@@ -1539,6 +1969,21 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     missingCoreConcepts: cleanStringList(source.missingCoreConcepts),
     matchedFacets: cleanStringList(source.matchedFacets),
     missingRequiredFacets: cleanStringList(source.missingRequiredFacets),
+    researchDirectnessTier:
+      source.researchDirectnessTier === "A" || source.researchDirectnessTier === "B" ||
+      source.researchDirectnessTier === "C" || source.researchDirectnessTier === "D"
+        ? source.researchDirectnessTier
+        : null,
+    researchDirectnessScore: finiteScore(source.researchDirectnessScore),
+    matchedResearchFacets: cleanStringList(source.matchedResearchFacets),
+    missingResearchFacets: cleanStringList(source.missingResearchFacets),
+    exactSearchCompleted:
+      typeof source.exactSearchCompleted === "boolean" ? source.exactSearchCompleted : null,
+    gapFillSearchAttempted:
+      typeof source.gapFillSearchAttempted === "boolean" ? source.gapFillSearchAttempted : null,
+    gapFillSearchCompleted:
+      typeof source.gapFillSearchCompleted === "boolean" ? source.gapFillSearchCompleted : null,
+    gapFillQueries: cleanStringList(source.gapFillQueries),
     evidenceGrounding: normalizeEvidenceGrounding(source.evidenceGrounding),
     claimExtractionStatus: normalizeClaimExtractionStatus(source.claimExtractionStatus),
     claimExtractionMode: normalizeClaimExtractionMode(source.claimExtractionMode),
@@ -1553,7 +1998,8 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     summaryConfidence: normalizeSummaryConfidence(source.summaryConfidence),
     relevanceReasonZhTW: cleanText(source.relevanceReasonZhTW),
     summaryWarnings: cleanStringList(source.summaryWarnings),
-    originalAbstract: cleanText(source.originalAbstract),
+    originalAbstract: cleanText(source.originalAbstract) ?? canonicalAbstract,
+    abstractOriginal: cleanText(source.abstractOriginal) ?? canonicalAbstract,
     originalSnippet: cleanText(source.originalSnippet),
     extractedText: cleanText(source.extractedText),
     llmSummaryStatus: normalizeSummaryStatus(source.llmSummaryStatus),
@@ -1598,7 +2044,9 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     abstractQuality: finiteScore(source.abstractQuality),
     sourceTrust: finiteScore(source.sourceTrust),
     isMetadataOnly:
-      typeof source.isMetadataOnly === "boolean" ? source.isMetadataOnly : null,
+      typeof source.isMetadataOnly === "boolean"
+        ? source.isMetadataOnly && contentLevel === "metadata"
+        : contentLevel === "metadata",
     isPrimaryEvidence:
       typeof source.isPrimaryEvidence === "boolean" ? source.isPrimaryEvidence : null,
     rejectionReason: cleanText(source.rejectionReason),
@@ -1622,6 +2070,19 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     sourceFacts: Array.isArray(source.sourceFacts) ? source.sourceFacts : null,
     researchRelevanceScore: source.researchRelevanceScore ?? null,
     sourceSummary: source.sourceSummary ?? null,
+    canonicalSourceIdentity:
+      cleanText(source.canonicalSourceIdentity) ?? sourceRecordKey(record),
+    providerIds: normalizeProviderIds(source.providerIds),
+    contentLevel,
+    enrichmentAttempted:
+      typeof source.enrichmentAttempted === "boolean"
+        ? source.enrichmentAttempted
+        : false,
+    enrichmentProviders: cleanStringList(source.enrichmentProviders),
+    enrichmentStatus: normalizeEnrichmentStatus(source.enrichmentStatus),
+    enrichmentFailureReason: cleanText(source.enrichmentFailureReason),
+    enrichmentProvenance: normalizeEnrichmentProvenance(source.enrichmentProvenance),
+    enrichedAt: cleanText(source.enrichedAt),
   });
 
   return {
@@ -1641,21 +2102,43 @@ export function dedupeSourceRecords(sources: SourceRecord[]): SourceRecord[] {
     const existing =
       seen.get(key) ??
       deduped.find((candidate) => {
-        if (normalized.doi || candidate.doi) return false;
-        if (!normalized.title || !candidate.title) return false;
-        const sameYear =
-          normalized.year != null &&
-          candidate.year != null &&
-          normalized.year === candidate.year;
-        const sameFirstAuthor =
-          normalizedAuthorKey(normalized.authors[0]) !== "" &&
-          normalizedAuthorKey(normalized.authors[0]) ===
-            normalizedAuthorKey(candidate.authors[0]);
-        const similarity = titleSimilarity(normalized.title, candidate.title);
-        return similarity >= 0.94 || (similarity >= 0.86 && (sameYear || sameFirstAuthor));
+        // Two distinct DOI identities must never be collapsed by title. When
+        // one record is a recognized preprint/version DOI, an exact title,
+        // complete author list and year can safely identify the same research.
+        // Otherwise bridge a metadata-only copy only when one side lacks DOI.
+        if (normalized.doi && candidate.doi) {
+          return sameResearchVersionMatch(normalized, candidate);
+        }
+        return strictMetadataIdentityMatch(normalized, candidate);
       });
     if (existing) {
-      const merged = { ...mergeSourceRecords(existing, normalized), id: existing.id || key };
+      const isVersionMerge = sameResearchVersionMatch(existing, normalized);
+      const mergedRecord = mergeSourceRecords(existing, normalized);
+      const versionDoi = isVersionMerge
+        ? canonicalVersionDoi(existing, normalized)
+        : mergedRecord.doi;
+      const merged = {
+        ...mergedRecord,
+        doi: versionDoi,
+        url: versionDoi ? doiUrl(versionDoi) : mergedRecord.url,
+        canonicalSourceIdentity: versionDoi
+          ? `doi:${versionDoi}`
+          : mergedRecord.canonicalSourceIdentity,
+        dedupeKey: versionDoi ? `doi:${versionDoi}` : mergedRecord.dedupeKey,
+        providerIds: isVersionMerge
+          ? {
+              ...(mergedRecord.providerIds ?? {}),
+              ...[existing.doi, normalized.doi]
+                .map(normalizeDoiValue)
+                .filter((doi): doi is string => Boolean(doi))
+                .reduce<Record<string, string>>((aliases, doi) => {
+                  aliases[`version-doi:${doi}`] = doiUrl(doi) ?? doi;
+                  return aliases;
+                }, {}),
+            }
+          : mergedRecord.providerIds,
+        id: existing.id || key,
+      };
       seen.set(sourceRecordKey(merged), merged);
       seen.set(sourceRecordKey(existing), merged);
       seen.set(key, merged);

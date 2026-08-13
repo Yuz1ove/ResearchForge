@@ -7,20 +7,23 @@
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
+    "test:facets": "TMPDIR=/private/tmp tsx --test src/services/research-topic-facets.test.ts",
     "smoke:providers": "tsx src/cli/smoke-providers.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "TMPDIR=/private/tmp tsx --test src/app.test.ts src/vercel-deployment.test.ts src/lib/load-env.test.ts src/config/llm-provider-config.test.ts src/services/provider-smoke.test.ts src/services/llm-adapter.test.ts src/services/topic-expansion.test.ts src/services/source-retrieval.test.ts src/services/keyword-expansion.test.ts src/services/research-pipeline.test.ts src/services/topic-anchor-contract.test.ts src/services/search-intent-planner.test.ts src/services/source-summarizer.test.ts src/services/report-writer.test.ts src/services/research/grounding/sourceContentExtractor.test.ts src/services/research/grounding/claimExtractionService.test.ts src/services/research/grounding/researchGroundingJobStore.test.ts src/services/research/grounding/researchGroundingPipeline.test.ts src/routes/research-grounding-jobs.test.ts src/routes/search-keywords.test.ts src/routes/search-sources.test.ts src/routes/paper-search.test.ts src/routes/generate-report.test.ts src/routes/report-drafts.test.ts src/routes/llm.test.ts"
+    "test": "TMPDIR=/private/tmp tsx --test src/app.test.ts src/vercel-deployment.test.ts src/lib/load-env.test.ts src/config/llm-provider-config.test.ts src/services/provider-smoke.test.ts src/services/llm-adapter.test.ts src/services/citation-markers.test.ts src/services/topic-expansion.test.ts src/services/source-retrieval.test.ts src/services/keyword-expansion.test.ts src/services/research-pipeline.test.ts src/services/topic-anchor-contract.test.ts src/services/search-intent-planner.test.ts src/services/source-summarizer.test.ts src/services/report-prose-structure.test.ts src/services/report-writer.test.ts src/services/research/normalizers/normalizeSource.test.ts src/services/research/grounding/acceptedSourceEnrichment.test.ts src/services/research/grounding/sourceContentExtractor.test.ts src/services/research/grounding/claimExtractionService.test.ts src/services/research/grounding/evidencePipelineGuards.test.ts src/services/research/grounding/evidenceResolution.test.ts src/services/research/grounding/researchGroundingJobStore.test.ts src/services/research/grounding/researchGroundingPipeline.test.ts src/routes/research-grounding-jobs.test.ts src/routes/search-keywords.test.ts src/routes/search-sources.test.ts src/routes/paper-search.test.ts src/routes/generate-report.test.ts src/routes/report-drafts.test.ts src/routes/report-exports.test.ts src/routes/llm.test.ts"
   },
   "dependencies": {
+    "@fontsource/noto-sans-tc": "5.2.8",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "drizzle-orm": "catalog:",
     "express": "^5.2.1",
+    "pg": "^8.20.0",
     "pino": "^9.14.0",
     "pino-http": "^10.5.0",
-    "pg": "^8.20.0"
+    "playwright": "^1.61.1"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",

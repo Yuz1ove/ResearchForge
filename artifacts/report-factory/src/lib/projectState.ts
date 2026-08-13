@@ -11,7 +11,7 @@ import {
 // Markdown so a future developer (or AI) can pick up the project quickly.
 // This is generated from live constants, so it never drifts from the engine.
 
-const APP_NAME = "Report Factory AI";
+const APP_NAME = "ResearchForge";
 const APP_VERSION = "V3";
 
 /** buildProjectHandoff — render a Traditional-Chinese project status document

@@ -8,6 +8,7 @@ import {
   searchIntentSources,
 } from "../../search-intent-planner";
 import { getSourceProviderConfigs } from "../../source-provider-config";
+import { expandSearchKeywords } from "../../keyword-expansion";
 import { logger } from "../../../lib/logger";
 import {
   runResearchGroundingPipeline,
@@ -15,6 +16,7 @@ import {
   type GroundingPipelineResult,
 } from "./researchGroundingPipeline";
 import { topicHashForWorkflow } from "../workflow/workflowIds";
+import { enrichAcceptedSources } from "./acceptedSourceEnrichment";
 import {
   createGroundingJobTimestamps,
   defaultGroundingJobRepository,
@@ -195,7 +197,17 @@ export async function runGroundingJob(
   const dependencies: GroundingPipelineDependencies = {
     searchHandler:
       options.dependencies?.searchHandler ?? defaultSearchHandler(input, currentJob),
+    keywordExpansionHandler:
+      options.dependencies?.keywordExpansionHandler ??
+      ((request) => expandSearchKeywords(request)),
     lexiconAdapters: options.dependencies?.lexiconAdapters,
+    acceptedSourceEnricher:
+      options.dependencies?.acceptedSourceEnricher ??
+      ((sources) => enrichAcceptedSources(sources, {
+        concurrency: 3,
+        timeoutMs: 5_000,
+        retryCount: 1,
+      })),
     onProgress: async (update) => {
       await persist(
         {

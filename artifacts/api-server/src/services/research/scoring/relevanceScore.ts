@@ -21,7 +21,9 @@ const GENERIC_TERMS = new Set([
   "effect",
   "effects",
   "evidence",
+  "development",
   "for",
+  "formation",
   "from",
   "general",
   "how",
@@ -46,9 +48,11 @@ const GENERIC_TERMS = new Set([
   "to",
   "with",
   "作用",
+  "形成",
   "原理",
   "受",
   "如何",
+  "產生",
   "影響",
   "應用",
   "資料",
@@ -72,6 +76,9 @@ export interface RelevanceScoreAnalysis {
   sourceQualityScore: number;
   hasCoreConceptMatch: boolean;
   hasTitleCoreConceptMatch: boolean;
+  hasSubjectAnchorMatch: boolean;
+  subjectAnchorTerms: string[];
+  matchedSubjectAnchorTerms: string[];
   matchedCoreTerms: string[];
   matchedTitleTerms: string[];
   matchedConcepts: string[];
@@ -269,6 +276,30 @@ function collectPlanTerms(plan: ScoringResearchQueryPlan): {
   };
 }
 
+function leadingEnglishSubjectAnchors(plan: ScoringResearchQueryPlan): string[] {
+  const queries = unique(plan.enQueries.map((query) => normalizeTextKey(query)).filter(Boolean));
+  if (queries.length < 2) return [];
+
+  const counts = new Map<string, number>();
+  for (const query of queries) {
+    const leading = normalizedTerms(query).find(
+      (term) =>
+        !term.includes(" ") &&
+        /^[a-z][a-z0-9-]*$/u.test(term) &&
+        !GENERIC_TERMS.has(term),
+    );
+    if (!leading) continue;
+    counts.set(leading, (counts.get(leading) ?? 0) + 1);
+  }
+
+  const threshold = Math.max(2, Math.ceil(queries.length * 0.5));
+  return [...counts.entries()]
+    .filter(([, count]) => count >= threshold)
+    .sort((left, right) => right[1] - left[1])
+    .map(([term]) => term)
+    .slice(0, 3);
+}
+
 function bridgeTerms(term: string): string[] {
   const normalized = term.trim();
   return TERM_BRIDGE[normalized] ?? [];
@@ -381,6 +412,9 @@ export function analyzeRelevanceScore(
       sourceQualityScore: 0,
       hasCoreConceptMatch: false,
       hasTitleCoreConceptMatch: false,
+      hasSubjectAnchorMatch: false,
+      subjectAnchorTerms: [],
+      matchedSubjectAnchorTerms: [],
       matchedCoreTerms: [],
       matchedTitleTerms: [],
       matchedConcepts: [],
@@ -391,6 +425,10 @@ export function analyzeRelevanceScore(
   }
 
   const { coreTerms, queryTerms, domainTerms } = collectPlanTerms(plan);
+  const subjectAnchorTerms = leadingEnglishSubjectAnchors(plan);
+  const matchedSubjectAnchorTerms = matchedTerms(anyText, subjectAnchorTerms);
+  const hasSubjectAnchorMatch =
+    subjectAnchorTerms.length === 0 || matchedSubjectAnchorTerms.length > 0;
   const conceptGroups = conceptGroupsForPlan(plan);
   const fields = {
     title: titleText,
@@ -516,13 +554,19 @@ export function analyzeRelevanceScore(
       multiConceptBonus +
       subjectOutcomeBonus,
   );
-  const hasCoreSignal = matchedCoreTerms.length > 0 || matchedConcepts.length > 0;
-  const score = hasCoreSignal
+  const hasCoreSignal =
+    hasSubjectAnchorMatch && (matchedCoreTerms.length > 0 || matchedConcepts.length > 0);
+  const unconstrainedScore = hasCoreSignal
     ? Math.max(lexicalScore, conceptScore, upstreamScore ?? 0)
     : Math.max(lexicalScore, conceptScore);
+  const score = hasSubjectAnchorMatch
+    ? unconstrainedScore
+    : Math.min(unconstrainedScore, RELEVANCE_SCORING_CONFIG.fallbackThreshold - 0.01);
   const confidenceTier =
     driftHits > 0
       ? "rejected"
+      : !hasSubjectAnchorMatch
+        ? "rejected"
       : !hasCoreSignal
         ? score >= RELEVANCE_SCORING_CONFIG.fallbackThreshold
           ? "fallback"
@@ -547,6 +591,8 @@ export function analyzeRelevanceScore(
     confidenceTier === "rejected"
       ? driftHits > 0
         ? "excluded_drift_term_match"
+        : !hasSubjectAnchorMatch
+          ? "missing_subject_anchor"
         : matchedConcepts.length === 0
         ? "missing_core_concept"
         : "low_topic_relevance"
@@ -562,6 +608,9 @@ export function analyzeRelevanceScore(
     sourceQualityScore,
     hasCoreConceptMatch: hasCoreSignal,
     hasTitleCoreConceptMatch: matchedTitleTerms.length > 0 || conceptTitleScore > 0,
+    hasSubjectAnchorMatch,
+    subjectAnchorTerms,
+    matchedSubjectAnchorTerms,
     matchedCoreTerms,
     matchedTitleTerms,
     matchedConcepts,

@@ -30,6 +30,11 @@ import {
   type SectionEvidenceCoverage,
   type SupportedClaim,
 } from "./sectionEvidencePolicy.ts";
+import {
+  sanitizeZhTwReportProse,
+  UNTRANSLATED_EVIDENCE_NOTICE,
+  verifiedZhTwReportText,
+} from "./zhTwReportText.ts";
 
 export interface ReportDraftInput {
   project: ResearchProject;
@@ -100,9 +105,21 @@ export interface ReportDraftSection {
   groundingStatus?: "grounded" | "partially_grounded" | "unsupported";
   unsupportedSentences?: string[];
   generationMethod?: string;
+  /** Writer-native paragraph-to-claim bindings; never inferred by the renderer. */
+  paragraphClaims?: ReportDraftParagraphClaim[];
   citationCount: number;
   evidenceCardCount: number;
   warnings: string[];
+}
+
+export interface ReportDraftParagraphClaim {
+  paragraphId: string;
+  sectionId: string;
+  claimIds: string[];
+  evidenceCardIds: string[];
+  citationMarkers: string[];
+  generatedTextZhTw: string;
+  unsupportedSentences: string[];
 }
 
 export interface ReportDraft {
@@ -205,20 +222,23 @@ function abstractOnly(card: EvidenceCard): boolean {
 }
 
 function evidenceLead(card: EvidenceCard): string {
-  return (
-    stripTrailingPunctuation(card.mainClaim) ||
-    stripTrailingPunctuation(card.usableEvidence) ||
-    stripTrailingPunctuation(card.summary) ||
-    stripTrailingPunctuation(card.evidence) ||
-    stripTrailingPunctuation(card.sourceTitle) ||
-    "此來源提供研究線索"
+  const verified = verifiedZhTwReportText(
+    card.claimTextZhTw,
+    card.mainClaimZhTw,
+    card.evidencePointZhTw,
+    card.sourceSummaryZhTw,
+    card.mainClaim,
+    card.usableEvidence,
+    card.summary,
+    card.evidence,
   );
+  return stripTrailingPunctuation(verified) || UNTRANSLATED_EVIDENCE_NOTICE;
 }
 
 function evidenceTitleSummary(cards: EvidenceCard[], sourceMarkerMap: Map<string, string>, limit = 3): string {
   return cards
     .slice(0, limit)
-    .map((card) => `${card.sourceTitle || "已接受來源"}${marker(card, sourceMarkerMap)}`)
+    .map((card) => `${card.sourceTitle || "已納入來源"}${marker(card, sourceMarkerMap)}`)
     .join("、");
 }
 
@@ -252,7 +272,7 @@ function sectionTopicSentence(
   const claimLead = claims[0] ?? topic;
   switch (sectionId) {
     case "abstract":
-      return `本摘要根據已接受來源整理「${topic}」目前可被證據支持的重點與限制。`;
+      return `本摘要根據已納入來源整理「${topic}」目前可被證據支持的重點與限制。`;
     case "introduction":
       return `「${topic}」的研究背景可先從現有來源共同提到的概念與應用情境切入。`;
     case "research_question":
@@ -260,9 +280,9 @@ function sectionTopicSentence(
     case "literature_review":
       return `現有文獻對「${topic}」的討論，主要圍繞${claimLead}等核心面向。`;
     case "methodology":
-      return "本報告採用來源審查與證據卡整理方式組裝草稿，不額外虛構實驗或訪談結果。";
+      return "本報告先審查使用者納入的來源，再依章節用途整理可核對摘錄與適用邊界，不額外虛構實驗或訪談結果。";
     case "findings":
-      return `綜合已接受來源，目前能較穩定支持的發現集中在${claimLead}等面向。`;
+      return `綜合已納入來源，目前能較穩定支持的發現集中在${claimLead}等面向。`;
     case "discussion":
       return `把目前證據放在一起看，「${topic}」可以先形成有限但可追溯的解讀。`;
     case "limitations":
@@ -314,7 +334,14 @@ function sanitizeReportParagraph(text: string): string {
   for (const pattern of INSTRUCTION_TEXT_PATTERNS) {
     sanitized = sanitized.replace(pattern, "");
   }
-  sanitized = sanitized.replace(/\s+/g, " ").trim();
+  sanitized = sanitized
+    .replace(/\bexact\s+support\s*span\b/giu, "可核對的來源片段")
+    .replace(/\bsupport\s*span\b/giu, "來源片段")
+    .replace(/\bevidence\s+cards?\b/giu, "可追溯證據")
+    .replace(/\bmetadata(?:-only)?\b/giu, "書目資訊")
+    .replace(/\bpeer[-\s]?reviewed\s+evidence\b/giu, "同儕審查文獻")
+    .replace(/\bgrounding\s+verifier\b/giu, "引用支撐檢查");
+  sanitized = sanitizeZhTwReportProse(sanitized.replace(/\s+/g, " ").trim());
   return sanitized || "目前可用證據不足，本段暫不形成正式結論。";
 }
 
@@ -326,11 +353,19 @@ export function buildReportSynthesisContext(input: ReportDraftInput): ReportSynt
   const topic = input.topic.trim() || input.outline.topic;
   const reportType = input.reportType.trim() || input.outline.reportType;
   const audience = input.audience.trim() || input.outline.audience;
+  const evidenceSourceIds = new Set(
+    input.evidenceCards.map((card) => card.sourceId).filter(Boolean),
+  );
+  // Only sources with usable evidence can enter the citation registry. This keeps
+  // inline markers and the bibliography closed over the same canonical source set.
+  const citableSources = input.acceptedSources.filter((source) =>
+    evidenceSourceIds.has(source.id),
+  );
   const acceptedSourceDigest =
     input.acceptedSourceDigest ??
     buildAcceptedSourceDigest(input.acceptedSources, { topic });
 
-  const sourceMarkerMap = buildStableCitationMarkerMap(input.acceptedSources);
+  const sourceMarkerMap = buildStableCitationMarkerMap(citableSources);
   const supportedClaims = buildSupportedClaimsFromEvidenceCards(input.evidenceCards, {
     markerMap: sourceMarkerMap,
   });
@@ -340,7 +375,7 @@ export function buildReportSynthesisContext(input: ReportDraftInput): ReportSynt
     topic,
     reportType,
     audience,
-    acceptedSources: input.acceptedSources,
+    acceptedSources: citableSources,
     evidenceCards: input.evidenceCards,
     outline: input.outline,
     acceptedSourceDigest,
@@ -418,7 +453,7 @@ function buildSectionEvidenceMap(
         missingEvidence: coverage.diagnostics.length > 0 || plan.needsMoreEvidence
           ? sectionGapSummary(
               [...coverage.diagnostics, ...context.acceptedSourceDigest.gaps],
-              "本節尚缺直接對應的證據卡",
+              "本節尚缺直接對應的來源證據",
             )
           : [],
       };
@@ -474,9 +509,15 @@ function renderParagraphPlan(
   }
 
   if (cards.length === 0) {
+    if (plan.sectionId === "abstract" && context.acceptedSourceDigest.summary.trim()) {
+      return sanitizeReportParagraph([
+        context.acceptedSourceDigest.summary,
+        "本摘要先整合已納入來源的閱讀摘要與書目資訊；未連結到可驗證原文片段的內容，不延伸為正式研究結論。",
+      ].join(""));
+    }
     return sanitizeReportParagraph([
       plan.topicSentence,
-      `目前沒有可直接支撐本節的 evidence card，因此僅能標示資料缺口：${proseList(plan.missingEvidence, "尚缺直接證據")}。`,
+      `目前沒有可直接支撐本節的來源證據，因此僅能標示資料缺口：${proseList(plan.missingEvidence, "尚缺直接證據")}。`,
       plan.limitationOrTransition,
     ]
       .filter(Boolean)
@@ -518,14 +559,23 @@ function renderParagraphPlan(
     case "methodology":
       return sanitizeReportParagraph([
         plan.topicSentence,
-        `本報告整理 ${context.acceptedSources.length} 筆已接受來源與 ${context.evidenceCards.length} 張證據卡，並依章節用途分配可驗證片段。`,
+        "本報告先審查已納入來源，再依章節用途分配可核對片段，並保留各來源的適用範圍與限制。",
         sourceSentence,
         plan.limitationOrTransition,
       ]
         .filter(Boolean)
         .join(""));
     case "findings":
-      return sanitizeReportParagraph([plan.topicSentence, claimsSentence, sourceSentence, plan.limitationOrTransition]
+      return sanitizeReportParagraph([
+        cards.some(abstractOnly)
+          ? plan.topicSentence
+              .replace(/目前能較穩定支持的發現集中在/u, "目前較可成立的初步方向包括")
+              .replace(/主要發現/gu, "初步方向")
+          : plan.topicSentence,
+        claimsSentence,
+        sourceSentence,
+        plan.limitationOrTransition,
+      ]
         .filter(Boolean)
         .join(""));
     case "discussion":
@@ -565,31 +615,28 @@ function renderParagraphPlan(
 
 export function buildReportDraft(input: ReportDraftInput): ReportDraft {
   const context = buildReportSynthesisContext(input);
-  const bibliography = buildBibliography(context.acceptedSources, input.citationFormat || "APA");
-  const references = bibliography.length ? bibliography.map((entry) => entry.text) : ["參考資料待補"];
+  let references: string[] = [];
   const outlineSections = context.outline.sections;
   const sectionEvidenceMap = buildSectionEvidenceMap(outlineSections, context);
   const paragraphPlans = buildParagraphPlans(sectionEvidenceMap, context);
   const planBySection = new Map(paragraphPlans.map((plan) => [plan.sectionId, plan]));
   const evidenceMapBySection = new Map(sectionEvidenceMap.map((entry) => [entry.sectionId, entry]));
 
-  const sections: ReportDraftSection[] = outlineSections.map((outlineSection) => {
+  let sections: ReportDraftSection[] = outlineSections.map((outlineSection) => {
     if (outlineSection.sectionId === "references") {
       return {
         sectionId: "references",
         title: "參考資料",
-        body: references.map((reference, index) => `${index + 1}. ${reference}`).join("\n"),
-        synthesizedProseZhTw: references
-          .map((reference, index) => `${index + 1}. ${reference}`)
-          .join("\n"),
+        body: "",
+        synthesizedProseZhTw: "",
         sectionGoal: outlineSection.purpose,
-        supportingSourceIds: context.acceptedSources.map((source) => source.id).filter(Boolean),
+        supportingSourceIds: [],
         citationMarkers: [],
-        evidenceSummary: "參考資料依已接受來源產生。",
+        evidenceSummary: "參考資料依正文實際使用的來源產生。",
         evidenceGaps: [],
-        writerNote: "僅列已接受來源，不使用 demo 或未審查來源。",
+        writerNote: "僅列正文已解析的來源。",
         evidenceCardIds: [],
-        citationIds: context.acceptedSources.map((source) => source.id).filter(Boolean),
+        citationIds: [],
         evidenceCoverageStatus: "sufficient",
         citationCount: 0,
         evidenceCardCount: 0,
@@ -641,7 +688,16 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
     });
     warnings.push(...synthesized.warnings);
     const fallbackBody = plan ? renderParagraphPlan(plan, context) : `本節尚未完成：${outlineSection.purpose}`;
-    const body = synthesized.body || fallbackBody;
+    const synthesizedBody = synthesized.body.trim();
+    const synthesizedIsPlaceholder =
+      synthesizedBody.length < 40 ||
+      /^目前來源尚不足以支持此結論[。.]?$/u.test(synthesizedBody);
+    const body = synthesizedBody && !synthesizedIsPlaceholder
+      ? synthesizedBody
+      : fallbackBody;
+    if (synthesizedIsPlaceholder && fallbackBody !== synthesizedBody) {
+      warnings.push("已改用 evidence-bound 保守完整段落，避免只顯示證據不足短句。");
+    }
     const acceptedMarkers = new Set(context.sourceMarkerMap.values());
     const actualMarkers = extractCitationMarkers(body).filter((marker) =>
       acceptedMarkers.has(marker),
@@ -673,7 +729,7 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
       evidenceSummary:
         selectedEvidence.length > 0
           ? evidenceTitleSummary(selectedEvidence, context.sourceMarkerMap)
-          : "目前尚未連結到對應 evidence card。",
+          : "目前尚未連結到對應來源證據。",
       evidenceGaps: evidenceEntry?.missingEvidence ?? [],
       writerNote: plan?.synthesisGoal ?? outlineSection.purpose,
       evidenceCardIds: sectionEvidenceCardIds,
@@ -685,10 +741,53 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
     };
   });
 
+  const citedSourceIdSet = new Set(
+    sections
+      .filter((section) => section.sectionId !== "references")
+      .flatMap((section) => section.citationIds)
+      .filter(Boolean),
+  );
+  const citedSources = context.acceptedSources.filter((source) =>
+    citedSourceIdSet.has(source.id),
+  );
+  const bibliography = buildBibliography(citedSources, input.citationFormat || "APA");
+  references = bibliography.map((entry, index) => {
+    const source = citedSources[index];
+    const marker = source ? context.sourceMarkerMap.get(source.id) : null;
+    return `${marker ? `${marker} ` : ""}${entry.text}`.trim();
+  });
+  if (references.length === 0) {
+    references = ["正文目前尚無可解析引用，因此不建立參考文獻清單。"];
+  }
+  const citedMarkers = citedSources
+    .map((source) => context.sourceMarkerMap.get(source.id))
+    .filter((marker): marker is string => Boolean(marker));
+  const citedEvidenceCardIds = context.evidenceCards
+    .filter((card) => citedSourceIdSet.has(card.sourceId))
+    .map((card) => card.id);
+  sections = sections.map((section) =>
+    section.sectionId === "references"
+      ? {
+          ...section,
+          body: references.join("\n"),
+          synthesizedProseZhTw: references.join("\n"),
+          supportingSourceIds: citedSources.map((source) => source.id),
+          citationMarkers: citedMarkers,
+          evidenceSummary: "參考文獻只列出正文已解析且有可追溯證據的來源。",
+          evidenceCardIds: citedEvidenceCardIds,
+          citationIds: citedSources.map((source) => source.id),
+          citationCount: citedMarkers.length,
+          evidenceCardCount: citedEvidenceCardIds.length,
+          evidenceCoverageStatus: citedSources.length > 0 ? "sufficient" : "insufficient",
+          warnings: citedSources.length > 0 ? [] : ["bibliography_has_no_resolved_citation"],
+        }
+      : section,
+  );
+
   const qualityReport = buildQualityReport({
     topic: context.topic,
     depth: input.project.depth,
-    acceptedSources: context.acceptedSources,
+    acceptedSources: input.acceptedSources,
     evidenceCards: context.evidenceCards,
     sections: sections.map((section) => ({
       id: section.sectionId,
@@ -703,7 +802,7 @@ export function buildReportDraft(input: ReportDraftInput): ReportDraft {
 
   const text = sections.map((section) => `${section.title}\n${section.body}`).join("\n\n");
   const debug: ReportDraftDebug = {
-    acceptedSourcesCount: context.acceptedSources.length,
+    acceptedSourcesCount: input.acceptedSources.length,
     evidenceCardsCount: context.evidenceCards.length,
     evidenceCardAbstractOnly: context.evidenceCards.map((card) => ({
       evidenceCardId: card.id,

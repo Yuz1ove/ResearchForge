@@ -145,7 +145,17 @@ export function getReportReadiness(input: ReportReadinessInput): ReportReadiness
     reliableBackgroundSourcesCount,
   } = counts;
   const evidenceCardsCount = input.evidenceCards?.length ?? 0;
-  const reportMode = inferReportMode(acceptedUsableSourcesCount, input.reportMode);
+  const hasExplicitUsableEvidence = input.evidenceCards != null && evidenceCardsCount > 0;
+  const inferredReportMode = inferReportMode(acceptedUsableSourcesCount, input.reportMode);
+  // One traceable abstract/full-text card is enough for a clearly labelled
+  // preliminary report. Source-count recommendations still control whether the
+  // result can be called a normal short or standard report.
+  const reportMode: ReportMode | "blocked" =
+    inferredReportMode === "blocked" &&
+    acceptedUsableSourcesCount >= 1 &&
+    hasExplicitUsableEvidence
+      ? "short"
+      : inferredReportMode;
   const claimMode: ReportClaimMode | "blocked" =
     reportMode === "blocked"
       ? "blocked"
@@ -198,9 +208,12 @@ export function getReportReadiness(input: ReportReadinessInput): ReportReadiness
   }
 
   if (reportMode === "short") {
+    const isPreliminary = acceptedUsableSourcesCount < SHORT_REPORT_MIN_ACCEPTED_SOURCES;
     const backgroundMessage =
       claimMode === "background_report_mode"
-        ? "目前來源主要為官方背景或一般可信資料，將生成背景型研究報告；若需要嚴格學術論文式報告，建議補足至少 3 筆同儕審查或學術 metadata 來源。"
+        ? isPreliminary
+          ? `目前有 ${acceptedUsableSourcesCount} 筆已接受來源與 ${evidenceCardsCount} 張可追溯證據卡，可生成初步研究報告；內容會逐段引用並把不足處列為研究限制。`
+          : "目前來源主要為官方背景或一般可信資料，將生成背景型研究報告；若需要嚴格學術論文式報告，建議補足至少 3 筆同儕審查或學術 metadata 來源。"
         : null;
     return {
       reportMode,
@@ -211,16 +224,20 @@ export function getReportReadiness(input: ReportReadinessInput): ReportReadiness
       officialBackgroundSourcesCount,
       reliableBackgroundSourcesCount,
       evidenceCardsCount,
-      minRequiredSources,
+      minRequiredSources: isPreliminary ? 1 : minRequiredSources,
       canGenerate: true,
       canGenerateStandard: false,
       canGenerateShort: true,
       badge:
-        claimMode === "background_report_mode"
+        isPreliminary
+          ? "可生成初步研究報告"
+          : claimMode === "background_report_mode"
           ? "可生成背景型研究報告"
           : "可生成短版研究報告",
       buttonLabel:
-        claimMode === "background_report_mode"
+        isPreliminary
+          ? "生成初步研究報告"
+          : claimMode === "background_report_mode"
           ? "生成背景型研究報告"
           : "生成短版研究報告",
       message:

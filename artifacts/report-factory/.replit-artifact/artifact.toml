@@ -1,6 +1,6 @@
 kind = "web"
 previewPath = "/"
-title = "Report Factory AI"
+title = "ResearchForge"
 version = "1.0.0"
 id = "artifacts/report-factory"
 router = "path"

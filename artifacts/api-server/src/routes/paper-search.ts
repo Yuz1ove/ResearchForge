@@ -197,11 +197,21 @@ function searchQueriesFor(query: string, expansion: KeywordExpansionResult): str
     ...expansion.english_queries,
     ...expansion.search_queries.filter((candidate) => /[a-z]/i.test(candidate)),
   ]);
+  const expandedEnglishText = englishCandidates.join(" ").toLocaleLowerCase();
+  const focusedCoreQuery =
+    /\b(?:dog|dogs|canine|canines)\b/u.test(expandedEnglishText) &&
+    /\bresource\s+guard(?:ing|er|ers)\b/u.test(expandedEnglishText)
+      ? "dog resource guarding"
+      : null;
   const bestEnglishQuery =
     englishCandidates.find((candidate) => candidate.toLocaleLowerCase() !== originalKey) ??
     `${query} academic research`;
 
-  return distinctQueries([query, bestEnglishQuery]);
+  // Compound topics lose retrieval precision when every modifier is packed into
+  // one long translated query.  Preserve the user's narrow entity + phenomenon
+  // as an additional provider query; the relevance gate below still verifies
+  // every returned title/abstract before it can be recommended.
+  return distinctQueries([query, focusedCoreQuery ?? "", bestEnglishQuery]);
 }
 
 function contentRank(source: SourceRecord): number {
@@ -257,6 +267,93 @@ export function sourceTopicMatchCount(source: SourceRecord, anchors: string[]): 
   return anchors.filter((term) => termMatchesSourceText(searchableText, term)).length;
 }
 
+const CANINE_SUBJECT_TERMS = [
+  "dog",
+  "dogs",
+  "canine",
+  "canines",
+  "domestic dog",
+  "companion dog",
+  "puppy",
+  "puppies",
+];
+const RESOURCE_GUARDING_TERMS = [
+  "resource guarding",
+  "resource guarder",
+  "food guarding",
+  "food aggression",
+  "possessive aggression",
+];
+const REINFORCEMENT_TRAINING_TERMS = [
+  "positive reinforcement",
+  "reward-based training",
+  "reward based training",
+  "reinforcement-based treatment",
+  "reinforcement based treatment",
+  "behavior modification",
+  "behaviour modification",
+  "counterconditioning",
+  "counter-conditioning",
+  "desensitization",
+  "desensitisation",
+  "humane training",
+  "socialization practices",
+  "socialisation practices",
+];
+
+function sourceSearchableText(source: SourceRecord): { title: string; all: string } {
+  const title = cleanText(source.title)?.toLocaleLowerCase() ?? "";
+  const all = [source.title, source.abstract, source.snippet]
+    .map((value) => cleanText(value)?.toLocaleLowerCase() ?? "")
+    .filter(Boolean)
+    .join(" ");
+  return { title, all };
+}
+
+function matchesAnyTerm(text: string, terms: string[]): boolean {
+  return terms.some((term) => termMatchesSourceText(text, term));
+}
+
+function isCanineResourceGuardingQuery(anchors: string[]): boolean {
+  const normalized = new Set(anchors.map((anchor) => anchor.toLocaleLowerCase()));
+  return (
+    ["dog", "dogs", "canine", "canines"].some((term) => normalized.has(term)) &&
+    normalized.has("resource") &&
+    normalized.has("guarding")
+  );
+}
+
+/**
+ * A single generic token is not enough for compound topics.  In particular,
+ * resource/positive/training frequently retrieve human psychotherapy or other
+ * animal training papers.  Require both the canine entity and one of the
+ * user's actual guarding or reinforcement-intervention concepts.
+ */
+export function sourceCoreTopicScore(source: SourceRecord, anchors: string[]): number {
+  const genericScore = sourceTopicMatchCount(source, anchors);
+  if (!isCanineResourceGuardingQuery(anchors)) return genericScore;
+
+  const text = sourceSearchableText(source);
+  const subjectMatch = matchesAnyTerm(text.all, CANINE_SUBJECT_TERMS);
+  const guardingMatch = matchesAnyTerm(text.all, RESOURCE_GUARDING_TERMS);
+  const trainingMatch = matchesAnyTerm(text.all, REINFORCEMENT_TRAINING_TERMS);
+  if (!subjectMatch || (!guardingMatch && !trainingMatch)) return 0;
+
+  const titleNamesOtherSpecies = /\b(horse|horses|monkey|monkeys|primate|primates|coyote|coyotes)\b/iu.test(
+    text.title,
+  );
+  const titleHasCanineFocus = matchesAnyTerm(text.title, CANINE_SUBJECT_TERMS);
+  const titleHasGuardingFocus = matchesAnyTerm(text.title, RESOURCE_GUARDING_TERMS);
+  if (titleNamesOtherSpecies && !titleHasGuardingFocus) return 0;
+
+  return (
+    genericScore +
+    (titleHasCanineFocus ? 4 : 1) +
+    (titleHasGuardingFocus ? 10 : guardingMatch ? 6 : 0) +
+    (matchesAnyTerm(text.title, REINFORCEMENT_TRAINING_TERMS) ? 8 : trainingMatch ? 4 : 0)
+  );
+}
+
 function selectPapers(
   sources: SourceRecord[],
   limit: number,
@@ -269,7 +366,7 @@ function selectPapers(
     .map((source, index) => ({
       source,
       index,
-      topicMatchCount: sourceTopicMatchCount(source, anchors),
+      topicMatchCount: sourceCoreTopicScore(source, anchors),
     }))
     .filter(({ topicMatchCount }) => topicMatchCount > 0);
   return {
@@ -452,6 +549,9 @@ function sourceTypeFromPaperProvider(value: unknown): SourceRecord["sourceType"]
   if (!provider) return null;
   if (provider.includes("openalex")) return "OpenAlex";
   if (provider.includes("crossref")) return "Crossref";
+  if (provider.includes("europe pmc") || provider.includes("pubmed")) {
+    return "Institutional Source";
+  }
   if (
     provider.includes("semantic scholar") ||
     provider.includes("semantic_scholar") ||
@@ -497,6 +597,11 @@ function sourceFromPaperShape(value: unknown): SourceRecord | null {
     year,
     abstract: boundedCleanText(paper.abstract, MAX_PAPER_ABSTRACT_LENGTH),
     snippet: boundedCleanText(paper.snippet, MAX_PAPER_ABSTRACT_LENGTH),
+    // A deferred summary request may carry a bounded, already extracted
+    // full-text excerpt from the product's retrieval stage. Preserve it for
+    // the summarizer instead of silently downgrading the source to its
+    // abstract. The public response still exposes only the summary.
+    extractedText: boundedCleanText(paper.extractedText, MAX_PAPER_ABSTRACT_LENGTH),
     doi: boundedCleanText(paper.doi, MAX_PAPER_METADATA_LENGTH),
     url: boundedCleanText(paper.url, MAX_PAPER_METADATA_LENGTH),
     sourceType,

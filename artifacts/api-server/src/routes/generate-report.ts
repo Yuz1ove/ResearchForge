@@ -101,6 +101,9 @@ function normalizeEvidenceCards(value: unknown): ReportWriterEvidenceCard[] {
         claimTextZh: cleanString(data.claimTextZh) ?? cleanString(data.claim) ?? "",
         supportedByText: cleanString(data.supportedByText) ?? cleanString(data.evidence) ?? "",
         sourceId,
+        canonicalSourceKey: cleanString(data.canonicalSourceKey),
+        dedupeKey: cleanString(data.dedupeKey),
+        citationKey: cleanString(data.citationKey),
         title: cleanString(data.title) ?? cleanString(data.sourceTitle) ?? "",
         claim: cleanString(data.claim) ?? "",
         claimTextZhTw: cleanString(data.claimTextZhTw) ?? "",
@@ -214,6 +217,30 @@ function normalizeEvidenceCards(value: unknown): ReportWriterEvidenceCard[] {
           data.safety && typeof data.safety === "object"
             ? (data.safety as ReportWriterEvidenceCard["safety"])
             : undefined,
+        location: cleanString(data.location) ?? null,
+        researchSetting: cleanString(data.researchSetting) ?? null,
+        studyDesign: cleanString(data.studyDesign) ?? null,
+        dataScope: cleanString(data.dataScope) ?? null,
+        exposure: cleanString(data.exposure) ?? null,
+        outcome: cleanString(data.outcome) ?? null,
+        exactResult:
+          cleanString(data.exactResult) ??
+          cleanString(data.supportedByText) ??
+          null,
+        numericResult: cleanString(data.numericResult) ?? null,
+        applicability: cleanString(data.applicability) ?? null,
+        locator:
+          cleanString(data.locator) ??
+          cleanString(data.pageOrLocation) ??
+          cleanString(data.sourceLocation) ??
+          null,
+        evidenceDirectnessTier:
+          data.evidenceDirectnessTier === "A" ||
+          data.evidenceDirectnessTier === "B" ||
+          data.evidenceDirectnessTier === "C" ||
+          data.evidenceDirectnessTier === "D"
+            ? data.evidenceDirectnessTier
+            : null,
       };
     })
     .filter((card): card is ReportWriterEvidenceCard => Boolean(card));

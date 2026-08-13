@@ -31,6 +31,9 @@ const TRACKED_ENV_KEYS = [
   "SCHOOL_LLM_API_KEY",
   "SCHOOL_LLM_PROVIDER",
   "OPENAI_SMOKE_TEST_MODEL",
+  "OLLAMA_BASE_URL",
+  "OLLAMA_MODEL",
+  "OLLAMA_API_KEY",
 ] as const;
 
 function parseEnvLine(line: string): readonly [string, string] | null {

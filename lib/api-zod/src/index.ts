@@ -15,6 +15,7 @@ export * from "./domain-synonyms";
 export * from "./llm-status";
 export * from "./topic-expansion";
 export * from "./topic-understanding";
+export * from "./research-topic-facets";
 export * from "./generated/api";
 export * from "./generated/types/errorResponse";
 export * from "./generated/types/healthStatus";

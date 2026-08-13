@@ -1,3 +1,8 @@
+/**
+ * AI assistance disclosure: Portions of this provider-retrieval layer were
+ * drafted or refactored with Replit Agent and OpenAI Codex. See
+ * /AI_ASSISTANCE.md.
+ */
 import {
   dedupeSourceRecords,
   normalizeSourceRecord,
@@ -347,8 +352,33 @@ type CrossrefWork = {
   URL?: string;
   publisher?: string;
   "container-title"?: string[];
+  volume?: string;
+  issue?: string;
+  page?: string;
+  "article-number"?: string;
+  event?: {
+    name?: string;
+    acronym?: string;
+    location?: string;
+    start?: CrossrefDate;
+    end?: CrossrefDate;
+  };
   type?: string;
   "is-referenced-by-count"?: number;
+  resource?: {
+    primary?: {
+      URL?: string;
+    };
+  };
+  link?: Array<{
+    URL?: string;
+    "content-type"?: string;
+    "content-version"?: string;
+    "intended-application"?: string;
+  }>;
+  license?: Array<{
+    URL?: string;
+  }>;
 };
 
 type CrossrefResponse = {
@@ -357,11 +387,16 @@ type CrossrefResponse = {
   };
 };
 
+type CrossrefSingleResponse = {
+  message?: CrossrefWork;
+};
+
 type SemanticScholarAuthor = {
   name?: string;
 };
 
 type SemanticScholarPaper = {
+  paperId?: string;
   title?: string;
   authors?: SemanticScholarAuthor[];
   year?: number;
@@ -429,6 +464,12 @@ type OpenAlexWork = {
   }>;
   open_access?: {
     is_oa?: boolean;
+  };
+  biblio?: {
+    volume?: string | null;
+    issue?: string | null;
+    first_page?: string | null;
+    last_page?: string | null;
   };
 };
 
@@ -504,6 +545,17 @@ function normalizeDoi(doi: string | null | undefined): string | null {
   return trimmed ? trimmed.toLowerCase() : null;
 }
 
+/**
+ * Accept only a standalone DOI identifier (bare, `doi:`, or doi.org URL).
+ * Topic queries that merely mention a DOI continue through normal search.
+ */
+export function extractDoiIdentifier(value: string): string | null {
+  const match = value.trim().match(
+    /^(?:(?:doi\s*:\s*)|(?:https?:\/\/(?:dx\.)?doi\.org\/))?(10\.\d{4,9}\/\S+)$/iu,
+  );
+  return normalizeDoi(match?.[1] ?? null);
+}
+
 function normalizeUrl(url: string | null | undefined, doi: string | null): string | null {
   if (doi) return `https://doi.org/${doi}`;
   if (url?.trim()) return url.trim();
@@ -542,6 +594,20 @@ function crossrefYear(work: CrossrefWork): number | null {
   return null;
 }
 
+function crossrefEventDate(event: CrossrefWork["event"]): string | null {
+  const format = (date: CrossrefDate | undefined): string | null => {
+    const parts = date?.["date-parts"]?.[0];
+    if (!parts?.length) return null;
+    return parts
+      .slice(0, 3)
+      .map((value, index) => (index === 0 ? String(value) : String(value).padStart(2, "0")))
+      .join("-");
+  };
+  const start = format(event?.start);
+  const end = format(event?.end);
+  return start && end && start !== end ? `${start}/${end}` : start ?? end;
+}
+
 function crossrefAuthors(authors: CrossrefAuthor[] | undefined): string[] {
   if (!authors?.length) return [];
 
@@ -555,6 +621,25 @@ function crossrefAuthors(authors: CrossrefAuthor[] | undefined): string[] {
       return fullName || null;
     })
     .filter((name): name is string => Boolean(name));
+}
+
+function crossrefReadableUrl(work: CrossrefWork): string | null {
+  const primary = firstText(work.resource?.primary?.URL);
+  if (primary) return primary;
+  const preferredLink = work.link?.find((link) =>
+    /text-mining|syndication/i.test(link["intended-application"] ?? "") ||
+    /text\/html|text\/plain|text\/xml|application\/pdf/i.test(link["content-type"] ?? ""),
+  );
+  return firstText(preferredLink?.URL) ?? firstText(work.link?.[0]?.URL);
+}
+
+function crossrefIsOpenAccess(work: CrossrefWork): boolean | null {
+  if (!work.license?.length) return null;
+  return work.license.some((license) =>
+    /creativecommons\.org\/licenses|creativecommons\.org\/publicdomain/i.test(
+      license.URL ?? "",
+    ),
+  );
 }
 
 export function normalizeCrossrefWork(work: CrossrefWork, queryUsed?: string): SourceRecord | null {
@@ -573,6 +658,13 @@ export function normalizeCrossrefWork(work: CrossrefWork, queryUsed?: string): S
     reviewState: "pending",
     publisher: work.publisher ?? null,
     containerTitle: firstText(work["container-title"]),
+    volume: firstText(work.volume),
+    issue: firstText(work.issue),
+    pages: firstText(work.page),
+    articleNumber: firstText(work["article-number"]),
+    conferenceName: firstText([work.event?.name, work.event?.acronym]),
+    conferenceLocation: firstText(work.event?.location),
+    conferenceDate: crossrefEventDate(work.event),
     accessedAt: null,
     provider: "Crossref",
     queryUsed,
@@ -580,6 +672,10 @@ export function normalizeCrossrefWork(work: CrossrefWork, queryUsed?: string): S
     sourceKind: sourceKindFromProviderType(work.type),
     citationCount: citationCount(work["is-referenced-by-count"]),
     isPeerReviewed: sourceKindFromProviderType(work.type) === "journal",
+    isOpenAccess: crossrefIsOpenAccess(work),
+    fullTextUrl: crossrefReadableUrl(work),
+    readableUrl: crossrefReadableUrl(work),
+    ...(doi ? { providerIds: { crossref: doi } } : {}),
   });
 }
 
@@ -607,6 +703,7 @@ export function normalizeSemanticScholarPaper(paper: SemanticScholarPaper, query
     sourceKind: sourceKindFromProviderType(firstText(paper.publicationTypes)),
     citationCount: citationCount(paper.citationCount),
     isOpenAccess: typeof paper.isOpenAccess === "boolean" ? paper.isOpenAccess : null,
+    ...(paper.paperId ? { providerIds: { semanticScholar: paper.paperId } } : {}),
   });
 }
 
@@ -687,6 +784,11 @@ export function normalizeOpenAlexWork(work: OpenAlexWork, queryUsed?: string): S
     reviewState: "pending",
     publisher: null,
     containerTitle: openAlexVenue(work),
+    volume: firstText(work.biblio?.volume),
+    issue: firstText(work.biblio?.issue),
+    pages: [firstText(work.biblio?.first_page), firstText(work.biblio?.last_page)]
+      .filter(Boolean)
+      .join("–") || null,
     accessedAt: null,
     provider: "OpenAlex",
     queryUsed,
@@ -694,6 +796,7 @@ export function normalizeOpenAlexWork(work: OpenAlexWork, queryUsed?: string): S
     sourceKind: sourceKindFromProviderType(work.type),
     citationCount: citationCount(work.cited_by_count),
     isOpenAccess: typeof work.open_access?.is_oa === "boolean" ? work.open_access.is_oa : null,
+    ...(work.id ? { providerIds: { openalex: work.id } } : {}),
   });
 }
 
@@ -707,13 +810,18 @@ function sourceProviderConfigs(options?: SourceSearchOptions): Record<AcademicSo
 }
 
 async function searchOpenAlex(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<ProviderNormalizedResults> {
+  const exactDoi = extractDoiIdentifier(query);
   const pages = Array.from({ length: pageCount(config) }, (_, index) => index + 1);
   const results: SourceRecord[] = [];
   let rawCount = 0;
 
   for (const page of pages) {
     const url = new URL(config.endpoint);
-    url.searchParams.set("search", query);
+    if (exactDoi) {
+      url.searchParams.set("filter", `doi:https://doi.org/${exactDoi}`);
+    } else {
+      url.searchParams.set("search", query);
+    }
     url.searchParams.set("per-page", String(config.queryLimit));
     url.searchParams.set("page", String(page));
     url.searchParams.set("sort", "relevance_score:desc");
@@ -725,9 +833,11 @@ async function searchOpenAlex(query: string, config: SourceProviderConfig, optio
     rawCount += rawItems.length;
     const pageResults = rawItems
       .map((work) => normalizeOpenAlexWork(work, query))
-      .filter((source): source is SourceRecord => Boolean(source));
+      .filter((source): source is SourceRecord =>
+        Boolean(source) && (!exactDoi || source?.doi === exactDoi)
+      );
     results.push(...pageResults);
-    if (rawItems.length < config.queryLimit) break;
+    if (exactDoi || rawItems.length < config.queryLimit) break;
   }
 
   return { results, rawCount };
@@ -854,7 +964,7 @@ async function searchCrossrefQuery(
     url.searchParams.set("query", query);
     url.searchParams.set("rows", String(config.queryLimit));
     url.searchParams.set("offset", String(page * config.queryLimit));
-    url.searchParams.set("select", "title,author,issued,published,published-print,published-online,abstract,DOI,URL,publisher,container-title,type,is-referenced-by-count");
+    url.searchParams.set("select", "title,author,issued,published,published-print,published-online,abstract,DOI,URL,resource,link,license,publisher,container-title,volume,issue,page,article-number,event,type,is-referenced-by-count");
     if (config.mailto) url.searchParams.set("mailto", config.mailto);
 
     const data = await fetchJson<CrossrefResponse>("Crossref", url, config, options?.fetchImpl);
@@ -870,7 +980,32 @@ async function searchCrossrefQuery(
   return { results, rawCount };
 }
 
+async function lookupCrossrefDoi(
+  query: string,
+  doi: string,
+  config: SourceProviderConfig,
+  options?: SourceSearchOptions,
+): Promise<ProviderNormalizedResults> {
+  const url = new URL(config.endpoint);
+  url.pathname = `${url.pathname.replace(/\/+$/u, "")}/${encodeURIComponent(doi)}`;
+  url.search = "";
+  if (config.mailto) url.searchParams.set("mailto", config.mailto);
+  const data = await fetchJson<CrossrefSingleResponse>(
+    "Crossref",
+    url,
+    config,
+    options?.fetchImpl,
+  );
+  const source = data.message ? normalizeCrossrefWork(data.message, query) : null;
+  return {
+    results: source?.doi === doi ? [source] : [],
+    rawCount: data.message ? 1 : 0,
+  };
+}
+
 async function searchCrossref(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<ProviderNormalizedResults> {
+  const exactDoi = extractDoiIdentifier(query);
+  if (exactDoi) return lookupCrossrefDoi(query, exactDoi, config, options);
   try {
     const initial = await searchCrossrefQuery(query, config, options);
     if (initial.results.length > 1 && initial.rawCount > 1) return initial;
@@ -919,6 +1054,30 @@ async function searchCrossref(query: string, config: SourceProviderConfig, optio
 }
 
 async function searchSemanticScholar(query: string, config: SourceProviderConfig, options?: SourceSearchOptions): Promise<ProviderNormalizedResults> {
+  const exactDoi = extractDoiIdentifier(query);
+  if (exactDoi) {
+    const url = new URL(config.endpoint);
+    const paperPath = `/paper/DOI:${encodeURIComponent(exactDoi)}`;
+    url.pathname = /\/paper\/search\/?$/u.test(url.pathname)
+      ? url.pathname.replace(/\/paper\/search\/?$/u, paperPath)
+      : `${url.pathname.replace(/\/+$/u, "")}${paperPath}`;
+    url.search = "";
+    url.searchParams.set(
+      "fields",
+      "title,authors,year,abstract,tldr,externalIds,url,venue,fieldsOfStudy,citationCount,publicationTypes,isOpenAccess",
+    );
+    const paper = await fetchJson<SemanticScholarPaper>(
+      "Semantic Scholar",
+      url,
+      config,
+      options?.fetchImpl,
+    );
+    const source = normalizeSemanticScholarPaper(paper, query);
+    return {
+      results: source?.doi === exactDoi ? [source] : [],
+      rawCount: paper.title ? 1 : 0,
+    };
+  }
   const results: SourceRecord[] = [];
   let rawCount = 0;
   let nextOffset: number | null = 0;
@@ -1184,6 +1343,9 @@ export async function searchSources(query: string, options?: SourceSearchOptions
     );
   }
 
-  const sources = fulfilled.flatMap((result) => result.results);
+  const exactDoi = extractDoiIdentifier(trimmedQuery);
+  const sources = fulfilled
+    .flatMap((result) => result.results)
+    .filter((source) => !exactDoi || source.doi === exactDoi);
   return dedupeSources(sources).slice(0, MAX_RESULTS);
 }

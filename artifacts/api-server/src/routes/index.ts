@@ -11,6 +11,7 @@ import researchRouter from "./research";
 import researchGroundingJobsRouter from "./research-grounding-jobs";
 import llmRouter from "./llm";
 import paperSearchRouter from "./paper-search";
+import reportExportsRouter from "./report-exports";
 
 const router: IRouter = Router();
 
@@ -26,6 +27,7 @@ router.use(researchRouter);
 router.use(researchGroundingJobsRouter);
 router.use(llmRouter);
 router.use(paperSearchRouter);
+router.use(reportExportsRouter);
 router.use((_req, res) => {
   res.status(404).json({
     code: "NOT_FOUND",

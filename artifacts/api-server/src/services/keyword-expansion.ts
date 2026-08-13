@@ -232,6 +232,13 @@ function buildEnglishQueries(input: KeywordExpansionRequest, domains: string[]):
     ];
   }
 
+  // A field named english_queries must never contain untranslated CJK text or
+  // a subjectless domain template. The grounding pipeline can still search the
+  // original Chinese topic while an injected translator is unavailable.
+  if (/[\u3400-\u9fff]/u.test(input.topic)) {
+    return [];
+  }
+
   const audience = hasAny(text, [/高中|學生|青少年|student|adolescent/i]) ? "students" : "people";
   const domainTerms = domains
     .filter((domain) => domain !== "general_academic_research")
@@ -326,7 +333,9 @@ function coerceKeywordExpansion(
   const normalizedTopic = cleanString(data.normalized_topic) ?? input.topic.trim();
   const domains = cleanupDomains(stringArray(data.domains, 8), input);
   const chineseQueries = stringArray(data.chinese_queries, 4);
-  const englishQueries = stringArray(data.english_queries, 4);
+  const englishQueries = stringArray(data.english_queries, 4).filter(
+    (query) => /[A-Za-z]/.test(query) && !/[\u3400-\u9fff]/u.test(query),
+  );
   const fallback = buildFallbackKeywordExpansion(input, "LLM returned incomplete keyword data; deterministic fields were merged.");
   const searchQueries = unique([
     ...stringArray(data.search_queries, 6),

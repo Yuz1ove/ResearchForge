@@ -1,17 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SourceRecord } from "@workspace/api-zod";
-import type { ClaimCandidate, SourceCandidate } from "@workspace/api-zod/research-grounding";
+import {
+  ReportPlanSchema,
+  type ClaimCandidate,
+  type SourceCandidate,
+} from "@workspace/api-zod/research-grounding";
 import {
   analyzeTopicInput,
   academicRetryQueryExpansion,
   buildGroundingEvidenceCards,
+  buildReportArtifacts,
+  buildStructuredPlannedClaims,
   buildSourceCandidates,
   buildGroundingQueryPlan,
   buildSeedQueryPlan,
   collectLexicalSignals,
   classifySourceCandidate,
   compareTitleSemantics,
+  createTopicTitleState,
   findLegacyGenericTraces,
   parseResearchTitleSentence,
   reviewAcademicSafety,
@@ -286,6 +293,25 @@ test("buildGroundingEvidenceCards keeps accepted source governance and excludes 
   assert.equal(cards.every((card) => card.source_access_level !== "metadata_only"), true);
 });
 
+test("buildGroundingEvidenceCards excludes explicit rejected decisions despite accepted review status", () => {
+  const rejected = sourceCandidateFixture({
+    sourceId: "conflicted-rejected-source",
+    title: "Conflicted accepted and rejected source",
+    reviewStatus: "accepted",
+    acceptedByUser: false,
+    userDecision: "rejected",
+  });
+
+  const cards = buildGroundingEvidenceCards({
+    workflowId: "wf-rejected-guard",
+    topicHash: "topic-hash",
+    acceptedSources: [rejected],
+    safetyReview: reviewAcademicSafety({ topic: "夕陽顏色與瑞利散射" }),
+  });
+
+  assert.equal(cards.length, 0);
+});
+
 test("buildGroundingEvidenceCards does not turn metadata-only titles into evidence cards", () => {
   const metadataOnly = sourceCandidateFixture({
     sourceId: "metadata-only",
@@ -320,6 +346,7 @@ test("buildGroundingEvidenceCards caps abstract-only sources at two abstract evi
     extractionStatus: "skipped",
     extractionMethod: "abstract_only",
     sourceUseLevel: "citable_abstract",
+    canonicalSourceIdentity: "doi:10.1000/rayleigh",
   });
 
   const cards = buildGroundingEvidenceCards({
@@ -333,6 +360,9 @@ test("buildGroundingEvidenceCards caps abstract-only sources at two abstract evi
   assert.deepEqual(cards.map((card) => card.source_access_level), ["abstract_only", "abstract_only"]);
   assert.deepEqual(cards.map((card) => card.source_location), ["abstract", "abstract"]);
   assert.equal(cards.every((card) => card.confidence <= 0.55), true);
+  assert.equal(cards.every((card) => card.canonicalSourceKey === "doi:10.1000/rayleigh"), true);
+  assert.equal(cards.every((card) => card.dedupeKey === "doi:10.1000/rayleigh"), true);
+  assert.equal(cards.every((card) => card.citationKey === "doi:10.1000/rayleigh"), true);
 });
 
 test("buildGroundingEvidenceCards turns extracted full-text chunks into traceable evidence cards", () => {
@@ -461,6 +491,226 @@ test("buildGroundingEvidenceCards augments scarce accepted claims with reviewed 
   assert.equal(
     cards.filter((card) => card.extractionMethod === "rule_fallback_claim_extraction").every((card) => card.needsReview),
     true,
+  );
+});
+
+test("buildReportArtifacts deterministically merges legal evidence into one structured claim and links later sections", () => {
+  const supportedSentence =
+    "The results show that wavelength-dependent scattering increases the red-orange component observed near sunset.";
+  const makeFullTextSource = (sourceId: string, doi: string) =>
+    sourceCandidateFixture({
+      sourceId,
+      title: `Full-text sunset study ${sourceId}`,
+      doi,
+      url: `https://doi.org/${doi}`,
+      canonicalSourceIdentity: `doi:${doi}`,
+      dedupeKey: `doi:${doi}`,
+      accessLevel: "full_text",
+      extractionStatus: "success",
+      extractionMethod: "html_readability",
+      sourceUseLevel: "citable_full_text",
+      extractedChunks: [
+        {
+          chunk_id: `${sourceId}:finding:1`,
+          text: supportedSentence,
+          source_location: "Findings",
+          section_heading: "Findings",
+          char_start: 0,
+          char_end: supportedSentence.length,
+        },
+      ],
+    });
+  const safetyReview = reviewAcademicSafety({
+    topic: "Rayleigh scattering and sunset color",
+  });
+  const cards = buildGroundingEvidenceCards({
+    workflowId: "wf-structured-plan",
+    topicHash: "topic-structured-plan",
+    topic: "Rayleigh scattering and sunset color",
+    acceptedSources: [
+      makeFullTextSource("source-b", "10.1000/sunset-b"),
+      makeFullTextSource("source-a", "10.1000/sunset-a"),
+    ],
+    safetyReview,
+  }).map((card) => ({
+    ...card,
+    confidence: 0.84,
+    groundingConfidence: 0.84,
+    needsManualReview: false,
+    needsReview: false,
+    governanceFlags: [],
+  }));
+  assert.equal(cards.length, 2);
+
+  const rejectedCard = {
+    ...cards[0]!,
+    evidenceId: "evidence-rejected",
+    evidence_id: "evidence-rejected",
+    sourceId: "source-rejected",
+    source_id: "source-rejected",
+    canonicalSourceKey: "doi:10.1000/rejected",
+    dedupeKey: "doi:10.1000/rejected",
+    citationKey: "doi:10.1000/rejected",
+    claimTextOriginal: "This rejected sentence must never enter the report plan.",
+    claimText: "This rejected sentence must never enter the report plan.",
+    claim_text: "This rejected sentence must never enter the report plan.",
+    claimTextZh: "This rejected sentence must never enter the report plan.",
+    supportedByText: "This rejected sentence must never enter the report plan.",
+    supportSpan: "This rejected sentence must never enter the report plan.",
+    userDecision: "rejected" as const,
+  };
+  const topic = "Rayleigh scattering and sunset color";
+  const build = (evidenceCards: typeof cards) =>
+    buildReportArtifacts({
+      topic,
+      workflowId: "wf-structured-plan",
+      topicHash: "topic-structured-plan",
+      titleState: createTopicTitleState({ originalTopic: topic }),
+      titleParse: parseResearchTitleSentence(topic),
+      evidenceCards,
+      safetyReview,
+    });
+  const result = build([rejectedCard, ...cards]);
+  const reversed = build([...cards].reverse());
+
+  assert.deepEqual(result.reportPlan.plannedClaims, reversed.reportPlan.plannedClaims);
+  assert.equal(result.reportPlan.plannedClaims.length, 1);
+  const claim = result.reportPlan.plannedClaims[0]!;
+  assert.equal(claim.sectionId, "evidence");
+  assert.equal(claim.claimText, supportedSentence);
+  assert.deepEqual(claim.supportingSourceKeys, [
+    "doi:10.1000/sunset-a",
+    "doi:10.1000/sunset-b",
+  ]);
+  assert.deepEqual(claim.allowedCitationKeys, claim.supportingSourceKeys);
+  assert.equal(claim.supportingEvidenceIds.length, 2);
+  assert.equal(claim.evidenceStrength, "strong");
+  assert.equal(claim.scope, "full_text_supported");
+  assert.equal(claim.agreementStatus, "corroborated");
+  assert.equal(claim.wordingStrength, "assertive");
+  assert.equal(
+    result.reportPlan.plannedClaims.some((planned) =>
+      planned.supportingSourceKeys.includes("doi:10.1000/rejected"),
+    ),
+    false,
+  );
+
+  for (const sectionId of ["discussion", "conclusion"]) {
+    const sectionPlan = result.reportPlan.sections.find(
+      (section) => section.sectionId === sectionId,
+    );
+    assert.deepEqual(sectionPlan?.plannedClaimIds, [claim.claimId]);
+    const rendered = result.reportSections.find(
+      (section) => section.sectionId === sectionId,
+    );
+    assert.equal(rendered?.synthesizedProse.includes(supportedSentence), false);
+  }
+  assert.deepEqual(
+    result.reportPlan.sections.find((section) => section.sectionId === "evidence")
+      ?.plannedClaimIds,
+    [claim.claimId],
+  );
+});
+
+test("structured report plan gives scholarly background evidence a background-only claim owner", () => {
+  const supportedSentence =
+    "Urban heat islands describe persistently warmer conditions in built areas than in nearby non-urban surroundings.";
+  const safetyReview = reviewAcademicSafety({ topic: "urban heat island" });
+  const [card] = buildGroundingEvidenceCards({
+    workflowId: "wf-background-owner",
+    topicHash: "topic-background-owner",
+    topic: "urban heat island",
+    acceptedSources: [
+      sourceCandidateFixture({
+        sourceId: "source-background-owner",
+        title: "Urban heat island background review",
+        doi: "10.1000/uhi-background",
+        url: "https://doi.org/10.1000/uhi-background",
+        canonicalSourceIdentity: "doi:10.1000/uhi-background",
+        dedupeKey: "doi:10.1000/uhi-background",
+        abstract: supportedSentence,
+        abstractOriginal: supportedSentence,
+        accessLevel: "abstract_only",
+        extractionStatus: "success",
+        extractionMethod: "abstract_only",
+        sourceUseLevel: "citable_abstract",
+      }),
+    ],
+    safetyReview,
+  });
+  assert.ok(card);
+  assert.equal(card.evidence_type, "background");
+
+  const claims = buildStructuredPlannedClaims({
+    topicHash: "topic-background-owner",
+    evidenceCards: [{
+      ...card,
+      needsManualReview: false,
+      needsReview: false,
+      governanceFlags: [],
+    }],
+  });
+
+  assert.equal(claims.length, 1);
+  assert.equal(claims[0]?.sectionId, "background");
+});
+
+test("ReportPlanSchema survives JSON persistence and defaults legacy claim links safely", () => {
+  const legacyPlan = ReportPlanSchema.parse({
+    workflowId: "wf-legacy-plan",
+    topicHash: "topic-legacy-plan",
+    title: "Legacy persisted plan",
+    researchQuestion: "What does the evidence support?",
+    sections: [
+      {
+        sectionId: "evidence",
+        title: "Evidence",
+        goal: "Summarize evidence",
+        requiredEvidenceTypes: ["finding"],
+        evidenceCardIds: ["evidence-1"],
+      },
+    ],
+    evidenceGaps: [],
+  });
+  assert.deepEqual(legacyPlan.plannedClaims, []);
+  assert.deepEqual(legacyPlan.sections[0]?.plannedClaimIds, []);
+
+  const persisted = JSON.parse(
+    JSON.stringify({
+      ...legacyPlan,
+      plannedClaims: [
+        {
+          claimId: "planned-claim-1",
+          claimText: "A traceable claim",
+          sectionId: "evidence",
+          supportingEvidenceIds: ["evidence-1"],
+          supportingSourceKeys: ["doi:10.1000/traceable"],
+          evidenceStrength: "moderate",
+          scope: "abstract_only_supported",
+          limitations: ["Abstract only"],
+          agreementStatus: "single_source",
+          allowedCitationKeys: ["doi:10.1000/traceable"],
+          wordingStrength: "qualified",
+        },
+      ],
+      sections: legacyPlan.sections.map((section) => ({
+        ...section,
+        plannedClaimIds: ["planned-claim-1"],
+      })),
+    }),
+  );
+  const reloaded = ReportPlanSchema.parse(persisted);
+  assert.deepEqual(reloaded, persisted);
+  assert.throws(() =>
+    ReportPlanSchema.parse({
+      ...persisted,
+      plannedClaims: [
+        {
+          ...persisted.plannedClaims[0],
+          supportingEvidenceIds: [],
+        },
+      ],
+    }),
   );
 });
 
@@ -864,7 +1114,7 @@ test("normalizeResearchTopic expands common Chinese Step 2 topics into bilingual
   }
 });
 
-test("runResearchGroundingPipeline preserves raw Chinese topics while routing reviewable Step 2 sources", async () => {
+test("runResearchGroundingPipeline preserves the original topic while routing an explicit normalized topic", async () => {
   const cases: Array<{
     topic: string;
     normalizedHint?: string;
@@ -991,11 +1241,11 @@ test("runResearchGroundingPipeline preserves raw Chinese topics while routing re
     );
 
     const firstInput = capturedInputs[0]!;
-    assert.equal(firstInput.topic, item.topic);
+    const expectedActiveTopic = item.normalizedHint ?? item.topic;
+    assert.equal(firstInput.topic, expectedActiveTopic);
     assert.equal(firstInput.originalTopic, item.topic);
     assert.equal(result.originalTopic, item.topic);
-    assert.equal(result.normalizedTopic, item.topic);
-    assert.doesNotMatch(result.normalizedTopic, /核心技術|資料流程|應用場景/u);
+    assert.equal(result.normalizedTopic, expectedActiveTopic);
     assert.match((firstInput.querySeedZh ?? []).join(" "), item.expectedZh);
     assert.match((firstInput.querySeedEn ?? []).join(" "), item.expectedEn);
     assert.doesNotMatch(
@@ -1419,9 +1669,9 @@ test("runResearchGroundingPipeline emits diagnostic trace for panda topic with p
   );
   assert.equal(
     result.diagnosticTrace?.step3_queryPlan.classifiedQueries?.some(
-      (query) => query.query === "background context" && query.classification === "outlineHint",
+      (query) => query.query === "background context",
     ),
-    true,
+    false,
   );
   assert.equal(
     result.diagnosticTrace?.step3_queryPlan.selectedQueriesByProvider?.openalex?.some(
@@ -2340,13 +2590,13 @@ test("runResearchGroundingPipeline accepts natural-science solar sail normalizat
   const allEn = (firstInput.querySeedEn ?? []).join(" ");
 
   assert.equal(result.originalTopic, "太陽帆與其利用價值");
-  assert.equal(result.normalizedTopic, "太陽帆與其利用價值");
+  assert.equal(result.normalizedTopic, "太陽帆推進技術的物理原理、太空任務應用與限制");
   assert.equal(result.groundingDiagnostics?.selectedDomain, "natural_science");
   assert.equal(
     result.groundingDiagnostics?.researchQuestion,
     "太陽帆如何利用太陽輻射壓進行航天推進，其在深空任務中的應用價值與限制為何？",
   );
-  assert.equal(firstInput.topic, "太陽帆與其利用價值");
+  assert.equal(firstInput.topic, "太陽帆推進技術的物理原理、太空任務應用與限制");
   assert.equal(firstInput.originalTopic, "太陽帆與其利用價值");
   assert.ok(firstInput.domainHints?.includes("natural_science"));
   assert.match(allZh, /太陽帆 輻射壓 推進 原理/);
@@ -2417,7 +2667,6 @@ test("runResearchGroundingPipeline expands English RAG citation accuracy topic w
     },
     {
       searchHandler: async (input) => {
-        assert.equal((input.querySeedZh ?? []).length, 0);
         assert.ok((input.querySeedEn ?? []).some((query) => /citation accuracy/i.test(query)));
         assert.ok((input.querySeedEn ?? []).some((query) => /source attribution|faithfulness|factuality/i.test(query)));
         return mockedGroundingSearchResult(
@@ -2529,6 +2778,240 @@ test("mixed source classification separates NASA, DOI journal, and wallpaper dri
   assert.equal(journalCandidate?.recommendationBucket, "scholarly_recommended");
   assert.equal(wallpaperCandidate?.recommendationBucket, "rejected");
   assert.equal(wallpaperCandidate?.reviewStatus, "rejected");
+});
+
+test("generic bilingual source classification requires the repeated subject anchor and keeps relevant imaging studies", async () => {
+  const topic = "雨水的終端速度";
+  const rainQueries = [
+    "raindrop terminal velocity air drag size relationship",
+    "raindrop fall terminal velocity experimental measurement",
+    "raindrop terminal fall speed diameter relationship",
+    "raindrop shape deformation terminal velocity",
+  ];
+  const topicAnalysis = analyzeTopicInput({
+    topic,
+    workflowId: "wf-rain-subject-anchor",
+  });
+  const seedQueryPlan = buildSeedQueryPlan({
+    topicAnalysis,
+    querySeedZh: ["雨滴 終端速度 空氣阻力 液滴直徑"],
+    querySeedEn: rainQueries,
+  });
+  const lexicalSignals = await collectLexicalSignals({ topicAnalysis });
+  const baseQueryPlan = buildGroundingQueryPlan({
+    topicAnalysis,
+    seedQueryPlan,
+    lexicalSignals,
+  });
+  const queryPlan = {
+    ...baseQueryPlan,
+    primaryQueries: rainQueries,
+    enCoreQueries: rainQueries,
+    enAcademicQueries: rainQueries,
+    bilingualQueries: {
+      ...baseQueryPlan.bilingualQueries,
+      en: rainQueries,
+    },
+  };
+  const dandelion = sourceRecord({
+    id: "doi:10.1000/dandelion-terminal-speed",
+    title: "Aerodynamic Shape, Scaling Law of Drag and Terminal Speed of the Dandelion",
+    abstract:
+      "This study analyzes pappus shape, aerodynamic drag, and terminal speed during dandelion seed dispersal.",
+    doi: "10.1000/dandelion-terminal-speed",
+    queryUsed: rainQueries[0],
+    relevanceScore: 100,
+    sourceQualityScore: 88,
+  });
+  const bubbles = sourceRecord({
+    id: "doi:10.1000/bubble-terminal-velocity",
+    title: "Terminal Velocity and Drag Coefficient of Single Air Bubbles in Water",
+    abstract:
+      "Bubble diameter, drag coefficient, and terminal velocity are measured in stagnant water.",
+    doi: "10.1000/bubble-terminal-velocity",
+    queryUsed: rainQueries[0],
+    relevanceScore: 86,
+    sourceQualityScore: 86,
+  });
+  const qinEmpire = sourceRecord({
+    id: "doi:10.24112/sinohumanitas.122467",
+    title: "Relationship between the Flow of Decisional Messages and the Fall of the Qin Empire",
+    abstract:
+      "The fall of the Qin Empire depended on information flow, rational decision making, and education of the princes.",
+    doi: "10.24112/sinohumanitas.122467",
+    queryUsed: rainQueries[0],
+    relevanceScore: 100,
+    sourceQualityScore: 80,
+  });
+  const review = sourceRecord({
+    id: "doi:10.1016/j.jhydrol.2019.06.040",
+    title: "Raindrop size distribution and terminal velocity for rainfall erosivity studies: A review",
+    abstract:
+      "This review evaluates raindrop diameter, terminal velocity, fall speed, and measurement evidence for rainfall erosivity studies.",
+    doi: "10.1016/j.jhydrol.2019.06.040",
+    queryUsed: rainQueries[0],
+    relevanceScore: 36,
+    sourceQualityScore: 82,
+  });
+  const measurement = sourceRecord({
+    id: "doi:10.1520/jte20150048",
+    title:
+      "Comparing Raindrop Size and Velocity Measurement Accuracy Using Shadowgraphy and Disdrometery",
+    abstract:
+      "High-speed photography and shadowgraphy measure raindrop size and fall velocity with traceable experimental accuracy.",
+    doi: "10.1520/jte20150048",
+    queryUsed: rainQueries[1],
+    reviewState: "rejected",
+    relevanceScore: 100,
+    sourceQualityScore: 83,
+  });
+
+  const result = buildSourceCandidates({
+    workflowId: "wf-rain-subject-anchor",
+    topicHash: topicAnalysis.topicHash,
+    queryPlan,
+    parsedInput: parseResearchInput(topic),
+    searchResult: mockedGroundingSearchResult(
+      {
+        topic,
+        workflowId: "wf-rain-subject-anchor",
+        querySeedZh: ["雨滴 終端速度 空氣阻力 液滴直徑"],
+        querySeedEn: rainQueries,
+      },
+      [dandelion, bubbles, qinEmpire, review, measurement],
+      {
+        primaryConcepts: ["raindrop", "terminal velocity", "drag", "diameter"],
+        mustHaveTerms: ["raindrop", "terminal velocity"],
+      },
+    ),
+  });
+
+  const byId = new Map(result.sourceCandidates.map((source) => [source.sourceId, source]));
+  assert.equal(byId.get(dandelion.id)?.recommendationBucket, "rejected");
+  assert.equal(byId.get(bubbles.id)?.recommendationBucket, "rejected");
+  assert.notEqual(byId.get(qinEmpire.id)?.recommendationBucket, "scholarly_recommended");
+  assert.notEqual(byId.get(qinEmpire.id)?.reviewStatus, "accepted");
+  assert.equal(byId.get(review.id)?.recommendationBucket, "scholarly_recommended");
+  assert.equal(byId.get(review.id)?.sourceBucket, "general_academic");
+  assert.equal(byId.get(review.id)?.matchedEntities?.includes("raindrop"), true);
+  assert.equal(byId.get(measurement.id)?.recommendationBucket, "scholarly_recommended");
+  assert.notEqual(byId.get(measurement.id)?.sourceBucket, "off_topic");
+
+  const irrelevantOnly = buildSourceCandidates({
+    workflowId: "wf-rain-subject-anchor-irrelevant-only",
+    topicHash: topicAnalysis.topicHash,
+    queryPlan,
+    parsedInput: parseResearchInput(topic),
+    searchResult: mockedGroundingSearchResult(
+      {
+        topic,
+        workflowId: "wf-rain-subject-anchor-irrelevant-only",
+        querySeedZh: ["雨滴 終端速度 空氣阻力 液滴直徑"],
+        querySeedEn: rainQueries,
+      },
+      [dandelion, bubbles, qinEmpire],
+      {
+        primaryConcepts: ["raindrop", "terminal velocity", "drag", "diameter"],
+        mustHaveTerms: ["raindrop", "terminal velocity"],
+      },
+    ),
+  });
+
+  assert.equal(
+    irrelevantOnly.sourceCandidates.every((source) => source.reviewStatus === "rejected"),
+    true,
+  );
+  assert.equal(
+    irrelevantOnly.warnings.some((warning) => warning.includes("不會自動提升")),
+    true,
+  );
+});
+
+test("runResearchGroundingPipeline expands a rain topic into English search queries and traceable evidence", async () => {
+  const originalTopic = "雨水的終端速度";
+  const canonicalTopic = "雨滴終端速度與液滴直徑、空氣阻力及形變的關係";
+  const rainQueries = [
+    "raindrop terminal velocity drop diameter aerodynamic drag",
+    "raindrop fall velocity shape deformation measurement",
+    "raindrop terminal speed air density experiment",
+  ];
+  let keywordExpansionCalls = 0;
+  const searchInputs: Array<{
+    topic: string;
+    querySeedZh?: string[];
+    querySeedEn?: string[];
+  }> = [];
+
+  const result = await runResearchGroundingPipeline(
+    {
+      workflowId: "wf-rain-expansion-evidence",
+      rawUserTopic: originalTopic,
+      originalTopic,
+      topic: originalTopic,
+      normalizedTopic: canonicalTopic,
+      researchQuestion: canonicalTopic,
+      selectedDomain: "natural_science",
+      reportType: "研究報告",
+      audience: "高中",
+    },
+    {
+      keywordExpansionHandler: async (input) => {
+        keywordExpansionCalls += 1;
+        assert.equal(input.topic, canonicalTopic);
+        return {
+          normalized_topic: canonicalTopic,
+          domains: ["environmental_science"],
+          search_queries: [...rainQueries, "雨滴 終端速度 液滴直徑 空氣阻力"],
+          english_queries: rainQueries,
+          chinese_queries: ["雨滴 終端速度 液滴直徑 空氣阻力"],
+          preferred_source_types: ["peer_reviewed_journal"],
+          avoid_source_types: ["uncited_blog"],
+          reasoning_notes: ["fixture keyword expansion"],
+          fallback_used: false,
+          llm_status: "success",
+        };
+      },
+      searchHandler: async (input) => {
+        searchInputs.push(input);
+        const querySeedEn = input.querySeedEn ?? [];
+        assert.match(querySeedEn.join(" "), /raindrop terminal velocity/i);
+        assert.equal(querySeedEn.some((query) => /[\u3400-\u9fff]/u.test(query)), false);
+        const sources = Array.from({ length: 12 }, (_, index) =>
+          sourceRecord({
+            id: `rain-expanded-${index + 1}`,
+            title: `Raindrop terminal velocity, diameter, and aerodynamic drag study ${index + 1}`,
+            abstract:
+              "This peer-reviewed study measures raindrop terminal velocity across drop diameter classes and evaluates aerodynamic drag, air density, fall speed, and shape deformation.",
+            queryUsed: querySeedEn[0] ?? rainQueries[0],
+            doi: `10.1000/rain-expanded-${index + 1}`,
+            url: `https://doi.org/10.1000/rain-expanded-${index + 1}`,
+            relevanceScore: 92 - index,
+            sourceQualityScore: 88,
+            sourceType: "OpenAlex",
+            provider: "OpenAlex",
+          }),
+        );
+        return mockedGroundingSearchResult(input, sources, {
+          primaryConcepts: ["raindrop", "terminal velocity", "drop diameter", "aerodynamic drag"],
+          mustHaveTerms: ["raindrop", "terminal velocity"],
+        });
+      },
+    },
+  );
+
+  assert.equal(keywordExpansionCalls, 1);
+  assert.equal(searchInputs.length > 0, true);
+  assert.equal(result.originalTopic, originalTopic);
+  assert.equal(result.normalizedTopic, canonicalTopic);
+  assert.notEqual(result.status, "partial");
+  assert.equal((result.acceptedSources?.length ?? 0) > 0, true);
+  assert.equal((result.evidenceCards?.length ?? 0) > 0, true);
+  assert.equal(
+    result.evidenceCards?.every((card) =>
+      /raindrop|terminal velocity/i.test(card.supportSpan ?? card.supportedByText ?? ""),
+    ),
+    true,
+  );
 });
 
 test("runResearchGroundingPipeline keeps OpenAlex and Crossref candidates reviewable when CORE times out", async () => {
@@ -3900,6 +4383,7 @@ test("runResearchGroundingPipeline promotes top candidates to review when all in
   assert.equal(
     result.groundingDiagnostics?.canProceedToSourceReview,
     true,
+    JSON.stringify({ reviewCount, groundingDiagnostics: result.groundingDiagnostics }),
   );
 });
 

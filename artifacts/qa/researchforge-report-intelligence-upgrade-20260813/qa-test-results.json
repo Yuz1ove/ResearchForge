@@ -1,0 +1,64 @@
+{
+  "capturedAt": "2026-08-13",
+  "verdict": "PARTIAL_REPORT_INTELLIGENCE_UPGRADE",
+  "configuredSuites": {
+    "reportFactory": { "passed": 395, "failed": 0, "status": "PASS" },
+    "apiServer": { "passed": 433, "failed": 0, "status": "PASS" },
+    "total": { "passed": 828, "failed": 0, "status": "PASS" }
+  },
+  "focusedNamedSuites": {
+    "reportFactory": { "passed": 73, "failed": 0, "status": "PASS" },
+    "apiServer": { "passed": 50, "failed": 0, "status": "PASS" },
+    "total": { "passed": 123, "failed": 0, "status": "PASS" }
+  },
+  "typecheck": "PASS",
+  "gitDiffCheck": "PASS",
+  "namedAcceptance": {
+    "exactNamesPresent": 28,
+    "exactNamesRequired": 28,
+    "status": "PASS",
+    "tests": [
+      "writer_does_not_receive_raw_abstracts",
+      "full_text_sections_are_not_confused",
+      "atomic_facts_are_source_traceable",
+      "concepts_are_not_falsely_merged",
+      "claim_graph_contains_support_and_counterevidence",
+      "heterogeneity_classification_is_consistent",
+      "no_cross_study_false_comparison",
+      "statistical_interpretation_matches_type",
+      "odds_ratio_not_rendered_as_percentage",
+      "correlation_not_claimed_as_causation",
+      "all_chart_values_are_traceable",
+      "visual_type_matches_statistic",
+      "main_body_contains_result_visuals",
+      "image2_does_not_generate_research_numbers",
+      "no_source_order_narrative",
+      "no_paper_by_paper_stitching",
+      "no_blanket_citation_clusters",
+      "whole_document_editor_removes_repetition",
+      "audience_profiles_change_explanation_depth",
+      "report_archetype_matches_question",
+      "contradictory_evidence_is_not_hidden",
+      "quality_gate_routes_failures_correctly",
+      "limited_evidence_downgrade_is_honest",
+      "claim_citation_reference_identity",
+      "docx_pdf_preview_content_parity",
+      "cjk_render_preserved",
+      "body_paragraph_first_line_indent",
+      "benchmark_suite_has_no_unexplained_regression"
+    ]
+  },
+  "hardeningChecks": {
+    "qaRunnerRejectsZeroMatchedSubtests": "PASS",
+    "claimCitationSwapFailsClosed": "PASS",
+    "editorRepetitionMustImprove": "PASS",
+    "protectedFactsCannotBeAddedOrRemovedByEditor": "PASS"
+  },
+  "renderChecks": {
+    "cjkSearchableTraditionalChinese": "PASS",
+    "canonicalPreviewDocxPdfParity": "PASS",
+    "docxFirstLineIndent": "PASS",
+    "chartValueTraceability": "PASS"
+  },
+  "scopeNote": "Counts are from the configured package test scripts. Live-provider acceptance is tracked separately and is not inferred from unit tests."
+}

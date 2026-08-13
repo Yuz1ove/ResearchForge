@@ -1,0 +1,19 @@
+{
+  "validatedAt": "2026-08-13",
+  "artifact": "output/pdf/ResearchForge-report-intelligence-upgrade-QA-20260813.pdf",
+  "sha256": "b98974ec6e7e24f411b0b6a6e861a326e702ac2bc1cd81ad709e1b862acb9a3c",
+  "pageCount": 9,
+  "fileBytes": 231292,
+  "pageTextCharacterCounts": [820, 1312, 1352, 1060, 1643, 1365, 1440, 1528, 1777],
+  "cjkCharacters": 1161,
+  "unicodeReplacementCharacters": 0,
+  "pagesWithTextOutsideMediaBox": 0,
+  "visualInspection": {
+    "pagesInspected": 9,
+    "clipping": false,
+    "overlap": false,
+    "garbledCjk": false,
+    "unreadableTables": false
+  },
+  "status": "PASS"
+}

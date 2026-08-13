@@ -1,3 +1,8 @@
+/**
+ * AI assistance disclosure: Portions of this source-extraction module were
+ * drafted or refactored with Replit Agent and OpenAI Codex. See
+ * /AI_ASSISTANCE.md.
+ */
 import { createHash } from "node:crypto";
 import type { ParsedDocument } from "@workspace/api-zod/research-tools";
 import type { SourceCandidate } from "@workspace/api-zod/research-grounding";
@@ -170,6 +175,7 @@ const OA_HOST_PATTERNS = [
   /(^|\.)figshare\.com$/i,
   /(^|\.)zenodo\.org$/i,
   /(^|\.)osf\.io$/i,
+  /(^|\.)jstage\.jst\.go\.jp$/i,
   /(^|\.)edu$/i,
   /(^|\.)gov$/i,
 ];
@@ -1133,8 +1139,25 @@ export function enrichSourceCandidateWithExtraction(
   result: ContentExtractionResult,
 ): SourceCandidate {
   const sourceUseLevel = sourceUseLevelForExtraction(result);
+  const contentLevel: NonNullable<SourceCandidate["contentLevel"]> =
+    result.access_level === "full_text"
+      ? "fulltext"
+      : result.access_level === "abstract_only" && Boolean(result.extracted_abstract)
+        ? "abstract"
+        : "metadata";
+  const temporaryFailure = result.extraction_warnings.some((warning) =>
+    /TIMEOUT|FETCH_FAILED|HTTP_429|HTTP_5\d\d/i.test(warning),
+  );
+  const enrichmentStatus: NonNullable<SourceCandidate["enrichmentStatus"]> =
+    contentLevel !== "metadata"
+      ? "success"
+      : temporaryFailure
+        ? "temporary_failure"
+        : "permanent_no_content";
+  const sourceWithoutFailure = { ...source };
+  delete sourceWithoutFailure.enrichmentFailureReason;
   return {
-    ...source,
+    ...sourceWithoutFailure,
     accessLevel: result.access_level,
     readableUrl: result.provenance.url_used,
     extractionStatus: result.extraction_status,
@@ -1161,6 +1184,32 @@ export function enrichSourceCandidateWithExtraction(
     ...(result.extracted_chunks.length ? { extractedChunks: result.extracted_chunks } : {}),
     extractionWarnings: result.extraction_warnings,
     contentHash: result.content_hash,
+    contentLevel,
+    enrichmentAttempted: true,
+    enrichmentProviders: dedupeStrings([
+      ...(source.enrichmentProviders ?? []),
+      "content_extractor",
+    ]),
+    enrichmentStatus,
+    ...(contentLevel === "metadata" && (result.failure_reason || result.extraction_warnings[0])
+      ? {
+          enrichmentFailureReason:
+            result.failure_reason ?? result.extraction_warnings[0],
+        }
+      : {}),
+    enrichmentProvenance: [
+      ...(source.enrichmentProvenance ?? []),
+      {
+        provider: source.provider,
+        method: result.extraction_method,
+        status: result.extraction_status,
+        contentLevel,
+        retrievedAt: result.fetched_at,
+        ...(result.provenance.url_used ? { url: result.provenance.url_used } : {}),
+        ...(result.failure_reason ? { failureReason: result.failure_reason } : {}),
+      },
+    ],
+    enrichedAt: result.fetched_at,
     sourceUseLevel,
     evidenceGrounding:
       result.access_level === "full_text"

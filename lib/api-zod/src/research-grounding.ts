@@ -472,6 +472,7 @@ export const SourceCandidateSchema = z.object({
   url: z.string().trim().min(1).optional(),
   abstract: z.string().trim().min(1).optional(),
   abstractOriginal: z.string().trim().min(1).optional(),
+  originalAbstract: z.string().trim().min(1).optional(),
   abstractZh: z.string().trim().min(1).optional(),
   language: z.string().trim().min(1).optional(),
   keywords: z.array(z.string().trim().min(1)).optional(),
@@ -587,6 +588,36 @@ export const SourceCandidateSchema = z.object({
   createdAt: z.string().trim().min(1),
   retrievedAt: z.string().trim().min(1),
   rawProviderPayload: z.unknown().optional(),
+  canonicalSourceIdentity: z.string().trim().min(1).optional(),
+  providerIds: z.record(z.string(), z.string().trim().min(1)).optional(),
+  contentLevel: z.enum(["fulltext", "abstract", "metadata"]).optional(),
+  enrichmentAttempted: z.boolean().optional(),
+  enrichmentProviders: z.array(z.string().trim().min(1)).optional(),
+  enrichmentStatus: z
+    .enum([
+      "not_attempted",
+      "success",
+      "partial",
+      "permanent_no_content",
+      "temporary_failure",
+      "skipped",
+    ])
+    .optional(),
+  enrichmentFailureReason: z.string().trim().min(1).optional(),
+  enrichmentProvenance: z
+    .array(
+      z.object({
+        provider: z.string().trim().min(1),
+        method: z.string().trim().min(1),
+        status: z.string().trim().min(1),
+        contentLevel: z.enum(["fulltext", "abstract", "metadata"]),
+        retrievedAt: z.string().trim().min(1),
+        url: z.string().trim().min(1).optional(),
+        failureReason: z.string().trim().min(1).optional(),
+      }),
+    )
+    .optional(),
+  enrichedAt: z.string().trim().min(1).optional(),
 });
 export type SourceCandidate = z.infer<typeof SourceCandidateSchema>;
 
@@ -970,6 +1001,9 @@ export const GroundingEvidenceCardSchema = z.object({
   topicHash: z.string().trim().min(1),
   sourceId: z.string().trim().min(1),
   source_id: z.string().trim().min(1).optional(),
+  canonicalSourceKey: z.string().trim().min(1).optional(),
+  dedupeKey: z.string().trim().min(1).optional(),
+  citationKey: z.string().trim().min(1).optional(),
   chunkId: z.string().trim().min(1).optional(),
   claimIds: z.array(z.string().trim().min(1)).optional(),
   claimTextOriginal: z.string().trim().min(1),
@@ -1115,12 +1149,700 @@ export const SectionSufficiencyGateSchema = z.object({
 });
 export type SectionSufficiencyGate = z.infer<typeof SectionSufficiencyGateSchema>;
 
+export const ReportPlannedClaimSchema = z.object({
+  claimId: z.string().trim().min(1),
+  claimText: z.string().trim().min(1),
+  sectionId: z.string().trim().min(1),
+  supportingEvidenceIds: z.array(z.string().trim().min(1)).min(1),
+  supportingSourceKeys: z.array(z.string().trim().min(1)).min(1),
+  evidenceStrength: z.enum(["strong", "moderate", "weak", "insufficient"]),
+  scope: z.enum([
+    "full_text_supported",
+    "abstract_only_supported",
+    "mixed_source_access",
+    "background_context_only",
+  ]),
+  limitations: z.array(z.string().trim().min(1)),
+  agreementStatus: z.enum([
+    "single_source",
+    "corroborated",
+    "mixed",
+    "conflicting",
+    "uncertain",
+  ]),
+  allowedCitationKeys: z.array(z.string().trim().min(1)).min(1),
+  wordingStrength: z.enum(["assertive", "qualified", "tentative", "gap_only"]),
+  /** Stable normalized facts and thematic clusters that were synthesized into this claim. */
+  normalizedFactIds: z.array(z.string().trim().min(1)).optional(),
+  synthesisClusterIds: z.array(z.string().trim().min(1)).optional(),
+  /** Cross-source claim node that governs citation entailment for this prose claim. */
+  claimGraphId: z.string().trim().min(1).optional(),
+});
+export type ReportPlannedClaim = z.infer<typeof ReportPlannedClaimSchema>;
+
+export const CanonicalReportSectionRoleSchema = z.enum([
+  "core_evidence",
+  "background",
+  "scope_method",
+  "cross_source_synthesis",
+  "limitations",
+  "conclusion",
+  "references",
+]);
+export type CanonicalReportSectionRole = z.infer<
+  typeof CanonicalReportSectionRoleSchema
+>;
+
+export const ReportPlanBuildStatusSchema = z.enum([
+  "plan_built",
+  "plan_invalidated",
+]);
+export type ReportPlanBuildStatus = z.infer<typeof ReportPlanBuildStatusSchema>;
+
+export const ReportReadinessStatusSchema = z.enum([
+  "ready_complete_report",
+  "ready_limited_report",
+  "needs_targeted_search",
+  "blocked_insufficient_evidence",
+  "invalid_evidence_set",
+]);
+export type ReportReadinessStatus = z.infer<typeof ReportReadinessStatusSchema>;
+
+export const WriterEvidenceRejectionSchema = z.object({
+  evidenceCardId: z.string().trim().min(1),
+  sourceId: z.string().trim().min(1).nullable(),
+  reasonCode: z.string().trim().min(1),
+  diagnostics: z.array(z.string().trim().min(1)),
+});
+export type WriterEvidenceRejection = z.infer<
+  typeof WriterEvidenceRejectionSchema
+>;
+
+export const WriterEvidenceSetSchema = z.object({
+  runId: z.string().trim().min(1),
+  canonicalSourceIds: z.array(z.string().trim().min(1)),
+  eligibleEvidenceCardIds: z.array(z.string().trim().min(1)),
+  eligibleEvidenceFingerprints: z.record(
+    z.string().trim().min(1),
+    z.string().regex(/^[a-f0-9]{64}$/u),
+  ),
+  rejectedEvidenceCards: z.array(WriterEvidenceRejectionSchema),
+  evidenceSetVersion: z.string().trim().min(1),
+  evidenceSetHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  citationRegistryVersion: z.string().trim().min(1),
+});
+export type WriterEvidenceSet = z.infer<typeof WriterEvidenceSetSchema>;
+
+export const NormalizedEvidenceFunctionSchema = z.enum([
+  "support",
+  "contrast",
+  "limitation",
+  "background",
+  "definition",
+  "method",
+  "unresolved",
+]);
+export type NormalizedEvidenceFunction = z.infer<
+  typeof NormalizedEvidenceFunctionSchema
+>;
+
+/**
+ * Reader-independent evidence access tier.  This is intentionally more
+ * granular than the legacy retrieval status because claim strength must
+ * distinguish a complete article from one citable excerpt, and a complete
+ * abstract from a truncated provider record.
+ */
+export const EvidenceAccessTierSchema = z.enum([
+  "complete_full_text",
+  "structured_full_text",
+  "verifiable_full_text_excerpt",
+  "complete_abstract",
+  "partial_abstract",
+  "bibliographic_only",
+]);
+export type EvidenceAccessTier = z.infer<typeof EvidenceAccessTierSchema>;
+
+export const AtomicEvidenceLevelSchema = z.enum([
+  "direct",
+  "near_direct",
+  "background",
+  "bibliographic",
+]);
+export type AtomicEvidenceLevel = z.infer<typeof AtomicEvidenceLevelSchema>;
+
+export const AtomicEvidenceSectionTypeSchema = z.enum([
+  "abstract",
+  "background",
+  "research_question",
+  "sample_and_setting",
+  "eligibility",
+  "study_design",
+  "exposure",
+  "outcome",
+  "measurement",
+  "statistical_methods",
+  "primary_results",
+  "secondary_results",
+  "sensitivity_analysis",
+  "discussion",
+  "mechanism_interpretation",
+  "limitations",
+  "conclusion",
+  "unknown",
+]);
+export type AtomicEvidenceSectionType = z.infer<typeof AtomicEvidenceSectionTypeSchema>;
+
+export const FactVerificationStatusSchema = z.enum([
+  "verified",
+  "needs_review",
+  "conflicted",
+  "rejected",
+  "unverified",
+]);
+export type FactVerificationStatus = z.infer<typeof FactVerificationStatusSchema>;
+
+export const NormalizedFactNumericalResultSchema = z.object({
+  rawText: z.string().trim().min(1),
+  measure: z.string().trim().min(1).nullable(),
+  resultRole: z.enum(["outcome", "exposure", "baseline", "statistic"]).optional(),
+  value: z.number().finite().nullable(),
+  unit: z.string().trim().min(1).nullable(),
+  statisticType: z.string().trim().min(1).nullable(),
+  comparisonBasis: z.string().trim().min(1).nullable().optional(),
+  lowerCI: z.number().finite().nullable().default(null),
+  upperCI: z.number().finite().nullable().default(null),
+  pValue: z.number().finite().min(0).max(1).nullable().default(null),
+  uncertainty: z.string().trim().min(1).nullable(),
+});
+export type NormalizedFactNumericalResult = z.infer<
+  typeof NormalizedFactNumericalResultSchema
+>;
+
+/**
+ * Atomic, source-traceable fact used by planning and synthesis.  Nullable
+ * dimensions are deliberate: an absent field remains unknown and must never be
+ * inferred later by the prose writer.
+ */
+export const NormalizedFactSchema = z.object({
+  factId: z.string().trim().min(1),
+  /** Stable parent identity when a card yields multiple atomic result facts. */
+  parentFactId: z.string().trim().min(1).optional(),
+  resultIndex: z.number().int().min(0).nullable().default(null).optional(),
+  evidenceId: z.string().trim().min(1),
+  /** Canonical source identity. Kept beside canonicalSourceId for compatibility. */
+  sourceId: z.string().trim().min(1),
+  canonicalSourceId: z.string().trim().min(1),
+  sourceType: z.string().trim().min(1).nullable().default(null),
+  evidenceLevel: AtomicEvidenceLevelSchema.nullable().default(null),
+  sourceAccessLevel: EvidenceAccessTierSchema.nullable().default(null),
+  sectionType: AtomicEvidenceSectionTypeSchema.nullable().default(null),
+  claimTextZhTw: z.string().trim().min(1),
+  population: z.string().trim().min(1).nullable().default(null),
+  ageGroup: z.string().trim().min(1).nullable().default(null),
+  sampleSize: z.number().int().positive().nullable().default(null),
+  geography: z.string().trim().min(1).nullable().default(null),
+  studySetting: z.string().trim().min(1).nullable().default(null),
+  studyDesign: z.string().trim().min(1).nullable().default(null),
+  exposureConcept: z.string().trim().min(1).nullable().default(null),
+  exposureMeasure: z.string().trim().min(1).nullable().default(null),
+  outcomeConcept: z.string().trim().min(1).nullable().default(null),
+  outcomeMeasure: z.string().trim().min(1).nullable().default(null),
+  statisticType: z.string().trim().min(1).nullable().default(null),
+  value: z.number().finite().nullable().default(null),
+  lowerCI: z.number().finite().nullable().default(null),
+  upperCI: z.number().finite().nullable().default(null),
+  pValue: z.number().finite().min(0).max(1).nullable().default(null),
+  unit: z.string().trim().min(1).nullable().default(null),
+  direction: z.enum([
+    "positive",
+    "negative",
+    "null",
+    "mixed",
+    "not_applicable",
+    "unclear",
+  ]).nullable().default(null),
+  mediator: z.string().trim().min(1).nullable().default(null),
+  moderator: z.string().trim().min(1).nullable().default(null),
+  confounders: z.array(z.string().trim().min(1)).nullable().default(null),
+  adjustmentStatus: z.string().trim().min(1).nullable().default(null),
+  evidenceDirectness: z.enum(["A", "B", "C", "D"]).nullable().default(null),
+  sourceSpan: z.string().trim().min(1).nullable().default(null),
+  certainty: z.string().trim().min(1).nullable().default(null),
+  confidence: z.number().min(0).max(1).nullable().default(null),
+  authorInterpretation: z.string().trim().min(1).nullable().default(null),
+  authorLimitations: z.array(z.string().trim().min(1)).nullable().default(null),
+  extractionConfidence: z.number().min(0).max(1).nullable().default(null),
+  verificationStatus: FactVerificationStatusSchema.default("unverified"),
+  evidenceFunction: NormalizedEvidenceFunctionSchema.default("support"),
+  location: z.string().trim().min(1).nullable(),
+  setting: z.string().trim().min(1).nullable(),
+  exposure: z.string().trim().min(1).nullable(),
+  outcome: z.string().trim().min(1).nullable(),
+  method: z.string().trim().min(1).nullable(),
+  numericalResults: z.array(NormalizedFactNumericalResultSchema),
+  associationDirection: z.enum([
+    "positive",
+    "negative",
+    "null",
+    "mixed",
+    "not_applicable",
+    "unclear",
+  ]),
+  uncertainty: z.string().trim().min(1).nullable(),
+  directness: z.enum(["A", "B", "C", "D"]),
+  applicability: z.string().trim().min(1),
+  locator: z.string().trim().min(1),
+  themeKey: z.string().trim().min(1),
+  conceptAxes: z.array(z.string().trim().min(1)).min(1),
+  comparabilityKey: z.string().trim().min(1),
+  limitations: z.array(z.string().trim().min(1)),
+  supportingEvidenceIds: z.array(z.string().trim().min(1)).min(1),
+  supportingSourceIds: z.array(z.string().trim().min(1)).min(1),
+  writerEligible: z.boolean(),
+});
+export type NormalizedFact = z.infer<typeof NormalizedFactSchema>;
+
+/** A semantic, potentially multi-source grouping of normalized facts. */
+export const SynthesisClusterSchema = z.object({
+  clusterId: z.string().trim().min(1),
+  clusterPurpose: z.enum([
+    "relationship",
+    "exposure_translation",
+    "outcome_hierarchy",
+    "applicability_boundary",
+    "method_heterogeneity",
+  ]).optional(),
+  themeKey: z.string().trim().min(1),
+  label: z.string().trim().min(1),
+  conceptAxes: z.array(z.string().trim().min(1)).min(1),
+  factIds: z.array(z.string().trim().min(1)).min(1),
+  evidenceIds: z.array(z.string().trim().min(1)).min(1),
+  sourceIds: z.array(z.string().trim().min(1)).min(1),
+  sharedFindingZhTw: z.string().trim().min(1),
+  agreementStatus: z.enum([
+    "single_source",
+    "corroborated",
+    "mixed",
+    "conflicting",
+    "uncertain",
+  ]),
+  associationDirections: z.array(z.enum([
+    "positive",
+    "negative",
+    "null",
+    "mixed",
+    "not_applicable",
+    "unclear",
+  ])),
+  comparabilityKeys: z.array(z.string().trim().min(1)).min(1),
+  numericAggregationAllowed: z.boolean().optional(),
+  comparabilityStatus: z.enum([
+    "comparable",
+    "partially_comparable",
+    "direction_only",
+    "not_comparable",
+  ]).default("not_comparable"),
+  comparabilityReasons: z.array(z.string().trim().min(1)).default([]),
+  conflictPoints: z.array(z.string().trim().min(1)),
+  limitations: z.array(z.string().trim().min(1)),
+});
+export type SynthesisCluster = z.infer<typeof SynthesisClusterSchema>;
+
+export const CrossSourceClaimTypeSchema = z.enum([
+  "direct_result",
+  "cross_source_shared_direction",
+  "research_difference",
+  "possible_mechanism",
+  "alternative_explanation",
+  "applicability_boundary",
+  "evidence_limitation",
+  "evidence_gap",
+  "research_gap",
+  "author_synthesis",
+]);
+export type CrossSourceClaimType = z.infer<typeof CrossSourceClaimTypeSchema>;
+
+export const CrossSourceClaimNodeSchema = z.object({
+  claimId: z.string().trim().min(1),
+  claimType: CrossSourceClaimTypeSchema,
+  readerFacingStatement: z.string().trim().min(1),
+  supportingFacts: z.array(z.string().trim().min(1)),
+  contradictingFacts: z.array(z.string().trim().min(1)),
+  backgroundFacts: z.array(z.string().trim().min(1)),
+  applicability: z.array(z.string().trim().min(1)),
+  confidence: z.number().min(0).max(1),
+  citationIds: z.array(z.string().trim().min(1)),
+  statisticalInterpretationIds: z.array(z.string().trim().min(1)).default([]),
+  visualizable: z.boolean(),
+  visualId: z.string().trim().min(1).nullable(),
+  evidenceDirectness: z.enum(["A", "B", "C", "D"]).nullable(),
+  limitations: z.array(z.string().trim().min(1)),
+});
+export type CrossSourceClaimNode = z.infer<typeof CrossSourceClaimNodeSchema>;
+
+export const CrossSourceClaimEdgeSchema = z.object({
+  fromClaimId: z.string().trim().min(1),
+  toClaimId: z.string().trim().min(1),
+  relationship: z.enum(["supports", "contradicts", "qualifies", "explains", "bounds"]),
+});
+export type CrossSourceClaimEdge = z.infer<typeof CrossSourceClaimEdgeSchema>;
+
+export const CrossSourceClaimGraphSchema = z.object({
+  researchQuestion: z.string().trim().min(1),
+  claims: z.array(CrossSourceClaimNodeSchema),
+  edges: z.array(CrossSourceClaimEdgeSchema).default([]),
+});
+export type CrossSourceClaimGraph = z.infer<typeof CrossSourceClaimGraphSchema>;
+
+export const StatisticalInterpretationSchema = z.object({
+  interpretationId: z.string().trim().min(1),
+  factId: z.string().trim().min(1),
+  sourceId: z.string().trim().min(1),
+  statisticType: z.string().trim().min(1),
+  technicalExplanation: z.string().trim().min(1),
+  readerExplanation: z.string().trim().min(1),
+  supportedConclusion: z.string().trim().min(1),
+  unsupportedConclusion: z.string().trim().min(1),
+  causalInterpretationAllowed: z.boolean(),
+  visualizable: z.boolean(),
+  recommendedVisual: z.enum([
+    "proportion_bar",
+    "hundred_person",
+    "forest_plot",
+    "correlation_matrix",
+    "path_diagram",
+    "line_chart",
+    "distribution_plot",
+    "comparison_matrix",
+    "key_finding_box",
+    "none",
+  ]),
+  nullValue: z.number().finite().nullable(),
+  precisionStatus: z.enum(["precise", "imprecise", "unknown", "crosses_null"]),
+  crossStudyComparability: z.enum([
+    "COMPARABLE",
+    "PARTIALLY_COMPARABLE",
+    "DIRECTION_ONLY",
+    "NOT_COMPARABLE",
+  ]),
+  warnings: z.array(z.string().trim().min(1)),
+});
+export type StatisticalInterpretation = z.infer<typeof StatisticalInterpretationSchema>;
+
+export const KnowledgeConceptNodeSchema = z.object({
+  nodeId: z.string().trim().min(1),
+  nodeType: z.enum([
+    "population",
+    "exposure",
+    "outcome",
+    "mediator",
+    "moderator",
+    "confounder",
+    "setting",
+    "method",
+    "direction",
+    "applicability",
+    "gap",
+  ]),
+  normalizedLabel: z.string().trim().min(1),
+  aliases: z.array(z.string().trim().min(1)),
+  supportingFactIds: z.array(z.string().trim().min(1)),
+});
+export type KnowledgeConceptNode = z.infer<typeof KnowledgeConceptNodeSchema>;
+
+export const KnowledgeRelationEdgeSchema = z.object({
+  edgeId: z.string().trim().min(1),
+  fromNodeId: z.string().trim().min(1),
+  toNodeId: z.string().trim().min(1),
+  relationshipType: z.enum([
+    "association",
+    "prediction",
+    "mediation",
+    "moderation",
+    "possible_mechanism",
+    "causal",
+    "reverse_relationship",
+    "null_relationship",
+    "insufficient_evidence",
+  ]),
+  supportingFactIds: z.array(z.string().trim().min(1)),
+  contradictingFactIds: z.array(z.string().trim().min(1)),
+  evidenceBasis: z.enum([
+    "direct_measurement",
+    "statistical_association",
+    "source_author_interpretation",
+    "researchforge_synthesis",
+    "unverified_hypothesis",
+  ]),
+  evidenceStrength: z.enum(["strong", "moderate", "weak", "insufficient"]),
+  applicablePopulations: z.array(z.string().trim().min(1)),
+  applicableSettings: z.array(z.string().trim().min(1)),
+  causalInterpretationAllowed: z.boolean(),
+  uncertainty: z.array(z.string().trim().min(1)),
+});
+export type KnowledgeRelationEdge = z.infer<typeof KnowledgeRelationEdgeSchema>;
+
+export const ResearchKnowledgeModelSchema = z.object({
+  researchQuestion: z.string().trim().min(1),
+  nodes: z.array(KnowledgeConceptNodeSchema),
+  edges: z.array(KnowledgeRelationEdgeSchema),
+  evidenceGaps: z.array(z.string().trim().min(1)),
+});
+export type ResearchKnowledgeModel = z.infer<typeof ResearchKnowledgeModelSchema>;
+
+export const HeterogeneityComparisonSchema = z.object({
+  comparisonId: z.string().trim().min(1),
+  leftFactId: z.string().trim().min(1),
+  rightFactId: z.string().trim().min(1),
+  status: z.enum([
+    "COMPARABLE",
+    "PARTIALLY_COMPARABLE",
+    "DIRECTION_ONLY",
+    "NOT_COMPARABLE",
+  ]),
+  comparableDimensions: z.array(z.string().trim().min(1)),
+  differingDimensions: z.array(z.string().trim().min(1)),
+  reasons: z.array(z.string().trim().min(1)),
+  numericPoolingAllowed: z.boolean(),
+  directionComparisonAllowed: z.boolean(),
+});
+export type HeterogeneityComparison = z.infer<typeof HeterogeneityComparisonSchema>;
+
+export const HeterogeneityAnalysisSchema = z.object({
+  comparisons: z.array(HeterogeneityComparisonSchema),
+  dominantDifferenceSources: z.array(z.string().trim().min(1)),
+  synthesisBoundary: z.string().trim().min(1),
+});
+export type HeterogeneityAnalysis = z.infer<typeof HeterogeneityAnalysisSchema>;
+
+export const ClaimContradictionAnalysisSchema = z.object({
+  claimId: z.string().trim().min(1),
+  status: z.enum([
+    "consistent",
+    "mixed",
+    "contradictory",
+    "single_source",
+    "insufficient",
+  ]),
+  supportingFactIds: z.array(z.string().trim().min(1)),
+  counterFactIds: z.array(z.string().trim().min(1)),
+  nullFactIds: z.array(z.string().trim().min(1)),
+  primaryExplanation: z.string().trim().min(1),
+  alternativeExplanations: z.array(z.string().trim().min(1)),
+  unresolvedPossibilities: z.array(z.string().trim().min(1)),
+  discriminatingStudy: z.string().trim().min(1),
+});
+export type ClaimContradictionAnalysis = z.infer<typeof ClaimContradictionAnalysisSchema>;
+
+export const AudienceProfileIdSchema = z.enum([
+  "general_reader",
+  "high_school_report",
+  "university_project",
+  "professional_evidence_synthesis",
+  "decision_brief",
+]);
+export type AudienceProfileId = z.infer<typeof AudienceProfileIdSchema>;
+
+export const AudienceProfileSchema = z.object({
+  profileId: AudienceProfileIdSchema,
+  terminologyExplanation: z.enum(["extensive", "guided", "selective", "minimal"]),
+  sentenceLength: z.enum(["short", "medium", "technical"]),
+  statisticalDetail: z.enum(["plain_language", "foundational", "operational", "complete"]),
+  methodDepth: z.enum(["brief", "foundational", "operationalization", "full"]),
+  visualComplexity: z.enum(["simple", "guided", "analytical", "expert"]),
+  citationDensity: z.enum(["low", "moderate", "high", "complete"]),
+  limitationDepth: z.enum(["key_only", "explained", "detailed", "full"]),
+  includePracticalRecommendations: z.boolean(),
+  showEvidenceGrades: z.boolean(),
+  summaryTargetWords: z.number().int().positive(),
+  bodyTargetWords: z.number().int().positive(),
+});
+export type AudienceProfile = z.infer<typeof AudienceProfileSchema>;
+
+export const ReportArchetypeIdSchema = z.enum([
+  "literature_review",
+  "comparative_analysis",
+  "mechanism_analysis",
+  "experimental_design",
+  "technical_assessment",
+  "policy_analysis",
+  "market_industry_research",
+  "controversy_analysis",
+  "limited_evidence_report",
+  "systematic_evidence_map",
+]);
+export type ReportArchetypeId = z.infer<typeof ReportArchetypeIdSchema>;
+
+export const ReportArchetypeDecisionSchema = z.object({
+  archetypeId: ReportArchetypeIdSchema,
+  questionType: z.enum([
+    "research_inventory",
+    "comparison",
+    "mechanism",
+    "effect_size",
+    "design",
+    "adoption",
+    "controversy",
+    "evidence_gap",
+  ]),
+  rationale: z.string().trim().min(1),
+  sectionBlueprint: z.array(z.string().trim().min(1)).min(1),
+  evidenceRequirements: z.array(z.string().trim().min(1)).min(1),
+  visualRequirements: z.array(z.string().trim().min(1)),
+  comparisonMethod: z.string().trim().min(1),
+  conclusionForm: z.string().trim().min(1),
+  minimumConditionsMet: z.boolean(),
+  downgradedFrom: ReportArchetypeIdSchema.nullable(),
+});
+export type ReportArchetypeDecision = z.infer<typeof ReportArchetypeDecisionSchema>;
+
+export const NarrativePassPlanSchema = z.object({
+  pass: z.enum(["teach_back", "academic_reconstruction"]),
+  objective: z.string().trim().min(1),
+  inputClaimIds: z.array(z.string().trim().min(1)),
+  inputFactIds: z.array(z.string().trim().min(1)),
+  outputConstraints: z.array(z.string().trim().min(1)).min(1),
+  citationMode: z.enum(["deferred", "claim_entailment"]),
+});
+export type NarrativePassPlan = z.infer<typeof NarrativePassPlanSchema>;
+
+export const NormalizedWriterEvidenceSchema = z.object({
+  evidenceId: z.string().trim().min(1),
+  canonicalSourceId: z.string().trim().min(1),
+  sourceLanguage: z.string().trim().min(1),
+  originalSpan: z.string(),
+  normalizedClaimZhTw: z.string().trim().min(1),
+  evidenceType: z.string().trim().min(1),
+  topicCluster: z.string().trim().min(1),
+  stance: z.enum(["supports", "contrasts", "limits", "neutral", "unresolved"]),
+  scope: z.string().trim().min(1),
+  confidence: z.number().min(0).max(1),
+  allowedUses: z.array(NormalizedEvidenceFunctionSchema),
+  canonicalCitationMarker: z.string().trim().min(1),
+  writerEligible: z.boolean(),
+});
+export type NormalizedWriterEvidence = z.infer<typeof NormalizedWriterEvidenceSchema>;
+
+export const ArgumentMapClaimSchema = z.object({
+  claimId: z.string().trim().min(1),
+  claimText: z.string().trim().min(1),
+  function: NormalizedEvidenceFunctionSchema,
+  supportingEvidenceIds: z.array(z.string().trim().min(1)),
+  contrastingEvidenceIds: z.array(z.string().trim().min(1)),
+  limitingEvidenceIds: z.array(z.string().trim().min(1)),
+  sourceCount: z.number().int().min(0),
+  wordingStrength: z.enum(["assertive", "qualified", "tentative", "gap_only"]),
+  normalizedFactIds: z.array(z.string().trim().min(1)).optional(),
+  synthesisClusterIds: z.array(z.string().trim().min(1)).optional(),
+});
+export type ArgumentMapClaim = z.infer<typeof ArgumentMapClaimSchema>;
+
+export const ArgumentMapSchema = z.object({
+  researchQuestion: z.string().trim().min(1),
+  scope: z.string().trim().min(1),
+  centralAnswer: z.string().trim().min(1),
+  subQuestions: z.array(z.string().trim().min(1)).min(1).max(4),
+  claims: z.array(ArgumentMapClaimSchema),
+  evidenceGaps: z.array(z.string().trim().min(1)),
+  conclusionBoundary: z.string().trim().min(1),
+});
+export type ArgumentMap = z.infer<typeof ArgumentMapSchema>;
+
+export const DiscourseSectionSchema = z.object({
+  sectionId: z.string().trim().min(1),
+  sectionRole: z.string().trim().min(1),
+  questionAnswered: z.string().trim().min(1),
+  sectionClaim: z.string().trim().min(1),
+  assignedEvidenceIds: z.array(z.string().trim().min(1)),
+  evidenceRelationship: z.string().trim().min(1),
+  connectionFromPrevious: z.string().trim().min(1),
+  expectedTakeaway: z.string().trim().min(1),
+  transitionToNext: z.string().trim().min(1),
+  limitations: z.array(z.string().trim().min(1)),
+  assignedFactIds: z.array(z.string().trim().min(1)).optional(),
+  synthesisClusterIds: z.array(z.string().trim().min(1)).optional(),
+});
+export type DiscourseSection = z.infer<typeof DiscourseSectionSchema>;
+
+export const ReportEvidenceGroupSchema = z.object({
+  groupId: z.string().trim().min(1),
+  label: z.string().trim().min(1),
+  groupingBasis: z.enum(["theme", "method", "setting", "geography", "finding", "limitation"]),
+  evidenceIds: z.array(z.string().trim().min(1)).min(1),
+  sourceKeys: z.array(z.string().trim().min(1)).min(1),
+  sharedFinding: z.string().trim().min(1),
+  contrastPoints: z.array(z.string().trim().min(1)).default([]),
+  limitations: z.array(z.string().trim().min(1)).default([]),
+  normalizedFactIds: z.array(z.string().trim().min(1)).optional(),
+  synthesisClusterIds: z.array(z.string().trim().min(1)).optional(),
+  conceptAxes: z.array(z.string().trim().min(1)).optional(),
+  comparabilityKeys: z.array(z.string().trim().min(1)).optional(),
+});
+export type ReportEvidenceGroup = z.infer<typeof ReportEvidenceGroupSchema>;
+
+export const ReportParagraphPlanSchema = z.object({
+  paragraphId: z.string().trim().min(1),
+  purpose: z.enum([
+    "orient",
+    "define_scope",
+    "present_evidence",
+    "compare_sources",
+    "interpret",
+    "state_boundary",
+    "transition",
+    "answer_question",
+  ]),
+  topicSentenceGoal: z.string().trim().min(1),
+  evidenceGroupIds: z.array(z.string().trim().min(1)).default([]),
+  supportedClaimIds: z.array(z.string().trim().min(1)).default([]),
+  synthesisGoal: z.string().trim().min(1),
+  transitionGoal: z.string().trim().min(1),
+  limitationBoundary: z.string().trim().min(1),
+  normalizedFactIds: z.array(z.string().trim().min(1)).optional(),
+  synthesisClusterIds: z.array(z.string().trim().min(1)).optional(),
+  teachBackGoal: z.string().trim().min(1).optional(),
+  academicReconstructionGoal: z.string().trim().min(1).optional(),
+  minimumIntegratedFactCount: z.number().int().min(0).optional(),
+  primaryFunction: z.enum([
+    "define_concept",
+    "raise_question",
+    "establish_claim",
+    "provide_evidence",
+    "explain_number",
+    "compare_difference",
+    "alternative_explanation",
+    "state_limitation",
+    "transition",
+    "synthesize",
+    "answer_question",
+  ]).optional(),
+});
+export type ReportParagraphPlan = z.infer<typeof ReportParagraphPlanSchema>;
+
 export const ReportSectionPlanSchema = z.object({
   sectionId: z.string().trim().min(1),
   title: z.string().trim().min(1),
   goal: z.string().trim().min(1),
   requiredEvidenceTypes: z.array(z.string().trim().min(1)),
   evidenceCardIds: z.array(z.string().trim().min(1)),
+  plannedClaimIds: z.array(z.string().trim().min(1)).default([]),
+  canonicalSectionRole: CanonicalReportSectionRoleSchema.optional(),
+  sectionRole: z.string().trim().min(1).optional(),
+  questionAnswered: z.string().trim().min(1).optional(),
+  sectionClaim: z.string().trim().min(1).optional(),
+  evidenceRelationship: z.string().trim().min(1).optional(),
+  connectionFromPrevious: z.string().trim().min(1).optional(),
+  expectedTakeaway: z.string().trim().min(1).optional(),
+  transitionToNext: z.string().trim().min(1).optional(),
+  limitations: z.array(z.string().trim().min(1)).optional(),
+  sectionPurpose: z.string().trim().min(1).optional(),
+  sectionThesis: z.string().trim().min(1).optional(),
+  paragraphPlan: z.array(ReportParagraphPlanSchema).optional(),
+  evidenceGroups: z.array(ReportEvidenceGroupSchema).optional(),
+  supportedClaims: z.array(ReportPlannedClaimSchema).optional(),
+  contrastPoints: z.array(z.string().trim().min(1)).optional(),
+  transitionGoal: z.string().trim().min(1).optional(),
+  limitationBoundary: z.string().trim().min(1).optional(),
 });
 export type ReportSectionPlan = z.infer<typeof ReportSectionPlanSchema>;
 
@@ -1128,9 +1850,41 @@ export const ReportPlanSchema = z.object({
   workflowId: z.string().trim().min(1),
   topicHash: z.string().trim().min(1),
   title: z.string().trim().min(1),
+  originalTitle: z.string().trim().min(1).optional(),
+  titleLanguage: z.enum(["zh-TW", "en", "mixed"]).optional(),
+  keywords: z.array(z.string().trim().min(1)).optional(),
   researchQuestion: z.string().trim().min(1),
+  evidenceSetHash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  evidenceSetVersion: z.string().trim().min(1).optional(),
+  citationRegistryVersion: z.string().trim().min(1).optional(),
+  planBuildStatus: ReportPlanBuildStatusSchema.optional(),
+  readinessStatus: ReportReadinessStatusSchema.optional(),
+  readinessReasons: z.array(z.string().trim().min(1)).optional(),
+  targetedRetrievalAttempted: z.boolean().optional(),
+  centralAnswer: z.string().trim().min(1).optional(),
+  scope: z.string().trim().min(1).optional(),
+  subQuestions: z.array(z.string().trim().min(1)).max(4).optional(),
   sections: z.array(ReportSectionPlanSchema),
+  plannedClaims: z.array(ReportPlannedClaimSchema).default([]),
   evidenceGaps: z.array(z.string().trim().min(1)),
+  conclusionBoundary: z.string().trim().min(1).optional(),
+  argumentMap: ArgumentMapSchema.optional(),
+  discoursePlan: z.array(DiscourseSectionSchema).optional(),
+  normalizedEvidence: z.array(NormalizedWriterEvidenceSchema).optional(),
+  normalizedFacts: z.array(NormalizedFactSchema).optional(),
+  synthesisClusters: z.array(SynthesisClusterSchema).optional(),
+  claimGraph: CrossSourceClaimGraphSchema.optional(),
+  knowledgeModel: ResearchKnowledgeModelSchema.optional(),
+  heterogeneityAnalysis: HeterogeneityAnalysisSchema.optional(),
+  statisticalInterpretations: z.array(StatisticalInterpretationSchema).optional(),
+  contradictionAnalysis: z.array(ClaimContradictionAnalysisSchema).optional(),
+  audienceProfile: AudienceProfileSchema.optional(),
+  reportArchetype: ReportArchetypeDecisionSchema.optional(),
+  narrativePasses: z.array(NarrativePassPlanSchema).length(2).optional(),
+  compositionKind: z
+    .enum(["complete_research_report", "limited_evidence_brief", "evidence_summary"])
+    .optional(),
+  terminology: z.record(z.string(), z.string()).optional(),
   academicSafetyReview: AcademicSafetyReviewSchema.optional(),
 });
 export type ReportPlan = z.infer<typeof ReportPlanSchema>;

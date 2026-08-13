@@ -1,3 +1,8 @@
+/**
+ * AI assistance disclosure: Portions of this research-planning pipeline were
+ * drafted or refactored with Replit Agent and OpenAI Codex. See
+ * /AI_ASSISTANCE.md for scope and verification details.
+ */
 import {
   dedupeSourceRecords,
   normalizeSourceRecord,
@@ -30,6 +35,14 @@ import {
   type TopicResearchAngle,
   type TopicUnderstandingResult,
 } from "@workspace/api-zod/topic-understanding";
+import {
+  assessResearchDirectness,
+  buildResearchFacetQueries,
+  inferResearchFacets,
+  summarizeFacetAdequacy,
+  type ResearchFacetKey,
+  type ResearchFacetPlan,
+} from "@workspace/api-zod/research-topic-facets";
 import { createHash, randomUUID } from "node:crypto";
 import { logger } from "../lib/logger";
 import {
@@ -232,7 +245,11 @@ export interface SearchIntentQueryPhase {
     | "academic_synonym"
     | "education_explanation"
     | "chinese_supplemental"
-    | "fallback_relaxed";
+    | "fallback_relaxed"
+    | "exact_bilingual"
+    | "synonym_expansion"
+    | "single_facet_relaxation"
+    | "gap_fill";
   queries: string[];
 }
 
@@ -407,6 +424,11 @@ export interface RecoveryResult {
   rawAddedCount: number;
   dedupedAddedCount: number;
   queries: string[];
+  facetGapFill?: boolean;
+  missingFacets?: ResearchFacetKey[];
+  completed?: boolean;
+  providerAttemptCount?: number;
+  successfulProviderQueryCount?: number;
 }
 
 export interface SourceSearchPipelineDiagnostics {
@@ -452,6 +474,9 @@ export interface SourceSearchPipelineDiagnostics {
   primary_candidate_count: number;
   recall_pool?: Omit<RecallPool, "items">;
   recovery?: RecoveryResult;
+  researchFacets?: ResearchFacetPlan;
+  evidenceAdequacy?: ReturnType<typeof summarizeFacetAdequacy>;
+  providerCoverageGaps?: string[];
   provider_status: SourceSearchProviderDiagnostic[];
   provider_health?: ProviderHealth[];
   warnings: string[];
@@ -773,6 +798,38 @@ const URBAN_HEAT_PENALTIES = [
   "learning performance",
   "student satisfaction",
   "school satisfaction",
+];
+
+const GREEN_ROOF_PRIMARY = [
+  "green roof",
+  "vegetated roof",
+  "roof greening",
+  "building cooling",
+  "building energy consumption",
+];
+
+const GREEN_ROOF_CONTEXT = [
+  "building envelope",
+  "roof surface temperature",
+  "indoor thermal environment",
+  "cooling load",
+];
+
+const GREEN_ROOF_OUTCOMES = [
+  "roof surface temperature",
+  "indoor temperature",
+  "cooling energy demand",
+  "energy savings",
+  "thermal performance",
+];
+
+const GREEN_ROOF_MUST_HAVE = [
+  "green roof",
+  "green roofs",
+  "vegetated roof",
+  "roof greening",
+  "綠屋頂",
+  "屋頂綠化",
 ];
 
 const SHORT_VIDEO_PRIMARY = [
@@ -2566,6 +2623,21 @@ function isUrbanHeatIslandTopic(input: SearchIntentPlannerInput): boolean {
   ]);
 }
 
+function isGreenRoofCoolingEnergyTopic(input: SearchIntentPlannerInput): boolean {
+  const text = normalizeText(
+    `${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`,
+  );
+  const hasGreenRoof = hasAny(text, [
+    /綠屋頂|屋頂綠化/,
+    /green roofs?|vegetated roofs?|roof greening/i,
+  ]);
+  const hasThermalOrEnergyOutcome = hasAny(text, [
+    /降溫|溫度|熱環境|熱性能|冷房|能源|能耗|節能/,
+    /cooling|temperature|thermal|energy|cooling load|energy consumption|energy savings?/i,
+  ]);
+  return hasGreenRoof && hasThermalOrEnergyOutcome;
+}
+
 function isShortVideoSleepAttentionTopic(
   input: SearchIntentPlannerInput,
 ): boolean {
@@ -4015,6 +4087,81 @@ export function buildRuleBasedSearchIntent(
       reasoningNotes: planReason(
         reason,
         "Agricultural-waste pollution searches must keep agricultural waste, farm residues, runoff, water or soil contamination, eutrophication, and waste-management evidence together.",
+      ),
+      plannerStatus,
+      fallbackUsed: true,
+    };
+  }
+
+  if (isGreenRoofCoolingEnergyTopic(input)) {
+    return {
+      normalizedTopic,
+      topicUnderstanding: understanding,
+      topicType: "environmental_issue",
+      primaryConcepts: GREEN_ROOF_PRIMARY,
+      contextConcepts: GREEN_ROOF_CONTEXT,
+      outcomeConcepts: GREEN_ROOF_OUTCOMES,
+      populationConcepts: ["buildings", "building occupants"],
+      lowWeightTerms: ["policy", "public opinion", "education"],
+      mustHaveTerms: GREEN_ROOF_MUST_HAVE,
+      shouldHaveTerms: unique([
+        ...GREEN_ROOF_CONTEXT,
+        ...GREEN_ROOF_OUTCOMES,
+        "evapotranspiration",
+        "insulation",
+      ]),
+      penaltyTerms: [
+        "unrelated green infrastructure",
+        "agricultural roof garden production",
+        "roof waterproofing without vegetation",
+      ],
+      negativeTerms: [
+        "generic urban greening without roofs",
+        "food production without thermal or energy outcomes",
+      ],
+      chineseQueries: [
+        "綠屋頂 建築 降溫 能源消耗",
+        "屋頂綠化 屋頂表面溫度 室內溫度",
+        "綠屋頂 冷房負荷 節能 建築",
+        "綠屋頂 熱性能 能源模擬 實測",
+      ],
+      englishQueries: [
+        "green roof building cooling energy consumption",
+        "green roof roof surface temperature indoor temperature",
+        "vegetated roof cooling load energy savings building",
+        "green roof thermal performance field measurement simulation",
+        "green roof building energy demand systematic review",
+      ],
+      narrowedResearchQuestions: [
+        {
+          title: "綠屋頂對建築熱環境與能源需求的影響",
+          researchAngle: "比較綠屋頂對屋頂表面溫度、室內溫度、冷房負荷與建築能源消耗的實測或模擬結果。",
+          whyResearchable: "可由建築熱性能、綠屋頂實測、能源模擬與回顧研究建立可追溯的證據比較。",
+          suggestedSourceTypes: ["academic_paper", "systematic_review"],
+          zhKeywords: ["綠屋頂", "屋頂表面溫度", "室內溫度", "冷房負荷", "能源消耗"],
+          enKeywords: ["green roof", "roof surface temperature", "indoor temperature", "cooling load", "energy consumption"],
+          primaryQueries: [
+            "green roof building cooling energy consumption",
+            "vegetated roof cooling load energy savings building",
+          ],
+          secondaryQueries: [
+            "綠屋頂 建築 降溫 能源消耗",
+            "green roof thermal performance field measurement simulation",
+          ],
+          excludedDriftTerms: [
+            "generic urban greening without roofs",
+            "roof waterproofing without vegetation",
+          ],
+        },
+      ],
+      excludedDriftTerms: [
+        "generic urban greening without roofs",
+        "agricultural roof garden production",
+        "roof waterproofing without vegetation",
+      ],
+      reasoningNotes: planReason(
+        reason,
+        "Green-roof searches must keep the vegetated-roof intervention together with building-temperature, cooling-load, or energy-consumption outcomes.",
       ),
       plannerStatus,
       fallbackUsed: true,
@@ -7956,6 +8103,50 @@ interface EvidenceCardTopicAnchorProfile {
 
 const EVIDENCE_CARD_TOPIC_ANCHORS: EvidenceCardTopicAnchorProfile[] = [
   {
+    id: "short_video_adolescent_sleep",
+    topicPattern: /(?:短影音|短視頻|short[- ]?form video|short video|tiktok|reels).*(?:睡眠|sleep|青少年|高中|adolescent|high school)|(?:睡眠|sleep|青少年|高中|adolescent|high school).*(?:短影音|短視頻|short[- ]?form video|short video|tiktok|reels)/i,
+    fallbackEnglish: [
+      "short-form video use adolescents sleep quality",
+      "short video social media high school students sleep quality",
+      "TikTok use adolescents sleep duration sleep quality",
+    ],
+    fallbackChinese: [
+      "短影音使用 青少年 睡眠品質",
+      "短影音 社群媒體 高中生 睡眠時間",
+    ],
+    sourceSubjectTerms: [
+      "short-form video",
+      "short video",
+      "TikTok",
+      "短影音",
+      "短視頻",
+    ],
+    sourceAxisTerms: [
+      "sleep quality",
+      "sleep duration",
+      "sleep disturbance",
+      "adolescents",
+      "high school students",
+      "睡眠品質",
+      "睡眠時間",
+      "青少年",
+      "高中生",
+    ],
+    sourceDriftTerms: [
+      "video marketing",
+      "advertising engagement",
+      "adult shift work",
+      "sleep apnea treatment",
+    ],
+    queryAllowed: (query) => {
+      const text = normalizeText(query);
+      return (
+        /short.?form video|short video|tiktok|reels|短影音|短視頻/.test(text) &&
+        /sleep|睡眠/.test(text)
+      );
+    },
+  },
+  {
     id: "photovoltaic_surface_roughness",
     topicPattern: /(?:光伏|太陽能|太陽電池|photovoltaic|solar (?:cell|panel)).*(?:粗糙|表面|反射|效率|roughness|surface|reflectance|efficiency)|(?:粗糙|表面|反射|效率|roughness|surface|reflectance|efficiency).*(?:光伏|太陽能|太陽電池|photovoltaic|solar (?:cell|panel))/i,
     fallbackEnglish: [
@@ -8434,7 +8625,18 @@ function evidenceCardAnchoredExpandedQueries(
 ): ExpandedQuery[] {
   const profile = evidenceCardAnchorProfileForPlan(plan);
   if (!profile) return expandedQueries;
-  return expandedQueries.filter((query) => profile.queryAllowed(query.query));
+  const filtered = expandedQueries.filter((query) => profile.queryAllowed(query.query));
+  if (filtered.length > 0) return filtered;
+
+  return unique([...profile.fallbackEnglish, ...profile.fallbackChinese])
+    .filter((query) => profile.queryAllowed(query))
+    .map((query): ExpandedQuery => ({
+      query,
+      language: /[\u3400-\u9fff]/u.test(query) ? "zh-TW" : "en",
+      purpose: "academic_source",
+      source: "fallback",
+      confidence: 0.68,
+    }));
 }
 
 function evidenceCardAnchoredSourceMixBuckets(
@@ -8527,6 +8729,14 @@ function fallbackRelaxedQueriesFromConcepts(concepts: string[]): string[] {
       continue;
     }
     fallbackQueries.push(`${cleaned[0]} ${current}`.trim());
+  }
+
+  const specificTail = [...cleaned]
+    .reverse()
+    .find((concept) => /\s/u.test(concept) && concept !== cleaned[0]);
+  if (specificTail && !fallbackQueries.includes(specificTail)) {
+    if (fallbackQueries.length >= 6) fallbackQueries[fallbackQueries.length - 1] = specificTail;
+    else fallbackQueries.push(specificTail);
   }
 
   return cleanQueryList(fallbackQueries, 6);
@@ -9072,6 +9282,17 @@ function sanitizeExclusiveTopicQuerySet(
 export function buildSearchIntentQueries(
   plan: SearchIntentPlan,
 ): SearchIntentQuerySet {
+  const facetPlan = inferResearchFacets(
+    [
+      plan.originalTopic ?? "",
+      plan.activeResearchTopic ?? "",
+      plan.displayTitle ?? "",
+      plan.normalizedTopic,
+      plan.canonicalTopicZh ?? "",
+      plan.canonicalEnglishTopic ?? "",
+    ].join(" "),
+  );
+  const facetQueries = buildResearchFacetQueries(facetPlan);
   const expandedQueries = domainQueryExpansion(plan);
   const deterministicVariants = deterministicAcademicQueryVariants(plan);
   const queryBuckets = queryBucketsForPlan(plan);
@@ -9083,6 +9304,11 @@ export function buildSearchIntentQueries(
     ...queryBuckets,
     education: educationQueries,
   });
+  const facetPhases = ([
+    { stage: "exact_bilingual", queries: facetQueries.exactBilingual },
+    { stage: "synonym_expansion", queries: facetQueries.synonymExpansion },
+    { stage: "single_facet_relaxation", queries: facetQueries.singleFacetRelaxation },
+  ] satisfies SearchIntentQueryPhase[]).filter((phase) => phase.queries.length > 0);
   const urbanHeatHighPrecision = isUrbanHeatPlan(plan)
     ? [
         "urban heat island thermal comfort campus microclimate",
@@ -9125,10 +9351,15 @@ export function buildSearchIntentQueries(
     sanitizeExclusiveTopicQuerySet(plan, {
       coreConcepts: queryBuckets.coreConcepts,
       chinese: stripTopicLiteralQueries([
+        ...facetQueries.exactBilingual.filter((query) => /[\u3400-\u9fff]/u.test(query)),
+        ...facetQueries.synonymExpansion.filter((query) => /[\u3400-\u9fff]/u.test(query)),
         ...deterministicVariants.chinese,
         ...queryBuckets.chineseSupplemental,
       ], plan, MAX_QUERY_COUNT),
       english: stripTopicLiteralQueries([
+        ...facetQueries.exactBilingual.filter((query) => /[A-Za-z]/.test(query)),
+        ...facetQueries.synonymExpansion.filter((query) => /[A-Za-z]/.test(query)),
+        ...facetQueries.singleFacetRelaxation,
         ...queryBuckets.coreEnglishAcademic,
         ...queryBuckets.academicSynonyms,
         ...deterministicVariants.english,
@@ -9136,14 +9367,30 @@ export function buildSearchIntentQueries(
         ...educationQueries,
         ...queryBuckets.fallbackRelaxed,
       ], plan, MAX_QUERY_COUNT),
-      highPrecision: stripTopicLiteralQueries(highPrecision, plan, MAX_QUERY_COUNT),
+      highPrecision: stripTopicLiteralQueries([
+        ...facetQueries.exactBilingual,
+        ...highPrecision,
+      ], plan, MAX_QUERY_COUNT),
       broad: stripTopicLiteralQueries(broad, plan, 6),
-      coreEnglishAcademic: queryBuckets.coreEnglishAcademic,
-      academicSynonyms: queryBuckets.academicSynonyms,
+      coreEnglishAcademic: cleanQueryList([
+        ...facetQueries.exactBilingual.filter((query) => /[A-Za-z]/.test(query)),
+        ...queryBuckets.coreEnglishAcademic,
+      ], MAX_QUERY_COUNT),
+      academicSynonyms: cleanQueryList([
+        ...facetQueries.synonymExpansion.filter((query) => /[A-Za-z]/.test(query)),
+        ...queryBuckets.academicSynonyms,
+      ], MAX_QUERY_COUNT),
       education: educationQueries,
-      chineseSupplemental: queryBuckets.chineseSupplemental,
-      fallbackRelaxed: queryBuckets.fallbackRelaxed,
-      phases,
+      chineseSupplemental: cleanQueryList([
+        ...facetQueries.exactBilingual.filter((query) => /[\u3400-\u9fff]/u.test(query)),
+        ...facetQueries.synonymExpansion.filter((query) => /[\u3400-\u9fff]/u.test(query)),
+        ...queryBuckets.chineseSupplemental,
+      ], MAX_QUERY_COUNT),
+      fallbackRelaxed: cleanQueryList([
+        ...facetQueries.singleFacetRelaxation,
+        ...queryBuckets.fallbackRelaxed,
+      ], 6),
+      phases: [...facetPhases, ...phases],
     }),
   );
 }
@@ -14285,6 +14532,18 @@ function sourceWithRelevanceMetadata(
   debug: SourceRelevanceDebug,
   workflow?: SourceWorkflowContext,
 ): SearchIntentRankedSource {
+  const facetPlan = inferResearchFacets(
+    [
+      plan.originalTopic ?? "",
+      plan.activeResearchTopic ?? "",
+      plan.displayTitle ?? "",
+      plan.normalizedTopic,
+      plan.canonicalTopicZh ?? "",
+      plan.canonicalEnglishTopic ?? "",
+    ].join(" "),
+  );
+  const directness = assessResearchDirectness(source, facetPlan);
+  const usesFacetDirectness = facetPlan.requiredKeys.length >= 2;
   const relevanceLevel = relevanceLevelFromDebug(debug, source);
   const evidenceGrounding = evidenceGroundingFromDebug(debug);
   const missingRequired = plan.mustHaveTerms.filter(
@@ -14306,7 +14565,7 @@ function sourceWithRelevanceMetadata(
   if (source.sourceType === "Authoritative Media") {
     sourceQualityScore = clampScore(Math.max(55, Math.min(sourceQualityScore, 75)));
   }
-  const finalScore = sourceFinalScore({
+  const baseFinalScore = sourceFinalScore({
     relevanceScore,
     sourceQualityScore,
     metadataCompletenessScore,
@@ -14315,6 +14574,18 @@ function sourceWithRelevanceMetadata(
     languageFitScore,
     openAccessScore: source.isOpenAccess || source.abstract?.trim() ? 80 : 35,
   });
+  const finalScore = clampScore(
+    baseFinalScore +
+      (usesFacetDirectness
+        ? directness.tier === "A"
+          ? 22
+          : directness.tier === "B"
+            ? 14
+            : directness.tier === "C"
+              ? -8
+              : -35
+        : 0),
+  );
   let classification = sourceClassification({
     relevanceScore,
     authorityScore,
@@ -14329,6 +14600,12 @@ function sourceWithRelevanceMetadata(
     classification = {
       classification: "off_topic",
       rejectReason: "topic_mismatch_no_hiv_aids_anchor",
+    };
+  }
+  if (facetPlan.requiredKeys.length >= 3 && directness.tier === "D") {
+    classification = {
+      classification: "off_topic",
+      rejectReason: "missing_required_research_facets",
     };
   }
   const matchedTermsForSource = unique([
@@ -14356,6 +14633,11 @@ function sourceWithRelevanceMetadata(
       ...debug.matchedOutcomeConcepts,
     ]),
     missingRequiredFacets: missingRequired,
+    researchDirectnessTier: directness.tier,
+    researchDirectnessScore: directness.score,
+    matchedResearchFacets: directness.matchedKeys,
+    missingResearchFacets: directness.missingKeys,
+    exactSearchCompleted: true,
     evidenceGrounding,
     sourceRelevanceReasonZhTw: reason,
     authorityScore,
@@ -14409,6 +14691,17 @@ export function rerankSourcesBySearchIntent(
   sources: SearchIntentRankedSource[];
   relevanceDebug: SourceRelevanceDebug[];
 } {
+  const facetPlan = inferResearchFacets(
+    [
+      plan.originalTopic ?? "",
+      plan.activeResearchTopic ?? "",
+      plan.displayTitle ?? "",
+      plan.normalizedTopic,
+      plan.canonicalTopicZh ?? "",
+      plan.canonicalEnglishTopic ?? "",
+    ].join(" "),
+  );
+  const usesFacetDirectness = facetPlan.requiredKeys.length >= 2;
   const scored = sources.map((source, index) => {
     const debug = scoreSourceRelevance(source, plan);
     const ranked = sourceWithRelevanceMetadata(source, plan, debug, workflow);
@@ -14420,6 +14713,12 @@ export function rerankSourcesBySearchIntent(
   });
 
   scored.sort((a, b) => {
+    if (usesFacetDirectness) {
+      const directnessRank = { A: 4, B: 3, C: 2, D: 1 } as const;
+      const aDirectness = directnessRank[a.source.researchDirectnessTier ?? "D"];
+      const bDirectness = directnessRank[b.source.researchDirectnessTier ?? "D"];
+      if (bDirectness !== aDirectness) return bDirectness - aDirectness;
+    }
     if ((b.source.finalScore ?? 0) !== (a.source.finalScore ?? 0)) {
       return (b.source.finalScore ?? 0) - (a.source.finalScore ?? 0);
     }
@@ -15174,6 +15473,21 @@ async function recoverSourcesIfNeeded(
     displayedCount: number;
   },
 ): Promise<RecoveryResult> {
+  const facetPlan = inferResearchFacets(
+    [
+      input.plan.originalTopic ?? "",
+      input.plan.activeResearchTopic ?? "",
+      input.plan.displayTitle ?? "",
+      input.plan.normalizedTopic,
+      input.plan.canonicalTopicZh ?? "",
+      input.plan.canonicalEnglishTopic ?? "",
+    ].join(" "),
+  );
+  const currentSources = dedupeSourceRecords(input.groups.flatMap((group) => group.results));
+  const facetAdequacy = summarizeFacetAdequacy(
+    currentSources.map((source) => assessResearchDirectness(source, facetPlan)),
+    facetPlan,
+  );
   if (
     isSodiumPerchlorateSafetyTopicText(
       [input.plan.activeResearchTopic ?? "", input.plan.displayTitle ?? "", input.plan.normalizedTopic]
@@ -15190,7 +15504,10 @@ async function recoverSourcesIfNeeded(
       queries: [],
     };
   }
-  const reason = recoveryNeeded(input);
+  const countReason = recoveryNeeded(input);
+  const reason = !facetAdequacy.adequate && facetPlan.requiredKeys.length >= 2
+    ? facetAdequacy.reason ?? "research_facet_gap"
+    : countReason;
   if (!reason) {
     return {
       attempted: false,
@@ -15203,12 +15520,15 @@ async function recoverSourcesIfNeeded(
   }
 
   const existingQueries = unique(input.groups.map((group) => group.query));
-  const maxRecoveryQueries = Math.max(0, MAX_QUERY_COUNT - existingQueries.length);
-  const recoveryQueries = recoveryQueriesForPlan(
-    input.plan,
-    existingQueries,
-    maxRecoveryQueries,
-  );
+  const facetGapQueries = buildResearchFacetQueries(
+    facetPlan,
+    facetAdequacy.missingKeys,
+  ).gapFill;
+  const maxRecoveryQueries = Math.min(4, Math.max(0, MAX_QUERY_COUNT - existingQueries.length));
+  const recoveryQueries = cleanQueryList([
+    ...facetGapQueries,
+    ...recoveryQueriesForPlan(input.plan, existingQueries, maxRecoveryQueries),
+  ], maxRecoveryQueries);
   if (recoveryQueries.length === 0) {
     return {
       attempted: true,
@@ -15217,6 +15537,11 @@ async function recoverSourcesIfNeeded(
       rawAddedCount: 0,
       dedupedAddedCount: 0,
       queries: [],
+      facetGapFill: !facetAdequacy.adequate,
+      missingFacets: facetAdequacy.missingKeys,
+      completed: false,
+      providerAttemptCount: 0,
+      successfulProviderQueryCount: 0,
     };
   }
 
@@ -15231,6 +15556,7 @@ async function recoverSourcesIfNeeded(
   input.groups.push(...recoveryGroups);
   const after = dedupeSourceRecords(input.groups.flatMap((group) => group.results));
   const rawAddedCount = recoveryGroups.reduce((sum, group) => sum + group.results.length, 0);
+  const successfulProviderQueryCount = recoveryGroups.filter((group) => group.ok).length;
 
   return {
     attempted: true,
@@ -15239,6 +15565,11 @@ async function recoverSourcesIfNeeded(
     rawAddedCount,
     dedupedAddedCount: Math.max(0, after.length - before.length),
     queries: recoveryQueries,
+    facetGapFill: !facetAdequacy.adequate,
+    missingFacets: facetAdequacy.missingKeys,
+    completed: recoveryGroups.length > 0 && successfulProviderQueryCount > 0,
+    providerAttemptCount: recoveryGroups.length,
+    successfulProviderQueryCount,
   };
 }
 
@@ -15427,7 +15758,11 @@ export async function searchIntentSources(
     },
     "ResearchForge bilingual query expansion",
   );
-  if (genericUnderstanding.topicKind === "unknown_or_noise") {
+  if (
+    genericUnderstanding.topicKind === "unknown_or_noise" &&
+    semanticClassification.primaryType === "general_research_topic" &&
+    semanticClassification.confidence < 0.5
+  ) {
     const topic = input.topic.trim();
     const warnings = ["查無結果：輸入內容不像有效研究主題，請改用具體關鍵詞。"];
     const intro = buildGroundedIntro(semanticClassification, [], 0);
@@ -15704,10 +16039,26 @@ export async function searchIntentSources(
     ),
     querySet.phases.length > 0 ? 8 : DEFAULT_ACADEMIC_QUERY_LIMIT,
   );
+  const budgetFacetPlan = inferResearchFacets(
+    [
+      input.topic,
+      plan.normalizedTopic,
+      ...(input.querySeedZh ?? []),
+      ...(input.querySeedEn ?? []),
+      ...(input.mustIncludeTerms ?? []),
+    ].join(" "),
+  );
+  // Facet-rich questions need time left for evidence-driven gap filling. Four
+  // foreground academic queries cover the exact/synonym phases while preserving
+  // enough of the shared deadline for the targeted recovery pass.
+  const facetAwareAcademicQueryBudget =
+    budgetFacetPlan.requiredKeys.length >= 3
+      ? Math.min(configuredAcademicQueryBudget, 4)
+      : configuredAcademicQueryBudget;
   const academicQueryBudget =
     options?.queryLimit === undefined
-      ? configuredAcademicQueryBudget
-      : Math.min(queryLimit, configuredAcademicQueryBudget, profile.maxQueries);
+      ? facetAwareAcademicQueryBudget
+      : Math.min(queryLimit, facetAwareAcademicQueryBudget, profile.maxQueries);
   const academicQueryPhases = queryExecutionPhases(querySet, academicQueryBudget);
   const runtimeBudget = searchBudgetRuntime({
     ...options,
@@ -15883,7 +16234,28 @@ export async function searchIntentSources(
     semanticClassification,
     expandedQueries,
   );
-  sources = pipeline.sources.map((source) => withSourceMixRole(source));
+  const researchFacetPlan = inferResearchFacets(
+    [
+      plan.originalTopic ?? "",
+      plan.activeResearchTopic ?? "",
+      plan.displayTitle ?? "",
+      plan.normalizedTopic,
+      plan.canonicalTopicZh ?? "",
+      plan.canonicalEnglishTopic ?? "",
+    ].join(" "),
+  );
+  const evidenceAdequacy = summarizeFacetAdequacy(
+    pipeline.sources.map((source) => assessResearchDirectness(source, researchFacetPlan)),
+    researchFacetPlan,
+  );
+  sources = pipeline.sources.map((source) => withSourceMixRole({
+    ...source,
+    exactSearchCompleted: true,
+    gapFillSearchAttempted: recovery.attempted && Boolean(recovery.facetGapFill),
+    gapFillSearchCompleted:
+      recovery.attempted && Boolean(recovery.facetGapFill) && recovery.completed === true,
+    gapFillQueries: recovery.facetGapFill ? recovery.queries : [],
+  }));
   logger.info(
     {
       marker: "[source-validation]",
@@ -16056,6 +16428,11 @@ export async function searchIntentSources(
     ...resultWarnings(groups, sources, plan),
     ...Array.from(runtimeBudget.warnings),
     ...diversityWarnings,
+    ...(!evidenceAdequacy.adequate && researchFacetPlan.requiredKeys.length >= 2
+      ? [
+          `${evidenceAdequacy.reason ?? "研究構面直接證據不足"}；報告必須降級為證據有限版，不得以間接來源冒充直接證據。`,
+        ]
+      : []),
     ...(plan.topicAnchorFailureReason
       ? [
           `TOPIC_ANCHOR_CONTRACT_INVALID: ${plan.topicAnchorFailureReason}`,
@@ -16208,6 +16585,14 @@ export async function searchIntentSources(
       },
     },
     recovery,
+    researchFacets: researchFacetPlan,
+    evidenceAdequacy,
+    providerCoverageGaps: unique([
+      ...evidenceAdequacy.missingKeys.map((key) => `facet:${key}`),
+      ...groups
+        .filter((group) => !group.ok)
+        .map((group) => `${group.provider}:${group.error_type ?? "provider_error"}`),
+    ]),
     provider_status: groups.map(providerDiagnostic),
     provider_health: allProviderHealthSnapshots(),
     warnings,

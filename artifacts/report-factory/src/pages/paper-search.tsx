@@ -1,3 +1,7 @@
+/**
+ * AI assistance disclosure: Portions of this paper-search workflow were drafted
+ * or refactored with Replit Agent and OpenAI Codex. See /AI_ASSISTANCE.md.
+ */
 import {
   type FormEvent,
   useCallback,
@@ -25,6 +29,10 @@ import { Footer } from "@/components/layout/footer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  mergePaperSearchPapers,
+  savePaperSearchHandoff,
+} from "@/lib/paperSearchHandoff";
 
 type PaperSearchStatus = "idle" | "loading" | "success" | "error";
 
@@ -142,25 +150,6 @@ function summaryFields(paper: PaperSearchPaper): Partial<PaperSearchPaper> {
     summarySourceType: paper.summarySourceType,
     summaryConfidence: paper.summaryConfidence,
   };
-}
-
-function mergedPaperList(
-  primary: PaperSearchPaper[],
-  secondary: PaperSearchPaper[],
-  summaries: Map<string, PaperSearchPaper>,
-  limit: number,
-): PaperSearchPaper[] {
-  const seen = new Set<string>();
-  const merged: PaperSearchPaper[] = [];
-  for (const paper of [...primary, ...secondary]) {
-    const key = paper.id || `${paper.doi ?? ""}:${paper.title.toLocaleLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const summarized = summaries.get(paper.id);
-    merged.push(summarized ? { ...paper, ...summaryFields(summarized) } : paper);
-    if (merged.length >= limit) break;
-  }
-  return merged;
 }
 
 function userFacingError(error: unknown): string {
@@ -486,7 +475,7 @@ export function PaperSearch() {
           const expandedOutcome = await expandedPromise;
           if (controller.signal.aborted || activeRunIdRef.current !== runId) return;
           if (expandedOutcome.data && Array.isArray(expandedOutcome.data.papers)) {
-            const papers = mergedPaperList(
+            const papers = mergePaperSearchPapers(
               expandedOutcome.data.papers,
               initialResult.papers,
               summariesByIdRef.current,
@@ -575,6 +564,20 @@ export function PaperSearch() {
   const summaryProgressPercent = summaryProgress.total > 0
     ? Math.round((summaryProgress.completed / summaryProgress.total) * 100)
     : 0;
+  const canOpenWorkspace =
+    status === "success" && Boolean(result?.papers.length);
+  const openWorkspaceHref = result
+    ? `/workspace?from=paper-search&q=${encodeURIComponent(result.query)}`
+    : "/workspace?from=paper-search";
+
+  const prepareWorkspaceHandoff = () => {
+    if (!result || result.papers.length === 0) return;
+    savePaperSearchHandoff({
+      query: result.query,
+      queries: result.queries,
+      papers: result.papers,
+    });
+  };
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -813,12 +816,18 @@ export function PaperSearch() {
                 進階工作台可審查來源、建立章節與匯出報告。
               </p>
             </div>
-            <Link href="/workspace">
-              <Button variant="secondary">
-                開啟進階研究工作台
-                <ArrowRight className="ml-2 h-4 w-4" />
+            {canOpenWorkspace ? (
+              <Link href={openWorkspaceHref} onClick={prepareWorkspaceHandoff}>
+                <Button variant="secondary" data-testid="paper-search-open-workspace">
+                  使用這批論文生成報告
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </Link>
+            ) : (
+              <Button variant="secondary" disabled>
+                完成論文搜尋後開啟
               </Button>
-            </Link>
+            )}
           </div>
         </section>
       </main>

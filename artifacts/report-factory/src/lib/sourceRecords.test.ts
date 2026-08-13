@@ -54,6 +54,65 @@ test("normalizes editable source metadata and preserves pending review state", (
   assert.equal(normalized.reviewState, "pending");
 });
 
+test("Semantic Scholar remains a retrieval provider and is never displayed as publication venue", () => {
+  const normalized = normalizeSourceForReview(
+    source({
+      sourceType: "Semantic Scholar",
+      provider: "Semantic Scholar",
+      publisher: "Semantic Scholar",
+      containerTitle: "Semantic Scholar",
+    }),
+  );
+  const reference = formatApaReference(normalized);
+
+  assert.equal(normalized.provider, "Semantic Scholar");
+  assert.equal(normalized.publisher, null);
+  assert.equal(normalized.containerTitle, null);
+  assert.doesNotMatch(reference.text, /Semantic Scholar/iu);
+});
+
+test("normalization preserves provider abstract aliases across API mapping and reload", () => {
+  const normalized = normalizeSourceForReview(
+    source({
+      abstract: null,
+      abstractOriginal:
+        "Provider abstract retained under the legacy abstractOriginal response field.",
+      abstractMissing: true,
+    }),
+  );
+
+  assert.equal(
+    normalized.abstract,
+    "Provider abstract retained under the legacy abstractOriginal response field.",
+  );
+  assert.equal(normalized.abstractMissing, false);
+
+  const reloaded = normalizeSourceForReview(
+    JSON.parse(JSON.stringify(normalized)) as SourceRecord,
+  );
+  assert.equal(reloaded.abstract, normalized.abstract);
+});
+
+test("normalization keeps the longest real abstract across aliases after reload", () => {
+  const longest =
+    "This is the complete provider abstract with methods, observed results, and explicit limitations.";
+  const normalized = normalizeSourceForReview(
+    source({
+      abstract: "Short abstract.",
+      abstractOriginal: "A medium provider abstract with one result.",
+      originalAbstract: longest,
+      extractedAbstract: "Extracted abstract.",
+    }),
+  );
+  const reloaded = normalizeSourceForReview(
+    JSON.parse(JSON.stringify(normalized)) as SourceRecord,
+  );
+
+  assert.equal(normalized.abstract, longest);
+  assert.equal(reloaded.abstract, longest);
+  assert.equal(reloaded.abstractMissing, false);
+});
+
 test("normalizes accepted source review metadata for evidence workflow", () => {
   const normalized = normalizeSourceForReview(
     source({
@@ -158,6 +217,79 @@ test("dedupes same title, first author, and year across providers and keeps rich
   assert.equal(deduped[0]?.dedupeKey, "title:spider habitat selection|author:ada lovelace|year:2020");
 });
 
+test("dedupes metadata-only and DOI copies only on strict title-author-year identity", () => {
+  const deduped = dedupeSourceRecords([
+    source({
+      id: "metadata-copy",
+      title: "Spider habitat selection",
+      doi: null,
+      abstract: null,
+      sourceType: "Crossref",
+    }),
+    source({
+      id: "rich-doi-copy",
+      title: "Spider habitat selection",
+      doi: "10.1000/spider-habitat",
+      abstract:
+        "Spider habitat selection and microhabitat ecology are described in the restored abstract.",
+      sourceType: "OpenAlex",
+    }),
+  ]);
+
+  assert.equal(deduped.length, 1);
+  assert.equal(deduped[0]?.doi, "10.1000/spider-habitat");
+  assert.equal(deduped[0]?.dedupeKey, "doi:10.1000/spider-habitat");
+  assert.equal(deduped[0]?.canonicalSourceIdentity, "doi:10.1000/spider-habitat");
+  assert.match(deduped[0]?.abstract ?? "", /microhabitat ecology/u);
+
+  const mismatched = dedupeSourceRecords([
+    source({ id: "metadata", title: "Spider habitat selection", doi: null }),
+    source({
+      id: "different-author",
+      title: "Spider habitat selection",
+      authors: ["Different Author"],
+      doi: "10.1000/different-author",
+    }),
+  ]);
+  assert.equal(mismatched.length, 2);
+});
+
+test("dedupes recognized preprint versions only with exact title, authors, and year", () => {
+  const title = "GIS-Based Spatial Optimization of Potential Urban Green Spaces";
+  const merged = dedupeSourceRecords([
+    source({
+      id: "ssrn-copy",
+      title,
+      authors: ["Jeyasuriya Durai"],
+      year: 2026,
+      doi: "10.2139/ssrn.7219073",
+      abstract: "Short preprint abstract.",
+    }),
+    source({
+      id: "research-square-copy",
+      title: `${title}.`,
+      authors: ["Jeyasuriya Durai"],
+      year: 2026,
+      doi: "10.21203/rs.3.rs-10531025/v1",
+      abstract: "A richer version abstract with methods, findings, and limitations.",
+    }),
+  ]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]?.doi, "10.21203/rs.3.rs-10531025/v1");
+  assert.match(merged[0]?.abstract ?? "", /richer version abstract/u);
+  assert.equal(
+    Boolean(merged[0]?.providerIds?.["version-doi:10.2139/ssrn.7219073"]),
+    true,
+  );
+
+  const distinctJournalWorks = dedupeSourceRecords([
+    source({ id: "journal-a", title, doi: "10.1000/journal-a" }),
+    source({ id: "journal-b", title, doi: "10.1000/journal-b" }),
+  ]);
+  assert.equal(distinctJournalWorks.length, 2);
+});
+
 test("filters accepted and rejected sources explicitly", () => {
   const accepted = source({ id: "accepted", reviewState: "accepted" });
   const rejected = source({ id: "rejected", reviewState: "rejected", doi: "10.1000/rejected" });
@@ -220,6 +352,18 @@ test("reads accepted review aliases before rendering source lists", () => {
   assert.deepEqual(acceptedSourceRecords(sources), [acceptedByStatus]);
   assert.deepEqual(candidateSourceRecords(sources), [pending]);
   assert.deepEqual(rejectedSourceRecords(sources), [dismissedByStatus]);
+});
+
+test("canonical rejected review state cannot be overridden by an accepted legacy alias", () => {
+  const conflicted = source({
+    id: "conflicted-review-state",
+    reviewState: "rejected",
+    status: "accepted",
+  } as Partial<SourceRecord>);
+
+  assert.equal(sourceReviewState(conflicted), "rejected");
+  assert.deepEqual(acceptedSourceRecords([conflicted]), []);
+  assert.deepEqual(rejectedSourceRecords([conflicted]), [conflicted]);
 });
 
 test("updates source review state without duplicating source records", () => {
@@ -290,6 +434,38 @@ test("formats accepted sources as APA-style bibliography entries", () => {
   );
 });
 
+test("APA formatting handles provider family-name-first authors and terminal title punctuation", () => {
+  const reference = formatApaReference(source({
+    authors: ["Zhang J", "Roba ZR"],
+    title: "Urban green space and land surface temperature.",
+  }));
+
+  assert.match(reference.text, /^Zhang, J\. & Roba, Z\. R\. \(2020\)\./u);
+  assert.match(reference.text, /Urban green space and land surface temperature\./u);
+  assert.doesNotMatch(reference.text, /temperature\.\./u);
+});
+
+test("APA references preserve journal volume/pages and conference event metadata", () => {
+  const journal = formatApaReference(source({
+    sourceKind: "journal",
+    volume: "12",
+    issue: "3",
+    pages: "101–119",
+  }));
+  const conference = formatApaReference(source({
+    id: "conference",
+    sourceKind: "conference",
+    containerTitle: "Proceedings of ICUC",
+    conferenceName: "International Conference on Urban Climate",
+    conferenceLocation: "Rotterdam, Netherlands",
+    conferenceDate: "2024-07-08/2024-07-12",
+  }));
+
+  assert.match(journal.text, /Example Journal, 12\(3\), 101–119\./u);
+  assert.match(conference.text, /In International Conference on Urban Climate, Rotterdam, Netherlands, 2024-07-08\/2024-07-12\./u);
+  assert.doesNotMatch(conference.text, /peer.?review|同儕審查/iu);
+});
+
 test("excludes rejected sources from bibliography output", () => {
   const bibliography = buildBibliography([
     source({ reviewState: "accepted" }),
@@ -317,7 +493,8 @@ test("marks incomplete metadata without inventing details", () => {
   assert.deepEqual(reference.missingFields, ["作者", "年份", "DOI 或網址"]);
   assert.match(reference.text, /作者未提供/);
   assert.match(reference.text, /年份未提供/);
-  assert.match(reference.text, /metadata incomplete/);
+  assert.match(reference.text, /書目資料待補/);
+  assert.doesNotMatch(reference.text, /metadata/iu);
 });
 
 test("builds export readiness warnings for source and citation gaps", () => {
@@ -346,6 +523,10 @@ test("builds export readiness warnings for source and citation gaps", () => {
   assert.deepEqual(
     warnings.map((warning) => warning.code),
     ["incomplete-source-metadata", "citation-placeholders"],
+  );
+  assert.doesNotMatch(
+    warnings.map((warning) => warning.message).join("\n"),
+    /metadata|incomplete/iu,
   );
 });
 

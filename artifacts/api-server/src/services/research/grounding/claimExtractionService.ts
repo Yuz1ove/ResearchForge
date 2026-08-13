@@ -572,6 +572,8 @@ export async function extractClaimsFromChunk(
     topic: input.topic,
     chunk: input.chunk,
     source: input.source,
+    matchedConcepts: input.source.matchedConcepts,
+    queryUsed: input.source.queryUsed,
   });
   if (!cleaned.accepted || !cleaned.chunk) {
     return [

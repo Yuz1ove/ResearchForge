@@ -317,7 +317,7 @@ test("generate-report route passes normalized accepted sources to report writer"
 
   await route.route.stack[0].handle(req as Request, res as unknown as Response, () => undefined);
 
-  assert.equal(statusCode, 200);
+  assert.equal(statusCode, 200, JSON.stringify(payload));
   assert.equal(writerTopic, "可樂");
   assert.equal(writerSourceCount, 5);
   assert.equal(writerEvidenceCount, 1);
@@ -398,7 +398,7 @@ test("generate-report route allows accepted official background sources in backg
 
   await route.route.stack[0].handle(req as Request, res as unknown as Response, () => undefined);
 
-  assert.equal(statusCode, 200);
+  assert.equal(statusCode, 200, JSON.stringify(payload));
   assert.equal(writerGenerationMode, "background_report_mode");
   assert.equal(writerSourceCount, 3);
   assert.equal(writerEvidenceCount, 3);

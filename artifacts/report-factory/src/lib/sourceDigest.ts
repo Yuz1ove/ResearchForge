@@ -25,7 +25,7 @@ export interface BuildAcceptedSourceDigestOptions {
   currentYear?: number;
 }
 
-export const ACCEPTED_SOURCE_DIGEST_VERSION = 4;
+export const ACCEPTED_SOURCE_DIGEST_VERSION = 5;
 
 const SECTION_COVERAGE_LABELS: Record<WorkflowReportSection, string> = {
   研究背景: "背景資料",
@@ -97,8 +97,12 @@ function containsCjk(text: string): boolean {
 function sourceSummaryLead(source: SourceRecord): string {
   return (
     stripCitationTone(firstSentence(source.evidenceSummaryZhTw)) ||
+    stripCitationTone(firstSentence(source.llmSummaryZhTw)) ||
+    stripCitationTone(firstSentence(source.readableSummaryZhTW)) ||
+    stripCitationTone(firstSentence(source.readableSummaryZhTw)) ||
     stripCitationTone(firstSentence(source.sourceRelevanceReasonZhTw)) ||
     firstSentence(source.abstract) ||
+    firstSentence(source.snippet) ||
     cleanText(source.title)
   );
 }
@@ -111,7 +115,7 @@ function summaryHighlights(sources: SourceRecord[], limit = 3): string[] {
 }
 
 function isMechanicalHighlight(text: string): boolean {
-  return /直接命中|摘要可支撐主題|可作為主要證據|相關性高|主證據/u.test(text);
+  return /直接命中|摘要可支撐主題|可作為主要證據|相關性高|主證據|缺少可驗證摘要片段|暫不產生主要主張|尚無可驗證/u.test(text);
 }
 
 function detailSentence(points: string[]): string {
@@ -198,7 +202,10 @@ function buildNarrativeSummary(
     coverage.slice(0, 4),
     "背景、文獻與可驗證資料",
   );
-  const directHighlights = synthesis.mainClaimsZhTw.slice(0, 3).filter(Boolean);
+  const directHighlights = synthesis.mainClaimsZhTw
+    .slice(0, 3)
+    .filter(Boolean)
+    .filter((item) => !isMechanicalHighlight(item));
   const fallbackHighlights = Array.from(new Set(summaryHighlights(sources, 4)));
   const usableFallbackHighlights = fallbackHighlights.filter(
     (item) => !isMechanicalHighlight(item),
@@ -206,7 +213,7 @@ function buildNarrativeSummary(
   const highlights =
     directHighlights.length > 0 && directHighlights.some(containsCjk)
       ? directHighlights
-      : usableFallbackHighlights.some(containsCjk) && usableFallbackHighlights.length >= 2
+      : usableFallbackHighlights.some(containsCjk)
         ? usableFallbackHighlights.slice(0, 3)
         : thematicHighlights(sources);
   const consensus = synthesis.consensusPointsZhTw[0] ?? "";

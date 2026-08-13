@@ -9,6 +9,7 @@ import {
   buildStableCitationMarkerMap,
   buildSupportedClaimsFromEvidenceCards,
   citationMarkersForSourceIds,
+  extractCitationMarkers,
   getSectionEvidencePolicy,
   guardUnsupportedSectionClaims,
   sourceIdsFromCitationMarkers,
@@ -113,6 +114,78 @@ test("supported claim builder downgrades educational and abstract-only evidence"
   );
   assert.equal(scholarlyClaims.some((claim) => claim.claimType === "finding"), true);
   assert.equal(abstractOnlyClaims.some((claim) => claim.supportLevel === "weak"), true);
+  assert.equal(
+    abstractOnlyClaims.some((claim) => claim.canUseInAcademicClaim),
+    false,
+  );
+});
+
+test("traceable abstract-only papers can support caveated findings", () => {
+  const abstractOnlySource = source(7, {
+    id: "rain-abstract-only",
+    title: "Terminal Velocity of Raindrops Aloft",
+    abstract:
+      "The terminal velocity of raindrops varies with drop diameter, shape, and aerodynamic drag.",
+    evidenceGrounding: "abstract_only",
+    sourceFacts: [],
+  });
+  const cards = buildEvidenceCards([abstractOnlySource]);
+  const markerMap = buildStableCitationMarkerMap([abstractOnlySource]);
+  const claims = buildSupportedClaimsFromEvidenceCards(cards, { markerMap });
+  const findings = claims.filter((claim) => claim.sectionKey === "findings");
+
+  assert.equal(cards.every((card) => Boolean(card.supportSpan || card.supportedByText)), true);
+  assert.equal(findings.length > 0, true);
+  assert.equal(findings.every((claim) => claim.supportLevel === "weak"), true);
+  assert.equal(findings.every((claim) => claim.canUseInAcademicClaim), true);
+  assert.equal(findings.every((claim) => claim.requiresCaveat), true);
+  assert.equal(
+    findings.every((claim) => claim.limitations.some((item) => /摘要|metadata/u.test(item))),
+    true,
+  );
+});
+
+test("section synthesis replaces mislabeled raw English zh fields with an explicit translation gap", () => {
+  const rawAbstract =
+    "Abstract The aim is to evaluate sleep duration and adolescent attention. `This narrative review examines sleep deprivation among children and adolescents in Japan.`";
+  const acceptedSources = [source(8, {
+    id: "sleep-raw",
+    title: "Sleep deprivation and adolescent attention",
+    abstract: rawAbstract,
+    originalAbstract: rawAbstract,
+    sourceFacts: [],
+    evidenceGrounding: "abstract_only",
+  })];
+  const cards = buildEvidenceCards(acceptedSources).map((card) => ({
+    ...card,
+    // Reproduce a legacy/server payload whose zh-TW field actually contained
+    // the raw source abstract.
+    claimTextZhTw: rawAbstract,
+    mainClaim: rawAbstract,
+    evidencePointZhTw: rawAbstract,
+    sourceSummaryZhTw: rawAbstract,
+    summary: rawAbstract,
+  }));
+  const outline = buildReportOutline({
+    topic: "睡眠不足與青少年注意力",
+    reportType: "研究報告",
+    audience: "高中生",
+    acceptedSources,
+    evidenceCards: cards,
+  });
+  const draft = buildReportDraft({
+    project: project(),
+    topic: "睡眠不足與青少年注意力",
+    reportType: "研究報告",
+    audience: "高中生",
+    evidenceCards: cards,
+    outline,
+    acceptedSources,
+  });
+  const readerText = draft.sections.map((section) => section.body).join(" ");
+
+  assert.doesNotMatch(readerText, /Abstract\s+The aim|This narrative review|`/iu);
+  assert.match(readerText, /尚未完成可驗證的繁中重點整理/u);
 });
 
 test("unsupported claim guard blocks uncited strong conclusions but allows questions", () => {
@@ -137,12 +210,55 @@ test("unsupported claim guard blocks uncited strong conclusions but allows quest
   assert.equal(question.text.includes("[S"), false);
 });
 
+test("unsupported claim guard never assigns an unrelated available marker", () => {
+  const guarded = guardUnsupportedSectionClaims({
+    sectionKey: "findings",
+    text: "台灣校園綠覆率顯著降低都市熱島效應。",
+    availableCitationMarkers: ["[S1]", "[S2]"],
+  });
+
+  assert.equal(guarded.text, "目前來源尚不足以支持此結論。");
+  assert.doesNotMatch(guarded.text, /\[S\d+\]/u);
+  assert.ok(guarded.warnings.some((warning) => warning.includes("缺少可驗證引用")));
+  assert.deepEqual(guarded.diagnostics, ["unsupported_claim_blocked:findings"]);
+  assert.equal(
+    guarded.diagnostics.some((diagnostic) => diagnostic.startsWith("citation_marker_added:")),
+    false,
+  );
+});
+
+test("unsupported claim guard removes inline markers outside the allowed source set", () => {
+  const mixed = guardUnsupportedSectionClaims({
+    sectionKey: "discussion",
+    text: "目前來源顯示綠覆率可能與地表溫度相關[S1]［Ｓ２］。",
+    availableCitationMarkers: ["[S1]"],
+  });
+  const unknownOnly = guardUnsupportedSectionClaims({
+    sectionKey: "findings",
+    text: "台灣校園綠覆率顯著降低都市熱島效應[S9]。",
+    availableCitationMarkers: ["[S1]"],
+  });
+
+  assert.match(mixed.text, /\[S1\]/u);
+  assert.doesNotMatch(mixed.text, /\[S2\]|［Ｓ２］/u);
+  assert.ok(mixed.warnings.some((warning) => warning.includes("無法對應")));
+  assert.ok(
+    mixed.diagnostics.some((diagnostic) =>
+      diagnostic.includes("unsupported_marker_removed:discussion:[S2]"),
+    ),
+  );
+  assert.equal(unknownOnly.text, "目前來源尚不足以支持此結論。");
+  assert.doesNotMatch(unknownOnly.text, /\[S9\]/u);
+  assert.ok(unknownOnly.warnings.some((warning) => warning.includes("缺少可驗證引用")));
+});
+
 test("citation mapping is stable and only accepts known source markers", () => {
   const accepted = [source(1), source(2)];
   const markerMap = buildStableCitationMarkerMap(accepted);
 
   assert.deepEqual(citationMarkersForSourceIds(["source-1", "source-2"], markerMap), ["[S1]", "[S2]"]);
   assert.deepEqual(sourceIdsFromCitationMarkers(["[S1]", "[S2]"], markerMap), ["source-1", "source-2"]);
+  assert.deepEqual(extractCitationMarkers("段落［Ｓ1］與［S2］。"), ["[S1]", "[S2]"]);
   assert.deepEqual(citationMarkersForSourceIds(["rejected-source"], markerMap), []);
 
   const coverage = validateSectionEvidenceCoverage({
@@ -153,6 +269,46 @@ test("citation mapping is stable and only accepts known source markers", () => {
     citationMarkers: ["[S1]", "[S2]"],
   });
   assert.equal(coverage.citationCount, 2);
+});
+
+test("citation mapping remains stable when accepted sources are reordered", () => {
+  const sources = [
+    source(1, { canonicalSourceIdentity: "doi:10.1000/zeta" }),
+    {
+      ...source(2, { doi: null, dedupeKey: null }),
+      canonicalSourceKey: "title:alpha|author:lovelace|year:2024",
+    } as SourceRecord,
+    source(3, { canonicalSourceIdentity: null, doi: null, dedupeKey: "title:middle" }),
+    source(4, { canonicalSourceIdentity: null, dedupeKey: null, doi: "10.1000/beta" }),
+    source(5, {
+      id: "opaque-title-source",
+      canonicalSourceIdentity: null,
+      dedupeKey: null,
+      doi: null,
+      title: "Gamma Honey Study",
+      authors: ["Grace Hopper"],
+      year: 2023,
+    }),
+  ];
+  const original = buildStableCitationMarkerMap(sources);
+  const reordered = buildStableCitationMarkerMap([
+    sources[4]!,
+    sources[2]!,
+    sources[0]!,
+    sources[3]!,
+    sources[1]!,
+  ]);
+
+  assert.deepEqual(
+    sources.map((item) => [item.id, original.get(item.id)]),
+    sources.map((item) => [item.id, reordered.get(item.id)]),
+  );
+  assert.equal(original.get("source-4"), "[S1]");
+  assert.equal(original.get("source-1"), "[S2]");
+  assert.equal(original.get("source-2"), "[S3]");
+  assert.equal(original.get("opaque-title-source"), "[S4]");
+  assert.equal(original.get("source-3"), "[S5]");
+  assert.deepEqual(Array.from(original.keys()).sort(), sources.map((item) => item.id).sort());
 });
 
 test("literature review with five cards creates multi-paragraph cited synthesis", () => {
@@ -177,9 +333,20 @@ test("literature review with five cards creates multi-paragraph cited synthesis"
   });
   const literature = draft.sections.find((section) => section.sectionId === "literature_review");
   const paragraphs = literature?.body.split(/\n{2,}/u).filter(Boolean) ?? [];
+  const citedParagraphs = paragraphs.filter((paragraph) => /\[S\d+\]/u.test(paragraph));
+  const blockedParagraphs = paragraphs.filter((paragraph) => !/\[S\d+\]/u.test(paragraph));
 
   assert.equal((literature?.evidenceCardIds.length ?? 0) >= 5, true);
   assert.equal(paragraphs.length >= 2, true);
-  assert.equal(paragraphs.every((paragraph) => /\[S\d+\]/u.test(paragraph)), true);
+  assert.equal(citedParagraphs.length >= 2, true);
+  assert.equal(
+    blockedParagraphs.every((paragraph) => /目前來源尚不足以支持此結論/u.test(paragraph)),
+    true,
+  );
+  assert.equal(
+    blockedParagraphs.length === 0 ||
+      Boolean(literature?.warnings.some((warning) => warning.includes("缺少可驗證引用"))),
+    true,
+  );
   assert.doesNotMatch(literature?.body ?? "", /目前文獻不足|不足以形成有效比較/u);
 });

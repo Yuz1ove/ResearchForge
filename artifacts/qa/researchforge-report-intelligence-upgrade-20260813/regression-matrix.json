@@ -1,0 +1,58 @@
+{
+  "version": "researchforge-report-intelligence/v1",
+  "scope": "deterministic_provider_free_contract_suite",
+  "warning": "This matrix validates deterministic report-intelligence contracts. It does not substitute for the seven requested live end-to-end report runs.",
+  "rows": [
+    {
+      "benchmarkId": "A",
+      "scenario": "多筆定量研究方向一致",
+      "checks": ["統計抽取", "視覺路由", "跨研究可比性"],
+      "status": "PASS",
+      "diagnostics": ["interpretations=3", "comparisons=3"]
+    },
+    {
+      "benchmarkId": "B",
+      "scenario": "有數字但統計指標不可直接比較",
+      "checks": ["不錯誤合併", "不建立虛假排名", "保留方向性綜合"],
+      "status": "PASS",
+      "diagnostics": ["status=DIRECTION_ONLY", "pooling=false"]
+    },
+    {
+      "benchmarkId": "C",
+      "scenario": "研究結果互相矛盾",
+      "checks": ["反例保留", "無顯著結果保留", "替代解釋"],
+      "status": "PASS",
+      "diagnostics": ["status=contradictory", "counter=1", "null=1"]
+    },
+    {
+      "benchmarkId": "D",
+      "scenario": "只有少量摘要證據",
+      "checks": ["誠實降級", "不虛構全文", "不硬填章節"],
+      "status": "PASS",
+      "diagnostics": ["archetype=limited_evidence_report", "downgradedFrom=literature_review"]
+    },
+    {
+      "benchmarkId": "E",
+      "scenario": "不同語言來源",
+      "checks": ["概念標準化", "引用身分一致", "不重複計數"],
+      "status": "PASS",
+      "diagnostics": ["status=COMPARABLE", "canonicalSources=1"]
+    },
+    {
+      "benchmarkId": "F",
+      "scenario": "沒有直接證據",
+      "checks": ["背景不冒充直接結果", "顯示研究缺口"],
+      "status": "PASS",
+      "diagnostics": ["evidenceLevel=background", "archetype=limited_evidence_report"]
+    },
+    {
+      "benchmarkId": "G",
+      "scenario": "方法型或實驗設計問題",
+      "checks": ["正確 archetype", "變項與假設", "流程與驗證"],
+      "status": "PASS",
+      "diagnostics": ["archetype=experimental_design", "sections=研究假設|變項操作化|樣本與分派|實驗流程|分析與驗證|風險與限制"]
+    }
+  ],
+  "unexplainedRegressions": [],
+  "passed": true
+}

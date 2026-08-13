@@ -14,10 +14,13 @@ import {
   ResearchGroundingJobCreateResponseSchema,
 } from "@workspace/api-zod/research-grounding";
 import type { EvidenceDerivation } from "@workspace/api-zod";
-import type { EvidenceCard } from "./evidenceCards.ts";
+import { buildEvidenceCards, type EvidenceCard } from "./evidenceCards.ts";
 import {
+  canonicalSourceKeyForSource,
   defaultUsableSections,
+  longestAbstractAlias,
   normalizeSourceForReview,
+  sourceRecordKey,
   type SourceCategory,
   type SourceConfidence,
   type SourceRecord,
@@ -388,7 +391,7 @@ export function sourceCandidateToSourceRecord(input: {
   const finalScore = toPercentage(candidate.relevanceScore);
   const qualityScore = toPercentage(candidate.sourceQualityScore);
   const queryUsed = cleanText(candidate.queryUsed) ?? input.originalTopic;
-  const abstractOriginal = cleanText(candidate.abstractOriginal);
+  const abstractOriginal = longestAbstractAlias(candidate);
   const abstractZh = cleanText(candidate.abstractZh);
   const reviewState = reviewStateForCandidate(candidate);
 
@@ -408,6 +411,16 @@ export function sourceCandidateToSourceRecord(input: {
     provider: providerLabel(candidate.provider),
     queryUsed,
     retrievedAt: candidate.retrievedAt,
+    dedupeKey: candidate.canonicalSourceIdentity ?? candidate.dedupeKey,
+    canonicalSourceIdentity: candidate.canonicalSourceIdentity ?? candidate.dedupeKey,
+    providerIds: candidate.providerIds ?? null,
+    contentLevel: candidate.contentLevel ?? null,
+    enrichmentAttempted: candidate.enrichmentAttempted ?? null,
+    enrichmentProviders: candidate.enrichmentProviders ?? null,
+    enrichmentStatus: candidate.enrichmentStatus ?? null,
+    enrichmentFailureReason: candidate.enrichmentFailureReason ?? null,
+    enrichmentProvenance: candidate.enrichmentProvenance ?? null,
+    enrichedAt: candidate.enrichedAt ?? null,
     language: candidate.language ?? null,
     sourceKind:
       candidate.sourceType === "official" || candidate.sourceType === "web"
@@ -614,6 +627,11 @@ export function groundingEvidenceCardToEvidenceCard(input: {
   source: SourceRecord | null;
 }): EvidenceCard {
   const { card, source } = input;
+  const metadataAuthors = Array.isArray(card.sourceMetadata?.authors)
+    ? card.sourceMetadata.authors.filter(
+        (author): author is string => typeof author === "string" && Boolean(author.trim()),
+      )
+    : [];
   const safety = card.safety ?? {
     containsActionableHarm: false,
     redactionApplied: false,
@@ -628,6 +646,9 @@ export function groundingEvidenceCardToEvidenceCard(input: {
   const relevanceScore = source?.relevanceScore ?? null;
   const finalScore = source?.finalScore ?? relevanceScore;
   const confidenceScore = Math.max(0, Math.min(1, card.confidence));
+  const canonicalSourceKey = card.canonicalSourceKey ??
+    card.dedupeKey ??
+    (source ? canonicalSourceKeyForSource(source) : card.sourceId);
 
   return {
     id: card.evidenceId,
@@ -636,6 +657,9 @@ export function groundingEvidenceCardToEvidenceCard(input: {
     workflowId: card.workflowId,
     topicHash: card.topicHash,
     sourceId: card.sourceId,
+    canonicalSourceKey,
+    dedupeKey: canonicalSourceKey,
+    citationKey: card.citationKey ?? canonicalSourceKey,
     claimIds: card.claimIds ?? [],
     claimTextOriginal: card.claimTextOriginal,
     claimText: card.claimText ?? card.claimTextZh,
@@ -673,9 +697,11 @@ export function groundingEvidenceCardToEvidenceCard(input: {
     sectionTargets: card.usableFor,
     sectionFit: card.sectionFit ?? card.usableFor,
     sourceTitle: card.sourceTitle,
+    authors: source?.authors ?? metadataAuthors,
     sourceUrl: source?.url ?? card.sourceUri,
     sourceDomain: sourceDomain(source?.url ?? card.sourceUri),
     sourceProvider: source?.provider ?? "Research Grounding",
+    sourceMetadata: card.sourceMetadata ?? null,
     sourceAccessLevel: card.source_access_level ?? source?.accessLevel ?? null,
     extractionStatus: card.extractionStatus ?? source?.extractionStatus ?? null,
     evidenceType: card.evidence_type ?? null,
@@ -708,9 +734,7 @@ export function groundingEvidenceCardToEvidenceCard(input: {
     confidenceScore: card.groundingConfidence ?? confidenceScore,
     groundingConfidence: card.groundingConfidence ?? confidenceScore,
     derivation,
-    abstractOnly:
-      card.source_access_level === "abstract_only" ||
-      (!source?.abstract && card.source_access_level !== "full_text"),
+    abstractOnly: derivation !== "fulltext-derived",
     limitation: card.limitations[0] ?? null,
     citationText: citationTextForSource(source),
     pageOrLocation:
@@ -737,17 +761,86 @@ export function groundedEvidenceCardsForAcceptedSources(input: {
   groundingEvidenceCards: GroundingEvidenceCard[];
   topic?: string;
 }): EvidenceCard[] {
-  const acceptedIds = new Set(input.acceptedSources.map((source) => source.id));
-  const sourceById = new Map(input.acceptedSources.map((source) => [source.id, source]));
+  const sourceById = new Map(
+    input.acceptedSources.flatMap((source) =>
+      [source.id, source.canonicalSourceIdentity, source.dedupeKey, sourceRecordKey(source)]
+        .filter((value): value is string => Boolean(value))
+        .map((value) => [value, source] as const),
+    ),
+  );
   const groundedCards = input.groundingEvidenceCards
-    .filter((card) => acceptedIds.has(card.sourceId))
+    .filter((card) =>
+      [card.sourceId, card.canonicalSourceKey, card.dedupeKey, card.citationKey]
+        .filter((value): value is string => Boolean(value))
+        .some((key) => sourceById.has(key)),
+    )
     .map((card) =>
       groundingEvidenceCardToEvidenceCard({
         card,
-        source: sourceById.get(card.sourceId) ?? null,
+        source:
+          [card.sourceId, card.canonicalSourceKey, card.dedupeKey, card.citationKey]
+            .filter((value): value is string => Boolean(value))
+            .map((key) => sourceById.get(key))
+            .find((source): source is SourceRecord => Boolean(source)) ?? null,
       }),
     );
   return groundedCards;
+}
+
+export function reportEvidenceCardsForAcceptedSources(input: {
+  acceptedSources: SourceRecord[];
+  groundingEvidenceCards: GroundingEvidenceCard[];
+  topic?: string;
+}): EvidenceCard[] {
+  const canonicalCards = groundedEvidenceCardsForAcceptedSources(input);
+  const canonicalSourceIds = new Set(
+    canonicalCards.flatMap((card) =>
+      [card.sourceId, card.canonicalSourceKey, card.dedupeKey, card.citationKey]
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  const sourcesMissingCanonicalEvidence = input.acceptedSources.filter(
+    (source) =>
+      ![source.id, source.canonicalSourceIdentity, source.dedupeKey, sourceRecordKey(source)]
+        .filter((value): value is string => Boolean(value))
+        .some((key) => canonicalSourceIds.has(key)),
+  );
+  const sourceById = new Map(
+    sourcesMissingCanonicalEvidence.flatMap((source) =>
+      [source.id, source.canonicalSourceIdentity, source.dedupeKey, sourceRecordKey(source)]
+        .filter((value): value is string => Boolean(value))
+        .map((value) => [value, source] as const),
+    ),
+  );
+  const fallbackCards = buildEvidenceCards(
+    sourcesMissingCanonicalEvidence,
+    [],
+    { topic: input.topic },
+  ).filter((card) => {
+    if (card.derivation === "metadata-derived") {
+      return Boolean(
+        card.sourceTitle.trim() &&
+          (card.doi?.trim() || card.sourceUrl?.trim()) &&
+          card.provider.trim(),
+      );
+    }
+    const supportSpan = card.supportSpan?.trim();
+    const source = sourceById.get(card.sourceId);
+    if (!supportSpan || !source) return false;
+    const sourceSupportTexts = [
+      source.originalAbstract,
+      source.abstractOriginal,
+      source.originalSnippet,
+      source.snippet,
+      source.abstract,
+      ...(source.sourceFacts ?? []).map((fact) => fact.supportedByText),
+    ]
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return sourceSupportTexts.some((text) => text.includes(supportSpan));
+  });
+  return [...canonicalCards, ...fallbackCards];
 }
 
 export function academicSafetyBlocksReport(

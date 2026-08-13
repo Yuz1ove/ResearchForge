@@ -34,18 +34,30 @@ function startServer(): void {
     }
 
     const llmConfig = resolveSafeLlmProviderConfig();
+    const providerEnvKeys =
+      llmConfig.provider === "school_llm"
+        ? {
+            baseUrl: "SCHOOL_LLM_BASE_URL",
+            model: "SCHOOL_LLM_MODEL",
+            apiKey: "SCHOOL_LLM_API_KEY",
+          }
+        : llmConfig.provider === "ollama"
+          ? {
+              baseUrl: "OLLAMA_BASE_URL",
+              model: "OLLAMA_MODEL",
+              apiKey: "OLLAMA_API_KEY",
+            }
+          : {
+              baseUrl: "OPENAI_BASE_URL",
+              model: "OPENAI_MODEL",
+              apiKey: "OPENAI_API_KEY",
+            };
     const baseUrlInfo =
-      apiServerEnvLoadResult.keys[
-        llmConfig.provider === "school_llm" ? "SCHOOL_LLM_BASE_URL" : "OPENAI_BASE_URL"
-      ];
+      apiServerEnvLoadResult.keys[providerEnvKeys.baseUrl];
     const modelInfo =
-      apiServerEnvLoadResult.keys[
-        llmConfig.provider === "school_llm" ? "SCHOOL_LLM_MODEL" : "OPENAI_MODEL"
-      ];
+      apiServerEnvLoadResult.keys[providerEnvKeys.model];
     const apiKeyInfo =
-      apiServerEnvLoadResult.keys[
-        llmConfig.provider === "school_llm" ? "SCHOOL_LLM_API_KEY" : "OPENAI_API_KEY"
-      ];
+      apiServerEnvLoadResult.keys[providerEnvKeys.apiKey];
     const envSources = new Set<string>(
       [baseUrlInfo, modelInfo, apiKeyInfo]
         .map((info) => info?.source)
@@ -64,7 +76,7 @@ function startServer(): void {
         model: llmConfig.model || "unset",
         openAiApiKeyConfigured: Boolean(process.env.OPENAI_API_KEY?.trim()),
         schoolLlmApiKeyConfigured: Boolean(process.env.SCHOOL_LLM_API_KEY?.trim()),
-        credentialPreview: llmConfig.credentialPreview,
+        credentialPresent: llmConfig.apiKeyConfigured,
         llmProvider: process.env.LLM_PROVIDER?.trim() || "unset",
         envSource:
           envSources.size > 0

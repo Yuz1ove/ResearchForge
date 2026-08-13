@@ -53,6 +53,52 @@ test("extractSourceContent reads public HTML into sections and chunks", async ()
   assert.equal(result.extraction_warnings.length, 0);
 });
 
+test("extractSourceContent reads a Crossref-resolved J-STAGE article without a separate OA flag", async () => {
+  const html = `
+    <html>
+      <head>
+        <meta name="citation_abstract" content="Raindrop diameter and terminal velocity were measured with high-speed imaging.">
+      </head>
+      <body>
+        <article>
+          <h1>Measurement of falling raindrops</h1>
+          <h2>Abstract</h2>
+          <p>High-speed outdoor imaging measured raindrop diameter, falling velocity, and aspect ratio under natural rainfall conditions.</p>
+          <p>The observed relationship between drop diameter and falling velocity was consistent with established indoor terminal-velocity measurements for drops below three millimetres.</p>
+        </article>
+      </body>
+    </html>
+  `;
+  let requestedUrl = "";
+
+  const result = await extractSourceContent(
+    {
+      sourceId: "doi:10.2208/jscejhe.70.i_523",
+      title: "Measurement of velocity, diameter and aspect ratio of falling raindrops",
+      url: "https://doi.org/10.2208/jscejhe.70.i_523",
+      fullTextUrl:
+        "https://www.jstage.jst.go.jp/article/jscejhe/70/4/70_88/_article/-char/en/",
+      provider: "Crossref",
+      sourceType: "paper",
+    },
+    {
+      fetchImpl: async (url) => {
+        requestedUrl = String(url);
+        return new Response(html, {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      },
+    },
+  );
+
+  assert.match(requestedUrl, /jstage\.jst\.go\.jp/u);
+  assert.equal(result.access_level, "full_text");
+  assert.equal(result.extraction_method, "html_readability");
+  assert.equal(result.can_use_for_claims, true);
+  assert.match(result.extracted_chunks.map((chunk) => chunk.text).join(" "), /terminal[- ]velocity/iu);
+});
+
 test("extractSourceContent returns structured PDF warnings when parser cannot extract text", async () => {
   const emptyPdfParse: ParsedDocument = {
     sourceId: "rayleigh-pdf",

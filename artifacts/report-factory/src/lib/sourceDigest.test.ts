@@ -89,3 +89,19 @@ test("accepted source digest does not fabricate concrete statistics", () => {
 
   assert.doesNotMatch(digest.summary, /\d+%|增加|降低|證明/);
 });
+
+test("accepted source digest uses the paper-search reader summary", () => {
+  const digest = buildAcceptedSourceDigest(
+    [
+      source({
+        abstract: null,
+        readableSummaryZhTW: "這篇研究整理睡眠時間與學生注意力之間的關聯。",
+        llmSummaryZhTw: "這篇研究整理睡眠時間與學生注意力之間的關聯。",
+        summarySourceType: "metadataFallback",
+      }),
+    ],
+    { topic: "睡眠與注意力", currentYear: 2026 },
+  );
+
+  assert.match(digest.summary, /睡眠時間與學生注意力之間的關聯/u);
+});

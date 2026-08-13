@@ -61,6 +61,8 @@ const SCHOLARLY_RECOMMENDED_SECTIONS = new Set<EvidenceSectionType>([
   "discussion_claim",
   "introduction",
   "background",
+  "limitations",
+  "basic_context",
 ]);
 
 const SCHOLARLY_CLAIM_SECTIONS = new Set<EvidenceSectionType>([

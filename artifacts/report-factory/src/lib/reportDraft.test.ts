@@ -131,8 +131,43 @@ test("draft generator flags accepted sources with insufficient abstracts", () =>
     citationFormat: "APA",
   });
 
-  assert.match(draft.text, /摘要或 metadata|來源尚不足|不能宣稱已完成全文分析/u);
+  assert.match(draft.text, /書目資訊|來源尚不足|不能宣稱已完成全文分析/u);
   assert.doesNotMatch(draft.text, /建議開啟原文|請開啟原文|回查原文/);
+});
+
+test("draft generator still creates an abstract from accepted reader summaries", () => {
+  const acceptedSources = [
+    source({
+      abstract: null,
+      originalAbstract: null,
+      title: "Student sleep and attention review",
+      readableSummaryZhTW: "這篇研究整理學生睡眠時間與注意力表現之間的關聯。",
+      llmSummaryZhTw: "這篇研究整理學生睡眠時間與注意力表現之間的關聯。",
+      summarySourceType: "metadataFallback",
+      evidenceGrounding: "metadata_only",
+    }),
+  ];
+  const outline = buildReportOutline({
+    topic: "睡眠與注意力",
+    reportType: "研究報告",
+    audience: "高中",
+    acceptedSources,
+    evidenceCards: [],
+  });
+  const draft = buildReportDraft({
+    project: project(),
+    topic: "睡眠與注意力",
+    reportType: "研究報告",
+    audience: "高中",
+    evidenceCards: [],
+    outline,
+    acceptedSources,
+    citationFormat: "APA",
+  });
+
+  const abstract = draft.sections.find((section) => section.sectionId === "abstract")?.body ?? "";
+  assert.match(abstract, /學生睡眠時間與注意力表現之間的關聯/u);
+  assert.match(abstract, /不延伸為正式研究結論/u);
 });
 
 test("draft synthesis organizes evidence by section intent instead of source-card order", () => {
@@ -274,5 +309,39 @@ test("draft writer never leaks instruction or scaffold text into report body", (
   }
   assert.match(draft.text, /可樂成分與青少年健康影響/);
   assert.match(draft.text, /\[S1\]|\[S2\]|\[S3\]/);
-  assert.match(draft.text, /資料檢索|證據卡整理方式/u);
+  assert.match(draft.text, /資料檢索|來源篩選|可核對片段/u);
+  assert.doesNotMatch(draft.text, /evidence card|supportSpan|metadata|peer-reviewed evidence/iu);
+});
+
+test("bibliography contains only accepted sources that are cited by report evidence", () => {
+  const cited = source({ id: "cited", title: "Cited study", doi: "10.1000/cited" });
+  const acceptedButUnused = source({
+    id: "unused",
+    title: "Unused accepted study",
+    doi: "10.1000/unused",
+  });
+  const evidenceCards = buildEvidenceCards([cited]);
+  const acceptedSources = [acceptedButUnused, cited];
+  const outline = buildReportOutline({
+    topic: "青少年睡眠品質",
+    reportType: "研究報告",
+    audience: "高中",
+    acceptedSources,
+    evidenceCards,
+  });
+
+  const draft = buildReportDraft({
+    project: project(),
+    topic: "青少年睡眠品質",
+    reportType: "研究報告",
+    audience: "高中",
+    evidenceCards,
+    outline,
+    acceptedSources,
+    citationFormat: "APA",
+  });
+
+  assert.equal(draft.referenceList.length, 1);
+  assert.match(draft.referenceList[0] ?? "", /^\[S1\].*Cited study/u);
+  assert.doesNotMatch(draft.text, /Unused accepted study/u);
 });

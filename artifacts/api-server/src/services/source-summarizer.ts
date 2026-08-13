@@ -542,6 +542,21 @@ function normalizeReaderSummary(text: string): string {
   return truncateText(stripHtmlAndNoise(text), 220);
 }
 
+function normalizeEvidenceScopeLanguage(
+  text: string,
+  sourceType: NonNullable<SourceSummaryCapableRecord["summarySourceType"]>,
+): string {
+  const normalized = cleanText(text);
+  if (!normalized || sourceType !== "fulltext") return normalized;
+  return normalized
+    .replace(/提供(?:內容|文本)僅(?:來自|為)摘要[，,]?/gu, "本次可核對全文摘錄未完整涵蓋")
+    .replace(/方法上[，,]摘要指出/gu, "方法上，本次可核對全文摘錄指出")
+    .replace(/(?:該)?摘要(?:中)?(?:指出|顯示|說明)/gu, "本次可核對全文摘錄顯示")
+    .replace(/(?:該)?摘要(?:中)?未(提供|交代|說明|報告|列出)/gu, "本次可核對全文摘錄未$1")
+    .replace(/僅(?:來自|提供)摘要層級/gu, "僅涵蓋本次可核對全文摘錄範圍")
+    .replace(/摘要層級/gu, "可核對全文摘錄範圍");
+}
+
 function summarySourceTypeForTarget(
   target: PreparedSummaryTarget,
 ): NonNullable<SourceSummaryCapableRecord["summarySourceType"]> {
@@ -706,7 +721,7 @@ function composeReadableSummaryZhTW(input: {
     return truncateText(
       [
         focus ? `這份來源主要討論${focus}。` : null,
-        `摘要指出${detail.replace(/^[，。]+|[，。]+$/g, "")}。`,
+        `${input.summarySourceType === "fulltext" ? "本次可核對全文摘錄顯示" : "摘要指出"}${detail.replace(/^[，。]+|[，。]+$/g, "")}。`,
         `與目前研究主題的關聯在於：${relation}`,
       ]
         .filter(Boolean)
@@ -740,10 +755,14 @@ function buildReadableSummaryPayload(input: {
   const summarySourceType = summarySourceTypeForTarget(input.target);
   const summaryConfidence = summaryConfidenceForType(summarySourceType);
   const relevanceReasonZhTW = relevanceReasonSummary(input.topic, input.target.source);
+  const normalizedSummaryText = normalizeEvidenceScopeLanguage(
+    input.summaryText,
+    summarySourceType,
+  );
   const readableSummaryZhTW = composeReadableSummaryZhTW({
     topic: input.topic,
     source: input.target.source,
-    baseSummary: input.summaryText,
+    baseSummary: normalizedSummaryText,
     summarySourceType,
     summaryConfidence,
   });
@@ -758,7 +777,7 @@ function buildReadableSummaryPayload(input: {
       cleanText(input.target.source.originalAbstract ?? input.target.source.abstract) ||
       null,
     abstractZhTw: null,
-    mainEvidencePointZhTw: cleanText(input.summaryText) || null,
+    mainEvidencePointZhTw: normalizedSummaryText || null,
     summaryWarnings: summaryWarningsForTarget(input.target),
   };
 }
@@ -1241,15 +1260,19 @@ export async function summarizeSourcesWithLlm(
     const prepared = preparedById.get(source.id);
     const success = successfulSummaries.get(source.id);
     if (success && prepared) {
+      const normalizedSuccessSummary = normalizeEvidenceScopeLanguage(
+        success.summary,
+        summarySourceTypeForTarget(prepared),
+      );
       const readableSummary = buildReadableSummaryPayload({
         topic,
         target: prepared,
-        summaryText: success.summary,
+        summaryText: normalizedSuccessSummary,
       });
       return {
         ...source,
         ...prepared.source,
-        llmSummaryZhTw: success.summary,
+        llmSummaryZhTw: normalizedSuccessSummary,
         ...readableSummary,
         llmSummaryStatus: "success",
         summaryStructuredStatus: "success",

@@ -415,8 +415,20 @@ test("random gibberish is invalid and produces no directions", () => {
   assert.equal(directions.length, 0);
 });
 
-test("generator topic step exposes domain cards and no longer renders old first-step dropdowns", () => {
+test("workspace omits topic setup while keeping legacy topic helpers isolated", () => {
   const generatorSource = readFileSync(new URL("../pages/generator.tsx", import.meta.url), "utf8");
+  const paperSearchSource = readFileSync(new URL("../pages/paper-search.tsx", import.meta.url), "utf8");
+  const workflowStepsSource = generatorSource.slice(
+    generatorSource.indexOf("const WORKFLOW_STEPS"),
+    generatorSource.indexOf("function workflowStepIndex"),
+  );
+
+  assert.equal(workflowStepsSource.includes('value: "topic"'), false);
+  assert.equal(generatorSource.includes("<TopicStepPanel"), false);
+  assert.match(generatorSource, /loadPaperSearchHandoff/);
+  assert.match(generatorSource, /setActiveStep\("manage"\)/);
+  assert.match(paperSearchSource, /savePaperSearchHandoff/);
+  assert.match(paperSearchSource, /paper-search-open-workspace/);
 
   assert.match(generatorSource, /data-testid="research-domain-section"/);
   assert.match(generatorSource, /research-domain-\$\{domain\.id\}/);
@@ -458,6 +470,22 @@ test("generator topic step exposes domain cards and no longer renders old first-
   assert.match(generatorSource, /const hasResearchTopicOverride = Boolean\([\s\S]*nextResearchTopicHint \|\| nextNormalizedTopic/);
   assert.match(generatorSource, /const nextResearchTopic = nextSubmittedTopic/);
   assert.match(generatorSource, /rawUserTopic: nextSubmittedTopic[\s\S]*originalTopic: nextSubmittedTopic[\s\S]*topic: nextSubmittedTopic/);
+  assert.match(
+    generatorSource,
+    /const groundingCanonicalTopic = groundingJob\?\.normalizedTopic\?\.trim\(\) \?\? ""/,
+  );
+  assert.match(
+    generatorSource,
+    /const activeResearchTopic =[\s\S]*selectedExpansionTopic \|\| groundingCanonicalTopic \|\| originalTopicValue/,
+  );
+  assert.match(
+    generatorSource,
+    /setSearchTopic\([\s\S]*result\.normalizedTopic\.trim\(\) !== result\.originalTopic\.trim\(\)/,
+  );
+  assert.match(
+    generatorSource,
+    /const effectiveInput: ReportInput = \{[\s\S]*?topic: activeResearchTopic/,
+  );
   assert.match(generatorSource, /if \(!hasResearchTopicOverride && parsedDraft\.nextAction === "show_topic_options"\)/);
   assert.match(generatorSource, /if \(!hasResearchTopicOverride && parsedDraft\.nextAction === "ask_clarification"\)/);
   assert.match(generatorSource, /setSelectedDirection\(null\)/);

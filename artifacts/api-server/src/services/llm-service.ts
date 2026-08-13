@@ -13,6 +13,7 @@ import {
   DEFAULT_OPENAI_MODEL,
   LlmAdapterError,
   extractModelText,
+  ollamaChatUrl,
   resolveOpenAiModelAlias,
   requestOpenAICompatibleChatCompletion,
   resolveLlmConfig,
@@ -24,6 +25,7 @@ import {
 } from "./llm-adapter";
 import { runProviderSmokeTest } from "./provider-smoke";
 import {
+  estimateMessageTokens,
   redactKnownSecrets,
   schoolProviderEnvPresent,
   schoolProviderLabel,
@@ -181,7 +183,11 @@ function responsesEndpoint(baseUrl: string): string {
   return new URL("responses", normalizedBase).toString();
 }
 
-export function llmEndpoint(baseUrl: string): string {
+export function llmEndpoint(
+  baseUrl: string,
+  providerKind?: "school" | "openai" | "ollama" | "generic",
+): string {
+  if (providerKind === "ollama") return ollamaChatUrl(baseUrl).toString();
   const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
   return new URL("chat/completions", normalizedBase).toString();
 }
@@ -257,7 +263,7 @@ export async function requestLlmText(
 ): Promise<LlmServiceSuccess> {
   const resolved = resolveLlmConfig(options.purpose, options.llm, options.env);
   const provider = providerLabel(resolved.baseUrl, options.env);
-  const endpoint = llmEndpoint(resolved.baseUrl);
+  const endpoint = llmEndpoint(resolved.baseUrl, resolved.providerKind);
 
   logger.info(
     {
@@ -268,6 +274,7 @@ export async function requestLlmText(
       model: resolved.model,
       endpointConfigured: Boolean(endpoint),
       timeoutMs: resolved.timeoutMs,
+      estimatedInputTokens: estimateMessageTokens(options.messages),
     },
     "LLM request starting",
   );

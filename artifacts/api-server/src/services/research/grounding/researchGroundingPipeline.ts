@@ -1,3 +1,8 @@
+/**
+ * AI assistance disclosure: Portions of this grounding pipeline were drafted or
+ * refactored with Replit Agent and OpenAI Codex. See /AI_ASSISTANCE.md for the
+ * scope of assistance and verification performed for this submission.
+ */
 import {
   type AcademicSafetyReview,
   type AcademicRetry,
@@ -12,6 +17,7 @@ import {
   type LexicalSignal,
   type QueryIntent,
   type ReportPlan,
+  type ReportPlannedClaim,
   type ResearchGroundingDiagnosticTrace,
   type ResearchGroundingJobCreateRequest,
   type ResearchTitleSentenceParse,
@@ -39,12 +45,17 @@ import {
   parseResearchInput,
 } from "@workspace/api-zod/research-intent";
 import type { ParsedResearchInput } from "@workspace/api-zod/research-intent";
-import type { SourceRecord } from "@workspace/api-zod";
+import { dedupeSourceRecords, type SourceRecord } from "@workspace/api-zod";
 import { understandTopic } from "@workspace/api-zod/topic-understanding";
 import type {
   SearchIntentPlannerInput,
   SearchIntentSourceSearchResult,
 } from "../../search-intent-planner";
+import {
+  buildFallbackKeywordExpansion,
+  type KeywordExpansionRequest,
+  type KeywordExpansionResult,
+} from "../../keyword-expansion";
 import { sourceRecordToNormalizedSource } from "../normalizers/normalizeSource";
 import { computeFinalScore } from "../scoring/finalScore";
 import { analyzeRelevanceScore, TERM_BRIDGE } from "../scoring/relevanceScore";
@@ -69,6 +80,10 @@ import {
   cleanExtractedTextChunk,
   scoreEvidenceRelevance,
 } from "./evidencePipelineGuards";
+import {
+  resolveEvidenceCandidates,
+  type ResolvedEvidence,
+} from "./evidenceResolution";
 
 const ACTIONABLE_HARM_PATTERNS = [
   /如何/u,
@@ -522,7 +537,11 @@ export interface GroundingPipelineDependencies {
   searchHandler: (
     input: SearchIntentPlannerInput,
   ) => Promise<SearchIntentSourceSearchResult>;
+  keywordExpansionHandler?: (
+    input: KeywordExpansionRequest,
+  ) => Promise<KeywordExpansionResult>;
   lexiconAdapters?: LexiconAdapter[];
+  acceptedSourceEnricher?: (sources: SourceCandidate[]) => Promise<SourceCandidate[]>;
   onProgress?: (update: GroundingPipelineProgress) => void | Promise<void>;
 }
 
@@ -586,6 +605,159 @@ function containsZh(value: string): boolean {
 
 function containsLatin(value: string): boolean {
   return /[A-Za-z]/.test(value);
+}
+
+const GENERIC_ENGLISH_QUERY_TERMS = new Set([
+  "academic",
+  "analysis",
+  "application",
+  "applications",
+  "article",
+  "background",
+  "context",
+  "development",
+  "effect",
+  "effects",
+  "evidence",
+  "experimental",
+  "features",
+  "formation",
+  "general",
+  "impact",
+  "journal",
+  "literature",
+  "main",
+  "mechanism",
+  "method",
+  "methods",
+  "overview",
+  "peer",
+  "people",
+  "process",
+  "research",
+  "review",
+  "reviewed",
+  "science",
+  "scientific",
+  "study",
+  "systematic",
+  "types",
+  "usage",
+  "use",
+]);
+
+const ENGLISH_QUERY_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "as",
+  "at",
+  "by",
+  "for",
+  "from",
+  "in",
+  "of",
+  "on",
+  "or",
+  "the",
+  "to",
+  "with",
+]);
+
+function englishSubjectTerms(query: string): string[] {
+  return uniqueStrings(
+    query
+      .toLowerCase()
+      .match(/[a-z][a-z0-9-]*/g)
+      ?.filter(
+        (term) =>
+          term.length >= 2 &&
+          !ENGLISH_QUERY_STOP_WORDS.has(term) &&
+          !GENERIC_ENGLISH_QUERY_TERMS.has(term),
+      ) ?? [],
+  );
+}
+
+export function isValidEnglishProviderQuery(query: string): boolean {
+  const normalized = compactWhitespace(query);
+  return (
+    normalized.length >= 3 &&
+    containsLatin(normalized) &&
+    !containsZh(normalized) &&
+    englishSubjectTerms(normalized).length > 0
+  );
+}
+
+function sanitizeEnglishProviderQueries(queries: string[]): string[] {
+  return uniqueStrings(queries).filter(isValidEnglishProviderQuery);
+}
+
+function meaningfulResearchTopic(topic: string): boolean {
+  const normalized = compactWhitespace(topic);
+  if (!normalized) return false;
+  if (containsZh(normalized)) {
+    return (normalized.match(/[\u3400-\u9fff]/gu) ?? []).length >= 2;
+  }
+  return englishSubjectTerms(normalized).length > 0;
+}
+
+export interface FinalGroundingQueryBundle {
+  activeResearchTopic: string;
+  normalizedTopic: string;
+  canonicalEnglishTopic: string;
+  querySeedZh: string[];
+  querySeedEn: string[];
+  subjectAnchorTerms: string[];
+  domains: string[];
+  llmStatus: KeywordExpansionResult["llm_status"];
+  fallbackUsed: boolean;
+}
+
+export function buildFinalGroundingQueryBundle(input: {
+  activeResearchTopic: string;
+  requestQuerySeedZh?: string[];
+  requestQuerySeedEn?: string[];
+  keywordExpansion: KeywordExpansionResult;
+}): FinalGroundingQueryBundle {
+  const activeResearchTopic = compactWhitespace(input.activeResearchTopic);
+  const expansionNormalizedTopic = compactWhitespace(
+    input.keywordExpansion.normalized_topic || activeResearchTopic,
+  );
+  const expansionSearchQueries = input.keywordExpansion.search_queries ?? [];
+  const requestEnglishQueries = sanitizeEnglishProviderQueries(
+    input.requestQuerySeedEn ?? [],
+  );
+  const expansionEnglishQueries = sanitizeEnglishProviderQueries([
+    ...(!containsZh(expansionNormalizedTopic) ? [expansionNormalizedTopic] : []),
+    ...(input.keywordExpansion.english_queries ?? []),
+    ...expansionSearchQueries.filter((query) => !containsZh(query)),
+  ]);
+  const querySeedEn = uniqueStrings([
+    ...requestEnglishQueries,
+    ...expansionEnglishQueries,
+  ]);
+  const querySeedZh = uniqueStrings([
+    ...(input.requestQuerySeedZh ?? []).filter(containsZh),
+    ...(containsZh(activeResearchTopic) ? [activeResearchTopic] : []),
+    ...(containsZh(expansionNormalizedTopic) ? [expansionNormalizedTopic] : []),
+    ...(input.keywordExpansion.chinese_queries ?? []).filter(containsZh),
+    ...expansionSearchQueries.filter(containsZh),
+  ]);
+  const subjectAnchorTerms = uniqueStrings(
+    querySeedEn.flatMap(englishSubjectTerms),
+  ).slice(0, 16);
+
+  return {
+    activeResearchTopic,
+    normalizedTopic: expansionNormalizedTopic || activeResearchTopic,
+    canonicalEnglishTopic: querySeedEn[0] ?? "",
+    querySeedZh,
+    querySeedEn,
+    subjectAnchorTerms,
+    domains: uniqueStrings(input.keywordExpansion.domains ?? []),
+    llmStatus: input.keywordExpansion.llm_status,
+    fallbackUsed: input.keywordExpansion.fallback_used,
+  };
 }
 
 type QueryClassification = "providerQuery" | "backgroundQuery" | "outlineHint" | "rejectedQuery";
@@ -798,6 +970,7 @@ type BucketEntityDefinition = {
   terms: string[];
   strongTerms?: string[];
   requiredSignals?: string[];
+  requiredAnyTerms?: string[];
 };
 
 type TopicEntityMap = {
@@ -864,6 +1037,74 @@ function textMatchesTerm(text: string, term: string): boolean {
 
 function matchedBucketTerms(text: string, terms: string[]): string[] {
   return uniqueStrings(terms.filter((term) => textMatchesTerm(text, term)));
+}
+
+function repeatedEnglishQueryTerms(queries: string[]): string[] {
+  const normalizedQueries = uniqueStrings(queries.filter(containsLatin));
+  if (normalizedQueries.length < 2) return [];
+  const counts = new Map<string, number>();
+  for (const query of normalizedQueries) {
+    for (const term of new Set(englishSubjectTerms(query))) {
+      counts.set(term, (counts.get(term) ?? 0) + 1);
+    }
+  }
+  const threshold = Math.max(2, Math.ceil(normalizedQueries.length * 0.5));
+  return [...counts.entries()]
+    .filter(([, count]) => count >= threshold)
+    .sort((left, right) => right[1] - left[1])
+    .map(([term]) => term)
+    .slice(0, 12);
+}
+
+function leadingEnglishQueryAnchors(queries: string[]): string[] {
+  const normalizedQueries = uniqueStrings(queries.filter(containsLatin));
+  if (normalizedQueries.length < 2) return [];
+  const counts = new Map<string, number>();
+  for (const query of normalizedQueries) {
+    const leading = englishSubjectTerms(query)[0];
+    if (!leading) continue;
+    counts.set(leading, (counts.get(leading) ?? 0) + 1);
+  }
+  const threshold = Math.max(2, Math.ceil(normalizedQueries.length * 0.5));
+  return [...counts.entries()]
+    .filter(([, count]) => count >= threshold)
+    .sort((left, right) => right[1] - left[1])
+    .map(([term]) => term)
+    .slice(0, 4);
+}
+
+function genericAcademicEntityDefinition(
+  queryPlan?: GroundingQueryPlan,
+): BucketEntityDefinition {
+  const englishQueries = uniqueStrings([
+    ...(queryPlan?.bilingualQueries.en ?? []),
+    ...(queryPlan?.primaryQueries ?? []).filter(containsLatin),
+  ]);
+  const requiredAnyTerms = leadingEnglishQueryAnchors(englishQueries);
+  const repeatedTerms = repeatedEnglishQueryTerms(englishQueries);
+  const conceptTerms = uniqueStrings(
+    (queryPlan?.conceptGroups ?? []).flatMap((group) => [
+      group.name,
+      ...group.zhTerms,
+      ...group.enTerms,
+    ]),
+  );
+  return {
+    bucket: "general_academic",
+    terms: uniqueStrings([
+      ...requiredAnyTerms,
+      ...repeatedTerms,
+      ...conceptTerms,
+      ...(queryPlan?.primaryQueries ?? []),
+    ]).slice(0, 32),
+    strongTerms: uniqueStrings([...requiredAnyTerms, ...repeatedTerms]).slice(0, 16),
+    ...(requiredAnyTerms.length > 0
+      ? {
+          requiredSignals: ["topic entity match"],
+          requiredAnyTerms,
+        }
+      : {}),
+  };
 }
 
 function scoreBucketText(input: {
@@ -1287,19 +1528,18 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
   return {
     buckets: ["general_academic", "general_background", "off_topic"],
     definitions: [
-      {
-        bucket: "general_academic",
-        terms: uniqueStrings([
-          ...(queryPlan?.conceptGroups ?? []).flatMap((group) => [group.name, ...group.zhTerms, ...group.enTerms]),
-          ...(queryPlan?.primaryQueries ?? []),
-        ]).slice(0, 24),
-      },
+      genericAcademicEntityDefinition(queryPlan),
       {
         bucket: "general_background",
         terms: ["official", "government", "museum", "education", "encyclopedia", "background"],
       },
     ],
-    offTopicPatterns: [/wallpaper|photography|travel|marketing|brand strategy/i],
+    offTopicPatterns: [
+      /\bwallpapers?\b/i,
+      /\btravel\s+(?:blog|guide|tips)\b/i,
+      /\bmarketing\b/i,
+      /\bbrand strategy\b/i,
+    ],
     backgroundSourceNeeded: false,
   };
 }
@@ -1360,10 +1600,20 @@ function assessSourceBucket(input: {
     ? []
     : matchedByBucket.get(bucket) ?? [];
   const definition = input.topicEntityMap.definitions.find((item) => item.bucket === bucket);
+  const matchedRequiredTerms =
+    bucket === "off_topic"
+      ? []
+      : matchedBucketTerms(fullText, definition?.requiredAnyTerms ?? []);
   const missingRequiredSignals =
     bucket === "off_topic"
       ? ["topic entity match"]
-      : (definition?.requiredSignals ?? []).filter((signal) => matchedEntities.length === 0 || bucketScore < 0.35);
+      : (definition?.requiredSignals ?? []).filter(
+          () =>
+            matchedEntities.length === 0 ||
+            bucketScore < 0.35 ||
+            ((definition?.requiredAnyTerms?.length ?? 0) > 0 &&
+              matchedRequiredTerms.length === 0),
+        );
   const academicTrace = sourceHasAcademicTraceForBucket(input);
   const sourceLooksOfficial =
     input.provider === "web" ||
@@ -1398,11 +1648,16 @@ function assessSourceBucket(input: {
     decision = "rejected";
     sourceUseCase = "rejected";
     decisionReasons.push("明顯命中 off_topic bucket，且缺少本題必要實體。");
+  } else if (bucket === "general_academic" && missingRequiredSignals.length > 0) {
+    decision = "rejected";
+    sourceUseCase = "rejected";
+    decisionReasons.push("缺少重複出現在核心查詢中的研究對象實體。 ");
   } else if (
-    scholarlyAcceptedBuckets.includes(bucket) &&
+    (scholarlyAcceptedBuckets.includes(bucket) || bucket === "general_academic") &&
     bucketScore >= 0.52 &&
     academicTrace &&
-    input.sourceQualityScore >= 0.45
+    input.sourceQualityScore >= 0.45 &&
+    missingRequiredSignals.length === 0
   ) {
     decision = "accepted";
     sourceUseCase = "academic_claim";
@@ -2357,7 +2612,7 @@ export function buildSeedQueryPlan(input: {
           ...titleParse.dependentVariables,
           ...parsedZhQueries,
         ], topicText);
-  const enQueries = sanitizeGroundingQueries([
+  const enQueries = sanitizeEnglishProviderQueries(sanitizeGroundingQueries([
     ...requestEnQueries,
     ...normalizedResearchTopic.enAcademicQuery,
     ...(specializedQueries?.en ?? []),
@@ -2368,7 +2623,7 @@ export function buildSeedQueryPlan(input: {
     ...(specializedQueries
       ? []
       : understanding.coreConcepts.filter((concept) => containsLatin(concept))),
-  ], topicText).filter(Boolean);
+  ], topicText));
   const topicAnchorProfile = topicQueryAnchorProfile(topicText);
   const anchoredExactQueries = topicAnchorProfile
     ? providerSafeDomainAnchoredQueries(exactQueries, topicText)
@@ -2654,6 +2909,9 @@ function splitConceptPieces(value: string): string[] {
   );
 }
 
+const GENERIC_CONCEPT_GROUP_TERM =
+  /^(形成|產生|形成機制|研究|方法|證據|限制|應用|影響|formation|development|mechanism|research|method|methods|evidence|limitations?|applications?|impact|effects?)$/i;
+
 function conceptGroupsFromGroundingInput(input: {
   topicText: string;
   titleParse: ResearchTitleSentenceParse;
@@ -2668,7 +2926,8 @@ function conceptGroupsFromGroundingInput(input: {
     ...splitConceptPieces(input.topicText),
   ]).filter(
     (term) =>
-      !/^(如何|影響|原因|角色|the|and|for|with|effect|impact|research|study)$/i.test(term),
+      !GENERIC_CONCEPT_GROUP_TERM.test(term) &&
+      !/^(如何|原因|角色|the|and|for|with|study)$/i.test(term),
   );
   const lexicalTerms = input.lexicalSignals.flatMap((signal) => [
     signal.originalTerm,
@@ -2733,6 +2992,7 @@ function bridgeTextContainsTerm(haystack: string, needle: string): boolean {
 function bridgeConceptGroupsFromTopicText(topicText: string): ConceptGroup[] {
   const normalizedTopic = normalizedBridgeText(topicText);
   return Object.entries(TERM_BRIDGE)
+    .filter(([term]) => !GENERIC_CONCEPT_GROUP_TERM.test(term))
     .filter(([term, aliases]) => {
       return (
         bridgeTextContainsTerm(normalizedTopic, term) ||
@@ -2761,7 +3021,10 @@ function uniqueConceptGroups(groups: ConceptGroup[]): ConceptGroup[] {
 
 function conceptGroupsFromSearchIntentTerms(terms: string[]): ConceptGroup[] {
   return uniqueStrings(terms)
-    .filter((term) => term.trim().length >= 2)
+    .filter(
+      (term) =>
+        term.trim().length >= 2 && !GENERIC_CONCEPT_GROUP_TERM.test(term.trim()),
+    )
     .slice(0, 12)
     .map((term, index) => ({
       name: term,
@@ -2832,11 +3095,11 @@ export function buildGroundingQueryPlan(input: {
       ...titleParse.subject.filter(containsZh),
       ...titleParse.independentVariables.filter(containsZh),
     ], topicText),
-	  en: topicAnchoredPlanQueries(sanitizeGroundingQueries([
+	  en: sanitizeEnglishProviderQueries(topicAnchoredPlanQueries(sanitizeGroundingQueries([
 	    ...input.seedQueryPlan.enQueries,
       ...bridgeQueries,
 	    ...secondaryQueries.filter((query) => containsLatin(query)),
-	  ], topicText), topicText),
+	  ], topicText), topicText)),
 	};
   const rawProviderQueries = providerQueriesFromPlan({
     seedQueryPlan: input.seedQueryPlan,
@@ -2845,10 +3108,10 @@ export function buildGroundingQueryPlan(input: {
     topicText,
   });
   const providerQueries = {
-    openalex: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.openalex, topicText), topicText),
-    crossref: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.crossref, topicText), topicText),
-    core: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.core, topicText), topicText),
-    semanticScholar: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.semanticScholar ?? [], topicText), topicText),
+    openalex: sanitizeEnglishProviderQueries(providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.openalex, topicText), topicText)),
+    crossref: sanitizeEnglishProviderQueries(providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.crossref, topicText), topicText)),
+    core: sanitizeEnglishProviderQueries(providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.core, topicText), topicText)),
+    semanticScholar: sanitizeEnglishProviderQueries(providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.semanticScholar ?? [], topicText), topicText)),
     web: webSafeQueries(sanitizeGroundingQueries(rawProviderQueries.web ?? [], topicText), topicText),
   };
   const domain = inferGroundingDomain(topicText);
@@ -3281,26 +3544,8 @@ function sourceLimitations(input: {
   ]);
 }
 
-function sourceRecordIdentity(source: SourceRecord): string {
-  return (
-    source.id ||
-    source.dedupeKey ||
-    source.doi ||
-    source.url ||
-    `${source.title}:${source.year ?? ""}`
-  ).toLowerCase();
-}
-
 function uniqueSourceRecords(sources: SourceRecord[]): SourceRecord[] {
-  const seen = new Set<string>();
-  const uniqueRecords: SourceRecord[] = [];
-  for (const source of sources) {
-    const key = sourceRecordIdentity(source);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    uniqueRecords.push(source);
-  }
-  return uniqueRecords;
+  return dedupeSourceRecords(sources);
 }
 
 function sourceTypeForCandidate(source: SourceRecord): SourceCandidate["sourceType"] {
@@ -3323,17 +3568,189 @@ function reviewStatusFromSignals(input: {
   return "rejected";
 }
 
+function normalizedCandidateDoi(candidate: SourceCandidate): string {
+  return compactWhitespace(candidate.doi ?? "")
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "")
+    .toLowerCase();
+}
+
+function normalizedCandidateTitle(candidate: SourceCandidate): string {
+  return compactWhitespace(candidate.title)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function candidateProviderIds(candidate: SourceCandidate): Record<string, string> {
+  const raw = candidate.rawProviderPayload && typeof candidate.rawProviderPayload === "object"
+    ? candidate.rawProviderPayload as Record<string, unknown>
+    : {};
+  const rawIds = raw.providerIds && typeof raw.providerIds === "object"
+    ? raw.providerIds as Record<string, unknown>
+    : {};
+  const providerIds = { ...(candidate.providerIds ?? {}) };
+  for (const [key, value] of Object.entries(rawIds)) {
+    if (typeof value === "string" && value.trim()) providerIds[key] = value.trim();
+  }
+  return providerIds;
+}
+
+function sameCandidateIdentity(left: SourceCandidate, right: SourceCandidate): boolean {
+  const leftDoi = normalizedCandidateDoi(left);
+  const rightDoi = normalizedCandidateDoi(right);
+  if (leftDoi || rightDoi) return Boolean(leftDoi && rightDoi && leftDoi === rightDoi);
+
+  const leftIds = candidateProviderIds(left);
+  const rightIds = candidateProviderIds(right);
+  if (Object.entries(leftIds).some(([provider, id]) => rightIds[provider] === id)) return true;
+  if (
+    left.canonicalSourceIdentity &&
+    right.canonicalSourceIdentity &&
+    left.canonicalSourceIdentity === right.canonicalSourceIdentity
+  ) return true;
+  if (left.dedupeKey && right.dedupeKey && left.dedupeKey === right.dedupeKey) return true;
+
+  const sameTitle = normalizedCandidateTitle(left) === normalizedCandidateTitle(right);
+  const sameYear = left.year != null && right.year != null && left.year === right.year;
+  const leftAuthor = compactWhitespace(left.authors?.[0] ?? "").toLowerCase();
+  const rightAuthor = compactWhitespace(right.authors?.[0] ?? "").toLowerCase();
+  return sameTitle && sameYear && Boolean(leftAuthor && rightAuthor && leftAuthor === rightAuthor);
+}
+
+function candidateContentRank(candidate: SourceCandidate): number {
+  if (
+    candidate.contentLevel === "fulltext" ||
+    candidate.accessLevel === "full_text" ||
+    (candidate.fullTextCharCount ?? 0) > 0 ||
+    (candidate.extractedChunks?.length ?? 0) > 0
+  ) return 3;
+  if (
+    candidate.contentLevel === "abstract" ||
+    candidate.abstractOriginal ||
+    candidate.abstract ||
+    candidate.extractedAbstract
+  ) return 2;
+  return 1;
+}
+
+function longestCandidateText(...values: Array<string | null | undefined>): string | undefined {
+  return uniqueStrings(values).sort((left, right) => right.length - left.length)[0];
+}
+
+function mergeCandidatePayloads(left: SourceCandidate, right: SourceCandidate): unknown {
+  const flatten = (value: unknown): unknown[] => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value ? [value] : [];
+    const versions = (value as Record<string, unknown>).versions;
+    return Array.isArray(versions) ? versions : [value];
+  };
+  return {
+    versions: [...flatten(left.rawProviderPayload), ...flatten(right.rawProviderPayload)],
+    providerIds: { ...candidateProviderIds(left), ...candidateProviderIds(right) },
+  };
+}
+
+function mergeSourceCandidatePair<T extends SourceCandidate>(left: T, right: T): T {
+  const canonical = sourceCandidateMergeRank(right) > sourceCandidateMergeRank(left) ? right : left;
+  const secondary = canonical === left ? right : left;
+  const richer = candidateContentRank(right) > candidateContentRank(left) ? right : left;
+  const doi = normalizedCandidateDoi(left) || normalizedCandidateDoi(right);
+  const abstract = longestCandidateText(
+    left.abstract,
+    left.abstractOriginal,
+    left.extractedAbstract,
+    right.abstract,
+    right.abstractOriginal,
+    right.extractedAbstract,
+  );
+  const merged = {
+    ...secondary,
+    ...canonical,
+    sourceId: left.sourceId,
+    citationMarker: left.citationMarker,
+    ...(doi ? { doi } : {}),
+    ...(abstract ? { abstract, abstractOriginal: abstract } : {}),
+    authors: uniqueStrings([...(left.authors ?? []), ...(right.authors ?? [])]),
+    year: canonical.year ?? secondary.year,
+    venue: canonical.venue ?? secondary.venue,
+    url: canonical.url ?? secondary.url,
+    fullTextUrl: richer.fullTextUrl ?? canonical.fullTextUrl ?? secondary.fullTextUrl,
+    readableUrl: richer.readableUrl ?? canonical.readableUrl ?? secondary.readableUrl,
+    isOpenAccess: Boolean(left.isOpenAccess || right.isOpenAccess),
+    providerIds: { ...candidateProviderIds(left), ...candidateProviderIds(right) },
+    canonicalSourceIdentity:
+      doi
+        ? `doi:${doi}`
+        : canonical.canonicalSourceIdentity ?? secondary.canonicalSourceIdentity ?? canonical.dedupeKey,
+    contentLevel: candidateContentRank(richer) === 3 ? "fulltext" : abstract ? "abstract" : "metadata",
+    enrichmentAttempted: Boolean(left.enrichmentAttempted || right.enrichmentAttempted),
+    enrichmentProviders: uniqueStrings([
+      ...(left.enrichmentProviders ?? []),
+      ...(right.enrichmentProviders ?? []),
+    ]),
+    enrichmentStatus:
+      left.enrichmentStatus === "success" || right.enrichmentStatus === "success"
+        ? "success"
+        : canonical.enrichmentStatus ?? secondary.enrichmentStatus,
+    ...(!abstract && candidateContentRank(richer) !== 3 &&
+    (canonical.enrichmentFailureReason ?? secondary.enrichmentFailureReason)
+      ? {
+          enrichmentFailureReason:
+            canonical.enrichmentFailureReason ?? secondary.enrichmentFailureReason,
+        }
+      : {}),
+    enrichmentProvenance: [
+      ...(left.enrichmentProvenance ?? []),
+      ...(right.enrichmentProvenance ?? []),
+    ],
+    extractedAbstract: richer.extractedAbstract ?? abstract,
+    extractedSections: richer.extractedSections ?? canonical.extractedSections ?? secondary.extractedSections,
+    extractedChunks: richer.extractedChunks ?? canonical.extractedChunks ?? secondary.extractedChunks,
+    extractionWarnings: uniqueStrings([
+      ...(left.extractionWarnings ?? []),
+      ...(right.extractionWarnings ?? []),
+    ]),
+    evidencePoints: uniqueStrings([...left.evidencePoints, ...right.evidencePoints]),
+    limitations: uniqueStrings([...left.limitations, ...right.limitations]),
+    usableSections: uniqueStrings([...left.usableSections, ...right.usableSections]),
+    matchedConcepts: uniqueStrings([
+      ...(left.matchedConcepts ?? []),
+      ...(right.matchedConcepts ?? []),
+    ]),
+    rawProviderPayload: mergeCandidatePayloads(left, right),
+  } as unknown as T;
+  const leftSignals = (left as unknown as { _signals?: SourceCandidateWithSignals["_signals"] })._signals;
+  const rightSignals = (right as unknown as { _signals?: SourceCandidateWithSignals["_signals"] })._signals;
+  if (leftSignals || rightSignals) {
+    (merged as unknown as { _signals: SourceCandidateWithSignals["_signals"] })._signals = {
+      finalScore: Math.max(leftSignals?.finalScore ?? 0, rightSignals?.finalScore ?? 0),
+      hasCoreConceptMatch: Boolean(leftSignals?.hasCoreConceptMatch || rightSignals?.hasCoreConceptMatch),
+      hasTitleCoreConceptMatch: Boolean(
+        leftSignals?.hasTitleCoreConceptMatch || rightSignals?.hasTitleCoreConceptMatch,
+      ),
+    };
+  }
+  return merged;
+}
+
+export function mergeSourceCandidateRecords<T extends SourceCandidate>(candidates: T[]): T[] {
+  const merged: T[] = [];
+  for (const candidate of candidates) {
+    const index = merged.findIndex((item) => sameCandidateIdentity(item, candidate));
+    if (index < 0) {
+      merged.push(candidate);
+    } else {
+      merged[index] = mergeSourceCandidatePair(merged[index]!, candidate);
+    }
+  }
+  return merged;
+}
+
 function dedupeSourceCandidates(
   candidates: SourceCandidateWithSignals[],
 ): SourceCandidateWithSignals[] {
-  const map = new Map<string, SourceCandidateWithSignals>();
-  for (const candidate of candidates) {
-    const existing = map.get(candidate.dedupeKey);
-    if (!existing || existing.relevanceScore < candidate.relevanceScore) {
-      map.set(candidate.dedupeKey, candidate);
-    }
-  }
-  return Array.from(map.values()).sort((left, right) => right.relevanceScore - left.relevanceScore);
+  return mergeSourceCandidateRecords(candidates).sort(
+    (left, right) => right.relevanceScore - left.relevanceScore,
+  );
 }
 
 function applyReviewFallback(
@@ -3349,6 +3766,7 @@ function applyReviewFallback(
     .filter(
       (candidate) =>
         candidate.sourceBucket !== "off_topic" &&
+        (candidate.missingRequiredSignals?.length ?? 0) === 0 &&
         (Boolean(candidate.doi) ||
           Boolean(candidate.abstractOriginal) ||
           Boolean(candidate.venue) ||
@@ -3363,7 +3781,7 @@ function applyReviewFallback(
   if (promotable.length === 0) {
     return {
       candidates,
-      warnings: ["找到資料但被篩選器全部排除，已保留最高分來源供人工審查。"],
+      warnings: ["找到資料但被篩選器全部排除；缺少主題必要實體的來源不會自動提升為人工審查。"],
     };
   }
 
@@ -4778,6 +5196,8 @@ export function buildSourceCandidates(input: {
       const effectiveRelevanceScore =
         bucketAssessment.decision === "rejected"
           ? Math.min(relevanceScore, 0.12)
+          : bucketAssessment.decision === "manual_review"
+            ? Math.min(relevanceScore, Math.max(0.18, bucketAssessment.bucketScore))
           : Math.max(
               relevanceScore,
               bucketAssessment.bucketScore >= 0.5 ? bucketAssessment.bucketScore : relevanceScore,
@@ -4859,6 +5279,8 @@ export function buildSourceCandidates(input: {
                   });
       const rawProviderPayload = {
         provider: source.provider ?? source.sourceType,
+        id: source.id,
+        providerIds: source.providerIds,
         publisher: source.publisher,
         containerTitle: source.containerTitle,
         sourceType: source.sourceType,
@@ -4866,6 +5288,11 @@ export function buildSourceCandidates(input: {
         sourceKind: source.sourceKind,
         citationCount: source.citationCount,
         isOpenAccess: source.isOpenAccess,
+        abstract: source.abstract,
+        abstractOriginal: source.abstractOriginal,
+        originalAbstract: source.originalAbstract,
+        extractedAbstract: source.extractedAbstract,
+        sourceLinkInfo: source.sourceLinkInfo,
       };
       const initialCandidateForClassification: SourceClassificationInput = {
         sourceId: normalized.id,
@@ -4918,6 +5345,15 @@ export function buildSourceCandidates(input: {
         bucketAssessment.highConfidenceManual &&
         passesRequiredTopicEvidence &&
         sourceClassification.recommendationBucket === "rejected"
+      ) {
+        sourceClassification = {
+          recommendationBucket: "manual_review",
+          sourceRole: "weak_or_uncertain",
+          institutionType: sourceClassification.institutionType,
+        };
+      } else if (
+        bucketAssessment.decision === "manual_review" &&
+        sourceClassification.recommendationBucket === "scholarly_recommended"
       ) {
         sourceClassification = {
           recommendationBucket: "manual_review",
@@ -5059,6 +5495,11 @@ export function buildSourceCandidates(input: {
           ? { isOpenAccess: normalized.isOpenAccess }
           : {}),
         ...(normalized.fullTextUrl ? { fullTextUrl: normalized.fullTextUrl } : {}),
+        ...(source.providerIds ? { providerIds: source.providerIds } : {}),
+        canonicalSourceIdentity: source.dedupeKey ?? normalized.dedupeKey,
+        contentLevel: normalized.abstract ? "abstract" : "metadata",
+        enrichmentAttempted: false,
+        enrichmentStatus: "not_attempted",
         ...(typeof normalized.citationCount === "number"
           ? { citationCount: normalized.citationCount }
           : {}),
@@ -5339,12 +5780,13 @@ function fallbackSearchInput(input: {
     input.queryPlan.intent,
     ...(input.queryPlan.conceptGroups ?? []).flatMap((group) => [group.name, ...group.zhTerms, ...group.enTerms]),
   ].join(" "));
-  const querySeedEn = providerSafeDomainAnchoredQueries(input.round === 1 ? roundOneEn : roundTwoEn, routingText);
+  const querySeedEn = sanitizeEnglishProviderQueries(
+    providerSafeDomainAnchoredQueries(
+      input.round === 1 ? roundOneEn : roundTwoEn,
+      routingText,
+    ),
+  );
   const querySeedZh = providerSafeDomainAnchoredQueries(input.round === 1 ? roundOneZh : roundTwoZh, routingText);
-  const fallbackTopic =
-    querySeedEn[0] ??
-    querySeedZh[0] ??
-    input.topicAnalysis.normalizedTopic;
   const reason =
     input.round === 1
       ? "automatic_academic_query_expansion"
@@ -5353,12 +5795,12 @@ function fallbackSearchInput(input: {
   return {
     reason,
     searchInput: {
-      topic: fallbackTopic,
+      topic: input.topicAnalysis.normalizedTopic,
       originalTopic: input.base.originalTopic ?? input.base.topic,
       refinedTopic: input.topicAnalysis.normalizedTopic,
       canonicalTopicZh: input.topicAnalysis.normalizedTopic,
       canonicalTopicEn: querySeedEn[0] ?? input.normalizedSearchTopic.enAcademicQuery[0],
-      displayTitle: input.normalizedSearchTopic.displayTitle,
+      displayTitle: input.base.originalTopic ?? input.base.topic,
       querySeedZh,
       querySeedEn,
       mustIncludeTerms: uniqueStrings([
@@ -5370,6 +5812,7 @@ function fallbackSearchInput(input: {
         ]),
       ]),
       excludeTerms: input.normalizedSearchTopic.negativeKeywords,
+      domainHints: uniqueStrings([input.base.selectedDomain ?? ""]),
       workflowId: input.base.workflowId,
       reportType: input.base.reportType,
       audience: input.base.audience,
@@ -5585,7 +6028,12 @@ export function academicRetryQueryExpansion(input: {
       (term) => !(topicIsMythResearch && term.toLowerCase() === "myth"),
     ),
   ]);
-  const querySeedEn = providerSafeDomainAnchoredQueries(uniqueStrings([...enSpecific, ...genericEn]), text).slice(0, 10);
+  const querySeedEn = sanitizeEnglishProviderQueries(
+    providerSafeDomainAnchoredQueries(
+      uniqueStrings([...enSpecific, ...genericEn]),
+      text,
+    ),
+  ).slice(0, 10);
   const querySeedZh = providerSafeDomainAnchoredQueries(uniqueStrings([...zhSpecific, ...genericZh]), text).slice(0, 8);
   const retryQueries = uniqueStrings([...querySeedEn, ...querySeedZh]);
   return { querySeedEn, querySeedZh, excludeTerms, retryQueries };
@@ -5625,23 +6073,20 @@ function academicRetrySearchInput(input: {
     input.queryPlan.intent,
     ...(input.queryPlan.conceptGroups ?? []).flatMap((group) => [group.name, ...group.zhTerms, ...group.enTerms]),
   ].join(" "));
-  const routedQuerySeedEn = providerSafeDomainAnchoredQueries(querySeedEn, routingText);
+  const routedQuerySeedEn = sanitizeEnglishProviderQueries(
+    providerSafeDomainAnchoredQueries(querySeedEn, routingText),
+  );
   const routedQuerySeedZh = providerSafeDomainAnchoredQueries(querySeedZh, routingText);
-  const fallbackTopic =
-    routedQuerySeedEn[0] ??
-    routedQuerySeedZh[0] ??
-    input.normalizedSearchTopic.enAcademicQuery[0] ??
-    input.topicAnalysis.normalizedTopic;
   return {
     reason: `academic_retry_${input.reason}`,
     retryQueries: uniqueStrings([...routedQuerySeedEn, ...routedQuerySeedZh]),
     searchInput: {
-      topic: fallbackTopic,
+      topic: input.topicAnalysis.normalizedTopic,
       originalTopic: input.base.originalTopic ?? input.base.topic,
       refinedTopic: input.topicAnalysis.normalizedTopic,
       canonicalTopicZh: input.topicAnalysis.normalizedTopic,
       canonicalTopicEn: routedQuerySeedEn[0] ?? input.normalizedSearchTopic.enAcademicQuery[0],
-      displayTitle: input.normalizedSearchTopic.displayTitle,
+      displayTitle: input.base.originalTopic ?? input.base.topic,
       querySeedZh: routedQuerySeedZh,
       querySeedEn: routedQuerySeedEn,
       mustIncludeTerms: uniqueStrings([
@@ -5654,6 +6099,7 @@ function academicRetrySearchInput(input: {
         ]),
       ]),
       excludeTerms: expansion.excludeTerms,
+      domainHints: uniqueStrings([input.base.selectedDomain ?? ""]),
       workflowId: input.base.workflowId,
       reportType: input.base.reportType,
       audience: input.base.audience,
@@ -5723,17 +6169,9 @@ function sourceCandidateMergeRank(candidate: SourceCandidate): number {
 }
 
 function mergeSourceCandidates(results: SourceCandidateBuildResult[]): SourceCandidate[] {
-  const byKey = new Map<string, SourceCandidate>();
-  for (const result of results) {
-    for (const candidate of result.sourceCandidates) {
-      const key = (candidate.dedupeKey || candidate.sourceId).toLowerCase();
-      const existing = byKey.get(key);
-      if (!existing || sourceCandidateMergeRank(candidate) > sourceCandidateMergeRank(existing)) {
-        byKey.set(key, candidate);
-      }
-    }
-  }
-  return Array.from(byKey.values()).sort(
+  return mergeSourceCandidateRecords(
+    results.flatMap((result) => result.sourceCandidates),
+  ).sort(
     (left, right) => sourceCandidateMergeRank(right) - sourceCandidateMergeRank(left),
   );
 }
@@ -5956,6 +6394,10 @@ function sourceAccessLimitations(source: SourceCandidate, accessLevel: ContentAc
   ]);
 }
 
+function canonicalKeyForCandidate(source: SourceCandidate): string {
+  return source.canonicalSourceIdentity?.trim() || source.dedupeKey.trim() || source.sourceId;
+}
+
 function makeGroundingEvidenceCard(input: {
   source: SourceCandidate;
   sourceIndex: number;
@@ -5976,6 +6418,7 @@ function makeGroundingEvidenceCard(input: {
   const safe = safeEvidenceText(claimTextOriginal, input.safetyReview);
   const citationMarker = citationMarkerForSource(input.sourceIndex);
   const evidenceId = `evidence-${input.source.sourceId}-${input.cardIndex + 1}`;
+  const canonicalSourceKey = canonicalKeyForCandidate(input.source);
   const usableFor = usableForEvidenceType(input.source, input.evidenceType, input.safetyReview);
   const confidence = Math.min(0.55, Math.max(0.05, input.confidence));
   const createdAt = nowIso();
@@ -5989,6 +6432,9 @@ function makeGroundingEvidenceCard(input: {
     topicHash: input.topicHash,
     sourceId: input.source.sourceId,
     source_id: input.source.sourceId,
+    canonicalSourceKey,
+    dedupeKey: canonicalSourceKey,
+    citationKey: canonicalSourceKey,
     ...(input.chunkId ? { chunkId: input.chunkId } : {}),
     claimTextOriginal,
     claimText: safe.text,
@@ -6145,6 +6591,7 @@ function makeGroundingEvidenceCardFromClaim(input: {
   const evidenceSafe = safeEvidenceText(supportSpan, input.safetyReview);
   const citationMarker = input.claim.citationMarker || citationMarkerForSource(input.sourceIndex);
   const evidenceId = `evidence-${input.claim.claimId}`;
+  const canonicalSourceKey = canonicalKeyForCandidate(input.source);
   const usableFor = usableForClaim(input.claim, input.source);
   const extractionMethod =
     input.claim.extractionMode === "llm"
@@ -6172,6 +6619,9 @@ function makeGroundingEvidenceCardFromClaim(input: {
     topicHash: input.topicHash,
     sourceId: input.source.sourceId,
     source_id: input.source.sourceId,
+    canonicalSourceKey,
+    dedupeKey: canonicalSourceKey,
+    citationKey: canonicalSourceKey,
     chunkId: input.claim.chunkId,
     claimIds: [input.claim.claimId],
     claimTextOriginal: input.claim.claimTextOriginal,
@@ -6331,6 +6781,8 @@ function evidenceCardsFromClaimCandidates(input: {
         title: card.sourceTitle,
         body: `${card.claimTextZh} ${card.supportedByText}`,
         source: sourceEntry.source,
+        matchedConcepts: sourceEntry.source.matchedConcepts,
+        queryUsed: sourceEntry.source.queryUsed,
       });
       if (!relevance.accepted) continue;
     }
@@ -6343,7 +6795,13 @@ function selectedFullTextChunks(source: SourceCandidate, topic?: string): Extrac
   const chunks = (source.extractedChunks ?? [])
     .map((chunk) =>
       topic
-        ? cleanExtractedTextChunk({ topic, chunk, source }).chunk
+        ? cleanExtractedTextChunk({
+            topic,
+            chunk,
+            source,
+            matchedConcepts: source.matchedConcepts,
+            queryUsed: source.queryUsed,
+          }).chunk
         : chunk,
     )
     .filter((chunk): chunk is ExtractedChunk => Boolean(chunk));
@@ -6400,7 +6858,15 @@ function abstractChunksForSource(source: SourceCandidate, topic?: string): Extra
   }));
   return topic
     ? abstractChunks
-        .map((chunk) => cleanExtractedTextChunk({ topic, chunk, source }).chunk)
+        .map((chunk) =>
+          cleanExtractedTextChunk({
+            topic,
+            chunk,
+            source,
+            matchedConcepts: source.matchedConcepts,
+            queryUsed: source.queryUsed,
+          }).chunk,
+        )
         .filter((chunk): chunk is ExtractedChunk => Boolean(chunk))
     : abstractChunks;
 }
@@ -6468,7 +6934,7 @@ function evidenceSupportKey(card: GroundingEvidenceCard): string {
       card.quoteOrSpan ??
       "",
   ).toLowerCase();
-  return `${card.sourceId}:${support}`;
+  return `${card.canonicalSourceKey ?? card.dedupeKey ?? card.sourceId}:${support}`;
 }
 
 function appendExtractedSpanReviewCards(input: {
@@ -6504,6 +6970,104 @@ function appendExtractedSpanReviewCards(input: {
   return cards;
 }
 
+function resolvedEvidenceType(
+  card: GroundingEvidenceCard,
+  resolved: ResolvedEvidence,
+): GroundingEvidenceCard["evidence_type"] {
+  if (resolved.sectionType === "discussion" || resolved.sectionType === "mechanism_interpretation") {
+    return "theory";
+  }
+  if (resolved.sectionType === "limitations") return "limitation";
+  if (resolved.sectionType === "study_design" || resolved.sectionType === "statistical_methods") {
+    return "method";
+  }
+  return card.evidence_type;
+}
+
+/**
+ * Applies the full-text/abstract resolution boundary before cards enter the
+ * report plan. The canonical source + semantic claim identity prevents an
+ * abstract and its full-text restatement from counting twice. Section
+ * semantics are retained in sourceMetadata so later fact construction can
+ * distinguish a reported result from an author interpretation.
+ */
+export function resolveGroundingEvidenceCards(
+  cards: GroundingEvidenceCard[],
+): GroundingEvidenceCard[] {
+  const cardById = new Map(cards.map((card) => [card.evidenceId, card] as const));
+  const resolution = resolveEvidenceCandidates(cards.map((card) => ({
+    evidenceId: card.evidenceId,
+    sourceId: card.sourceId,
+    canonicalSourceId: card.canonicalSourceKey ?? card.dedupeKey ?? card.sourceId,
+    claimKey: compactWhitespace(
+      card.claimTextZh ?? card.mainClaimZhTw ?? card.claimText ?? card.claimTextOriginal,
+    ),
+    conceptKey: compactWhitespace(card.evidence_type ?? ""),
+    text: compactWhitespace(card.supportSpan ?? card.supportedByText ?? card.quoted_text ?? ""),
+    material: card.source_access_level === "full_text"
+      ? "full_text" as const
+      : card.source_access_level === "abstract_only"
+        ? "abstract" as const
+        : "metadata" as const,
+    extractionStatus: card.extractionStatus,
+    sectionHeading: card.section_heading ?? card.supportSpans?.[0]?.sectionHeading,
+    sourceLocation: card.source_location,
+    locator: {
+      page: card.page ?? card.supportSpans?.[0]?.pageStart,
+      sectionHeading: card.section_heading ?? card.supportSpans?.[0]?.sectionHeading,
+      chunkId: card.chunkId,
+      sourceLocation: card.source_location,
+      charStart: card.supportStart ?? card.supportSpans?.[0]?.startOffset,
+      charEnd: card.supportEnd ?? card.supportSpans?.[0]?.endOffset,
+    },
+    confidence: card.confidence,
+    structuredFullText: card.source_access_level === "full_text" && Boolean(
+      card.section_heading ?? card.supportSpans?.[0]?.sectionHeading,
+    ),
+    abstractComplete: false,
+  })));
+  const conflictsByEvidenceId = new Map(
+    resolution.conflicts.map((conflict) => [conflict.selectedEvidenceId, conflict] as const),
+  );
+  return resolution.evidence.flatMap((resolved) => {
+    const card = cardById.get(resolved.evidenceId);
+    if (!card) return [];
+    const conflict = conflictsByEvidenceId.get(resolved.evidenceId);
+    const interpretationOnly = resolved.sectionType === "discussion" ||
+      resolved.sectionType === "mechanism_interpretation";
+    return [{
+      ...card,
+      evidence_type: resolvedEvidenceType(card, resolved),
+      confidence: resolved.confidence,
+      groundingConfidence: resolved.confidence,
+      needsReview: card.needsReview || resolved.verificationStatus !== "verified",
+      governanceFlags: uniqueStrings([
+        ...(card.governanceFlags ?? []),
+        interpretationOnly ? "author_interpretation_not_direct_result" : "",
+        resolved.duplicateEvidenceIds.length > 0 ? "same_source_duplicate_collapsed" : "",
+        conflict ? "abstract_full_text_conflict" : "",
+      ]),
+      sourceMetadata: {
+        ...(card.sourceMetadata ?? {}),
+        atomicEvidence: {
+          accessTier: resolved.accessTier,
+          sectionType: resolved.sectionType,
+          verificationStatus: resolved.verificationStatus,
+          duplicateEvidenceIds: resolved.duplicateEvidenceIds,
+          conflictId: conflict?.conflictId ?? null,
+        },
+      },
+      limitations: uniqueStrings([
+        ...card.limitations,
+        interpretationOnly
+          ? "Discussion 中的來源作者解釋不得當作直接研究結果。"
+          : "",
+        conflict ? "摘要與全文的可核對結果不一致；已保留衝突紀錄並降低信心。" : "",
+      ]),
+    }];
+  });
+}
+
 export function buildGroundingEvidenceCards(input: {
   workflowId: string;
   topicHash: string;
@@ -6522,13 +7086,18 @@ export function buildGroundingEvidenceCards(input: {
     Boolean(source.acceptedAs?.trim());
   const accepted = input.acceptedSources.filter((source) => {
     if (source.reviewStatus !== "accepted") return false;
-    if (source.recommendationBucket === "rejected") return false;
+    if (
+      source.recommendationBucket === "rejected" ||
+      source.sourceRole === "rejected" ||
+      source.sourceUseLevel === "rejected" ||
+      source.userDecision === "rejected"
+    ) return false;
     if (source.recommendationBucket === "manual_review") return userAccepted(source);
     return true;
   });
   const seenSources = new Set<string>();
   const evidenceSources = accepted.filter((source) => {
-    const key = source.dedupeKey || source.sourceId;
+    const key = canonicalKeyForCandidate(source);
     if (seenSources.has(key)) return false;
     seenSources.add(key);
     return true;
@@ -6542,14 +7111,14 @@ export function buildGroundingEvidenceCards(input: {
       claimCandidates: input.claimCandidates,
       safetyReview: input.safetyReview,
     });
-    return appendExtractedSpanReviewCards({
+    return resolveGroundingEvidenceCards(appendExtractedSpanReviewCards({
       cards: claimCards,
       evidenceSources,
       workflowId: input.workflowId,
       topicHash: input.topicHash,
       topic: input.topic,
       safetyReview: input.safetyReview,
-    });
+    }));
   }
   const cards: GroundingEvidenceCard[] = [];
   evidenceSources.slice(0, 12).forEach((source, sourceIndex) => {
@@ -6563,7 +7132,7 @@ export function buildGroundingEvidenceCards(input: {
     });
     cards.push(...sourceCards);
   });
-  return cards;
+  return resolveGroundingEvidenceCards(cards);
 }
 
 export function findLegacyGenericTraces(input: {
@@ -6650,6 +7219,228 @@ export function suppressLegacyGenericOutput(input: {
   };
 }
 
+function compactPlannedClaimText(card: GroundingEvidenceCard): string {
+  return compactWhitespace(
+    card.claimTextZh ||
+      card.mainClaimZhTw ||
+      card.claimText ||
+      card.claimTextOriginal,
+  );
+}
+
+function plannedClaimFingerprint(card: GroundingEvidenceCard): string {
+  return compactPlannedClaimText(card)
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+function plannedClaimSourceKey(card: GroundingEvidenceCard): string {
+  return compactWhitespace(
+    card.canonicalSourceKey ?? card.dedupeKey ?? card.sourceId,
+  );
+}
+
+function plannedClaimCitationKey(card: GroundingEvidenceCard): string {
+  return compactWhitespace(card.citationKey ?? plannedClaimSourceKey(card));
+}
+
+function evidenceCardCanEnterReportPlan(card: GroundingEvidenceCard): boolean {
+  if (
+    card.userDecision === "rejected" ||
+    card.recommendationBucket === "rejected" ||
+    card.sourceRole === "rejected" ||
+    Boolean(card.rejectionReason?.trim())
+  ) {
+    return false;
+  }
+  if (
+    card.source_access_level === "metadata_only" ||
+    card.source_access_level === "blocked_or_paywalled" ||
+    card.source_access_level === "failed_extraction"
+  ) {
+    return false;
+  }
+  if (
+    !compactPlannedClaimText(card) ||
+    !compactWhitespace(card.supportSpan ?? card.supportedByText ?? "") ||
+    !plannedClaimSourceKey(card) ||
+    !plannedClaimCitationKey(card)
+  ) {
+    return false;
+  }
+  return (
+    canUseEvidenceCardForSection(card, "evidence_synthesis") ||
+    canUseEvidenceCardForSection(card, "background")
+  );
+}
+
+function plannedClaimOwnerSection(card: GroundingEvidenceCard): "background" | "evidence" {
+  // Scholarly cards are generally eligible for evidence synthesis, but a card
+  // extracted specifically as background/definition must still have a single
+  // background owner. Otherwise an academic-only search produces no planned
+  // claims for the introduction or research-question chapters.
+  if (
+    (card.evidence_type === "background" || card.evidence_type === "definition") &&
+    canUseEvidenceCardForSection(card, "background")
+  ) {
+    return "background";
+  }
+  return canUseEvidenceCardForSection(card, "evidence_synthesis")
+    ? "evidence"
+    : "background";
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return uniqueStrings(values).sort((left, right) => left.localeCompare(right));
+}
+
+function plannedClaimScope(
+  sectionId: "background" | "evidence",
+  cards: GroundingEvidenceCard[],
+): ReportPlannedClaim["scope"] {
+  if (sectionId === "background") return "background_context_only";
+  const accessLevels = new Set(cards.map((card) => card.source_access_level));
+  if (accessLevels.size === 1 && accessLevels.has("full_text")) {
+    return "full_text_supported";
+  }
+  if (accessLevels.size === 1 && accessLevels.has("abstract_only")) {
+    return "abstract_only_supported";
+  }
+  return "mixed_source_access";
+}
+
+function plannedClaimAgreement(
+  cards: GroundingEvidenceCard[],
+  sourceCount: number,
+): ReportPlannedClaim["agreementStatus"] {
+  const hasCounterpoint = cards.some((card) => card.evidence_type === "counterpoint");
+  const hasAffirmativeEvidence = cards.some(
+    (card) => card.evidence_type !== "counterpoint",
+  );
+  if (hasCounterpoint && hasAffirmativeEvidence) return "mixed";
+  if (hasCounterpoint && sourceCount > 1) return "conflicting";
+  if (sourceCount > 1) return "corroborated";
+  if (sourceCount === 1) return "single_source";
+  return "uncertain";
+}
+
+function plannedClaimEvidenceStrength(
+  cards: GroundingEvidenceCard[],
+  sourceCount: number,
+): ReportPlannedClaim["evidenceStrength"] {
+  const averageConfidence =
+    cards.reduce((total, card) => total + card.confidence, 0) / cards.length;
+  const fullTextSourceCount = new Set(
+    cards
+      .filter((card) => card.source_access_level === "full_text")
+      .map(plannedClaimSourceKey),
+  ).size;
+  if (sourceCount >= 2 && fullTextSourceCount >= 2 && averageConfidence >= 0.72) {
+    return "strong";
+  }
+  if (sourceCount >= 2 || (fullTextSourceCount >= 1 && averageConfidence >= 0.65)) {
+    return "moderate";
+  }
+  return "weak";
+}
+
+export function buildStructuredPlannedClaims(input: {
+  topicHash: string;
+  evidenceCards: GroundingEvidenceCard[];
+}): ReportPlannedClaim[] {
+  const eligibleCards = input.evidenceCards
+    .filter(evidenceCardCanEnterReportPlan)
+    .sort((left, right) => {
+      const leftOwner = plannedClaimOwnerSection(left);
+      const rightOwner = plannedClaimOwnerSection(right);
+      return (
+        leftOwner.localeCompare(rightOwner) ||
+        plannedClaimFingerprint(left).localeCompare(plannedClaimFingerprint(right)) ||
+        plannedClaimSourceKey(left).localeCompare(plannedClaimSourceKey(right)) ||
+        left.evidenceId.localeCompare(right.evidenceId)
+      );
+    });
+  const grouped = new Map<
+    string,
+    { sectionId: "background" | "evidence"; cards: GroundingEvidenceCard[] }
+  >();
+  for (const card of eligibleCards) {
+    const sectionId = plannedClaimOwnerSection(card);
+    const fingerprint = plannedClaimFingerprint(card);
+    if (!fingerprint) continue;
+    const groupKey = `${sectionId}:${fingerprint}`;
+    const group = grouped.get(groupKey);
+    if (group) {
+      group.cards.push(card);
+    } else {
+      grouped.set(groupKey, { sectionId, cards: [card] });
+    }
+  }
+
+  return [...grouped.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([groupKey, group]) => {
+      const rankedCards = [...group.cards].sort(
+        (left, right) =>
+          right.confidence - left.confidence ||
+          Number(right.source_access_level === "full_text") -
+            Number(left.source_access_level === "full_text") ||
+          left.evidenceId.localeCompare(right.evidenceId),
+      );
+      const supportingEvidenceIds = uniqueSorted(
+        rankedCards.map((card) => card.evidenceId),
+      );
+      const supportingSourceKeys = uniqueSorted(
+        rankedCards.map(plannedClaimSourceKey),
+      );
+      const allowedCitationKeys = uniqueSorted(
+        rankedCards.map(plannedClaimCitationKey),
+      );
+      const evidenceStrength = plannedClaimEvidenceStrength(
+        rankedCards,
+        supportingSourceKeys.length,
+      );
+      const scope = plannedClaimScope(group.sectionId, rankedCards);
+      const agreementStatus = plannedClaimAgreement(
+        rankedCards,
+        supportingSourceKeys.length,
+      );
+      const limitations = uniqueSorted([
+        ...rankedCards.flatMap((card) => card.limitations),
+        ...(rankedCards.some((card) => card.source_access_level === "abstract_only")
+          ? ["僅以摘要內容支撐，不外推至全文未揭露的結果。"]
+          : []),
+        ...(rankedCards.some((card) => card.needsManualReview || card.needsReview)
+          ? ["此證據仍需人工複核。"]
+          : []),
+      ]);
+      const wordingStrength: ReportPlannedClaim["wordingStrength"] =
+        evidenceStrength === "strong" &&
+        agreementStatus === "corroborated" &&
+        scope === "full_text_supported"
+          ? "assertive"
+          : evidenceStrength === "moderate"
+            ? "qualified"
+            : "tentative";
+      return {
+        claimId: `planned-claim-${stableQueryHash(
+          [input.topicHash, groupKey].join("|"),
+        )}`,
+        claimText: compactPlannedClaimText(rankedCards[0]!),
+        sectionId: group.sectionId,
+        supportingEvidenceIds,
+        supportingSourceKeys,
+        evidenceStrength,
+        scope,
+        limitations,
+        agreementStatus,
+        allowedCitationKeys,
+        wordingStrength,
+      };
+    });
+}
+
 export function buildReportArtifacts(input: {
   topic: string;
   workflowId: string;
@@ -6669,49 +7460,80 @@ export function buildReportArtifacts(input: {
     input.titleState.acceptedDisplayTitle ??
     input.titleState.polishedTitle ??
     input.titleState.originalTopic;
+  const legalEvidenceCards = input.evidenceCards.filter(
+    evidenceCardCanEnterReportPlan,
+  );
+  const plannedClaims = buildStructuredPlannedClaims({
+    topicHash: input.topicHash,
+    evidenceCards: legalEvidenceCards,
+  });
   const sectionTypeForGroundingSection = (sectionId: string): EvidenceSectionType => {
     if (sectionId === "background") return "background";
     if (sectionId === "evidence") return "evidence_synthesis";
     if (sectionId === "discussion") return "discussion_claim";
+    if (sectionId === "conclusion") return "conclusion_claim";
     return "basic_context";
   };
   const guardedEvidenceCardIds = (sectionId: string, cards: GroundingEvidenceCard[]) =>
-    cards
-      .filter((card) =>
-        canUseEvidenceCardForSection(card, sectionTypeForGroundingSection(sectionId)),
-      )
-      .map((card) => card.evidenceId);
+    uniqueSorted(
+      cards
+        .filter((card) =>
+          canUseEvidenceCardForSection(card, sectionTypeForGroundingSection(sectionId)),
+        )
+        .map((card) => card.evidenceId),
+    );
+  const plannedClaimIdsForSection = (sectionId: string): string[] => {
+    if (sectionId === "discussion" || sectionId === "conclusion") {
+      return plannedClaims
+        .filter((claim) => claim.sectionId === "evidence")
+        .map((claim) => claim.claimId);
+    }
+    return plannedClaims
+      .filter((claim) => claim.sectionId === sectionId)
+      .map((claim) => claim.claimId);
+  };
   const sections = [
     {
       sectionId: "background",
       title: "研究背景",
       goal: "交代主題、核心變項與研究脈絡",
       requiredEvidenceTypes: ["background", "review"],
-      evidenceCardIds: guardedEvidenceCardIds("background", input.evidenceCards.slice(0, 3)),
+      evidenceCardIds: guardedEvidenceCardIds("background", legalEvidenceCards.slice(0, 3)),
+      plannedClaimIds: plannedClaimIdsForSection("background"),
     },
     {
       sectionId: "evidence",
       title: "文獻證據",
       goal: "整理目前來源支持的具體發現與限制",
       requiredEvidenceTypes: ["data", "review", "policy"],
-      evidenceCardIds: guardedEvidenceCardIds("evidence", input.evidenceCards),
+      evidenceCardIds: guardedEvidenceCardIds("evidence", legalEvidenceCards),
+      plannedClaimIds: plannedClaimIdsForSection("evidence"),
     },
     {
       sectionId: "discussion",
       title: "討論",
       goal: "說明可支持的解讀與尚待補證的缺口",
       requiredEvidenceTypes: ["mechanism", "policy"],
-      evidenceCardIds: guardedEvidenceCardIds("discussion", input.evidenceCards.slice(0, 4)),
+      evidenceCardIds: guardedEvidenceCardIds("discussion", legalEvidenceCards.slice(0, 4)),
+      plannedClaimIds: plannedClaimIdsForSection("discussion"),
+    },
+    {
+      sectionId: "conclusion",
+      title: "結論",
+      goal: "只回扣正文已建立的主張，不新增事實判斷",
+      requiredEvidenceTypes: ["finding", "limitation"],
+      evidenceCardIds: guardedEvidenceCardIds("conclusion", legalEvidenceCards.slice(0, 4)),
+      plannedClaimIds: plannedClaimIdsForSection("conclusion"),
     },
   ];
-  const scholarlyEvidenceCount = input.evidenceCards.filter(
+  const scholarlyEvidenceCount = legalEvidenceCards.filter(
     (card) => card.recommendationBucket === "scholarly_recommended",
   ).length;
-  const officialBackgroundCount = input.evidenceCards.filter(
+  const officialBackgroundCount = legalEvidenceCards.filter(
     (card) => card.recommendationBucket === "official_background",
   ).length;
   const evidenceGaps = uniqueStrings([
-    input.evidenceCards.length >= 3
+    legalEvidenceCards.length >= 3
       ? ""
       : "accepted evidence cards below recommended minimum for a full report",
     scholarlyEvidenceCount === 0 && officialBackgroundCount > 0
@@ -6727,12 +7549,13 @@ export function buildReportArtifacts(input: {
         ? `${input.titleParse.independentVariables.join("、")}如何影響${input.titleParse.dependentVariables.join("、")}？`
         : title,
     sections,
+    plannedClaims,
     evidenceGaps,
     academicSafetyReview: input.safetyReview,
   };
 
   const sectionEvidence = (sectionId: string) =>
-    input.evidenceCards
+    legalEvidenceCards
       .filter((card) => {
         if (!canUseEvidenceCardForSection(card, sectionTypeForGroundingSection(sectionId))) {
           return false;
@@ -6746,6 +7569,13 @@ export function buildReportArtifacts(input: {
           );
         }
         if (sectionId === "discussion") return card.usableFor.includes("discussion");
+        if (sectionId === "conclusion") {
+          return (
+            card.usableFor.includes("discussion") ||
+            card.usableFor.includes("analysis") ||
+            card.usableFor.includes("literature_review")
+          );
+        }
         return true;
       })
       .slice(0, sectionId === "evidence" ? 8 : 4);
@@ -6774,7 +7604,13 @@ export function buildReportArtifacts(input: {
     );
     const missingEvidenceTypes = requiredEvidenceTypes.filter((type) => !presentTypes.has(type));
     const threshold =
-      sectionId === "background" ? 2 : sectionId === "evidence" ? 4 : 3;
+      sectionId === "background"
+        ? 2
+        : sectionId === "evidence"
+          ? 4
+          : sectionId === "conclusion"
+            ? 2
+            : 3;
     const enoughSources = sectionId === "evidence" ? sourceCount >= 2 : sourceCount >= 1;
     const status: SectionSufficiencyGate["status"] =
       cards.length >= threshold && enoughSources
@@ -6784,7 +7620,7 @@ export function buildReportArtifacts(input: {
           : "insufficient";
     const userVisibleMessage =
       status === "sufficient"
-        ? "本節已有足夠證據卡可形成受限但可引用的段落。"
+        ? "本節已有足夠可核對來源，可形成受限但可引用的段落。"
         : status === "weak"
           ? "本節有部分證據，但來源數量或證據類型仍不足，段落需保守呈現。"
           : "目前來源不足以支撐完整段落，本節只能說明證據缺口。";
@@ -6806,10 +7642,16 @@ export function buildReportArtifacts(input: {
     sufficiency: SectionSufficiencyGate,
   ): string => {
     if (cards.length === 0) {
-      return "目前來源不足以支撐完整段落。已接受來源尚未提供可驗證摘錄，因此本節僅能標示證據缺口，暫不提出具體結論。";
+      return "目前來源不足以支撐完整段落。現有來源尚未提供可驗證摘錄，因此本節僅能標示證據缺口，暫不提出具體結論。";
     }
     const markerText = (selected: GroundingEvidenceCard[]) =>
       uniqueStrings(selected.map((card) => card.citationMarker)).join("");
+    if (sectionId === "discussion") {
+      return `本節僅依文獻證據節已建立的 ${plannedClaimIdsForSection(sectionId).length} 項主張，比較其適用範圍、證據強度與限制${markerText(cards)}；不重述來源原句，也不新增未由證據支持的主張。${sufficiency.userVisibleMessage}`;
+    }
+    if (sectionId === "conclusion") {
+      return `結論僅回扣正文已建立的 ${plannedClaimIdsForSection(sectionId).length} 項受支撐主張${markerText(cards)}，不新增未經正文驗證的事實判斷。${sufficiency.userVisibleMessage}`;
+    }
     const points = uniqueStrings(cards.map((card) => firstSentence(card.claimTextZh, 90))).slice(0, 4);
     if (sectionId === "evidence" && cards.length >= 2) {
       const firstGroup = cards.slice(0, 2);
@@ -6885,10 +7727,10 @@ export async function runResearchGroundingPipeline(
   const createdAt = nowIso();
   const pipelineStartedAt = Date.now();
   const originalTopic = compactWhitespace(input.rawUserTopic ?? input.originalTopic ?? input.topic);
-  const effectiveTopic = originalTopic;
   const planningTopic = compactWhitespace(
     input.normalizedTopic ?? input.researchQuestion ?? input.topic,
   );
+  const activeResearchTopic = planningTopic || originalTopic;
   const requestResearchQuestion = compactWhitespace(input.researchQuestion ?? "");
   const requestQuerySeedZh = uniqueStrings([
     ...(input.bilingualQueries?.zh ?? []),
@@ -6899,20 +7741,22 @@ export async function runResearchGroundingPipeline(
     ...(input.querySeedEn ?? []),
   ]);
   const requestExcludeTerms = uniqueStrings(input.excludeTerms ?? []);
-  const parsedInput = parseResearchInput(effectiveTopic);
-  const normalizedInputTopic = normalizeResearchTopic(planningTopic || effectiveTopic);
-  const canSearchNormalizedTopic =
-    normalizedInputTopic.keywordSet.length >= 4 &&
-    (normalizedInputTopic.enAcademicQuery.length >= 2 ||
-      normalizedInputTopic.zhAcademicQuery.length >= 2);
+  const parsedInput = parseResearchInput(activeResearchTopic);
+  const originalParsedInput =
+    activeResearchTopic === originalTopic
+      ? parsedInput
+      : parseResearchInput(originalTopic);
   const topicAnalysis = analyzeTopicInput({
-    topic: effectiveTopic,
+    topic: activeResearchTopic,
     workflowId: input.workflowId,
     parsedInput,
   });
-  const titleParse = parseResearchTitleSentence(requestResearchQuestion || effectiveTopic);
+  const titleParse = parseResearchTitleSentence(activeResearchTopic);
   const topicTitleState = createTopicTitleState({
-    originalTopic: effectiveTopic,
+    originalTopic,
+    ...(activeResearchTopic !== originalTopic
+      ? { polishedTitle: activeResearchTopic, acceptedDisplayTitle: originalTopic }
+      : {}),
     titlePolishMode: "polish_only",
   });
 
@@ -6922,7 +7766,9 @@ export async function runResearchGroundingPipeline(
     patch: { parsedInput, topicAnalysis, titleParse, topicTitleState },
   });
 
-  if (parsedInput.nextAction === "block") {
+  const blockedParsedInput =
+    originalParsedInput.nextAction === "block" ? originalParsedInput : parsedInput;
+  if (blockedParsedInput.nextAction === "block") {
     return {
       jobId: "pending-assignment",
       workflowId: input.workflowId,
@@ -6931,12 +7777,12 @@ export async function runResearchGroundingPipeline(
       normalizedTopic: topicAnalysis.normalizedTopic,
       status: "partial",
       progress: 18,
-      parsedInput,
+      parsedInput: blockedParsedInput,
       topicAnalysis,
       titleParse,
       topicTitleState,
-      researchCandidates: parsedInput.safeAlternatives,
-      warnings: [parsedInput.safetyReason],
+      researchCandidates: blockedParsedInput.safeAlternatives,
+      warnings: [blockedParsedInput.safetyReason],
       createdAt,
       updatedAt: nowIso(),
     };
@@ -6966,15 +7812,59 @@ export async function runResearchGroundingPipeline(
         parsedInput,
         topicAnalysis,
         selectedDomain: input.selectedDomain,
-        researchQuestion: requestResearchQuestion || parsedInput.researchQuestion,
+        researchQuestion: requestResearchQuestion || activeResearchTopic,
       }),
       createdAt,
       updatedAt: nowIso(),
     };
   }
 
+  const keywordExpansionRequest: KeywordExpansionRequest = {
+    topic: activeResearchTopic,
+    reportType: input.reportType,
+    audience: input.audience,
+    sourceMode: "academic",
+    language: topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW",
+  };
+  let keywordExpansion = buildFallbackKeywordExpansion(
+    keywordExpansionRequest,
+    "Grounding keyword expansion adapter was not injected; deterministic fallback used.",
+    "skipped",
+  );
+  if (dependencies.keywordExpansionHandler) {
+    try {
+      keywordExpansion = await dependencies.keywordExpansionHandler(
+        keywordExpansionRequest,
+      );
+    } catch {
+      keywordExpansion = buildFallbackKeywordExpansion(
+        keywordExpansionRequest,
+        "Grounding keyword expansion failed; deterministic fallback preserved the active topic.",
+        "failed",
+      );
+    }
+  }
+  const finalQueryBundle = buildFinalGroundingQueryBundle({
+    activeResearchTopic,
+    requestQuerySeedZh,
+    requestQuerySeedEn,
+    keywordExpansion,
+  });
+  const hasExplicitResearchDirection = Boolean(
+    input.selectedDomain?.trim() ||
+      input.normalizedTopic?.trim() ||
+      input.researchQuestion?.trim() ||
+      requestQuerySeedZh.length ||
+      requestQuerySeedEn.length,
+  );
+  const canSearchFinalQueryBundle =
+    meaningfulResearchTopic(activeResearchTopic) &&
+    (finalQueryBundle.querySeedZh.length > 0 ||
+      finalQueryBundle.querySeedEn.length > 0);
+
   if (
-    !canSearchNormalizedTopic &&
+    !hasExplicitResearchDirection &&
+    !canSearchFinalQueryBundle &&
     (parsedInput.nextAction === "ask_clarification" || parsedInput.nextAction === "show_topic_options")
   ) {
     const invalidInputMessage = "無法辨識有效研究主題，請輸入可研究的詞彙或句子。";
@@ -7007,7 +7897,7 @@ export async function runResearchGroundingPipeline(
         parsedInput,
         topicAnalysis,
         selectedDomain: input.selectedDomain,
-        researchQuestion: requestResearchQuestion || parsedInput.researchQuestion,
+        researchQuestion: requestResearchQuestion || activeResearchTopic,
       }),
       createdAt,
       updatedAt: nowIso(),
@@ -7018,8 +7908,8 @@ export async function runResearchGroundingPipeline(
     topicAnalysis,
     titleParse,
     parsedInput,
-    querySeedZh: requestQuerySeedZh,
-    querySeedEn: requestQuerySeedEn,
+    querySeedZh: finalQueryBundle.querySeedZh,
+    querySeedEn: finalQueryBundle.querySeedEn,
     excludeTerms: requestExcludeTerms,
   });
   await progress(dependencies, {
@@ -7046,7 +7936,7 @@ export async function runResearchGroundingPipeline(
   });
 
   const academicSafetyReview = reviewAcademicSafety({
-    topic: requestResearchQuestion || effectiveTopic,
+    topic: activeResearchTopic,
     titleParse,
   });
   await progress(dependencies, {
@@ -7083,7 +7973,7 @@ export async function runResearchGroundingPipeline(
 
   const normalizedSearchTopic =
     seedQueryPlan.normalizedResearchTopic ??
-    normalizeResearchTopic(planningTopic || effectiveTopic, topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW");
+    normalizeResearchTopic(activeResearchTopic, topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW");
   const queryRoutingTopicText = compactWhitespace([
     topicAnalysis.normalizedTopic,
     normalizedSearchTopic.displayTitle,
@@ -7092,18 +7982,20 @@ export async function runResearchGroundingPipeline(
     ...(queryPlan.conceptGroups ?? []).flatMap((group) => [group.name, ...group.zhTerms, ...group.enTerms]),
   ].join(" "));
   const initialQuerySeedZh = providerSafeDomainAnchoredQueries([
-    ...requestQuerySeedZh,
+    ...finalQueryBundle.querySeedZh,
     ...normalizedSearchTopic.zhAcademicQuery,
     ...queryPlan.bilingualQueries.zh,
   ], queryRoutingTopicText);
   const initialAnchorProfile = topicQueryAnchorProfile(queryRoutingTopicText);
-  const initialQuerySeedEn = providerSafeDomainAnchoredQueries([
+  const initialQuerySeedEn = sanitizeEnglishProviderQueries(
+    providerSafeDomainAnchoredQueries([
+    ...finalQueryBundle.querySeedEn,
     ...normalizedSearchTopic.enAcademicQuery,
     ...(initialAnchorProfile?.fallbackQueries ?? []),
     ...normalizedSearchTopic.broaderAcademicQueries,
     ...queryPlan.bilingualQueries.en,
-    ...requestQuerySeedEn,
-  ], queryRoutingTopicText);
+  ], queryRoutingTopicText),
+  );
   await progress(dependencies, {
     status: "searching_initial",
     progress: 68,
@@ -7114,7 +8006,7 @@ export async function runResearchGroundingPipeline(
         topicAnalysis,
         queryPlan,
         selectedDomain: input.selectedDomain,
-        researchQuestion: requestResearchQuestion || parsedInput.researchQuestion,
+        researchQuestion: requestResearchQuestion || activeResearchTopic,
         currentPhase: "searching_initial",
         fallbackAttempts: [],
         fallbackCompleted: false,
@@ -7123,18 +8015,25 @@ export async function runResearchGroundingPipeline(
     },
   });
   const initialSearchInput: SearchIntentPlannerInput = {
-    topic: topicAnalysis.normalizedTopic,
+    topic: activeResearchTopic,
     originalTopic,
-    refinedTopic: topicAnalysis.normalizedTopic,
-    canonicalTopicZh: topicAnalysis.normalizedTopic,
+    refinedTopic: activeResearchTopic,
+    canonicalTopicZh: activeResearchTopic,
     canonicalTopicEn:
-      initialQuerySeedEn[0] ?? normalizedSearchTopic.enAcademicQuery[0],
-    displayTitle: normalizedSearchTopic.displayTitle,
+      finalQueryBundle.canonicalEnglishTopic || initialQuerySeedEn[0],
+    displayTitle: originalTopic,
     querySeedZh: initialQuerySeedZh,
     querySeedEn: initialQuerySeedEn,
-    mustIncludeTerms: normalizedSearchTopic.keywordSet,
+    mustIncludeTerms: uniqueStrings([
+      ...finalQueryBundle.subjectAnchorTerms,
+      ...normalizedSearchTopic.keywordSet,
+    ]),
     excludeTerms: uniqueStrings([...normalizedSearchTopic.negativeKeywords, ...requestExcludeTerms]),
-    domainHints: uniqueStrings([input.selectedDomain ?? "", ...(input.bilingualQueries ? ["frontend_bilingual_queries"] : [])]),
+    domainHints: uniqueStrings([
+      input.selectedDomain ?? "",
+      ...finalQueryBundle.domains,
+      ...(input.bilingualQueries ? ["frontend_bilingual_queries"] : []),
+    ]),
     workflowId: input.workflowId,
     reportType: input.reportType,
     audience: input.audience,
@@ -7208,7 +8107,7 @@ export async function runResearchGroundingPipeline(
           searchResult,
           sourceCandidates,
           selectedDomain: input.selectedDomain,
-          researchQuestion: requestResearchQuestion || parsedInput.researchQuestion,
+          researchQuestion: requestResearchQuestion || activeResearchTopic,
           currentPhase: "searching_fallback",
           fallbackAttempts,
           fallbackCompleted: false,
@@ -7312,7 +8211,7 @@ export async function runResearchGroundingPipeline(
           searchResult,
           sourceCandidates,
           selectedDomain: input.selectedDomain,
-          researchQuestion: requestResearchQuestion || parsedInput.researchQuestion,
+          researchQuestion: requestResearchQuestion || activeResearchTopic,
           currentPhase: "academic_retrying",
           fallbackAttempts,
           fallbackCompleted: fallbackRoundsExecuted > 0,
@@ -7400,7 +8299,7 @@ export async function runResearchGroundingPipeline(
         searchResult,
         sourceCandidates,
         selectedDomain: input.selectedDomain,
-        researchQuestion: requestResearchQuestion || parsedInput.researchQuestion,
+        researchQuestion: requestResearchQuestion || activeResearchTopic,
         currentPhase: "scoring_sources",
         fallbackAttempts,
         fallbackCompleted: fallbackRoundsExecuted > 0 || academicRetry.count > 0,
@@ -7444,7 +8343,7 @@ export async function runResearchGroundingPipeline(
     searchResult,
     sourceCandidates,
     selectedDomain: input.selectedDomain,
-    researchQuestion: requestResearchQuestion || parsedInput.researchQuestion,
+    researchQuestion: requestResearchQuestion || activeResearchTopic,
     currentPhase: finalGroundingPhase,
     fallbackAttempts,
     fallbackCompleted,
@@ -7478,6 +8377,56 @@ export async function runResearchGroundingPipeline(
     progress: 90,
     patch: { groundingDiagnostics },
   });
+  if (dependencies.acceptedSourceEnricher && acceptedSources.length > 0) {
+    try {
+      const enrichedAccepted = await dependencies.acceptedSourceEnricher(
+        mergeSourceCandidateRecords(acceptedSources),
+      );
+      const enrichedBySourceId = new Map(
+        enrichedAccepted.map((source) => [source.sourceId, source]),
+      );
+      const applyAcceptedEnrichment = (items: SourceCandidate[]): SourceCandidate[] =>
+        items.map((source) => enrichedBySourceId.get(source.sourceId) ?? source);
+      sourceCandidates = applyAcceptedEnrichment(sourceCandidates);
+      highConfidenceCandidateSources = applyAcceptedEnrichment(highConfidenceCandidateSources);
+      candidateSources = applyAcceptedEnrichment(candidateSources);
+      fallbackReviewSources = applyAcceptedEnrichment(fallbackReviewSources);
+      officialBackgroundSources = applyAcceptedEnrichment(officialBackgroundSources);
+      rejectedSources = applyAcceptedEnrichment(rejectedSources);
+      acceptedSources = applyAcceptedEnrichment(acceptedSources);
+    } catch (error) {
+      const failureReason = error instanceof Error
+        ? compactWhitespace(error.message).slice(0, 180)
+        : "accepted_source_enrichment_failed";
+      acceptedSources = acceptedSources.map((source) => ({
+        ...source,
+        canonicalSourceIdentity:
+          source.canonicalSourceIdentity ?? source.dedupeKey ?? source.sourceId,
+        contentLevel:
+          source.accessLevel === "full_text"
+            ? "fulltext"
+            : source.abstractOriginal || source.abstract || source.extractedAbstract
+              ? "abstract"
+              : "metadata",
+        enrichmentAttempted: true,
+        enrichmentStatus: "temporary_failure",
+        enrichmentFailureReason: failureReason,
+        enrichmentProviders: ["existing_payload"],
+        enrichedAt: nowIso(),
+      }));
+      const failedBySourceId = new Map(
+        acceptedSources.map((source) => [source.sourceId, source]),
+      );
+      const applyFailedEnrichment = (items: SourceCandidate[]): SourceCandidate[] =>
+        items.map((source) => failedBySourceId.get(source.sourceId) ?? source);
+      sourceCandidates = applyFailedEnrichment(sourceCandidates);
+      highConfidenceCandidateSources = applyFailedEnrichment(highConfidenceCandidateSources);
+      candidateSources = applyFailedEnrichment(candidateSources);
+      fallbackReviewSources = applyFailedEnrichment(fallbackReviewSources);
+      officialBackgroundSources = applyFailedEnrichment(officialBackgroundSources);
+      rejectedSources = applyFailedEnrichment(rejectedSources);
+    }
+  }
   const extractionResults = await extractContentForSources(acceptedSources);
   const extractionBySourceId = new Map(
     extractionResults.map((result) => [result.source_id, result]),
@@ -7504,7 +8453,7 @@ export async function runResearchGroundingPipeline(
     },
   });
   const claimCandidates = await extractClaimsForSources({
-    topic: effectiveTopic,
+    topic: activeResearchTopic,
     workflowId: input.workflowId,
     topicHash: topicAnalysis.topicHash,
     sources: acceptedSources,
@@ -7567,7 +8516,7 @@ export async function runResearchGroundingPipeline(
   const evidenceCards = buildGroundingEvidenceCards({
     workflowId: input.workflowId,
     topicHash: topicAnalysis.topicHash,
-    topic: effectiveTopic,
+    topic: activeResearchTopic,
     acceptedSources,
     claimCandidates,
     reviewSources,
@@ -7618,7 +8567,7 @@ export async function runResearchGroundingPipeline(
   };
 
   const reportArtifacts = buildReportArtifacts({
-    topic: effectiveTopic,
+    topic: activeResearchTopic,
     workflowId: input.workflowId,
     topicHash: topicAnalysis.topicHash,
     titleState: topicTitleState,

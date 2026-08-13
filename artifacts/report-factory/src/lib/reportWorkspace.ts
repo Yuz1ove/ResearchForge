@@ -1,3 +1,7 @@
+/**
+ * AI assistance disclosure: Portions of the report workspace model were drafted
+ * or refactored with Replit Agent and OpenAI Codex. See /AI_ASSISTANCE.md.
+ */
 import {
   buildBibliography,
   type SourceFactMetadata,
@@ -7,7 +11,12 @@ import type { EvidenceCard } from "./evidenceCards.ts";
 import { buildReportDraft, type ReportDraft } from "./reportDraft.ts";
 import { buildReportOutline, type ReportOutline } from "./reportOutline.ts";
 import type { QualityReport, ResearchProject } from "./qualityJudge.ts";
-import type { AcademicSafetyReview } from "@workspace/api-zod";
+import type {
+  AcademicSafetyReview,
+  ReportPlan,
+  ReportReadinessStatus,
+  WriterEvidenceSet,
+} from "@workspace/api-zod";
 import {
   buildAcceptedSourceDigest,
   type AcceptedSourceDigest,
@@ -33,6 +42,19 @@ import {
   type ReportPresentationSettings,
 } from "./reportPresentation.ts";
 import { exportSafeReportSectionText } from "./reportPreviewGuards.ts";
+import {
+  buildCanonicalDetailedReportModel,
+  type CanonicalDetailedReportModel,
+} from "./detailedReport.ts";
+import {
+  buildFormalReportDocument,
+  formalReportSectionContent,
+  formalReportSectionSequence,
+} from "./formalReportDocument.ts";
+import {
+  buildReaderCitationEntries,
+  stripReaderCitationTokens,
+} from "./readerCitations.ts";
 
 export type ReportGenerationMode =
   | "blocked"
@@ -82,6 +104,14 @@ export interface ReportWorkspaceLlmDiagnostics {
   fallbackReason: string | null;
   message?: string | null;
   warning: string | null;
+  degradedMode?: boolean;
+  fallbackReasons?: string[];
+  groundingDiagnostics?: Array<{
+    sectionId: string;
+    groundingStatus: "grounded" | "partially_grounded" | "unsupported";
+    unsupportedSentences: string[];
+    diagnostics: string[];
+  }>;
   generationMode?: string;
   missingEvidence?: Array<{
     sectionId: string;
@@ -90,14 +120,50 @@ export interface ReportWorkspaceLlmDiagnostics {
     requiredEvidenceRoles?: string[];
   }>;
   warnings?: string[];
+  reportPlanStatus?: "plan_built" | "complete" | "filtered" | "degraded_legacy";
+  reportPlanDiagnostics?: string[];
+  writerEvidenceSet?: WriterEvidenceSet;
+  evidenceSetHash?: string;
+  writerEvidenceSetHash?: string;
+  readinessStatus?: ReportReadinessStatus;
+  filteredEvidence?: WriterEvidenceSet["rejectedEvidenceCards"];
+  filteredAfterPlanCount?: number;
   sectionPlan?: Array<{
     sectionId: string;
     title: string;
+    paragraphPurpose?: string;
+    plannedClaims?: string[];
     evidenceCardIds: string[];
+    conflictingEvidenceCardIds?: string[];
+    evidenceLevel?: "full_text" | "abstract" | "mixed" | "metadata_limited";
+    targetWordCount?: number;
     supportLevel?: "strong" | "partial" | "limited";
+    hasSufficientEvidence?: boolean;
     needsMoreEvidence?: boolean;
     evidenceGaps?: string[];
+    uncertaintyOrLimitations?: string[];
   }>;
+  writerDiagnostics?: {
+    requestedSections: number;
+    completedSections: number;
+    modelCompletedSections: number;
+    repairedSections: number;
+    fallbackSections: number;
+    completedSectionIds: string[];
+    repairedSectionIds: string[];
+    fallbackSectionIds: string[];
+    failureReasons: Record<string, string>;
+    editorialPass?: {
+      status: "applied" | "rejected" | "failed" | "skipped";
+      provider: string | null;
+      model: string | null;
+      issues: string[];
+    };
+    postEditValidation?: {
+      status: "pass" | "blocked";
+      issues: string[];
+    };
+  };
 }
 
 export interface ReportWorkspaceSupplementalSearchDiagnostics {
@@ -148,6 +214,8 @@ export interface ReportWorkspaceGenerationPayload {
   acceptedSources: SourceRecord[];
   evidenceCards: EvidenceCard[];
   academicSafetyReview?: AcademicSafetyReview | null;
+  reportPlan?: ReportPlan;
+  writerEvidenceSet?: WriterEvidenceSet;
 }
 
 export interface ReportWorkspaceNavigationResult {
@@ -170,6 +238,7 @@ export interface CreateReportWorkspaceOptions {
   displayTitle?: string | null;
   evidenceCards?: EvidenceCard[] | null;
   academicSafetyReview?: AcademicSafetyReview | null;
+  reportPlan?: ReportPlan | null;
 }
 
 const STORAGE_KEY = "researchforge:report-workspaces:v1";
@@ -304,7 +373,7 @@ function bindSourcesToWorkspace(
     workflowId: source.workflowId ?? workflowId,
     topic: source.topic ?? input.topic,
     normalizedTopic: source.normalizedTopic ?? input.topic,
-    topicHash: source.topicHash,
+    topicHash: source.topicHash ?? topicHash,
     queryPlanHash: source.queryPlanHash ?? queryPlanHash,
   }));
 }
@@ -372,6 +441,7 @@ export function reportGenerationBlockingReason(input: {
   acceptedSources: SourceRecord[];
   hasWorkspaceTopicMismatch?: boolean;
   evidenceCardCount?: number;
+  evidenceFailureReason?: string | null;
   workflowId?: string | null;
   topicHash?: string | null;
 }): string | null {
@@ -383,13 +453,17 @@ export function reportGenerationBlockingReason(input: {
   const workflowId = input.workflowId?.trim();
   if (!workflowId) return MISSING_WORKFLOW_ID_MESSAGE;
 
-  const readiness = getReportReadiness({ acceptedSources: input.acceptedSources });
-  if (!readiness.canGenerate) {
-    return readiness.message;
-  }
   const evidenceCardCount = input.evidenceCardCount ?? 0;
+  const readiness = getReportReadiness({
+    acceptedSources: input.acceptedSources,
+    evidenceCards: Array.from({ length: evidenceCardCount }),
+  });
+  if (!readiness.canGenerate) {
+    return input.evidenceFailureReason ?? readiness.message;
+  }
   if (evidenceCardCount < 1) {
-    return "來源已接受，但尚未形成足夠證據卡，請先重新產生證據卡後再生成報告。";
+    return input.evidenceFailureReason ??
+      "來源已接受，但尚未形成足夠證據卡，請先重新產生證據卡後再生成報告。";
   }
 
   const guardDiagnostics = reportSourceGuardDiagnostics(
@@ -445,6 +519,10 @@ export function workspaceSnapshotIsConsistent(workspace: ReportWorkspace): boole
   const draftCitationIds = (workspace.draft?.sections ?? []).flatMap(
     (section) => section.citationIds ?? [],
   );
+  const reportPlanMatchesContext =
+    !generationPayload.reportPlan ||
+    (generationPayload.reportPlan.workflowId === workspace.workflowId &&
+      generationPayload.reportPlan.topicHash === topicHash);
 
   return (
     workspace.payloadVersion === 3 &&
@@ -457,6 +535,7 @@ export function workspaceSnapshotIsConsistent(workspace: ReportWorkspace): boole
     (workspace.reportId ?? workspace.id) === workspace.id &&
     sourcesMatchWorkflow &&
     evidenceCardsMatchWorkflow &&
+    reportPlanMatchesContext &&
     savedSourceIds.length === sourceIds.length &&
     savedSourceIds.every((sourceId) => sourceIdSet.has(sourceId)) &&
     draftCitationIds.every((citationId) => sourceIdSet.has(citationId))
@@ -701,26 +780,6 @@ export function generationReadiness(
   };
 }
 
-export function shouldRunSupplementalCoverageSearch(input: {
-  acceptedSourceCount: number;
-  literatureReviewEvidenceCount: number;
-  peerReviewedAcceptedSourceCount: number;
-  canonicalEvidenceCardCount: number;
-  serverDerivableEvidenceAvailable: boolean;
-}): boolean {
-  const hasEvidencePathForReportDrafts =
-    (input.canonicalEvidenceCardCount > 0 || input.serverDerivableEvidenceAvailable) &&
-    input.acceptedSourceCount >= 3;
-
-  if (hasEvidencePathForReportDrafts) return false;
-
-  return (
-    input.acceptedSourceCount < 10 ||
-    input.literatureReviewEvidenceCount < 5 ||
-    input.peerReviewedAcceptedSourceCount < 3
-  );
-}
-
 export function reportModeFromGenerationMode(
   generationMode: Exclude<ReportGenerationMode, "blocked">,
 ): ReportMode {
@@ -915,6 +974,7 @@ export function createReportWorkspace(
       acceptedSources: boundAcceptedSources,
       evidenceCards: workspaceParts.evidenceCards,
       academicSafetyReview: options.academicSafetyReview ?? null,
+      ...(options.reportPlan ? { reportPlan: options.reportPlan } : {}),
     },
     ...workspaceParts,
   };
@@ -1029,6 +1089,9 @@ export function regenerateReportWorkspace(
       acceptedSources,
       evidenceCards: workspaceParts.evidenceCards,
       academicSafetyReview: generationPayload?.academicSafetyReview ?? null,
+      ...(generationPayload?.reportPlan
+        ? { reportPlan: generationPayload.reportPlan }
+        : {}),
     },
     ...workspaceParts,
   };
@@ -1144,6 +1207,9 @@ function hydrateStoredWorkspace(
       acceptedSources,
       evidenceCards: workspace.evidenceCards ?? [],
       academicSafetyReview: null,
+      ...(workspace.generationPayload?.reportPlan
+        ? { reportPlan: workspace.generationPayload.reportPlan }
+        : {}),
     },
     ...buildWorkspaceParts(input, acceptedSources, project, {
       evidenceCards: workspace.evidenceCards ?? [],
@@ -1354,33 +1420,232 @@ export function loadReportWorkspace(reportId: string): ReportWorkspace | null {
   return workspaceSnapshotIsConsistent(hydrated) ? hydrated : null;
 }
 
+const REQUIRED_READER_SECTION_IDS = [
+  "abstract",
+  "introduction",
+  "research_question",
+  "literature_review",
+  "methodology",
+  "findings",
+  "discussion",
+  "limitations",
+  "conclusion",
+] as const;
+
+const READER_SECTIONS_REQUIRING_CITATIONS = new Set<string>([
+  "abstract",
+  "introduction",
+  "literature_review",
+  "methodology",
+  "findings",
+  "discussion",
+  "conclusion",
+]);
+
+function reportSectionHasReaderIntegrity(
+  section: ReportWorkspace["draft"]["sections"][number] | undefined,
+): boolean {
+  if (!section) return false;
+  if (
+    section.generationMethod === "needs_manual_review" ||
+    section.generationMethod === "grounding_verifier_blocked" ||
+    section.generationMethod === "insufficient_evidence_notice"
+  ) {
+    return false;
+  }
+  const text = exportSafeReportSectionText(section)
+    .replace(/\[S\d+\]/gu, "")
+    .replace(/目前來源尚不足以支持此結論[。.]?/gu, "")
+    .replace(/本節因此只說明研究範圍與證據缺口，不提出未經支撐的結論[。.]?/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const minimumLength = section.sectionId === "research_question" ? 18 : 28;
+  if (text.length < minimumLength) return false;
+  if (!READER_SECTIONS_REQUIRING_CITATIONS.has(section.sectionId)) return true;
+  return /\[S\d+\]/u.test(exportSafeReportSectionText(section));
+}
+
+/**
+ * Compute the export percentage from the actual reader-facing chapter
+ * integrity and the current quality judgement. This deliberately ignores the
+ * legacy generator's requested-length and short-topic percentages.
+ */
+export function reportIntegrityCompleteness(workspace: ReportWorkspace): number {
+  const completeSectionCount = REQUIRED_READER_SECTION_IDS.filter((sectionId) =>
+    reportSectionHasReaderIntegrity(
+      workspace.draft.sections.find((section) => section.sectionId === sectionId),
+    ),
+  ).length;
+  const missingSectionCount = REQUIRED_READER_SECTION_IDS.length - completeSectionCount;
+  let structuralScore = Math.round(
+    (completeSectionCount / REQUIRED_READER_SECTION_IDS.length) * 100,
+  );
+  if (missingSectionCount >= 3) structuralScore = Math.min(structuralScore, 49);
+  else if (missingSectionCount > 0) structuralScore = Math.min(structuralScore, 69);
+
+  const qualityCap: Record<QualityReport["readiness"], number> = {
+    insufficient: 35,
+    preliminary: 65,
+    usable: 85,
+    strong: 100,
+  };
+  return Math.max(
+    0,
+    Math.min(structuralScore, qualityCap[workspace.qualityReport.readiness]),
+  );
+}
+
+function integrityVersionLabel(workspace: ReportWorkspace): string {
+  const modeLabel: Record<ReportWorkspace["generationMode"], string> = {
+    single_source_review: "單篇文獻整理",
+    initial_brief: "初步研究草稿",
+    background_report_mode: "背景型研究報告",
+    short_research_report: "短版研究報告",
+    standard_research_report: "標準研究報告",
+    complete_research_report: "完整研究報告",
+  };
+  const readinessLabel: Record<QualityReport["readiness"], string> = {
+    insufficient: "證據不足",
+    preliminary: "初步草稿",
+    usable: "可用草稿",
+    strong: "完整草稿",
+  };
+  return `${modeLabel[workspace.generationMode]}・${readinessLabel[workspace.qualityReport.readiness]}`;
+}
+
 export function workspaceToGeneratedReport(
   workspace: ReportWorkspace,
   category: TopicCategory,
+  canonicalModel: CanonicalDetailedReportModel = buildCanonicalDetailedReportModel(workspace),
 ): GeneratedReport {
-  return {
-    ...workspace.report,
-    sections: workspace.draft.sections.map((section) => ({
-      heading: section.title,
+  const formalDocument = canonicalModel.formalDocument ?? buildFormalReportDocument(workspace);
+  const citedSourceIdSet = new Set(formalDocument.references.map((reference) => reference.sourceId));
+  const citedSources = workspace.acceptedSources.filter((source) =>
+    citedSourceIdSet.has(source.id),
+  );
+  const bibliography = buildBibliography(citedSources, workspace.input.citationFormat);
+  const readerReferences = buildReaderCitationEntries(
+    formalDocument.references,
+    workspace.acceptedSources,
+  );
+  const readerSections = formalReportSectionSequence(formalDocument).map((section, index) => ({
+    heading: `${index + 1}. ${section.title}`,
+    blocks: formalReportSectionContent(section).map((node) => {
+      if (node.nodeType === "table") {
+        return { type: "formalTable" as const, table: node.table };
+      }
+      if (node.nodeType === "figure") {
+        return { type: "formalFigure" as const, figure: node.figure };
+      }
+      return {
+        type: "paragraph" as const,
+        text: node.block.citationIds.length > 0
+          ? stripReaderCitationTokens(node.block.text)
+          : node.block.text,
+        citationIds: node.block.citationIds,
+        ...(node.block.segments ? { citationSegments: node.block.segments } : {}),
+        paragraphRole: node.block.paragraphRole,
+      };
+    }),
+  }));
+  const sections = [
+    {
+      heading: "摘要與關鍵詞",
       blocks: [
+        { type: "paragraph" as const, text: formalDocument.abstract.text },
         {
-          type: "paragraph",
-          text: exportSafeReportSectionText(section),
+          type: "paragraph" as const,
+          text: `關鍵詞：${formalDocument.abstract.keywords.join("、")}`,
         },
       ],
+    },
+    ...readerSections,
+    {
+      heading: "參考文獻",
+      blocks: readerReferences.map((reference) => ({
+        type: "paragraph" as const,
+        text: reference.referenceText,
+      })),
+    },
+    ...formalDocument.appendix.map((section) => ({
+      heading: section.title,
+      blocks: formalReportSectionContent(section).map((node) => {
+        if (node.nodeType === "table") {
+          return { type: "formalTable" as const, table: node.table };
+        }
+        if (node.nodeType === "figure") {
+          return { type: "formalFigure" as const, figure: node.figure };
+        }
+        return {
+          type: "paragraph" as const,
+          text: node.block.citationIds.length > 0
+            ? stripReaderCitationTokens(node.block.text)
+            : node.block.text,
+          citationIds: node.block.citationIds,
+          ...(node.block.segments ? { citationSegments: node.block.segments } : {}),
+          paragraphRole: node.block.paragraphRole,
+        };
+      }),
     })),
+  ];
+  const keepInitialBriefNotice =
+    workspace.generationMode === "single_source_review" ||
+    workspace.generationMode === "initial_brief" ||
+    workspace.generationMode === "background_report_mode" ||
+    workspace.generationMode === "short_research_report";
+
+  return {
+    ...workspace.report,
+    shortTopic: keepInitialBriefNotice ? workspace.report.shortTopic : undefined,
+    sections,
     meta: {
       ...workspace.report.meta,
-      title: workspace.generationPayload?.displayTitle ?? workspace.draft.title,
+      title: formalDocument.metadata.title,
       category,
-      acceptedSources: workspace.acceptedSources,
-      bibliography: buildBibliography(
-        workspace.acceptedSources,
-        workspace.input.citationFormat,
-      ),
+      versionLabel: `${formalDocument.metadata.reportTypeLabel}・${formalDocument.metadata.documentVersion}`,
+      completeness: formalDocument.integrity.status === "pass" ? 100 : reportIntegrityCompleteness(workspace),
+      acceptedSources: citedSources,
+      bibliography,
       researchDraft: workspace.draft,
       qualityReport: workspace.qualityReport,
-      evidenceCards: workspace.evidenceCards,
+      evidenceCards: workspace.evidenceCards.filter((card) =>
+        citedSources.some((source) => source.id === card.sourceId),
+      ),
+      formalReportDocument: formalDocument,
+      citationIntegrity: {
+        status: formalDocument.integrity.status,
+        unknownMarkers: formalDocument.integrity.unknownCitationTokens,
+        ambiguousMarkers: formalDocument.integrity.ambiguousCitationTokens,
+        rewrites: formalDocument.references.map((reference) => ({
+          inputMarker: reference.sourceIdentity,
+          canonicalMarker: reference.marker,
+          sourceId: reference.sourceId,
+          canonicalSourceKey: reference.sourceIdentity,
+        })),
+      },
+      readerFacingAudit: {
+        status: formalDocument.integrity.status,
+        forbiddenTokens: formalDocument.integrity.forbiddenReaderTokens,
+        abstractValidation: formalDocument.abstract.validation,
+      },
+      ...(workspace.llmDiagnostics?.evidenceSetHash &&
+      workspace.llmDiagnostics?.writerEvidenceSetHash &&
+      workspace.llmDiagnostics?.readinessStatus
+        ? {
+            formalExportProof: {
+              planBuildStatus:
+                workspace.llmDiagnostics.reportPlanStatus === "plan_built"
+                  ? "plan_built" as const
+                  : "plan_invalidated" as const,
+              readinessStatus: workspace.llmDiagnostics.readinessStatus,
+              evidenceSetHash: workspace.llmDiagnostics.evidenceSetHash,
+              writerEvidenceSetHash:
+                workspace.llmDiagnostics.writerEvidenceSetHash,
+              filteredAfterPlanCount:
+                workspace.llmDiagnostics.filteredAfterPlanCount ?? 0,
+            },
+          }
+        : {}),
     },
   };
 }

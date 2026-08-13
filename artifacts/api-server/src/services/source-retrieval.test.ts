@@ -4,6 +4,7 @@ import {
   allProviderHealthSnapshots,
   InMemoryProviderHealthStore,
   dedupeSources,
+  extractDoiIdentifier,
   normalizeCrossrefWork,
   normalizeOpenAlexWork,
   normalizeSemanticScholarPaper,
@@ -18,6 +19,96 @@ beforeEach(() => {
   resetProviderHealthStoreForTesting();
 });
 
+test("recognizes only standalone DOI identifiers", () => {
+  assert.equal(extractDoiIdentifier("10.1000/Exact.ID"), "10.1000/exact.id");
+  assert.equal(extractDoiIdentifier("doi:10.1000/Exact.ID"), "10.1000/exact.id");
+  assert.equal(
+    extractDoiIdentifier("https://doi.org/10.1000/Exact.ID"),
+    "10.1000/exact.id",
+  );
+  assert.equal(extractDoiIdentifier("study about doi:10.1000/example"), null);
+});
+
+test("standalone DOI lookup uses provider identifier endpoints and rejects non-matches", async () => {
+  const configs = getSourceProviderConfigs();
+  const seenUrls: URL[] = [];
+  const doi = "10.1000/exact-lookup";
+  const result = await searchSources(`https://doi.org/${doi}`, {
+    providerConfigs: {
+      Crossref: {
+        ...configs.Crossref,
+        endpoint: "https://example.test/crossref/works",
+        timeoutMs: 50,
+      },
+      OpenAlex: {
+        ...configs.OpenAlex,
+        endpoint: "https://example.test/openalex/works",
+        timeoutMs: 50,
+      },
+      "Semantic Scholar": {
+        ...configs["Semantic Scholar"],
+        endpoint: "https://example.test/graph/v1/paper/search",
+        timeoutMs: 50,
+      },
+    },
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      seenUrls.push(url);
+      if (url.pathname.includes("/crossref/")) {
+        return new Response(JSON.stringify({
+          message: {
+            title: ["Exact identifier result"],
+            DOI: doi,
+            type: "journal-article",
+          },
+        }));
+      }
+      if (url.pathname.includes("/openalex/")) {
+        return new Response(JSON.stringify({
+          results: [
+            {
+              id: "https://openalex.org/W1",
+              title: "Exact identifier result",
+              doi: `https://doi.org/${doi}`,
+              type: "article",
+            },
+            {
+              id: "https://openalex.org/W2",
+              title: "Unrelated result must be removed",
+              doi: "https://doi.org/10.1000/unrelated",
+              type: "article",
+            },
+          ],
+        }));
+      }
+      return new Response(JSON.stringify({
+        title: "Exact identifier result",
+        externalIds: { DOI: doi },
+      }));
+    },
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.doi, doi);
+  assert.ok(
+    seenUrls.some((url) =>
+      decodeURIComponent(url.pathname).endsWith(`/works/${doi}`) &&
+      !url.searchParams.has("query")
+    ),
+  );
+  assert.ok(
+    seenUrls.some((url) =>
+      decodeURIComponent(url.pathname).endsWith(`/paper/DOI:${doi}`)
+    ),
+  );
+  assert.ok(
+    seenUrls.some((url) =>
+      url.searchParams.get("filter") === `doi:https://doi.org/${doi}` &&
+      !url.searchParams.has("search")
+    ),
+  );
+});
+
 test("normalizes Crossref works into the unified Source shape", () => {
   const source = normalizeCrossrefWork({
     title: ["Vitamin C and oxidative stress"],
@@ -30,8 +121,24 @@ test("normalizes Crossref works into the unified Source shape", () => {
     URL: "https://doi.org/10.1000/example",
     publisher: "Example Publisher",
     "container-title": ["Example Journal"],
+    volume: "18",
+    issue: "2",
+    page: "33-48",
     type: "journal-article",
     "is-referenced-by-count": 42,
+    resource: {
+      primary: {
+        URL: "https://www.jstage.jst.go.jp/article/example/1/1/example_1/_article/-char/en/",
+      },
+    },
+    link: [
+      {
+        URL: "https://www.jstage.jst.go.jp/article/example/1/1/example_1/_pdf",
+        "content-type": "application/pdf",
+        "intended-application": "similarity-checking",
+      },
+    ],
+    license: [{ URL: "https://creativecommons.org/licenses/by/4.0/" }],
   }, "vitamin c query");
 
   assert.equal(source?.id, "doi:10.1000/example");
@@ -45,8 +152,16 @@ test("normalizes Crossref works into the unified Source shape", () => {
   assert.equal(source?.provider, "Crossref");
   assert.equal(source?.queryUsed, "vitamin c query");
   assert.equal(source?.containerTitle, "Example Journal");
+  assert.equal(source?.volume, "18");
+  assert.equal(source?.issue, "2");
+  assert.equal(source?.pages, "33-48");
   assert.equal(source?.citationCount, 42);
   assert.equal(source?.sourceKind, "journal");
+  assert.equal(
+    source?.fullTextUrl,
+    "https://www.jstage.jst.go.jp/article/example/1/1/example_1/_article/-char/en/",
+  );
+  assert.equal(source?.isOpenAccess, true);
   assert.ok((source?.sourceQualityScore ?? 0) > 80);
   assert.ok(source?.scoreReasons?.includes("has DOI"));
 });

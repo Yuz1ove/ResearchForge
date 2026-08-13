@@ -1,9 +1,10 @@
-export type LlmProviderName = "school_llm" | "openai" | "unconfigured";
+export type LlmProviderName = "school_llm" | "openai" | "ollama" | "unconfigured";
 
 export type LlmCompatibleMode =
   | "openai_chat_completions"
   | "openai_responses"
   | "openai_responses_or_chat"
+  | "ollama_chat"
   | "unknown";
 
 export type LlmConfigStatus =
@@ -14,6 +15,7 @@ export type LlmConfigStatus =
 export type LlmConfigSource =
   | "school_llm_env"
   | "openai_env"
+  | "ollama_env"
   | "explicit_options"
   | "unconfigured";
 
@@ -116,6 +118,15 @@ function modelFromEnv(
       null
     );
   }
+  if (provider === "ollama") {
+    return (
+      envValue(env, "OLLAMA_MODEL") ??
+      envValue(env, "LLM_MODEL") ??
+      envValue(env, "REPORT_MODEL") ??
+      envValue(env, "REPORT_FAST_MODEL") ??
+      null
+    );
+  }
   return (
     envValue(env, "SCHOOL_LLM_MODEL") ??
     envValue(env, "SCHOOL_LLM_SMOKE_MODEL") ??
@@ -141,11 +152,12 @@ function buildProviderConfig(input: {
   missing: string[];
   source: LlmConfigSource;
   compatibleMode: LlmCompatibleMode;
+  apiKeyRequired?: boolean;
 }): PrivateLlmProviderConfig {
   const apiKeyConfigured = Boolean(input.apiKey);
   const baseURLConfigured = Boolean(input.baseURL);
   const missing = [...input.missing];
-  const available = apiKeyConfigured && baseURLConfigured;
+  const available = baseURLConfigured && (input.apiKeyRequired === false || apiKeyConfigured);
   return {
     available,
     provider: input.provider,
@@ -161,6 +173,29 @@ function buildProviderConfig(input: {
     missing,
     source: input.source,
   };
+}
+
+function ollamaConfig(
+  env: NodeJS.ProcessEnv,
+  options: ResolveLlmProviderConfigOptions,
+  source: LlmConfigSource,
+): PrivateLlmProviderConfig {
+  const apiKey = cleanCredential(options.apiKey ?? env.OLLAMA_API_KEY) ?? null;
+  const baseURL = cleanValue(options.baseURL) ?? envValue(env, "OLLAMA_BASE_URL") ?? null;
+  const missing: string[] = [];
+  if (!baseURL) missing.push("OLLAMA_BASE_URL");
+  const model = modelFromEnv(env, options.model, "ollama");
+  if (!model) missing.push("OLLAMA_MODEL");
+  return buildProviderConfig({
+    provider: "ollama",
+    apiKey,
+    baseURL,
+    model,
+    missing,
+    source,
+    compatibleMode: options.compatibleMode ?? "ollama_chat",
+    apiKeyRequired: false,
+  });
 }
 
 function schoolConfig(
@@ -218,7 +253,7 @@ function unconfiguredConfig(env: NodeJS.ProcessEnv, options: ResolveLlmProviderC
     modelConfigured: Boolean(modelFromEnv(env, options.model)),
     compatibleMode: "unknown",
     status: "unconfigured",
-    missing: ["SCHOOL_LLM_API_KEY", "SCHOOL_LLM_BASE_URL", "OPENAI_API_KEY"],
+    missing: ["SCHOOL_LLM_API_KEY", "SCHOOL_LLM_BASE_URL", "OPENAI_API_KEY", "OLLAMA_BASE_URL"],
     source: "unconfigured",
   };
 }
@@ -237,11 +272,17 @@ export function resolvePrivateLlmProviderConfig(
   if (provider === "openai") {
     return openAiConfig(env, options, hasExplicitCredential ? "explicit_options" : "openai_env");
   }
+  if (provider === "ollama") {
+    return ollamaConfig(env, options, hasExplicitCredential ? "explicit_options" : "ollama_env");
+  }
   if (envProvider === "school_llm" || envProvider === "school") {
     return schoolConfig(env, options, hasExplicitCredential ? "explicit_options" : "school_llm_env");
   }
   if (envProvider === "openai") {
     return openAiConfig(env, options, hasExplicitCredential ? "explicit_options" : "openai_env");
+  }
+  if (envProvider === "ollama") {
+    return ollamaConfig(env, options, hasExplicitCredential ? "explicit_options" : "ollama_env");
   }
 
   const hasSchoolKey = Boolean(envValue(env, "SCHOOL_LLM_API_KEY"));
@@ -254,6 +295,12 @@ export function resolvePrivateLlmProviderConfig(
   const hasOpenAiBaseURL = Boolean(envValue(env, "OPENAI_BASE_URL"));
   if (hasOpenAiKey || hasOpenAiBaseURL) {
     return openAiConfig(env, options, "openai_env");
+  }
+
+  const hasOllamaBaseURL = Boolean(envValue(env, "OLLAMA_BASE_URL"));
+  const hasOllamaModel = Boolean(envValue(env, "OLLAMA_MODEL"));
+  if (hasOllamaBaseURL || hasOllamaModel) {
+    return ollamaConfig(env, options, "ollama_env");
   }
 
   if (hasExplicitCredential) {

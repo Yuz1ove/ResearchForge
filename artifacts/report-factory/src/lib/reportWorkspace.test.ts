@@ -7,11 +7,11 @@ import {
   generationReadiness,
   generatorWorkflowVisibility,
   reportGenerationBlockingReason,
+  reportIntegrityCompleteness,
   reportSourceGuardDiagnostics,
   reportWorkspacePath,
   reportTopicFingerprint,
   serializeReportWorkspaceForStorageForTests,
-  shouldRunSupplementalCoverageSearch,
   startReportWorkspaceNavigation,
   workspaceToGeneratedReport,
   workspaceSnapshotIsConsistent,
@@ -267,7 +267,7 @@ test("official background sources can generate a background report without acade
   assert.equal(result.workspace.generationPayload.evidenceCards.length, 0);
 });
 
-test("report generation blocking reason is explicit below three accepted sources and clears at three", () => {
+test("report generation allows a preliminary report with traceable evidence and still blocks zero evidence", () => {
   const topic = "月球表面撞擊坑形成機制";
   const twoAccepted = [
     sourceForTopic(1, topic, { title: "月球表面撞擊坑形成機制 source 1" }),
@@ -286,7 +286,17 @@ test("report generation blocking reason is explicit below three accepted sources
       workflowId: `wf-${reportTopicFingerprint(topic)}`,
       topicHash: reportTopicFingerprint(topic),
     }),
-    "目前已接受 2 筆可用來源，至少需 3 筆才能生成研究報告。",
+    null,
+  );
+  assert.equal(
+    reportGenerationBlockingReason({
+      topic,
+      acceptedSources: twoAccepted.slice(0, 1),
+      evidenceCardCount: 1,
+      workflowId: `wf-${reportTopicFingerprint(topic)}`,
+      topicHash: reportTopicFingerprint(topic),
+    }),
+    null,
   );
   assert.equal(
     reportGenerationBlockingReason({
@@ -306,7 +316,7 @@ test("report generation blocking reason is explicit below three accepted sources
       workflowId: `wf-${reportTopicFingerprint(topic)}`,
       topicHash: reportTopicFingerprint(topic),
     }),
-    "來源已接受，但尚未形成足夠證據卡，請先重新產生證據卡後再生成報告。",
+    "已接受來源尚未形成證據卡，至少需 1 張證據卡才能生成研究報告。",
   );
   assert.equal(
     reportGenerationBlockingReason({
@@ -329,48 +339,21 @@ test("generation readiness requires at least one evidence card when evidence gat
 
   const blocked = generationReadiness(acceptedSources, "standard", []);
   const ready = generationReadiness(acceptedSources, "standard", [{}] as any);
+  const preliminary = generationReadiness(
+    acceptedSources.slice(0, 1),
+    "standard",
+    [{}] as any,
+  );
 
   assert.equal(blocked.canGenerate, false);
   assert.equal(blocked.buttonLabel, "缺少證據卡");
   assert.match(blocked.message ?? "", /至少需 1 張證據卡/);
   assert.equal(ready.canGenerate, true);
+  assert.equal(preliminary.canGenerate, true);
+  assert.equal(preliminary.buttonLabel, "生成初步研究報告");
+  assert.equal(preliminary.minRequiredSources, 1);
   assert.equal(ready.reportMode, "short");
   assert.equal(ready.buttonLabel, "生成短版研究報告");
-});
-
-test("supplemental coverage search yields to server-side reviewed evidence derivation", () => {
-  assert.equal(
-    shouldRunSupplementalCoverageSearch({
-      acceptedSourceCount: 10,
-      literatureReviewEvidenceCount: 1,
-      peerReviewedAcceptedSourceCount: 0,
-      canonicalEvidenceCardCount: 1,
-      serverDerivableEvidenceAvailable: false,
-    }),
-    false,
-  );
-
-  assert.equal(
-    shouldRunSupplementalCoverageSearch({
-      acceptedSourceCount: 10,
-      literatureReviewEvidenceCount: 0,
-      peerReviewedAcceptedSourceCount: 0,
-      canonicalEvidenceCardCount: 0,
-      serverDerivableEvidenceAvailable: true,
-    }),
-    false,
-  );
-
-  assert.equal(
-    shouldRunSupplementalCoverageSearch({
-      acceptedSourceCount: 10,
-      literatureReviewEvidenceCount: 0,
-      peerReviewedAcceptedSourceCount: 0,
-      canonicalEvidenceCardCount: 0,
-      serverDerivableEvidenceAvailable: false,
-    }),
-    true,
-  );
 });
 
 test("report generation blocks when workflow topic hash is missing", () => {
@@ -515,7 +498,7 @@ test("report workspace storage omits heavy extracted chunks after LLM generation
   assert.match(String(stored.acceptedSources[0]?.abstract ?? ""), /Evidence abstract 1/);
 });
 
-test("workspace export replaces verifier-blocked sections with review prompts", () => {
+test("workspace export replaces verifier-blocked sections with reader-facing evidence boundaries", () => {
   const workspace = createReportWorkspace(
     input(),
     [source(1), source(2), source(3)],
@@ -597,8 +580,66 @@ test("workspace export replaces verifier-blocked sections with review prompts", 
     .map((block) => ("text" in block ? block.text : ""))
     .join("\n");
 
-  assert.match(exportedText, /不輸出正式段落|補查/);
+  assert.match(exportedText, /缺少足以支撐|不提出未經支撐的結論/);
   assert.doesNotMatch(exportedText, /這是一句未支撐但看似正式的外推。/);
+  assert.doesNotMatch(exportedText, /grounding verifier|evidence card|supportSpan|metadata/iu);
+});
+
+test("integrity completeness ignores legacy length heuristics and caps a missing chapter", () => {
+  const workspace = createReportWorkspace(
+    input({ length: "深度研究", wordCount: "5000", mode: "直接生成完整報告" }),
+    Array.from({ length: 11 }, (_, index) => source(index + 1)),
+    "complete_research_report",
+    "rf-integrity-completeness",
+  );
+  const qualityReport = {
+    sourceCount: 11,
+    acceptedSourceCount: 11,
+    evidenceCardCount: 11,
+    missingCitationWarnings: [],
+    unsupportedClaimWarnings: [],
+    overclaimWarnings: [],
+    topicDriftWarnings: [],
+    readiness: "strong" as const,
+  };
+  const completeSections = workspace.draft.sections.map((section) =>
+    section.sectionId === "title" || section.sectionId === "references"
+      ? section
+      : {
+          ...section,
+          body: `短影音研究的 ${section.sectionId} 章節包含足以構成正式報告的獨立內容、證據範圍與必要限制[S1]。`,
+          synthesizedProseZhTw: `短影音研究的 ${section.sectionId} 章節包含足以構成正式報告的獨立內容、證據範圍與必要限制[S1]。`,
+          citationIds: ["source-1"],
+          citationMarkers: ["[S1]"],
+          generationMethod: "grounding_verifier_pruned",
+        },
+  );
+  const completeWorkspace = {
+    ...workspace,
+    qualityReport,
+    draft: { ...workspace.draft, sections: completeSections },
+    report: {
+      ...workspace.report,
+      shortTopic: { message: "legacy short-topic warning", expansions: [] },
+      meta: { ...workspace.report.meta, completeness: 5 },
+    },
+  };
+  const incompleteWorkspace = {
+    ...completeWorkspace,
+    draft: {
+      ...completeWorkspace.draft,
+      sections: completeWorkspace.draft.sections.filter(
+        (section) => section.sectionId !== "findings",
+      ),
+    },
+  };
+
+  assert.equal(reportIntegrityCompleteness(completeWorkspace), 100);
+  assert.equal(reportIntegrityCompleteness(incompleteWorkspace), 69);
+  const exported = workspaceToGeneratedReport(incompleteWorkspace, "一般學校報告");
+  assert.equal(exported.meta.completeness, 69);
+  assert.equal(exported.shortTopic, undefined);
+  assert.doesNotMatch(exported.meta.versionLabel, /五步驟|深度研究草稿/u);
 });
 
 test("generator hides evidence cards unless developer debug is open", () => {

@@ -85,6 +85,41 @@ test("api-server env loader never overrides pre-existing process env keys", () =
   assert.equal(env.SCHOOL_LLM_API_KEY, "existing-token");
 });
 
+test("api-server env loader preserves externally locked empty remote vars while loading Ollama", () => {
+  const root = createWorkspace();
+  writeFileSync(
+    path.join(root, ".env.local"),
+    [
+      "SCHOOL_LLM_API_KEY=file-school-token",
+      "OPENAI_API_KEY=file-openai-token",
+      "OLLAMA_BASE_URL=http://127.0.0.1:11434",
+      "OLLAMA_MODEL=cached-qwen-model",
+    ].join("\n"),
+  );
+
+  const env: NodeJS.ProcessEnv = {
+    LLM_PROVIDER: "ollama",
+    SCHOOL_LLM_API_KEY: "",
+    OPENAI_API_KEY: "",
+  };
+  const result = loadApiServerEnv({
+    env,
+    startDir: root,
+    externallyLockedKeys: new Set([
+      "LLM_PROVIDER",
+      "SCHOOL_LLM_API_KEY",
+      "OPENAI_API_KEY",
+    ]),
+  });
+
+  assert.equal(env.SCHOOL_LLM_API_KEY, "");
+  assert.equal(env.OPENAI_API_KEY, "");
+  assert.equal(env.OLLAMA_BASE_URL, "http://127.0.0.1:11434");
+  assert.equal(env.OLLAMA_MODEL, "cached-qwen-model");
+  assert.equal(result.keys.OLLAMA_BASE_URL?.source, "root .env.local");
+  assert.equal(result.keys.OLLAMA_MODEL?.source, "root .env.local");
+});
+
 test("api-server env loader skips local env files in production", () => {
   const root = createWorkspace();
   writeFileSync(

@@ -11,6 +11,7 @@ import {
   createPaperSearchRouter,
   normalizePaperSearchRequest,
   normalizePaperSummariesRequest,
+  sourceCoreTopicScore,
   type PaperSearchResponse,
   type PaperSummariesResponse,
 } from "./paper-search";
@@ -260,6 +261,86 @@ test("paper search removes provider records without a query or translated academ
   assert.ok(response.warnings.some((warning) => warning.includes("已略過 1 筆")));
 });
 
+test("compound canine guarding queries require the dog entity plus guarding or reinforcement intervention", async () => {
+  const englishQuery =
+    "dog resource guarding causes positive reinforcement training effectiveness";
+  const anchors = [
+    "dog",
+    "resource",
+    "guarding",
+    "positive",
+    "reinforcement",
+    "training",
+    "effectiveness",
+  ];
+  const exactGuarding = source({
+    id: "canine-guarding",
+    doi: "10.1000/canine-guarding",
+    title: "Canine resource guarding in adoptive homes",
+    abstract: "This study evaluates food guarding and resource guarding in companion dogs.",
+  });
+  const rewardTraining = source({
+    id: "canine-reward",
+    doi: "10.1000/canine-reward",
+    title: "Reward-based training for domestic dog behavior",
+    abstract: "Domestic dogs received reward-based training for behavioral problems.",
+  });
+  const genericWorkingDogs = source({
+    id: "working-dogs",
+    doi: "10.1000/working-dogs",
+    title: "Working Dogs",
+    abstract: "This overview describes the health and communication of working dogs.",
+  });
+  const humanTherapy = source({
+    id: "human-therapy",
+    doi: "10.1000/human-therapy",
+    title: "Canine-assisted resource-oriented Positive Psychotherapy after war",
+    abstract: "Canine-assisted therapy supports human participants affected by war.",
+  });
+  const autismTraining = source({
+    id: "autism-training",
+    doi: "10.1000/autism-training",
+    title: "Functional communication training and chained reinforcement",
+    abstract: "The intervention reduces challenging classroom behavior in autistic students.",
+  });
+
+  assert.ok(sourceCoreTopicScore(exactGuarding, anchors) > sourceCoreTopicScore(rewardTraining, anchors));
+  assert.equal(sourceCoreTopicScore(genericWorkingDogs, anchors), 0);
+  assert.equal(sourceCoreTopicScore(humanTherapy, anchors), 0);
+  assert.equal(sourceCoreTopicScore(autismTraining, anchors), 0);
+
+  const searchQueries: string[] = [];
+  const router = createPaperSearchRouter({
+    expandKeywords: async () => expansion(englishQuery),
+    searchProviders: async (query) => {
+      searchQueries.push(query);
+      return [providerResult("OpenAlex", [
+        genericWorkingDogs,
+        humanTherapy,
+        exactGuarding,
+        autismTraining,
+        rewardTraining,
+      ])];
+    },
+    summarizeSources: async (_topic, sources) => sources,
+  });
+  const { payload } = await invoke(router, {
+    query: "犬隻資源防衛行為的成因與正向訓練介入成效",
+    includeSummaries: false,
+  });
+  const response = payload as PaperSearchResponse;
+
+  assert.deepEqual(response.papers.map((paper) => paper.id), [
+    "canine-guarding",
+    "canine-reward",
+  ]);
+  assert.deepEqual(searchQueries, [
+    "犬隻資源防衛行為的成因與正向訓練介入成效",
+    "dog resource guarding",
+    englishQuery,
+  ]);
+});
+
 test("paper search dedupes results, marks primary sources, and maps summaries by id", async () => {
   const originalQuery = "生成式 AI 與學習成效";
   const englishQuery = "generative AI learning outcomes";
@@ -494,10 +575,12 @@ test("paper summaries endpoint validates a batch of one to four paper-shaped obj
     papers: [
       { id: "merged", title: "Merged providers", provider: "Crossref, S2" },
       { id: "s2", title: "S2 provider", provider: "S2" },
+      { id: "pmc", title: "Europe PMC provider", provider: "Europe PMC" },
     ],
   });
   assert.equal(mergedProviders?.sources[0]?.sourceType, "Crossref");
   assert.equal(mergedProviders?.sources[1]?.sourceType, "Semantic Scholar");
+  assert.equal(mergedProviders?.sources[2]?.sourceType, "Institutional Source");
 
   const { statusCode } = await invoke(
     createPaperSearchRouter(),
@@ -545,6 +628,7 @@ test("paper summaries endpoint safely maps papers and prefers a long cleaned raw
           citationCount: 12,
           isOpenAccess: true,
           abstract: "Original evidence supplied by the paper provider.",
+          extractedText: "Full-text evidence excerpt retained for deferred summarization.".repeat(8),
           summary: "untrusted client summary",
           readableSummaryZhTW: "must not be accepted from the client",
           relevanceLevel: "off_topic",
@@ -567,4 +651,5 @@ test("paper summaries endpoint safely maps papers and prefers a long cleaned raw
   assert.equal(capturedSources[0]?.relevanceLevel, "primary");
   assert.equal(capturedSources[0]?.readableSummaryZhTW, undefined);
   assert.equal(capturedSources[0]?.containerTitle, "Sleep Journal");
+  assert.match(capturedSources[0]?.extractedText ?? "", /Full-text evidence excerpt/u);
 });
