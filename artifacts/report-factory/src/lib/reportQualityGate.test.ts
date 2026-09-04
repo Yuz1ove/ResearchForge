@@ -5,6 +5,7 @@ import {
   QUALITY_RETRY_ROUTES,
   REPORT_QUALITY_DIMENSIONS,
   evaluateReportQuality,
+  orchestrateReportQualityRetries,
   type ReportQualityGateInput,
 } from "./reportQualityGate.ts";
 
@@ -247,4 +248,117 @@ test("quality gate enforces the retry cap without dropping the audit plan", () =
   assert.equal(atCap.retryPlan[0]?.retryStage, "claim_citation_mapping");
   assert.equal(atCap.retryPlan[0]?.canRetry, false);
   assert.equal(atCap.retryPlan[0]?.nextRetryCount, null);
+});
+
+test("quality retry orchestrator repairs the routed stage and re-audits before export", async () => {
+  type State = { citationFixed: boolean; cjkFixed: boolean };
+  const result = await orchestrateReportQualityRetries<State>({
+    initialState: { citationFixed: false, cjkFixed: false },
+    maxRetries: 2,
+    buildGateInput(state) {
+      return {
+        ...passingInput(),
+        citationIssues: state.citationFixed
+          ? []
+          : [{ kind: "identity_mismatch", location: "claim:claim-1" }],
+        formatParity: {
+          ...passingInput().formatParity,
+          cjkGlyphsPreserved: state.cjkFixed,
+        },
+      };
+    },
+    repairStage({ state, instruction }) {
+      if (instruction.retryStage === "claim_citation_mapping") {
+        return { ...state, citationFixed: true };
+      }
+      if (instruction.retryStage === "exporter_font_config") {
+        return { ...state, cjkFixed: true };
+      }
+      return state;
+    },
+  });
+
+  assert.equal(result.quality.passed, true);
+  assert.equal(result.exportAllowed, true);
+  assert.deepEqual(result.attempts.map((attempt) => attempt.retryStage), [
+    "claim_citation_mapping",
+    "exporter_font_config",
+  ]);
+  assert.equal(result.attempts.every((attempt) => attempt.changed), true);
+});
+
+test("quality retry orchestrator stops a repeated failure without an infinite loop", async () => {
+  const result = await orchestrateReportQualityRetries({
+    initialState: { calls: 0 },
+    maxRetries: 3,
+    buildGateInput() {
+      return {
+        ...passingInput(),
+        citationIssues: [{ kind: "entailment_failure", location: "claim:claim-1" }],
+      };
+    },
+    repairStage({ state }) {
+      return { calls: state.calls + 1 };
+    },
+  });
+
+  assert.equal(result.exportAllowed, false);
+  assert.equal(result.terminalReason, "repeated_failure_without_progress");
+  assert.equal(result.attempts.length, 1);
+  assert.equal(result.attempts[0]?.changed, false);
+});
+
+test("formal quality gate accepts evidence-bearing long prose without requiring every character to be factual", () => {
+  const result = evaluateReportQuality({
+    ...passingInput(),
+    longReportEvidence: {
+      requested: true,
+      canonicalBodyCjk: 7_100,
+      supportedFactualCjk: 4_000,
+      supportedSynthesisCjk: 1_300,
+      supportedEvidenceBearingCjk: 5_300,
+      evidenceBearingRatio: 5_300 / 7_100,
+      duplicateRatio: 0.02,
+      unsupportedFactualClaimCount: 0,
+      minimumCanonicalBodyCjk: 7_000,
+      minimumSupportedEvidenceBearingCjk: 5_200,
+      minimumEvidenceBearingRatio: 0.71,
+      maximumDuplicateRatio: 0.03,
+      centralAnswerAligned: true,
+      conclusionAligned: true,
+      allConclusionClaimsRealizedInBody: true,
+      conclusionClaimNovelty: 0,
+      thresholdsDerivedFromFixtureIds: ["accepted-long-a", "accepted-long-b"],
+    },
+  });
+  assert.equal(result.passed, true);
+  assert.equal(result.blockExport, false);
+});
+
+test("formal quality gate blocks verbose padding and novel conclusion claims", () => {
+  const result = evaluateReportQuality({
+    ...passingInput(),
+    longReportEvidence: {
+      requested: true,
+      canonicalBodyCjk: 7_200,
+      supportedFactualCjk: 1_900,
+      supportedSynthesisCjk: 200,
+      supportedEvidenceBearingCjk: 2_100,
+      evidenceBearingRatio: 2_100 / 7_200,
+      duplicateRatio: 0.41,
+      unsupportedFactualClaimCount: 0,
+      minimumCanonicalBodyCjk: 7_000,
+      minimumSupportedEvidenceBearingCjk: 5_200,
+      minimumEvidenceBearingRatio: 0.71,
+      maximumDuplicateRatio: 0.03,
+      centralAnswerAligned: true,
+      conclusionAligned: false,
+      allConclusionClaimsRealizedInBody: false,
+      conclusionClaimNovelty: 1,
+      thresholdsDerivedFromFixtureIds: ["accepted-long-a", "accepted-long-b"],
+    },
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.blockExport, true);
+  assert.match(result.dimensions.coherence.reason, /重複|結論/u);
 });

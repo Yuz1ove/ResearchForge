@@ -1,0 +1,34 @@
+{
+  "schema_version": "researchforge-ironman-day-facts/v1",
+  "day": 10,
+  "title_seed": "Evidence card 不是摘要卡",
+  "historical_period": {"start": "2026-06-16", "end": "2026-07-06", "confidence": "HIGH"},
+  "evidence_boundary": "COMMITTED_GIT",
+  "central_problem": "從『這篇在說什麼』到『我能安全主張什麼』，中間需要什麼資料結構？",
+  "reader_takeaway": "claim、citation、source identity、review/safety state 與定位要一起移動。",
+  "known_at_the_time": [
+    {"fact": "frontend evidence-card flow 在 6/16 開始演化，backend evidenceCardBuilder/evidenceSchema 在 6/26 committed tree 出現。", "source_refs": ["SRC-GIT-EVIDENCE-CARD-0626"]},
+    {"fact": "source records、review and evidence pipeline were distinct from later canonical admission。", "source_refs": ["SRC-GIT-CITATION", "SRC-GIT-EVIDENCE-CARD-0626"]}
+  ],
+  "implemented_at_the_time": [{"fact": "evidence cards became structured downstream material derived from reviewed/accepted sources, rather than plain provider abstracts。", "source_refs": ["SRC-GIT-EVIDENCE-CARD-0626", "SRC-DOC-ARCH-0618"]}],
+  "not_yet_available": [{"fact": "Study Facts V2 status taxonomy and canonical owner revision binding were not committed at this stage。", "source_refs": ["SRC-GIT-EVIDENCE-CARD-0626", "SRC-SOURCE-STUDY-FACTS", "SRC-SOURCE-CANONICAL"]}],
+  "observed_failures": [
+    {"failure_id": "CARD_OVERREAD_RISK", "date_or_range": "2026-06-16/2026-07-06", "historical_stage": "evidence transport", "symptom": "a summary/evidence card could be mistaken for a complete study-level fact record", "root_cause_if_known": "early card contract was less complete than later facts/provenance model", "what_was_known_then": "cards should carry source-grounded material", "later_resolution": "later Study Facts and canonical admission distinguish missing, unknown and admitted states", "source_refs": ["SRC-GIT-EVIDENCE-CARD-0626", "SRC-SOURCE-STUDY-FACTS"]}
+  ],
+  "tests_and_metrics": [{"test_or_metric": "One evidence-card transport layer is identifiable; no card-count or pass-rate claim is made.", "result": "architectural layer verified", "source_refs": ["SRC-GIT-EVIDENCE-CARD-0626"]}],
+  "engineering_decisions": [{"decision": "讓 Evidence Card 作為可追蹤的 transport contract；不讓它自行取得最終 evidence authority。", "source_refs": ["SRC-GIT-EVIDENCE-CARD-0626", "SRC-SOURCE-CANONICAL"]}],
+  "architecture_state": [{"state": "accepted source → evidence card → report synthesis", "source_refs": ["SRC-DOC-ARCH-0618", "SRC-GIT-EVIDENCE-CARD-0626"]}],
+  "terminology_available_at_the_time": ["Evidence Card", "claim", "citation", "source identity", "accepted source"],
+  "terminology_forbidden_due_to_hindsight": ["StudyFactEnvelopeV2", "PRESENT/NOT_REPORTED/UNKNOWN", "canonical admission revision", "FORMAL/LIMITED/BLOCKED"],
+  "safe_numbers": [{"value": "1 evidence-card transport layer", "meaning": "architectural layer, not card count", "source_refs": ["SRC-GIT-EVIDENCE-CARD-0626"]}],
+  "safe_public_facts": [{"fact": "摘要是輸入材料之一，但 Evidence Card 應保存能回到 source 的 claim/citation context。", "source_refs": ["SRC-GIT-EVIDENCE-CARD-0626"]}],
+  "sensitive_or_internal_facts": ["debug card payloads", "internal evidence IDs", "raw source text"],
+  "retrospective_notes": [{"note": "後來 card 會攜帶 owner-issued admission/provenance projection；早期 card 不應被描寫成同樣完整。", "source_refs": ["SRC-SOURCE-EVIDENCE-CARDS", "SRC-QA-CANONICAL"]}],
+  "source_refs": [
+    {"type": "commit", "ref": "SRC-GIT-EVIDENCE-CARD-0626", "why_it_supports_this_fact": "committed evidence card builder/schema"},
+    {"type": "doc", "ref": "SRC-DOC-ARCH-0618", "why_it_supports_this_fact": "accepted-source to evidence-card flow"},
+    {"type": "source_code", "ref": "SRC-SOURCE-EVIDENCE-CARDS", "why_it_supports_this_fact": "current model, explicitly not backdated"}
+  ],
+  "publication_risks": ["不要把 current card schema 當成 6 月 schema。", "不要公開 raw evidence payload。"],
+  "confidence": "HIGH"
+}

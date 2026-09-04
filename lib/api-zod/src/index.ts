@@ -1,6 +1,7 @@
 export * from "./source-record";
 export * from "./source-mix-profile";
 export * from "./research-workflow";
+export * from "./research-product-workflow";
 export * from "./research-pipeline";
 export * from "./research-grounding";
 export type {
@@ -16,6 +17,7 @@ export * from "./llm-status";
 export * from "./topic-expansion";
 export * from "./topic-understanding";
 export * from "./research-topic-facets";
+export * from "./topic-integrity";
 export * from "./generated/api";
 export * from "./generated/types/errorResponse";
 export * from "./generated/types/healthStatus";

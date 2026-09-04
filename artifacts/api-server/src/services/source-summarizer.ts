@@ -488,6 +488,19 @@ function chooseBestBodySentence(source: SourceSummaryCapableRecord, bodyText: st
   return scored[0]?.sentence ?? sentences[0] ?? "";
 }
 
+export function stripLeadingSourceTitle(body: string, title: string): string {
+  const normalizedBody = cleanText(body);
+  const normalizedTitle = cleanText(title);
+  if (
+    !normalizedTitle ||
+    normalizedTitle.length > normalizedBody.length ||
+    !normalizedBody.startsWith(normalizedTitle)
+  ) {
+    return normalizedBody;
+  }
+  return normalizedBody.slice(normalizedTitle.length).trimStart();
+}
+
 function deterministicFallbackSummary(
   topic: string,
   target: PreparedSummaryTarget,
@@ -495,7 +508,7 @@ function deterministicFallbackSummary(
   const body = cleanText(target.textForSummary);
   const contentBody =
     combinedVisibleText(target.source) ||
-    body.replace(new RegExp(`^${target.source.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`), "");
+    stripLeadingSourceTitle(body, target.source.title);
   const bestSentence = chooseBestBodySentence(target.source, contentBody) || contentBody;
   const action = summaryActionLabel([target.source.title, contentBody].join(" "));
   const polishedLead = excerptForFallback(

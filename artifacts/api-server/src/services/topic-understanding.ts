@@ -1152,11 +1152,15 @@ export async function understandTopicWithFallback(
   input: TopicUnderstandingRequest,
   options: {
     fetchImpl?: (input: string | URL, init?: RequestInit) => Promise<Response>;
+    disableLlm?: boolean;
   } = {},
 ): Promise<TopicUnderstanding> {
   const taxonomy = understandTopic(input.topic);
   const heuristicFallback = understandTopicHeuristically(input, taxonomy);
   const taxonomyFallback = convertFallback(taxonomy);
+  if (options.disableLlm) {
+    return heuristicFallback;
+  }
   const llmAttempt = await requestLocalLlmJson<TopicUnderstanding>({
     purpose: "planner",
     fetchImpl: options.fetchImpl,

@@ -1,0 +1,18 @@
+=== BASELINE R25.1 VERIFICATION ===
+R25_1_ARTIFACT_DIR=artifacts/qa/researchforge-r25-1-20260904-020916
+total 5168
+drwxr-xr-x@ 15 user  staff      480 Sep  4 02:47 .
+drwxr-xr-x@ 10 user  staff      320 Sep  4 07:43 ..
+-rw-r--r--@  1 user  staff     1293 Sep  4 02:47 EXPORT-QA.md
+-rw-r--r--@  1 user  staff     5881 Sep  4 02:47 GENERALIZATION-BENCHMARK-QA.md
+-rw-r--r--@  1 user  staff     4782 Sep  4 02:47 HUMAN-ACCEPTANCE-R25-1.md
+-rw-r--r--@  1 user  staff  2569797 Sep  4 02:09 preflight_git_diff.patch
+-rw-r--r--@  1 user  staff     5608 Sep  4 02:09 preflight_git_diff_stat.txt
+-rw-r--r--@  1 user  staff       41 Sep  4 02:09 preflight_git_head.txt
+-rw-r--r--@  1 user  staff      428 Sep  4 02:09 preflight_git_log.txt
+-rw-r--r--@  1 user  staff    13534 Sep  4 02:09 preflight_git_status_branch.txt
+-rw-r--r--@  1 user  staff    12505 Sep  4 02:09 preflight_git_status_short.txt
+-rw-r--r--@  1 user  staff       77 Sep  4 02:09 preflight_pwd.txt
+drwxr-xr-x@  2 user  staff       64 Sep  4 02:38 scenario-a
+drwxr-xr-x@  7 user  staff      224 Sep  4 02:38 scenario-b
+drwxr-xr-x@ 13 user  staff      416 Sep  4 02:45 screenshots

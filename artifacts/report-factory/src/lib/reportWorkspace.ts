@@ -55,6 +55,11 @@ import {
   buildReaderCitationEntries,
   stripReaderCitationTokens,
 } from "./readerCitations.ts";
+import {
+  publicationNumberedTitle,
+  publicationSectionTitle,
+  publicationSourcesHeading,
+} from "./publicationLayout.ts";
 
 export type ReportGenerationMode =
   | "blocked"
@@ -96,6 +101,28 @@ export interface GeneratorWorkflowVisibility {
   showTechnicalLogs: boolean;
 }
 
+export interface ReportWorkspaceFormalResearchCheckpoint {
+  schemaVersion: "formal-research-checkpoint.v1" | "formal-research-checkpoint.v2";
+  workflowId: string;
+  topicHash: string;
+  topicIntegrityVersion?: string;
+  topicIntegrityHash?: string;
+  relevancePolicyVersion?: string;
+  evidenceSetHash: string | null;
+  acceptedSourceIds: string[];
+  acceptedSourceCount?: number;
+  rejectedSourceCount?: number;
+  directFindingSourceCount?: number;
+  contentIntegrityValidated?: boolean;
+  topicIntegrityValidatedAt?: string;
+  evidenceIds: string[];
+  completedStages: string[];
+  resumeFrom: "source_relevance_review" | "writer_generation" | "validation" | "export";
+  safeToResume: boolean;
+  providerFailureCategories: string[];
+  invalidatedBy: string[];
+}
+
 export interface ReportWorkspaceLlmDiagnostics {
   reportGenerationProvider: string;
   reportGenerationModel: string | null;
@@ -104,6 +131,8 @@ export interface ReportWorkspaceLlmDiagnostics {
   fallbackReason: string | null;
   message?: string | null;
   warning: string | null;
+  formalResearchValidation?: unknown;
+  formalResearchCheckpoint?: ReportWorkspaceFormalResearchCheckpoint;
   degradedMode?: boolean;
   fallbackReasons?: string[];
   groundingDiagnostics?: Array<{
@@ -163,6 +192,19 @@ export interface ReportWorkspaceLlmDiagnostics {
       status: "pass" | "blocked";
       issues: string[];
     };
+    writerVNext?: {
+      status: "active" | "inactive";
+      atomicClaimCount: number;
+      validatedSynthesisClaimCount: number;
+      rejectedSynthesisClaimCount: number;
+      sectionClaimPlanCount: number;
+      paragraphContractCount: number;
+      sentenceTraceCount: number;
+      locallyRepairedSentenceCount: number;
+      deletedSentenceCount: number;
+      conclusionMode: string | null;
+      validationIssueCount: number;
+    };
   };
 }
 
@@ -216,6 +258,7 @@ export interface ReportWorkspaceGenerationPayload {
   academicSafetyReview?: AcademicSafetyReview | null;
   reportPlan?: ReportPlan;
   writerEvidenceSet?: WriterEvidenceSet;
+  formalResearchCheckpoint?: ReportWorkspaceFormalResearchCheckpoint;
 }
 
 export interface ReportWorkspaceNavigationResult {
@@ -1529,7 +1572,7 @@ export function workspaceToGeneratedReport(
     workspace.acceptedSources,
   );
   const readerSections = formalReportSectionSequence(formalDocument).map((section, index) => ({
-    heading: `${index + 1}. ${section.title}`,
+    heading: publicationNumberedTitle(index, section.title),
     blocks: formalReportSectionContent(section).map((node) => {
       if (node.nodeType === "table") {
         return { type: "formalTable" as const, table: node.table };
@@ -1560,15 +1603,8 @@ export function workspaceToGeneratedReport(
       ],
     },
     ...readerSections,
-    {
-      heading: "參考文獻",
-      blocks: readerReferences.map((reference) => ({
-        type: "paragraph" as const,
-        text: reference.referenceText,
-      })),
-    },
     ...formalDocument.appendix.map((section) => ({
-      heading: section.title,
+      heading: publicationSectionTitle(section.title),
       blocks: formalReportSectionContent(section).map((node) => {
         if (node.nodeType === "table") {
           return { type: "formalTable" as const, table: node.table };
@@ -1587,6 +1623,15 @@ export function workspaceToGeneratedReport(
         };
       }),
     })),
+    ...(readerReferences.length > 0 ? [{
+      heading: publicationSourcesHeading(
+        workspace.input.outputLanguage === "英文" ? "en" : "zh-TW",
+      ),
+      blocks: readerReferences.map((reference) => ({
+        type: "paragraph" as const,
+        text: reference.referenceText,
+      })),
+    }] : []),
   ];
   const keepInitialBriefNotice =
     workspace.generationMode === "single_source_review" ||
@@ -1643,6 +1688,16 @@ export function workspaceToGeneratedReport(
                 workspace.llmDiagnostics.writerEvidenceSetHash,
               filteredAfterPlanCount:
                 workspace.llmDiagnostics.filteredAfterPlanCount ?? 0,
+              formalResearchValidationPassed:
+                workspace.llmDiagnostics.formalResearchValidation !== null &&
+                typeof workspace.llmDiagnostics.formalResearchValidation === "object" &&
+                (workspace.llmDiagnostics.formalResearchValidation as { pass?: unknown }).pass === true,
+              contentIntegrityValidated:
+                workspace.llmDiagnostics.formalResearchCheckpoint?.contentIntegrityValidated === true,
+              resumeFrom:
+                workspace.llmDiagnostics.formalResearchCheckpoint?.resumeFrom ?? "validation",
+              safeToResume:
+                workspace.llmDiagnostics.formalResearchCheckpoint?.safeToResume === true,
             },
           }
         : {}),

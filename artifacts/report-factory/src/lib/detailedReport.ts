@@ -568,7 +568,7 @@ export function buildCanonicalDetailedReportModel(
       const source = reference ? sourceById.get(reference.sourceId) : null;
       return reference && readerReference && source
         ? [{
-            marker: readerReference.label,
+            marker: String(readerReference.referenceNumber),
             label: readerReference.label,
             citationId,
             href: readerReference.externalHref,

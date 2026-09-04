@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">Canonical admission owner 與多個只讀投影</title><desc id="desc">解析與事實狀態進入唯一的 canonical admission owner，Terminal Manifest、Architecture、Writer 與 QA 只能讀取同一 revision 的投影。</desc>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L9 3z" fill="#5eead4"/></marker><style>text{font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif}.t{fill:#f8fafc;font-size:34px;font-weight:700}.s{fill:#94a3b8;font-size:20px}.b{fill:#13233d;stroke:#5eead4;stroke-width:2}.h{fill:#e2e8f0;font-size:22px;font-weight:650}.d{fill:#94a3b8;font-size:18px}.l{stroke:#5eead4;stroke-width:3;marker-end:url(#a)}</style></defs>
+  <style>.l{fill:none}</style><rect width="1200" height="675" rx="28" fill="#08111f"/><text x="72" y="78" class="t">Admission 只能有一個 Owner</text><text x="72" y="112" class="s">Consumer 投影同一決策，不得重新授權。</text>
+  <g transform="translate(70 260)"><rect class="b" width="220" height="135" rx="20"/><text class="h" x="110" y="45" text-anchor="middle">Resolver / Parser</text><text class="d" x="110" y="80" text-anchor="middle">identity · access</text><text class="d" x="110" y="108" text-anchor="middle">facts · provenance</text></g><path class="l" d="M290 328h150"/>
+  <g transform="translate(440 210)"><rect width="330" height="235" rx="24" fill="#143127" stroke="#fbbf24" stroke-width="3"/><text x="165" y="55" text-anchor="middle" class="h">Canonical Admission Owner</text><text x="165" y="105" text-anchor="middle" class="d">eligibility · reason codes</text><text x="165" y="140" text-anchor="middle" class="d">evidence revision</text><text x="165" y="190" text-anchor="middle" fill="#fbbf24" font-size="20">唯一可改變決策的元件</text></g>
+  <path class="l" d="M770 328h100"/><path d="M870 198v260" stroke="#5eead4" stroke-width="3"/>
+  <g transform="translate(900 160)"><rect class="b" width="230" height="75" rx="16"/><text class="h" x="115" y="46" text-anchor="middle">Terminal Manifest</text></g>
+  <g transform="translate(900 255)"><rect class="b" width="230" height="75" rx="16"/><text class="h" x="115" y="46" text-anchor="middle">Architecture</text></g>
+  <g transform="translate(900 350)"><rect class="b" width="230" height="75" rx="16"/><text class="h" x="115" y="46" text-anchor="middle">Writer</text></g>
+  <g transform="translate(900 445)"><rect class="b" width="230" height="75" rx="16"/><text class="h" x="115" y="46" text-anchor="middle">QA</text></g>
+  <path class="l" d="M870 198h22M870 293h22M870 388h22M870 483h22"/><text x="72" y="605" class="s">Shared database ≠ shared authority</text>
+</svg>

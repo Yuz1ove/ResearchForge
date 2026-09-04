@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">搜尋從題目走到人工審查的分層流程</title>
+  <desc id="desc">研究題目依序經過查詢規劃、供應者檢索、正規化、排序診斷與品質閘門，最後才交給人工審查。</desc>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#5eead4"/></marker><style>text{font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif}.t{fill:#f8fafc;font-size:34px;font-weight:700}.s{fill:#94a3b8;font-size:20px}.b{fill:#13233d;stroke:#5eead4;stroke-width:2}.h{fill:#e2e8f0;font-size:23px;font-weight:650}.d{fill:#94a3b8;font-size:17px}.l{stroke:#5eead4;stroke-width:3;marker-end:url(#a)}</style></defs>
+  <style>.l{fill:none}</style><rect width="1200" height="675" rx="28" fill="#08111f"/>
+  <text x="72" y="78" class="t">API 回應只是第一站</text><text x="72" y="112" class="s">每一層只回答自己的問題，任何候選都不能跳過 quality gate。</text>
+  <g transform="translate(55 210)"><rect class="b" width="150" height="110" rx="18"/><text class="h" x="75" y="48" text-anchor="middle">研究題目</text><text class="d" x="75" y="78" text-anchor="middle">問題與範圍</text></g>
+  <g transform="translate(244 210)"><rect class="b" width="150" height="110" rx="18"/><text class="h" x="75" y="48" text-anchor="middle">查詢規劃</text><text class="d" x="75" y="78" text-anchor="middle">要查什麼</text></g>
+  <g transform="translate(433 210)"><rect class="b" width="150" height="110" rx="18"/><text class="h" x="75" y="48" text-anchor="middle">Provider</text><text class="d" x="75" y="78" text-anchor="middle">外部回應</text></g>
+  <g transform="translate(622 210)"><rect class="b" width="150" height="110" rx="18"/><text class="h" x="75" y="48" text-anchor="middle">正規化</text><text class="d" x="75" y="78" text-anchor="middle">共同資料形狀</text></g>
+  <g transform="translate(811 210)"><rect class="b" width="150" height="110" rx="18"/><text class="h" x="75" y="48" text-anchor="middle">排序診斷</text><text class="d" x="75" y="78" text-anchor="middle">相關性與降級</text></g>
+  <g transform="translate(1000 210)"><rect class="b" width="150" height="110" rx="18"/><text class="h" x="75" y="48" text-anchor="middle">品質閘門</text><text class="d" x="75" y="78" text-anchor="middle">可否往下走</text></g>
+  <path class="l" d="M205 265h31"/><path class="l" d="M394 265h31"/><path class="l" d="M583 265h31"/><path class="l" d="M772 265h31"/><path class="l" d="M961 265h31"/>
+  <path class="l" d="M1075 320v90h-355"/><g transform="translate(510 410)"><rect width="410" height="112" rx="18" fill="#143127" stroke="#fbbf24" stroke-width="2"/><text x="205" y="48" text-anchor="middle" class="h">人工審查</text><text x="205" y="80" text-anchor="middle" class="d">接受、拒絕，或保留為待查候選</text></g>
+  <text x="72" y="610" class="s">Transport success ≠ research success</text>
+</svg>

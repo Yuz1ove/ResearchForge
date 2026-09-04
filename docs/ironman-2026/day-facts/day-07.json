@@ -1,0 +1,33 @@
+{
+  "schema_version": "researchforge-ironman-day-facts/v1",
+  "day": 7,
+  "title_seed": "三個 provider 三種資料形狀",
+  "historical_period": {"start": "2026-06-26", "end": "2026-06-26", "confidence": "HIGH"},
+  "evidence_boundary": "COMMITTED_GIT",
+  "central_problem": "Crossref、OpenAlex、Semantic Scholar 與其他 research sources 如何進入共同資料模型？",
+  "reader_takeaway": "provider adapter 吸收資料形狀差異，但不自動保證內容相關或可引用。",
+  "known_at_the_time": [
+    {"fact": "ec20e43 的 research tree 包含 Crossref、OpenAlex、Semantic Scholar、arXiv、Unpaywall、DOAJ provider modules/configuration。", "source_refs": ["SRC-GIT-PROVIDERS-0626"]},
+    {"fact": "同一 commit 也包含 parser workers 與 research normalizer/scoring building blocks。", "source_refs": ["SRC-GIT-PROVIDERS-0626", "SRC-GIT-DATA-PIPELINE-0626"]}
+  ],
+  "implemented_at_the_time": [{"fact": "provider-specific metadata could be represented through normalized research records and diagnostics paths。", "source_refs": ["SRC-GIT-DATA-PIPELINE-0626"]}],
+  "not_yet_available": [{"fact": "此 commit 證明模組存在，不證明每個 provider 在 arbitrary live topic 上成功或提供 qualifying full text。", "source_refs": ["SRC-GIT-PROVIDERS-0626", "SRC-QA-FULLTEXT"]}],
+  "observed_failures": [
+    {"failure_id": "PROVIDER_SHAPE_AND_HEALTH_DIVERGENCE", "date_or_range": "2026-06-26", "historical_stage": "provider/parser foundation", "symptom": "different provider metadata and health/fallback states needed normalization and diagnostics", "root_cause_if_known": "provider APIs have different payloads and availability", "what_was_known_then": "adapter and parser boundaries were being added", "later_resolution": "later current worktree retained provider health/retry diagnostics and separate content qualification", "source_refs": ["SRC-GIT-PROVIDERS-0626", "SRC-SOURCE-PROVIDERS"]}
+  ],
+  "tests_and_metrics": [{"test_or_metric": "Three scholarly provider adapters are named in the 6/26 research tree: Crossref, OpenAlex and Semantic Scholar.", "result": "adapter names verified; not a success rate", "source_refs": ["SRC-GIT-PROVIDERS-0626"]}],
+  "engineering_decisions": [{"decision": "用 shared normalized source model 隔離 provider payload shape，保留 provider identity。", "source_refs": ["SRC-GIT-DATA-PIPELINE-0626"]}],
+  "architecture_state": [{"state": "provider adapters → normalized sources → scoring/dedupe → downstream evidence", "source_refs": ["SRC-GIT-PROVIDERS-0626", "SRC-GIT-DATA-PIPELINE-0626"]}],
+  "terminology_available_at_the_time": ["Crossref", "OpenAlex", "Semantic Scholar", "provider adapter", "normalized source", "parser worker"],
+  "terminology_forbidden_due_to_hindsight": ["canonical study admission", "qualifying full text", "FORMAL", "direct-study coverage", "V5 budget authority"],
+  "safe_numbers": [{"value": "3 named scholarly provider adapters", "meaning": "Crossref, OpenAlex and Semantic Scholar are the editorial focus; not a success rate", "source_refs": ["SRC-GIT-PROVIDERS-0626"]}],
+  "safe_public_facts": [{"fact": "接 provider 的第一個工程問題是資料形狀與健康狀態不一致，不是把三個 API 的結果直接串接。", "source_refs": ["SRC-GIT-PROVIDERS-0626"]}],
+  "sensitive_or_internal_facts": ["API keys", "provider rate-limit details", "raw response bodies"],
+  "retrospective_notes": [{"note": "後來的 live QA 顯示 provider response、metadata、payload 與 qualifying artifact 必須分開計數；這是後見審計結果。", "source_refs": ["SRC-QA-FULLTEXT", "SRC-QA-OA-V2"]}],
+  "source_refs": [
+    {"type": "commit", "ref": "SRC-GIT-PROVIDERS-0626", "why_it_supports_this_fact": "provider and parser tree in committed history"},
+    {"type": "commit", "ref": "SRC-GIT-DATA-PIPELINE-0626", "why_it_supports_this_fact": "normalization/scoring/evidence building blocks"}
+  ],
+  "publication_risks": ["不要把 adapter existence 寫成 provider reliability。", "不要公開 provider credentials 或 raw payload。"],
+  "confidence": "HIGH"
+}

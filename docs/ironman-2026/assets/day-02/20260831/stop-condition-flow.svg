@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="1330" viewBox="0 0 680 1330" role="img" aria-labelledby="title desc">
+<title id="title">ResearchForge 的停止決策鏈</title>
+<desc id="desc">簡化概念模型。取得資料後依序確認身分與全文資格，否或未知則 BLOCKED。保留合格全文後仍須通過本次工程驗收條件；範圍外檔案變動會阻止驗收。通過後只能評估下一階段准入，主案例的 Writer 仍為 NOT_RUN。</desc>
+<defs>
+ <marker id="go" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#5eead4"/></marker>
+ <marker id="stop" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#fca5a5"/></marker>
+ <style>text{font-family:system-ui,-apple-system,sans-serif;fill:#eef4fc;text-anchor:middle}.main{font-size:29px;font-weight:650}.sub{font-size:26px;fill:#b7c7d9}.edge{fill:none;stroke:#5eead4;stroke-width:3;marker-end:url(#go)}.reject{fill:none;stroke:#fca5a5;stroke-width:3;marker-end:url(#stop)}.yes{font-size:25px;fill:#5eead4}.no{font-size:24px;fill:#fca5a5}</style>
+</defs>
+<rect width="680" height="1330" rx="24" fill="#08111f"/>
+<text x="340" y="55" font-size="32" font-weight="750">ResearchForge 的停止決策鏈</text>
+<text x="340" y="94" class="sub">簡化概念模型｜每一層都有自己的條件</text>
+
+<g id="acquire"><rect x="36" y="140" width="370" height="100" rx="16" fill="#13233d" stroke="#52728f" stroke-width="2"/>
+<text x="221.0" y="181" class="main">取得資料</text>
+<text x="221.0" y="217" class="sub">只走允許路徑</text>
+</g>
+<path id="acquire-identity" class="edge" d="M221 240 V298"/>
+<g id="identity"><rect x="36" y="300" width="370" height="100" rx="16" fill="#13233d" stroke="#52728f" stroke-width="2"/>
+<text x="221.0" y="341" class="main">身分可確認？</text>
+<text x="221.0" y="377" class="sub">和獨立基準比對</text>
+</g>
+<path id="reject-1" class="reject" d="M406 350 H491"/><text x="453" y="322" class="no">否／未知</text>
+<g id="blocked-1"><rect x="496" y="317" width="154" height="66" rx="16" fill="#361e29" stroke="#fca5a5" stroke-width="2"/>
+<text x="573.0" y="360.0" class="main">BLOCKED</text>
+</g>
+<path id="identity-evidence" class="edge" d="M221 400 V458"/>
+<text x="250" y="437.0" class="yes">是</text>
+<g id="evidence"><rect x="36" y="460" width="370" height="100" rx="16" fill="#13233d" stroke="#52728f" stroke-width="2"/>
+<text x="221.0" y="501" class="main">全文證據合格？</text>
+<text x="221.0" y="537" class="sub">正文、資格與檔案核對</text>
+</g>
+<path id="reject-2" class="reject" d="M406 510 H491"/><text x="453" y="482" class="no">否／未知</text>
+<g id="blocked-2"><rect x="496" y="477" width="154" height="66" rx="16" fill="#361e29" stroke="#fca5a5" stroke-width="2"/>
+<text x="573.0" y="520.0" class="main">BLOCKED</text>
+</g>
+<path id="evidence-qualified" class="edge" d="M221 560 V618"/>
+<text x="250" y="597.0" class="yes">是</text>
+<g id="qualified"><rect x="36" y="620" width="370" height="82" rx="16" fill="#143127" stroke="#5eead4" stroke-width="2"/>
+<text x="221.0" y="671.0" class="main">保留合格全文</text>
+</g>
+<path id="qualified-acceptance" class="edge" d="M221 702 V818"/>
+<path d="M30 761 H650" stroke="#59738d" stroke-dasharray="6 6"/><rect x="119" y="743" width="442" height="38" fill="#08111f"/><text x="340" y="771" class="sub">以下加入本次工程驗收條件</text>
+<g id="acceptance"><rect x="36" y="820" width="370" height="100" rx="16" fill="#13233d" stroke="#52728f" stroke-width="2"/>
+<text x="221.0" y="861" class="main">驗收條件成立？</text>
+<text x="221.0" y="897" class="sub">含範圍與檔案保全</text>
+</g>
+<path id="reject-3" class="reject" d="M406 870 H491"/><text x="453" y="842" class="no">否／未知</text>
+<g id="blocked-3"><rect x="496" y="837" width="154" height="66" rx="16" fill="#361e29" stroke="#fca5a5" stroke-width="2"/>
+<text x="573.0" y="880.0" class="main">BLOCKED</text>
+</g>
+<path id="acceptance-next" class="edge" d="M221 920 V978"/>
+<text x="250" y="957.0" class="yes">是</text>
+<g id="next"><rect x="36" y="980" width="608" height="82" rx="16" fill="#143127" stroke="#5eead4" stroke-width="2"/>
+<text x="340.0" y="1031.0" class="main">可評估下一階段准入</text>
+</g>
+<path id="next-writer" class="edge" stroke-dasharray="6 6" d="M340 1062 V1154"/><text x="340" y="1111" class="sub">仍須通過下游自己的必要檢查</text>
+<g id="writer"><rect x="36" y="1158" width="608" height="100" rx="16" fill="#202c3e" stroke="#8395ac" stroke-width="2"/>
+<text x="340.0" y="1199" class="main">Writer：本案例 NOT_RUN</text>
+<text x="340.0" y="1235" class="sub">沒有生成報告，也不推定能成功</text>
+</g>
+<text x="340" y="1300" class="sub">已完成的步驟，不替未執行的步驟背書。</text></svg>

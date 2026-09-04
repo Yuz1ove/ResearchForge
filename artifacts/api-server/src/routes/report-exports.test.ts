@@ -23,6 +23,10 @@ const exportGateProof = {
   evidenceSetHash: "a".repeat(64),
   writerEvidenceSetHash: "a".repeat(64),
   filteredAfterPlanCount: 0,
+  formalResearchValidationPassed: true,
+  contentIntegrityValidated: true,
+  resumeFrom: "export",
+  safeToResume: true,
 };
 
 async function withServer(
@@ -152,6 +156,10 @@ test("PDF route rejects a missing or mismatched canonical export proof before re
       undefined,
       { ...exportGateProof, writerEvidenceSetHash: "b".repeat(64) },
       { ...exportGateProof, filteredAfterPlanCount: 1 },
+      { ...exportGateProof, formalResearchValidationPassed: false },
+      { ...exportGateProof, contentIntegrityValidated: false },
+      { ...exportGateProof, resumeFrom: "validation" },
+      { ...exportGateProof, safeToResume: false },
     ]) {
       const response = await fetch(`${baseUrl}/api/report-exports/pdf`, {
         method: "POST",

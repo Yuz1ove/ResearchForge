@@ -1,0 +1,34 @@
+{
+  "schema_version": "researchforge-ironman-day-facts/v1",
+  "day": 5,
+  "title_seed": "Accepted source 才能往下走",
+  "historical_period": {"start": "2026-06-16", "end": "2026-06-18", "confidence": "HIGH"},
+  "evidence_boundary": "COMMITTED_GIT_AND_HISTORICAL_DOC",
+  "central_problem": "搜尋候選、使用者接受、Evidence Card 與 report generation 的責任如何接起來？",
+  "reader_takeaway": "一條單向 source-first flow 比一個更強的 prompt 更能降低錯誤穿透。",
+  "known_at_the_time": [
+    {"fact": "6/16–6/18 commits 增加 source cards、accepted source digest、evidence cards、accepted synthesis 與 generation readiness。", "source_refs": ["SRC-GIT-EVIDENCE-CARD-0626", "SRC-GIT-EVIDENCE-GATE"]},
+    {"fact": "6/18 architecture audit 記錄 topic → search → review → accepted sources → evidence cards → draft → preview → export。", "source_refs": ["SRC-DOC-ARCH-0618"]}
+  ],
+  "implemented_at_the_time": [{"fact": "report generation 的輸入被限定為 accepted source/evidence flow，而不是全部 raw search results。", "source_refs": ["SRC-DOC-ARCH-0618", "SRC-GIT-EVIDENCE-GATE"]}],
+  "not_yet_available": [{"fact": "當時仍沒有 later canonical admission owner；accepted source 與 evidence card 不是 FORMAL authorization。", "source_refs": ["SRC-DOC-ARCH-0618", "SRC-SOURCE-CANONICAL"]}],
+  "observed_failures": [
+    {"failure_id": "DISTRIBUTED_EVIDENCE_AUTHORITY", "date_or_range": "2026-06-18", "historical_stage": "source-first workflow", "symptom": "workflow 已分階段，但 authority 仍散落於 UI state 與 helper modules。", "root_cause_if_known": "canonical owner had not yet been designed", "what_was_known_then": "accepted sources 應先於 report draft。", "later_resolution": "2026-08-28 current worktree introduced a canonical admission owner; this is hindsight. ", "source_refs": ["SRC-DOC-ARCH-0618", "SRC-QA-CANONICAL"]}
+  ],
+  "tests_and_metrics": [{"test_or_metric": "The 6/18 architecture snapshot names eight workflow stages from topic through export.", "result": "workflow shape verified; not an acceptance score", "source_refs": ["SRC-DOC-ARCH-0618"]}],
+  "engineering_decisions": [{"decision": "先讓人審查與接受來源，再由 evidence layer 產生可追蹤材料。", "source_refs": ["SRC-DOC-ARCH-0618", "SRC-GIT-EVIDENCE-GATE"]}],
+  "architecture_state": [{"state": "topic → search plan → source review → accepted sources → evidence cards → draft → preview → export", "source_refs": ["SRC-DOC-ARCH-0618"]}],
+  "terminology_available_at_the_time": ["accepted source", "source review", "evidence card", "report draft", "generation readiness"],
+  "terminology_forbidden_due_to_hindsight": ["canonical-study-admission", "FORMAL", "LIMITED", "BLOCKED as canonical classes", "full-text qualification"],
+  "safe_numbers": [{"value": "8 workflow stages", "meaning": "the 6/18 documented flow stages, not an acceptance score", "source_refs": ["SRC-DOC-ARCH-0618"]}],
+  "safe_public_facts": [{"fact": "接受來源才是早期 report workflow 的下游輸入；這是一個流程邊界，不是成熟真值系統。", "source_refs": ["SRC-DOC-ARCH-0618"]}],
+  "sensitive_or_internal_facts": ["component-local state details", "debug evidence cards", "internal file paths"],
+  "retrospective_notes": [{"note": "後來的 canonical admission 不是推翻 source-first 順序，而是把每一關的權限與 revision 收斂起來。", "source_refs": ["SRC-QA-CANONICAL"]}],
+  "source_refs": [
+    {"type": "doc", "ref": "SRC-DOC-ARCH-0618", "why_it_supports_this_fact": "dated architecture snapshot"},
+    {"type": "commit_group", "ref": "SRC-GIT-EVIDENCE-GATE", "why_it_supports_this_fact": "accepted-source and generation gates"},
+    {"type": "commit", "ref": "SRC-GIT-EVIDENCE-CARD-0626", "why_it_supports_this_fact": "backend evidence card builder exists later in the committed period"}
+  ],
+  "publication_risks": ["不要寫成 6 月已有 canonical authority。", "不要將 accepted source 數量當成 evidence sufficiency。"],
+  "confidence": "HIGH"
+}

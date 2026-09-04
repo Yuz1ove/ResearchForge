@@ -78,6 +78,10 @@ const READER_METADATA_LABEL_PATTERN =
 
 const INTERNAL_READER_LANGUAGE_REPLACEMENTS: Array<readonly [RegExp, string]> = [
   [
+    /Associations of screen time with sleep duration and sleep quality in adolescents adolescent digital media health student wellbeing students/giu,
+    "青少年螢幕使用與睡眠時長及睡眠品質之關聯",
+  ],
+  [
     /此來源已保留可追溯的摘要片段，但尚未完成可驗證的繁中重點整理/gu,
     "此來源目前只提供可核對的原文摘要，因此不單獨形成本文的實質結論",
   ],
@@ -91,8 +95,22 @@ const INTERNAL_READER_LANGUAGE_REPLACEMENTS: Array<readonly [RegExp, string]> = 
   [/\bmetadata(?:-only)?\b/giu, "書目資訊"],
   [/\bpeer[-\s]?reviewed\s+evidence\b/giu, "同儕審查文獻"],
   [/\baccepted\s+sources?\b/giu, "已納入來源"],
+  [/\baccepted[-\s]+source\s+abstract\b/giu, "已納入來源之摘要"],
+  [/\bdirect_evidence\b/giu, "直接證據"],
+  [/\brule_fallback_claim_extraction\b/giu, "僅能依摘要或可讀片段進行保守判讀"],
+  [/\bcanonical\s+(?:standardized\s+)?facts?\b/giu, "可核對的標準化研究數值"],
+  [/\bstandardized\s+evidence\s+facts?\b/giu, "可核對的標準化研究數值"],
+  [/\bexactResult\b/gu, "原始數值"],
+  [/\bfact\s+(?:and\s+)?locator\b/giu, "數值與原文定位"],
+  [/\bfact\s+與\s+locator\b/giu, "數值與原文定位"],
+  [/\blocator\b/giu, "原文定位"],
+  [/主要\s+exposure\b/giu, "主要暴露指標"],
   [/\bprovider\s+(?:diagnostics?|progress|status)\b/giu, "來源服務狀態"],
   [/\bLLM\s+provider\b/giu, "模型服務"],
+  [/\bWriter\b/gu, "正式內容驗證"],
+  [/(?:內容|content)\s*gate/giu, "內容審查"],
+  [/\bINSUFFICIENT_FOR_CROSS_STUDY_CONSISTENCY\b\s*[：:]/gu, "目前不足以判斷跨研究一致性："],
+  [/[（(]?\bINSUFFICIENT_FOR_CROSS_STUDY_CONSISTENCY\b[）)]?/gu, ""],
   [/\bgrounding\s+verifier\b/giu, "引用支撐檢查"],
   [/\bverifier\b/giu, "引用檢查"],
   [/\bneeds?_manual_review\b/giu, "需人工複核"],
@@ -126,6 +144,14 @@ export const READER_FACING_INTERNAL_TERM_PATTERNS: ReadonlyArray<
   ["support span", /\bsupport\s*span\b/iu],
   ["provider diagnostics", /\bprovider\s+(?:diagnostics?|progress|status)\b/iu],
   ["accepted sources", /\baccepted\s+sources?\b/iu],
+  ["accepted source abstract", /\baccepted[-\s]+source\s+abstract\b/iu],
+  ["internal evidence enum", /\bdirect_evidence\b/iu],
+  ["fallback rule", /\brule_fallback_claim_extraction\b/iu],
+  ["canonical fact label", /\bcanonical\s+(?:standardized\s+)?facts?\b/iu],
+  ["standardized evidence fact", /\bstandardized\s+evidence\s+facts?\b/iu],
+  ["exact result field", /\bexactResult\b/u],
+  ["fact locator label", /\bfact\s+(?:and\s+)?locator\b|\bfact\s+與\s+locator\b/iu],
+  ["mixed-language exposure label", /主要\s+exposure\b/iu],
   ["grounding verifier", /\bgrounding\s+verifier\b/iu],
   ["internal review status", /\b(?:needs?_manual_review|grounding_verifier_blocked)\b/iu],
   ["internal boolean", /\babstractOnly\b/iu],
@@ -138,6 +164,9 @@ export const READER_FACING_INTERNAL_TERM_PATTERNS: ReadonlyArray<
   ["internal evidence type", /\bfindings\s*類證據/iu],
   ["normalization workflow", /(?:已|未)?正規化(?:內容|證據|主張)?/u],
   ["generation-state notice", /尚未完成可驗證的繁中重點整理/u],
+  ["writer implementation term", /\bWriter\b/u],
+  ["content gate", /(?:內容|content)\s*gate/iu],
+  ["consistency enum", /\bINSUFFICIENT_FOR_CROSS_STUDY_CONSISTENCY\b/u],
 ];
 
 export function readerFacingInternalTerms(

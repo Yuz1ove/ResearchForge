@@ -39,6 +39,7 @@ test("API root, health, CORS, and 404 responses do not expose server source", as
     rootResponse.headers.get("content-type") ?? "",
     /^application\/json\b/,
   );
+  assert.equal(rootResponse.headers.get("x-powered-by"), null);
   const rootBody = await rootResponse.text();
   assert.deepEqual(JSON.parse(rootBody), {
     service: "ResearchForge API",

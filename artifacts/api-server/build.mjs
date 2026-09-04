@@ -10,6 +10,32 @@ globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 
+const workspaceSourceAliasPlugin = {
+  name: "researchforge-worktree-source-alias",
+  setup(build) {
+    build.onResolve({ filter: /^@workspace\/api-zod(\/.*)?$/ }, (args) => {
+      const suffix = args.path.slice("@workspace/api-zod".length).replace(/^\//u, "");
+      return {
+        path: path.resolve(
+          artifactDir,
+          "../../lib/api-zod/src",
+          suffix ? `${suffix}.ts` : "index.ts",
+        ),
+      };
+    });
+    build.onResolve({ filter: /^@workspace\/db(\/.*)?$/ }, (args) => {
+      const suffix = args.path.slice("@workspace/db".length).replace(/^\//u, "");
+      return {
+        path: path.resolve(
+          artifactDir,
+          "../../lib/db/src",
+          suffix ? `${suffix}.ts` : "index.ts",
+        ),
+      };
+    });
+  },
+};
+
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
   await rm(distDir, { recursive: true, force: true });
@@ -103,6 +129,7 @@ async function buildAll() {
     ],
     sourcemap: "linked",
     plugins: [
+      workspaceSourceAliasPlugin,
       // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
       esbuildPluginPino({ transports: ["pino-pretty"] })
     ],

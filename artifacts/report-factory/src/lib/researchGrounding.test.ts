@@ -95,6 +95,46 @@ test("candidate schema preserves originalAbstract and frontend mapping chooses t
   );
 });
 
+test("grounding topic-integrity lineage survives the SourceCandidate to SourceRecord adapter", () => {
+  const topicIntegrityAssessment = {
+    topicIntegrityVersion: "topic-integrity-contract.v2" as const,
+    relevancePolicyVersion: "peco-directness-reconciliation.v2" as const,
+    sourceId: "doi:10.1000/example",
+    metadataRelevance: {
+      passed: true,
+      matchedFields: ["title", "abstract"],
+      populationMatches: [],
+      interventionExposureMatches: ["fossil algae"],
+      primaryOutcomeMatches: ["paleoenvironment"],
+      primaryOutcomeProminent: true,
+    },
+    semanticRelevance: { score: 0.91, policy: "CANDIDATE_SIGNAL_ONLY" as const },
+    evidenceEntailment: {
+      supportedTopicFacet: ["intervention_or_exposure", "primary_outcome"],
+      populationMatch: "unspecified" as const,
+      interventionExposureMatch: true,
+      outcomeMatch: true,
+      relationship: "direct" as const,
+      acceptanceReason: "directly reports the requested relationship",
+      rejectionReason: null,
+    },
+    hardExclusion: { excluded: false, reasons: [] },
+    sourceRole: "DIRECT_FINDING" as const,
+    acceptedForCanonicalEvidence: true,
+    allowedSections: ["findings", "discussion"],
+    topicIntegrityReason: "directly reports the requested relationship",
+  };
+  const source = sourceCandidateToSourceRecord({
+    candidate: candidate({ topicIntegrityAssessment }),
+    workflowId: "wf-1",
+    topicHash: "topic-1",
+    queryPlanHash: "plan-1",
+    originalTopic: "化石與藻類的關係",
+  });
+
+  assert.deepEqual(source.topicIntegrityAssessment, topicIntegrityAssessment);
+});
+
 test("metadata-only review papers are not promoted to primary candidates", () => {
   const source = sourceCandidateToSourceRecord({
     candidate: candidate({ abstractOriginal: undefined }),

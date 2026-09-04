@@ -28,7 +28,9 @@ import {
 import { normalizeResearchTopic } from "./normalizeResearchTopic";
 import { parseResearchInput } from "@workspace/api-zod/research-intent";
 
-function sourceRecord(input: Partial<SourceRecord> & { id: string; title: string }): SourceRecord {
+function sourceRecord(
+  input: Partial<SourceRecord> & { id: string; title: string },
+): SourceRecord {
   return {
     id: input.id,
     title: input.title,
@@ -287,10 +289,22 @@ test("buildGroundingEvidenceCards keeps accepted source governance and excludes 
     safetyReview: reviewAcademicSafety({ topic: "夕陽顏色與瑞利散射" }),
   });
 
-  assert.equal(cards.some((card) => card.sourceId === "official-1"), false);
-  assert.equal(cards.some((card) => card.sourceId === "manual-accepted"), true);
-  assert.equal(cards.some((card) => card.sourceId === "manual-review-only"), false);
-  assert.equal(cards.every((card) => card.source_access_level !== "metadata_only"), true);
+  assert.equal(
+    cards.some((card) => card.sourceId === "official-1"),
+    false,
+  );
+  assert.equal(
+    cards.some((card) => card.sourceId === "manual-accepted"),
+    true,
+  );
+  assert.equal(
+    cards.some((card) => card.sourceId === "manual-review-only"),
+    false,
+  );
+  assert.equal(
+    cards.every((card) => card.source_access_level !== "metadata_only"),
+    true,
+  );
 });
 
 test("buildGroundingEvidenceCards excludes explicit rejected decisions despite accepted review status", () => {
@@ -357,12 +371,30 @@ test("buildGroundingEvidenceCards caps abstract-only sources at two abstract evi
   });
 
   assert.equal(cards.length, 2);
-  assert.deepEqual(cards.map((card) => card.source_access_level), ["abstract_only", "abstract_only"]);
-  assert.deepEqual(cards.map((card) => card.source_location), ["abstract", "abstract"]);
-  assert.equal(cards.every((card) => card.confidence <= 0.55), true);
-  assert.equal(cards.every((card) => card.canonicalSourceKey === "doi:10.1000/rayleigh"), true);
-  assert.equal(cards.every((card) => card.dedupeKey === "doi:10.1000/rayleigh"), true);
-  assert.equal(cards.every((card) => card.citationKey === "doi:10.1000/rayleigh"), true);
+  assert.deepEqual(
+    cards.map((card) => card.source_access_level),
+    ["abstract_only", "abstract_only"],
+  );
+  assert.deepEqual(
+    cards.map((card) => card.source_location),
+    ["abstract", "abstract"],
+  );
+  assert.equal(
+    cards.every((card) => card.confidence <= 0.55),
+    true,
+  );
+  assert.equal(
+    cards.every((card) => card.canonicalSourceKey === "doi:10.1000/rayleigh"),
+    true,
+  );
+  assert.equal(
+    cards.every((card) => card.dedupeKey === "doi:10.1000/rayleigh"),
+    true,
+  );
+  assert.equal(
+    cards.every((card) => card.citationKey === "doi:10.1000/rayleigh"),
+    true,
+  );
 });
 
 test("buildGroundingEvidenceCards turns extracted full-text chunks into traceable evidence cards", () => {
@@ -377,8 +409,7 @@ test("buildGroundingEvidenceCards turns extracted full-text chunks into traceabl
     extractedChunks: [
       {
         chunk_id: "fulltext-rayleigh:chunk:1",
-        text:
-          "Rayleigh scattering is a wavelength-dependent mechanism that preferentially removes short-wavelength light from the direct solar beam during long atmospheric paths.",
+        text: "Rayleigh scattering is a wavelength-dependent mechanism that preferentially removes short-wavelength light from the direct solar beam during long atmospheric paths.",
         source_location: "Mechanism",
         section_heading: "Mechanism",
         char_start: 0,
@@ -386,8 +417,7 @@ test("buildGroundingEvidenceCards turns extracted full-text chunks into traceabl
       },
       {
         chunk_id: "fulltext-rayleigh:chunk:2",
-        text:
-          "The method compares clear-sky atmospheric-path observations with spectral attenuation patterns to separate scattering effects from local aerosol changes.",
+        text: "The method compares clear-sky atmospheric-path observations with spectral attenuation patterns to separate scattering effects from local aerosol changes.",
         source_location: "Method",
         section_heading: "Method",
         char_start: 156,
@@ -395,8 +425,7 @@ test("buildGroundingEvidenceCards turns extracted full-text chunks into traceabl
       },
       {
         chunk_id: "fulltext-rayleigh:chunk:3",
-        text:
-          "The results show a stronger red-orange component near sunset when shorter wavelengths are scattered out of the observer's direct line of sight.",
+        text: "The results show a stronger red-orange component near sunset when shorter wavelengths are scattered out of the observer's direct line of sight.",
         source_location: "Findings",
         section_heading: "Findings",
         char_start: 303,
@@ -413,13 +442,22 @@ test("buildGroundingEvidenceCards turns extracted full-text chunks into traceabl
   });
 
   assert.equal(cards.length, 3);
-  assert.deepEqual(cards.map((card) => card.source_access_level), ["full_text", "full_text", "full_text"]);
+  assert.deepEqual(
+    cards.map((card) => card.source_access_level),
+    ["full_text", "full_text", "full_text"],
+  );
   assert.equal(cards[0]?.citation_marker, "[S1]");
   assert.equal(cards[0]?.chunkId, "fulltext-rayleigh:chunk:1");
   assert.match(cards[0]?.quoted_text ?? "", /wavelength-dependent mechanism/u);
   assert.equal(cards[0]?.trace?.content_hash, "content-hash-123");
-  assert.equal(cards.some((card) => card.evidence_type === "method"), true);
-  assert.equal(cards.some((card) => card.evidence_type === "finding"), true);
+  assert.equal(
+    cards.some((card) => card.evidence_type === "method"),
+    true,
+  );
+  assert.equal(
+    cards.some((card) => card.evidence_type === "finding"),
+    true,
+  );
 });
 
 test("buildGroundingEvidenceCards augments scarce accepted claims with reviewed support-span cards", () => {
@@ -443,8 +481,7 @@ test("buildGroundingEvidenceCards augments scarce accepted claims with reviewed 
       },
       {
         chunk_id: "fulltext-rayleigh-claims:chunk:2",
-        text:
-          "The results show a stronger red-orange component near sunset when shorter wavelengths are scattered out of the observer's direct line of sight.",
+        text: "The results show a stronger red-orange component near sunset when shorter wavelengths are scattered out of the observer's direct line of sight.",
         source_location: "Findings",
         section_heading: "Findings",
         char_start: supportSpan.length + 1,
@@ -481,16 +518,126 @@ test("buildGroundingEvidenceCards augments scarce accepted claims with reviewed 
     topic: "Rayleigh scattering sunset color",
     acceptedSources: [fullText],
     claimCandidates: [claim],
-    safetyReview: reviewAcademicSafety({ topic: "Rayleigh scattering sunset color" }),
+    safetyReview: reviewAcademicSafety({
+      topic: "Rayleigh scattering sunset color",
+    }),
   });
 
   assert.equal(cards.length >= 2, true);
-  assert.equal(cards.some((card) => card.extractionMethod === "llm_structured_extract"), true);
-  assert.equal(cards.some((card) => card.extractionMethod === "rule_fallback_claim_extraction"), true);
-  assert.equal(cards.every((card) => Boolean(card.supportSpan)), true);
   assert.equal(
-    cards.filter((card) => card.extractionMethod === "rule_fallback_claim_extraction").every((card) => card.needsReview),
+    cards.some((card) => card.extractionMethod === "llm_structured_extract"),
     true,
+  );
+  assert.equal(
+    cards.some(
+      (card) => card.extractionMethod === "rule_fallback_claim_extraction",
+    ),
+    true,
+  );
+  assert.equal(
+    cards.every((card) => Boolean(card.supportSpan)),
+    true,
+  );
+  assert.equal(
+    cards
+      .filter(
+        (card) => card.extractionMethod === "rule_fallback_claim_extraction",
+      )
+      .every((card) => card.needsReview),
+    true,
+  );
+});
+
+test("abstract-only disclosure does not block an exact-span LLM claim while rule fallback still requires review", () => {
+  const supportSpan =
+    "A cross-sectional survey of 1,629 adolescents found that short-form video addiction was associated with poorer sleep quality.";
+  const abstractSource = sourceCandidateFixture({
+    sourceId: "abstract-short-video-sleep",
+    title: "Short-form video addiction and adolescent sleep quality",
+    abstractOriginal: supportSpan,
+    accessLevel: "abstract_only",
+    extractionStatus: "extraction_skipped_no_full_text",
+    extractionMethod: "abstract",
+    sourceUseLevel: "citable_abstract",
+  });
+  const claimBase: Omit<
+    ClaimCandidate,
+    "claimId" | "claimTextZhTw" | "confidence" | "extractionMode"
+  > = {
+    sourceId: abstractSource.sourceId,
+    chunkId: "abstract-short-video-sleep:abstract:1",
+    workflowId: "wf-abstract-claim-governance",
+    claimTextOriginal: supportSpan,
+    claimType: "finding",
+    supportSpanText: supportSpan,
+    supportSpanStartOffset: 0,
+    supportSpanEndOffset: supportSpan.length,
+    sectionHeading: "Abstract",
+    citationMarker: "[S1]",
+    relevanceToTopic: 0.9,
+    sourceQualityScore: 0.9,
+    usableSections: ["literature_review", "analysis"],
+    limitations: ["僅取得摘要，不能宣稱已讀全文。"],
+    status: "accepted",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  const claims: ClaimCandidate[] = [
+    {
+      ...claimBase,
+      claimId: "claim-abstract-llm",
+      claimTextZhTw:
+        "一項納入1,629名青少年的橫斷調查顯示，短影音成癮與較差睡眠品質相關。",
+      confidence: 0.82,
+      extractionMode: "llm",
+    },
+    {
+      ...claimBase,
+      claimId: "claim-abstract-rule-fallback",
+      claimTextZhTw: supportSpan,
+      confidence: 0.55,
+      extractionMode: "rule_fallback",
+      limitations: [
+        "僅取得摘要，不能宣稱已讀全文。",
+        "rule_fallback_claim_extraction",
+      ],
+    },
+  ];
+
+  const buildCards = (claim: ClaimCandidate) =>
+    buildGroundingEvidenceCards({
+      workflowId: "wf-abstract-claim-governance",
+      topicHash: "topic-hash",
+      topic: "青少年短影音使用與睡眠品質",
+      acceptedSources: [abstractSource],
+      claimCandidates: [claim],
+      safetyReview: reviewAcademicSafety({
+        topic: "青少年短影音使用與睡眠品質",
+      }),
+    });
+  const llmCard = buildCards(claims[0]!).find(
+    (card) => card.evidenceId === "evidence-claim-abstract-llm",
+  );
+  const fallbackCard = buildCards(claims[1]!).find(
+    (card) => card.evidenceId === "evidence-claim-abstract-rule-fallback",
+  );
+
+  assert.ok(llmCard);
+  assert.equal(llmCard.extractionMethod, "llm_structured_extract");
+  assert.equal(llmCard.needsManualReview, false);
+  assert.equal(llmCard.needsReview, false);
+  assert.ok(llmCard.governanceFlags?.includes("abstract_only_support"));
+  assert.ok(llmCard.governanceFlags?.includes("exact_support_span_verified"));
+  assert.ok(llmCard.limitations.includes("僅取得摘要，不能宣稱已讀全文。"));
+
+  assert.ok(fallbackCard);
+  assert.equal(fallbackCard.extractionMethod, "rule_fallback_claim_extraction");
+  assert.equal(fallbackCard.needsManualReview, true);
+  assert.equal(fallbackCard.needsReview, true);
+  assert.ok(
+    fallbackCard.governanceFlags?.includes("claim_extraction_rule_fallback"),
+  );
+  assert.ok(
+    fallbackCard.governanceFlags?.includes("exact_support_span_verified"),
   );
 });
 
@@ -551,7 +698,8 @@ test("buildReportArtifacts deterministically merges legal evidence into one stru
     canonicalSourceKey: "doi:10.1000/rejected",
     dedupeKey: "doi:10.1000/rejected",
     citationKey: "doi:10.1000/rejected",
-    claimTextOriginal: "This rejected sentence must never enter the report plan.",
+    claimTextOriginal:
+      "This rejected sentence must never enter the report plan.",
     claimText: "This rejected sentence must never enter the report plan.",
     claim_text: "This rejected sentence must never enter the report plan.",
     claimTextZh: "This rejected sentence must never enter the report plan.",
@@ -573,7 +721,10 @@ test("buildReportArtifacts deterministically merges legal evidence into one stru
   const result = build([rejectedCard, ...cards]);
   const reversed = build([...cards].reverse());
 
-  assert.deepEqual(result.reportPlan.plannedClaims, reversed.reportPlan.plannedClaims);
+  assert.deepEqual(
+    result.reportPlan.plannedClaims,
+    reversed.reportPlan.plannedClaims,
+  );
   assert.equal(result.reportPlan.plannedClaims.length, 1);
   const claim = result.reportPlan.plannedClaims[0]!;
   assert.equal(claim.sectionId, "evidence");
@@ -606,8 +757,9 @@ test("buildReportArtifacts deterministically merges legal evidence into one stru
     assert.equal(rendered?.synthesizedProse.includes(supportedSentence), false);
   }
   assert.deepEqual(
-    result.reportPlan.sections.find((section) => section.sectionId === "evidence")
-      ?.plannedClaimIds,
+    result.reportPlan.sections.find(
+      (section) => section.sectionId === "evidence",
+    )?.plannedClaimIds,
     [claim.claimId],
   );
 });
@@ -643,12 +795,14 @@ test("structured report plan gives scholarly background evidence a background-on
 
   const claims = buildStructuredPlannedClaims({
     topicHash: "topic-background-owner",
-    evidenceCards: [{
-      ...card,
-      needsManualReview: false,
-      needsReview: false,
-      governanceFlags: [],
-    }],
+    evidenceCards: [
+      {
+        ...card,
+        needsManualReview: false,
+        needsReview: false,
+        governanceFlags: [],
+      },
+    ],
   });
 
   assert.equal(claims.length, 1);
@@ -1001,14 +1155,29 @@ function sunsetOfficialBackgroundSources(): SourceRecord[] {
 }
 
 test("normalizeResearchTopic rewrites sunset wavelength topic into bilingual atmospheric optics queries", () => {
-  const normalized = normalizeResearchTopic("探討夕陽餘暉之光波長關係", "zh-TW");
+  const normalized = normalizeResearchTopic(
+    "探討夕陽餘暉之光波長關係",
+    "zh-TW",
+  );
 
   assert.equal(normalized.originalQuery, "探討夕陽餘暉之光波長關係");
   assert.ok(normalized.zhAcademicQuery[0]?.includes("瑞利散射"));
-  assert.ok(normalized.enAcademicQuery.some((query) => /Rayleigh scattering/i.test(query)));
-  assert.ok(normalized.enAcademicQuery.some((query) => /sunset color/i.test(query)));
-  assert.ok(normalized.enAcademicQuery.some((query) => /atmospheric scattering/i.test(query)));
-  assert.ok(normalized.enAcademicQuery.some((query) => /wavelength/i.test(query)));
+  assert.ok(
+    normalized.enAcademicQuery.some((query) =>
+      /Rayleigh scattering/i.test(query),
+    ),
+  );
+  assert.ok(
+    normalized.enAcademicQuery.some((query) => /sunset color/i.test(query)),
+  );
+  assert.ok(
+    normalized.enAcademicQuery.some((query) =>
+      /atmospheric scattering/i.test(query),
+    ),
+  );
+  assert.ok(
+    normalized.enAcademicQuery.some((query) => /wavelength/i.test(query)),
+  );
   assert.ok(normalized.negativeKeywords.includes("photography"));
 });
 
@@ -1018,8 +1187,16 @@ test("normalizeResearchTopic rewrites panda terminology topic into bilingual tax
   assert.equal(normalized.originalQuery, "熊貓與貓熊的關係");
   assert.equal(normalized.displayTitle, "熊貓與貓熊的關係");
   assert.match(normalized.normalizedTopicZh ?? "", /熊貓與貓熊名稱差異/u);
-  assert.ok(normalized.zhAcademicQuery.some((query) => /熊貓 貓熊 名稱 差異/u.test(query)));
-  assert.ok(normalized.zhAcademicQuery.some((query) => /大熊貓 小熊貓 分類 關係/u.test(query)));
+  assert.ok(
+    normalized.zhAcademicQuery.some((query) =>
+      /熊貓 貓熊 名稱 差異/u.test(query),
+    ),
+  );
+  assert.ok(
+    normalized.zhAcademicQuery.some((query) =>
+      /大熊貓 小熊貓 分類 關係/u.test(query),
+    ),
+  );
   assert.ok(normalized.enAcademicQuery.length >= 3);
   assert.ok(
     normalized.enAcademicQuery.some((query) =>
@@ -1046,13 +1223,28 @@ test("normalizeResearchTopic expands fish oil production and nutrition topics be
 
   assert.equal(normalized.originalQuery, "魚油的製作及其營養成分");
   assert.equal(normalized.displayTitle, "魚油的製作及其營養成分");
-  assert.match(normalized.normalizedTopicZh ?? "", /魚油的製作、精製流程與營養成分/u);
-  assert.ok(normalized.zhAcademicQuery.includes("魚油 製作 加工 精製 營養成分"));
-  assert.ok(normalized.zhAcademicQuery.includes("魚油 萃取 製程 EPA DHA 脂肪酸組成"));
-  assert.ok(normalized.enAcademicQuery.includes("fish oil production and nutritional composition"));
-  assert.ok(normalized.enAcademicQuery.includes("fish oil processing and refining"));
+  assert.match(
+    normalized.normalizedTopicZh ?? "",
+    /魚油的製作、精製流程與營養成分/u,
+  );
+  assert.ok(
+    normalized.zhAcademicQuery.includes("魚油 製作 加工 精製 營養成分"),
+  );
+  assert.ok(
+    normalized.zhAcademicQuery.includes("魚油 萃取 製程 EPA DHA 脂肪酸組成"),
+  );
+  assert.ok(
+    normalized.enAcademicQuery.includes(
+      "fish oil production and nutritional composition",
+    ),
+  );
+  assert.ok(
+    normalized.enAcademicQuery.includes("fish oil processing and refining"),
+  );
   assert.ok(normalized.enAcademicQuery.includes("fish oil extraction methods"));
-  assert.ok(normalized.enAcademicQuery.includes("EPA DHA composition in fish oil"));
+  assert.ok(
+    normalized.enAcademicQuery.includes("EPA DHA composition in fish oil"),
+  );
   assert.ok(normalized.keywordSet.length >= 4);
 });
 
@@ -1088,13 +1280,25 @@ test("normalizeResearchTopic expands common Chinese Step 2 topics into bilingual
       topic: "牙菌斑的產生及對應治療方式",
       expectedZh: /牙菌斑 產生 對應治療方式/u,
       expectedEn: /dental plaque formation treatment oral biofilm/i,
-      expectedTerms: [/牙菌斑/u, /口腔生物膜/u, /dental plaque/i, /oral biofilm/i],
+      expectedTerms: [
+        /牙菌斑/u,
+        /口腔生物膜/u,
+        /dental plaque/i,
+        /oral biofilm/i,
+      ],
     },
     {
       topic: "狗的護食行為與教育方式",
       expectedZh: /狗 護食 行為 教育方式/u,
-      expectedEn: /dog resource guarding food aggression behavior modification/i,
-      expectedTerms: [/狗/u, /犬/u, /護食/u, /resource guarding/i, /food aggression/i],
+      expectedEn:
+        /dog resource guarding food aggression behavior modification/i,
+      expectedTerms: [
+        /狗/u,
+        /犬/u,
+        /護食/u,
+        /resource guarding/i,
+        /food aggression/i,
+      ],
       expectedNegative: /dog food product|guard dog|police dog/i,
     },
   ];
@@ -1109,7 +1313,10 @@ test("normalizeResearchTopic expands common Chinese Step 2 topics into bilingual
       assert.match(normalized.keywordSet.join(" "), expectedTerm);
     }
     if (item.expectedNegative) {
-      assert.match(normalized.negativeKeywords.join(" "), item.expectedNegative);
+      assert.match(
+        normalized.negativeKeywords.join(" "),
+        item.expectedNegative,
+      );
     }
   }
 });
@@ -1135,7 +1342,13 @@ test("runResearchGroundingPipeline preserves the original topic while routing an
       titlePrefix: "Kite Aerodynamics",
       abstractTerms:
         "Kite aerodynamics, lift, drag, tethered flight, line tension, wind speed, flight stability and wind tunnel evidence.",
-      primaryConcepts: ["kite", "aerodynamics", "lift", "drag", "tethered flight"],
+      primaryConcepts: [
+        "kite",
+        "aerodynamics",
+        "lift",
+        "drag",
+        "tethered flight",
+      ],
       mustHaveTerms: ["kite", "aerodynamics", "lift"],
       expectedZh: /風箏 空氣動力學 升力 阻力/u,
       expectedEn: /kite aerodynamics lift drag tethered flight/i,
@@ -1147,7 +1360,13 @@ test("runResearchGroundingPipeline preserves the original topic while routing an
       titlePrefix: "Avian Feeding Ecology",
       abstractTerms:
         "Bird feeding behavior, avian foraging ecology, diet, trophic ecology, feeding strategies and adaptation.",
-      primaryConcepts: ["bird feeding behavior", "avian", "foraging", "diet", "trophic ecology"],
+      primaryConcepts: [
+        "bird feeding behavior",
+        "avian",
+        "foraging",
+        "diet",
+        "trophic ecology",
+      ],
       mustHaveTerms: ["bird", "avian", "feeding"],
       expectedZh: /鳥類 覓食行為 食性/u,
       expectedEn: /bird feeding behavior avian foraging ecology/i,
@@ -1159,7 +1378,12 @@ test("runResearchGroundingPipeline preserves the original topic while routing an
       titlePrefix: "Dental Plaque Oral Biofilm",
       abstractTerms:
         "Dental plaque formation, oral biofilm, periodontal disease treatment, plaque control, chlorhexidine, scaling and oral hygiene.",
-      primaryConcepts: ["dental plaque", "oral biofilm", "periodontal disease", "plaque control"],
+      primaryConcepts: [
+        "dental plaque",
+        "oral biofilm",
+        "periodontal disease",
+        "plaque control",
+      ],
       mustHaveTerms: ["dental plaque", "oral biofilm", "treatment"],
       expectedZh: /牙菌斑 產生 對應治療方式/u,
       expectedEn: /dental plaque formation treatment oral biofilm/i,
@@ -1172,12 +1396,20 @@ test("runResearchGroundingPipeline preserves the original topic while routing an
       titlePrefix: "Canine Resource Guarding",
       abstractTerms:
         "Canine resource guarding, food aggression, positive reinforcement, behavior modification, desensitization, counterconditioning and veterinary behavior.",
-      primaryConcepts: ["dog", "canine", "resource guarding", "food aggression", "behavior modification"],
+      primaryConcepts: [
+        "dog",
+        "canine",
+        "resource guarding",
+        "food aggression",
+        "behavior modification",
+      ],
       mustHaveTerms: ["dog", "canine", "resource guarding", "food aggression"],
       expectedZh: /狗 護食 行為 教育方式/u,
-      expectedEn: /dog resource guarding food aggression behavior modification/i,
+      expectedEn:
+        /dog resource guarding food aggression behavior modification/i,
       expectedDomain: /animal behavior|veterinary behavior/i,
-      expectedBucket: /canine_resource_guarding_behavior|behavior_modification_training/,
+      expectedBucket:
+        /canine_resource_guarding_behavior|behavior_modification_training/,
     },
   ];
 
@@ -1253,7 +1485,10 @@ test("runResearchGroundingPipeline preserves the original topic while routing an
       /scientific method|experimental design|variables|scientific mechanism|observation evidence|research limitation/i,
     );
     for (const term of item.mustHaveTerms) {
-      assert.match((firstInput.mustIncludeTerms ?? []).join(" "), new RegExp(term, "i"));
+      assert.match(
+        (firstInput.mustIncludeTerms ?? []).join(" "),
+        new RegExp(term, "i"),
+      );
     }
     assert.equal(result.groundingDiagnostics?.canProceedToSourceReview, true);
     assert.ok((result.groundingDiagnostics?.candidateCount ?? 0) >= 8);
@@ -1267,7 +1502,9 @@ test("runResearchGroundingPipeline preserves the original topic while routing an
       item.expectedDomain,
     );
     const reviewableCandidates =
-      result.sourceCandidates?.filter((candidate) => candidate.reviewStatus !== "rejected") ?? [];
+      result.sourceCandidates?.filter(
+        (candidate) => candidate.reviewStatus !== "rejected",
+      ) ?? [];
     assert.ok(reviewableCandidates.length >= 3);
     if (item.expectedBucket) {
       assert.ok(
@@ -1277,8 +1514,14 @@ test("runResearchGroundingPipeline preserves the original topic while routing an
         `expected a candidate bucket matching ${item.expectedBucket}`,
       );
     }
-    assert.equal(result.diagnosticTrace?.step8_nextStepDecision.canProceedToSourceReview, true);
-    assert.notEqual(result.diagnosticTrace?.step8_nextStepDecision.workflowStatus, "empty");
+    assert.equal(
+      result.diagnosticTrace?.step8_nextStepDecision.canProceedToSourceReview,
+      true,
+    );
+    assert.notEqual(
+      result.diagnosticTrace?.step8_nextStepDecision.workflowStatus,
+      "empty",
+    );
   }
 });
 
@@ -1292,13 +1535,19 @@ test("topic-specific source buckets reject dental and dog behavior drift despite
         title: "Tooth whitening advertisement and dental clinic marketing",
         abstract:
           "A cosmetic dentistry product shopping page about whitening packages, clinic coupons, marketing conversion, and appointment booking.",
-        queryUsed: "dental plaque oral biofilm periodontal disease plaque control",
+        queryUsed:
+          "dental plaque oral biofilm periodontal disease plaque control",
         sourceType: "OpenAlex",
         provider: "OpenAlex",
         relevanceScore: 96,
         sourceQualityScore: 90,
       }),
-      primaryConcepts: ["dental plaque", "oral biofilm", "periodontal disease", "plaque control"],
+      primaryConcepts: [
+        "dental plaque",
+        "oral biofilm",
+        "periodontal disease",
+        "plaque control",
+      ],
       mustHaveTerms: ["dental plaque", "oral biofilm", "plaque control"],
     },
     {
@@ -1309,13 +1558,20 @@ test("topic-specific source buckets reject dental and dog behavior drift despite
         title: "Guard dog police training and dog food product review",
         abstract:
           "This article reviews guard dog patrol training, police dog equipment, dog food product ingredients, and shopping comparisons without resource guarding or behavior modification evidence.",
-        queryUsed: "dog resource guarding food aggression behavior modification",
+        queryUsed:
+          "dog resource guarding food aggression behavior modification",
         sourceType: "Crossref",
         provider: "Crossref",
         relevanceScore: 94,
         sourceQualityScore: 88,
       }),
-      primaryConcepts: ["dog", "canine", "resource guarding", "food aggression", "behavior modification"],
+      primaryConcepts: [
+        "dog",
+        "canine",
+        "resource guarding",
+        "food aggression",
+        "behavior modification",
+      ],
       mustHaveTerms: ["dog", "resource guarding", "food aggression"],
     },
   ];
@@ -1364,9 +1620,12 @@ test("topic-specific source buckets reject dental and dog behavior drift despite
     assert.equal(candidate?.reviewStatus, "rejected");
     assert.equal(candidate?.recommendationBucket, "rejected");
     assert.ok(
-      ["excluded_drift_term_match", "off_topic_bucket", "missing_core_concept", "low_topic_relevance"].includes(
-        candidate?.rejectionReason ?? "",
-      ),
+      [
+        "excluded_drift_term_match",
+        "off_topic_bucket",
+        "missing_core_concept",
+        "low_topic_relevance",
+      ].includes(candidate?.rejectionReason ?? ""),
       `unexpected rejection reason ${candidate?.rejectionReason}`,
     );
   }
@@ -1376,7 +1635,8 @@ test("runResearchGroundingPipeline emits diagnostic trace for panda topic with p
   const pandaSources = [
     sourceRecord({
       id: "panda-taxonomy-1",
-      title: "Comparative genomics reveals convergent evolution between the bamboo-eating giant and red pandas",
+      title:
+        "Comparative genomics reveals convergent evolution between the bamboo-eating giant and red pandas",
       year: 2017,
       abstract:
         "Comparative genomics examines giant panda Ailuropoda melanoleuca and red panda Ailurus fulgens, including bamboo feeding, phylogeny, taxonomy and convergent evolution.",
@@ -1392,7 +1652,8 @@ test("runResearchGroundingPipeline emits diagnostic trace for panda topic with p
     }),
     sourceRecord({
       id: "panda-taxonomy-2",
-      title: "Earliest giant panda false thumb suggests conflicting demands for locomotion and feeding",
+      title:
+        "Earliest giant panda false thumb suggests conflicting demands for locomotion and feeding",
       year: 2022,
       abstract:
         "The fossil and morphology study discusses giant panda evolution, taxonomy, Ursidae, bamboo feeding and the false thumb trait in Ailuropoda.",
@@ -1408,7 +1669,8 @@ test("runResearchGroundingPipeline emits diagnostic trace for panda topic with p
     }),
     sourceRecord({
       id: "panda-taxonomy-3",
-      title: "The primitive giant panda Kretzoiarctos beatrix from the late Miocene of Spain",
+      title:
+        "The primitive giant panda Kretzoiarctos beatrix from the late Miocene of Spain",
       year: 2012,
       abstract:
         "Kretzoiarctos beatrix is interpreted as a primitive giant panda relative, supporting Ailuropoda taxonomy, fossil history and Ursidae classification.",
@@ -1424,7 +1686,8 @@ test("runResearchGroundingPipeline emits diagnostic trace for panda topic with p
     }),
     sourceRecord({
       id: "panda-taxonomy-4",
-      title: "Red panda phylogeny and Ailurus fulgens classification in Ailuridae",
+      title:
+        "Red panda phylogeny and Ailurus fulgens classification in Ailuridae",
       year: 2020,
       abstract:
         "Ailurus fulgens red panda taxonomy distinguishes Ailuridae from Ursidae and from the giant panda Ailuropoda melanoleuca.",
@@ -1440,7 +1703,8 @@ test("runResearchGroundingPipeline emits diagnostic trace for panda topic with p
     }),
     sourceRecord({
       id: "panda-taxonomy-5",
-      title: "Giant panda classification places Ailuropoda melanoleuca within Ursidae",
+      title:
+        "Giant panda classification places Ailuropoda melanoleuca within Ursidae",
       year: 2021,
       abstract:
         "The review discusses giant panda taxonomy, Ailuropoda melanoleuca, Ursidae, and comparison with red panda Ailurus fulgens in Ailuridae.",
@@ -1475,7 +1739,8 @@ test("runResearchGroundingPipeline emits diagnostic trace for panda topic with p
     sourceRecord({
       id: "panda-offtopic-vaquita",
       title: "Vaquita genome reveals marine mammal conservation history",
-      abstract: "Vaquita conservation genomics and population bottlenecks in marine mammals.",
+      abstract:
+        "Vaquita conservation genomics and population bottlenecks in marine mammals.",
       doi: "10.1000/vaquita-genome",
       sourceType: "OpenAlex",
       provider: "OpenAlex",
@@ -1486,7 +1751,8 @@ test("runResearchGroundingPipeline emits diagnostic trace for panda topic with p
     sourceRecord({
       id: "panda-offtopic-polar-bear",
       title: "Polar bear faecal microbiota varies by Arctic diet",
-      abstract: "Polar bear fecal microbiota and Arctic dietary ecology across seasonal diet shifts.",
+      abstract:
+        "Polar bear fecal microbiota and Arctic dietary ecology across seasonal diet shifts.",
       doi: "10.1000/polar-bear-microbiota",
       sourceType: "OpenAlex",
       provider: "OpenAlex",
@@ -1497,7 +1763,8 @@ test("runResearchGroundingPipeline emits diagnostic trace for panda topic with p
     sourceRecord({
       id: "panda-offtopic-deep-learning",
       title: "Deep learning as a tool for ecology and evolution",
-      abstract: "General machine learning methods for ecology and evolution across biodiversity datasets.",
+      abstract:
+        "General machine learning methods for ecology and evolution across biodiversity datasets.",
       doi: "10.1000/deep-learning-ecology",
       sourceType: "OpenAlex",
       provider: "OpenAlex",
@@ -1508,7 +1775,8 @@ test("runResearchGroundingPipeline emits diagnostic trace for panda topic with p
     sourceRecord({
       id: "panda-offtopic-sign-language",
       title: "Sign language lexical comprehension in bilingual adults",
-      abstract: "Language comprehension and psycholinguistics in bilingual adult lexical processing.",
+      abstract:
+        "Language comprehension and psycholinguistics in bilingual adult lexical processing.",
       doi: "10.1000/sign-language-comprehension",
       sourceType: "OpenAlex",
       provider: "OpenAlex",
@@ -1523,8 +1791,17 @@ test("runResearchGroundingPipeline emits diagnostic trace for panda topic with p
     {
       workflowId: "wf-panda-diagnostic",
       topic: "熊貓與貓熊的關係",
-      querySeedZh: ["背景脈絡", "主要類型", "核心特徵", "大熊貓 小熊貓 分類 關係"],
-      querySeedEn: ["background context", "core features", "giant panda red panda taxonomy"],
+      querySeedZh: [
+        "背景脈絡",
+        "主要類型",
+        "核心特徵",
+        "大熊貓 小熊貓 分類 關係",
+      ],
+      querySeedEn: [
+        "background context",
+        "core features",
+        "giant panda red panda taxonomy",
+      ],
       reportType: "研究報告",
       audience: "高中",
       searchProfile: "standard",
@@ -1634,36 +1911,85 @@ test("runResearchGroundingPipeline emits diagnostic trace for panda topic with p
   const firstCall = calls[0]!;
   assert.ok((firstCall.querySeedEn ?? []).length >= 2);
   assert.ok((firstCall.querySeedZh ?? []).length >= 1);
-  assert.match((firstCall.querySeedEn ?? []).join(" "), /giant panda red panda taxonomy naming history/i);
-  assert.doesNotMatch((firstCall.querySeedEn ?? []).join(" "), /background context|core features/i);
-  assert.doesNotMatch((firstCall.querySeedZh ?? []).join(" "), /背景脈絡|主要類型|核心特徵/u);
+  assert.match(
+    (firstCall.querySeedEn ?? []).join(" "),
+    /giant panda red panda taxonomy naming history/i,
+  );
+  assert.doesNotMatch(
+    (firstCall.querySeedEn ?? []).join(" "),
+    /background context|core features/i,
+  );
+  assert.doesNotMatch(
+    (firstCall.querySeedZh ?? []).join(" "),
+    /背景脈絡|主要類型|核心特徵/u,
+  );
   assert.notEqual(result.status, "failed");
-  assert.ok(result.status === "source_review_needs_manual" || result.status === "source_review_ready");
-  assert.equal(result.diagnosticTrace?.step2_normalization.detectedDomain.includes("unknown"), false);
-  assert.equal(result.diagnosticTrace?.step5_normalizedSources.rawTotal, pandaSources.length * calls.length);
-  assert.ok((result.diagnosticTrace?.step7_bucketSummary.acceptedSources ?? 0) >= 3);
-  assert.ok((result.diagnosticTrace?.step7_bucketSummary.rejectedSources ?? 0) >= 3);
-  assert.ok((result.diagnosticTrace?.step7_bucketSummary.bucketCounts?.taxonomy_distinction ?? 0) >= 3);
-  assert.ok((result.diagnosticTrace?.step7_bucketSummary.bucketCounts?.terminology_usage ?? 0) >= 1);
-  assert.equal(result.diagnosticTrace?.step7_bucketSummary.backgroundSourceNeeded, false);
-  assert.ok((result.diagnosticTrace?.step7_bucketSummary.fallbackReviewSources ?? 0) > 0);
-  assert.equal(result.diagnosticTrace?.step8_nextStepDecision.canProceedToSourceReview, true);
-  assert.ok(["completed", "partial"].includes(result.diagnosticTrace?.step8_nextStepDecision.workflowStatus ?? ""));
   assert.ok(
-    (result.diagnosticTrace?.step3_queryPlan.bilingualQueries.filter((query) => query.lang === "en").length ?? 0) >= 3,
+    result.status === "source_review_needs_manual" ||
+      result.status === "source_review_ready",
+  );
+  assert.equal(
+    result.diagnosticTrace?.step2_normalization.detectedDomain.includes(
+      "unknown",
+    ),
+    false,
+  );
+  assert.equal(
+    result.diagnosticTrace?.step5_normalizedSources.rawTotal,
+    pandaSources.length * calls.length,
   );
   assert.ok(
-    (result.diagnosticTrace?.step3_queryPlan.bilingualQueries.filter((query) => query.lang === "zh").length ?? 0) >= 2,
+    (result.diagnosticTrace?.step7_bucketSummary.acceptedSources ?? 0) >= 3,
+  );
+  assert.ok(
+    (result.diagnosticTrace?.step7_bucketSummary.rejectedSources ?? 0) >= 3,
+  );
+  assert.ok(
+    (result.diagnosticTrace?.step7_bucketSummary.bucketCounts
+      ?.taxonomy_distinction ?? 0) >= 3,
+  );
+  assert.ok(
+    (result.diagnosticTrace?.step7_bucketSummary.bucketCounts
+      ?.terminology_usage ?? 0) >= 1,
+  );
+  assert.equal(
+    result.diagnosticTrace?.step7_bucketSummary.backgroundSourceNeeded,
+    false,
+  );
+  assert.ok(
+    (result.diagnosticTrace?.step7_bucketSummary.fallbackReviewSources ?? 0) >
+      0,
+  );
+  assert.equal(
+    result.diagnosticTrace?.step8_nextStepDecision.canProceedToSourceReview,
+    true,
+  );
+  assert.ok(
+    ["completed", "partial"].includes(
+      result.diagnosticTrace?.step8_nextStepDecision.workflowStatus ?? "",
+    ),
+  );
+  assert.ok(
+    (result.diagnosticTrace?.step3_queryPlan.bilingualQueries.filter(
+      (query) => query.lang === "en",
+    ).length ?? 0) >= 3,
+  );
+  assert.ok(
+    (result.diagnosticTrace?.step3_queryPlan.bilingualQueries.filter(
+      (query) => query.lang === "zh",
+    ).length ?? 0) >= 2,
   );
   assert.equal(
     result.diagnosticTrace?.step4_providerExecution.some(
-      (provider) => provider.provider === "OpenAlex" && provider.status === "success",
+      (provider) =>
+        provider.provider === "OpenAlex" && provider.status === "success",
     ),
     true,
   );
   assert.equal(
     result.diagnosticTrace?.step4_providerExecution.some(
-      (provider) => provider.provider === "Crossref" && provider.status === "empty",
+      (provider) =>
+        provider.provider === "Crossref" && provider.status === "empty",
     ),
     true,
   );
@@ -1693,23 +2019,38 @@ test("runResearchGroundingPipeline emits diagnostic trace for panda topic with p
   );
   assert.equal(
     result.diagnosticTrace?.step3_queryPlan.selectedQueriesByProvider?.web?.some(
-      (query) => /背景脈絡|主要類型|核心特徵|形成過程|使用方式|background context|core features/i.test(query),
+      (query) =>
+        /背景脈絡|主要類型|核心特徵|形成過程|使用方式|background context|core features/i.test(
+          query,
+        ),
     ),
     false,
   );
-  const offTopicScoring = result.diagnosticTrace?.step6_scoring.filter((source) =>
-    /vaquita|polar bear|deep learning|sign language/i.test(source.title),
-  ) ?? [];
+  const offTopicScoring =
+    result.diagnosticTrace?.step6_scoring.filter((source) =>
+      /vaquita|polar bear|deep learning|sign language/i.test(source.title),
+    ) ?? [];
   assert.equal(offTopicScoring.length, 4);
-  assert.equal(offTopicScoring.every((source) => source.bucket === "off_topic"), true);
-  assert.equal(offTopicScoring.every((source) => source.decision === "rejected"), true);
-  assert.equal(offTopicScoring.every((source) => source.sourceUseCase === "rejected"), true);
+  assert.equal(
+    offTopicScoring.every((source) => source.bucket === "off_topic"),
+    true,
+  );
+  assert.equal(
+    offTopicScoring.every((source) => source.decision === "rejected"),
+    true,
+  );
+  assert.equal(
+    offTopicScoring.every((source) => source.sourceUseCase === "rejected"),
+    true,
+  );
   assert.equal(
     offTopicScoring.some((source) => source.finalBucket === "accepted"),
     false,
   );
   assert.equal(
-    result.diagnosticTrace?.step6_scoring.every((source) => source.scoringNotes.length > 0),
+    result.diagnosticTrace?.step6_scoring.every(
+      (source) => source.scoringNotes.length > 0,
+    ),
     true,
   );
 });
@@ -1766,14 +2107,20 @@ test("runResearchGroundingPipeline routes jade pendant topic to humanities bucke
           },
           jadeSources,
           {
-            primaryConcepts: ["jade pendant", "archaeology", "material culture", "symbolism"],
+            primaryConcepts: [
+              "jade pendant",
+              "archaeology",
+              "material culture",
+              "symbolism",
+            ],
             mustHaveTerms: ["jade pendant", "Chinese jade", "archaeology"],
           },
         ),
     },
   );
 
-  const bucketCounts = result.diagnosticTrace?.step7_bucketSummary.bucketCounts ?? {};
+  const bucketCounts =
+    result.diagnosticTrace?.step7_bucketSummary.bucketCounts ?? {};
   assert.ok((bucketCounts.archaeology_history_culture ?? 0) >= 3);
   assert.equal(bucketCounts.biomedical ?? 0, 0);
   assert.equal(bucketCounts.physics_atmospheric_optics ?? 0, 0);
@@ -1819,22 +2166,35 @@ test("runResearchGroundingPipeline routes HIV immune-system topic to biomedical 
           },
           hivSources,
           {
-            primaryConcepts: ["HIV", "immune system", "CD4 T cells", "viral replication"],
+            primaryConcepts: [
+              "HIV",
+              "immune system",
+              "CD4 T cells",
+              "viral replication",
+            ],
             mustHaveTerms: ["HIV", "immune system", "CD4"],
           },
         ),
     },
   );
 
-  const bucketCounts = result.diagnosticTrace?.step7_bucketSummary.bucketCounts ?? {};
+  const bucketCounts =
+    result.diagnosticTrace?.step7_bucketSummary.bucketCounts ?? {};
   assert.ok((bucketCounts.biomedical ?? 0) >= 5);
-  assert.ok((result.diagnosticTrace?.step7_bucketSummary.acceptedSources ?? 0) >= 3);
+  assert.ok(
+    (result.diagnosticTrace?.step7_bucketSummary.acceptedSources ?? 0) >= 3,
+  );
   assert.equal(
-    result.sourceCandidates?.every((source) => source.sourceBucket !== "off_topic"),
+    result.sourceCandidates?.every(
+      (source) => source.sourceBucket !== "off_topic",
+    ),
     true,
   );
   assert.doesNotMatch(
-    [...(result.warnings ?? []), ...(result.groundingDiagnostics?.readinessWarnings ?? [])].join(" "),
+    [
+      ...(result.warnings ?? []),
+      ...(result.groundingDiagnostics?.readinessWarnings ?? []),
+    ].join(" "),
     /缺少愛滋病研究/u,
   );
 });
@@ -1853,7 +2213,8 @@ test("runResearchGroundingPipeline foregrounds sunset metadata candidates from b
     sourceRecord({
       id: "sunset-offtopic-travel",
       title: "Best sunset travel photography spots",
-      abstract: "Tourism itinerary and camera composition advice for travel photography.",
+      abstract:
+        "Tourism itinerary and camera composition advice for travel photography.",
       doi: null,
       sourceType: "Authoritative Media",
       provider: "OpenAlex",
@@ -1865,7 +2226,8 @@ test("runResearchGroundingPipeline foregrounds sunset metadata candidates from b
     sourceRecord({
       id: "sunset-offtopic-poem",
       title: "Poems about red sunsets",
-      abstract: "Literary analysis of sunset imagery in poetry and travel writing.",
+      abstract:
+        "Literary analysis of sunset imagery in poetry and travel writing.",
       doi: null,
       sourceType: "Authoritative Media",
       provider: "OpenAlex",
@@ -1884,15 +2246,26 @@ test("runResearchGroundingPipeline foregrounds sunset metadata candidates from b
       reportType: "研究報告",
       audience: "高中",
       searchProfile: "standard",
-      querySeedEn: ["sunset travel photography", "Rayleigh scattering sunset red light"],
+      querySeedEn: [
+        "sunset travel photography",
+        "Rayleigh scattering sunset red light",
+      ],
       debugTrace: true,
     },
     {
       searchHandler: async (input) => {
         receivedEnglishQueries = input.querySeedEn ?? [];
-        assert.ok(receivedEnglishQueries.some((query) => /Rayleigh scattering/i.test(query)));
-        assert.ok(receivedEnglishQueries.some((query) => /sunset color/i.test(query)));
-        assert.notDeepEqual(receivedEnglishQueries, ["探討夕陽餘暉之光波長關係"]);
+        assert.ok(
+          receivedEnglishQueries.some((query) =>
+            /Rayleigh scattering/i.test(query),
+          ),
+        );
+        assert.ok(
+          receivedEnglishQueries.some((query) => /sunset color/i.test(query)),
+        );
+        assert.notDeepEqual(receivedEnglishQueries, [
+          "探討夕陽餘暉之光波長關係",
+        ]);
         return mockedGroundingSearchResult(
           {
             topic: input.topic,
@@ -1909,7 +2282,11 @@ test("runResearchGroundingPipeline foregrounds sunset metadata candidates from b
               "Rayleigh scattering",
               "atmospheric scattering",
             ],
-            mustHaveTerms: ["sunset color", "wavelength", "Rayleigh scattering"],
+            mustHaveTerms: [
+              "sunset color",
+              "wavelength",
+              "Rayleigh scattering",
+            ],
           },
         );
       },
@@ -1917,17 +2294,25 @@ test("runResearchGroundingPipeline foregrounds sunset metadata candidates from b
   );
 
   assert.ok(receivedEnglishQueries.length >= 5);
-  assert.equal(receivedEnglishQueries.some((query) => /travel|photography|poem/i.test(query)), false);
+  assert.equal(
+    receivedEnglishQueries.some((query) =>
+      /travel|photography|poem/i.test(query),
+    ),
+    false,
+  );
   assert.ok((result.highConfidenceCandidateSources?.length ?? 0) >= 5);
-  assert.ok((result.diagnosticTrace?.step7_bucketSummary.bucketCounts?.physics_atmospheric_optics ?? 0) >= 5);
   assert.ok(
-    result.diagnosticTrace?.step3_queryPlan.selectedQueriesByProvider?.openalex?.some((query) =>
-      /Rayleigh scattering|wavelength|Mie scattering/i.test(query),
+    (result.diagnosticTrace?.step7_bucketSummary.bucketCounts
+      ?.physics_atmospheric_optics ?? 0) >= 5,
+  );
+  assert.ok(
+    result.diagnosticTrace?.step3_queryPlan.selectedQueriesByProvider?.openalex?.some(
+      (query) => /Rayleigh scattering|wavelength|Mie scattering/i.test(query),
     ),
   );
   assert.equal(
-    result.diagnosticTrace?.step3_queryPlan.selectedQueriesByProvider?.openalex?.some((query) =>
-      /travel|photography|poem/i.test(query),
+    result.diagnosticTrace?.step3_queryPlan.selectedQueriesByProvider?.openalex?.some(
+      (query) => /travel|photography|poem/i.test(query),
     ),
     false,
   );
@@ -1937,7 +2322,9 @@ test("runResearchGroundingPipeline foregrounds sunset metadata candidates from b
       .every((source) => source.decision === "rejected"),
     true,
   );
-  assert.ok((result.groundingDiagnostics?.firstCandidateLatencyMs ?? 0) <= 6000);
+  assert.ok(
+    (result.groundingDiagnostics?.firstCandidateLatencyMs ?? 0) <= 6000,
+  );
   assert.ok((result.groundingDiagnostics?.foregroundLatencyMs ?? 0) <= 12000);
   assert.notEqual(
     (result.highConfidenceCandidateSources?.length ?? 0) +
@@ -1959,49 +2346,8 @@ test("trusted fallback seeds classify as official background when scholarly prov
       searchProfile: "standard",
     },
     {
-      searchHandler: async (input) => ({
-        ...mockedGroundingSearchResult(
-          {
-            topic: input.topic,
-            originalTopic: input.originalTopic,
-            workflowId: input.workflowId,
-            querySeedZh: input.querySeedZh,
-            querySeedEn: input.querySeedEn,
-          },
-          seedSources,
-          {
-            primaryConcepts: ["sunset color", "wavelength", "Rayleigh scattering"],
-            mustHaveTerms: ["sunset color", "wavelength", "Rayleigh scattering"],
-          },
-        ),
-        candidateSources: [],
-        fallbackReviewSources: [],
-        rejectedSources: [],
-        sources: seedSources,
-        scoredSources: seedSources,
-        provider_status: [
-          {
-            ok: false,
-            provider: "OpenAlex",
-            query: "sunset color wavelength Rayleigh scattering",
-            results: [],
-            raw_count: 0,
-            error_type: "server_error",
-            error_message: "OpenAlex returned HTTP 503",
-            latency_ms: 420,
-          },
-          {
-            ok: false,
-            provider: "Crossref",
-            query: "sunset color wavelength Rayleigh scattering",
-            results: [],
-            raw_count: 0,
-            error_type: "timeout",
-            error_message: "Crossref request timed out",
-            latency_ms: 4000,
-          },
-        ],
-        diagnostics: {
+      searchHandler: async (input) =>
+        ({
           ...mockedGroundingSearchResult(
             {
               topic: input.topic,
@@ -2012,63 +2358,127 @@ test("trusted fallback seeds classify as official background when scholarly prov
             },
             seedSources,
             {
-              primaryConcepts: ["sunset color", "wavelength", "Rayleigh scattering"],
-              mustHaveTerms: ["sunset color", "wavelength", "Rayleigh scattering"],
+              primaryConcepts: [
+                "sunset color",
+                "wavelength",
+                "Rayleigh scattering",
+              ],
+              mustHaveTerms: [
+                "sunset color",
+                "wavelength",
+                "Rayleigh scattering",
+              ],
             },
-          ).diagnostics,
-          provider_search_results_count: 0,
-          raw_provider_count: 0,
+          ),
+          candidateSources: [],
+          fallbackReviewSources: [],
+          rejectedSources: [],
+          sources: seedSources,
+          scoredSources: seedSources,
           provider_status: [
             {
+              ok: false,
               provider: "OpenAlex",
               query: "sunset color wavelength Rayleigh scattering",
-              ok: false,
-              result_count: 0,
+              results: [],
+              raw_count: 0,
               error_type: "server_error",
               error_message: "OpenAlex returned HTTP 503",
               latency_ms: 420,
             },
             {
+              ok: false,
               provider: "Crossref",
               query: "sunset color wavelength Rayleigh scattering",
-              ok: false,
-              result_count: 0,
+              results: [],
+              raw_count: 0,
               error_type: "timeout",
               error_message: "Crossref request timed out",
               latency_ms: 4000,
             },
           ],
-          provider_health: [
-            {
-              provider: "openalex",
-              status: "degraded",
-              recentFailureCount: 3,
-              recentTimeoutCount: 0,
-              lastFailureAt: "2026-07-02T00:00:00.000Z",
-              lastErrorCode: "server_error",
-            },
-            {
-              provider: "crossref",
-              status: "degraded",
-              recentFailureCount: 3,
-              recentTimeoutCount: 3,
-              lastFailureAt: "2026-07-02T00:00:00.000Z",
-              lastErrorCode: "timeout",
-            },
-          ],
-        },
-      } as any),
+          diagnostics: {
+            ...mockedGroundingSearchResult(
+              {
+                topic: input.topic,
+                originalTopic: input.originalTopic,
+                workflowId: input.workflowId,
+                querySeedZh: input.querySeedZh,
+                querySeedEn: input.querySeedEn,
+              },
+              seedSources,
+              {
+                primaryConcepts: [
+                  "sunset color",
+                  "wavelength",
+                  "Rayleigh scattering",
+                ],
+                mustHaveTerms: [
+                  "sunset color",
+                  "wavelength",
+                  "Rayleigh scattering",
+                ],
+              },
+            ).diagnostics,
+            provider_search_results_count: 0,
+            raw_provider_count: 0,
+            provider_status: [
+              {
+                provider: "OpenAlex",
+                query: "sunset color wavelength Rayleigh scattering",
+                ok: false,
+                result_count: 0,
+                error_type: "server_error",
+                error_message: "OpenAlex returned HTTP 503",
+                latency_ms: 420,
+              },
+              {
+                provider: "Crossref",
+                query: "sunset color wavelength Rayleigh scattering",
+                ok: false,
+                result_count: 0,
+                error_type: "timeout",
+                error_message: "Crossref request timed out",
+                latency_ms: 4000,
+              },
+            ],
+            provider_health: [
+              {
+                provider: "openalex",
+                status: "degraded",
+                recentFailureCount: 3,
+                recentTimeoutCount: 0,
+                lastFailureAt: "2026-07-02T00:00:00.000Z",
+                lastErrorCode: "server_error",
+              },
+              {
+                provider: "crossref",
+                status: "degraded",
+                recentFailureCount: 3,
+                recentTimeoutCount: 3,
+                lastFailureAt: "2026-07-02T00:00:00.000Z",
+                lastErrorCode: "timeout",
+              },
+            ],
+          },
+        }) as any,
     },
   );
 
   assert.equal(result.groundingDiagnostics?.scholarlyRecommendedCount, 0);
-  assert.equal((result.groundingDiagnostics?.officialBackgroundCount ?? 0) >= 3, true);
+  assert.equal(
+    (result.groundingDiagnostics?.officialBackgroundCount ?? 0) >= 3,
+    true,
+  );
   assert.equal(result.status, "source_review_needs_manual");
   assert.equal(result.groundingDiagnostics?.canProceedToSourceReview, true);
   assert.equal(result.academicRetry?.count, 2);
   assert.equal(result.academicRetry?.exhausted, true);
   assert.equal(result.groundingDiagnostics?.academicRetry?.exhausted, true);
-  assert.equal(result.groundingDiagnostics?.sourceQualitySummary?.academicEnough, false);
+  assert.equal(
+    result.groundingDiagnostics?.sourceQualitySummary?.academicEnough,
+    false,
+  );
   assert.match(
     (result.academicRetry?.retryQueries ?? []).join(" "),
     /Rayleigh scattering|atmospheric optics|sunset spectrum/i,
@@ -2076,30 +2486,55 @@ test("trusted fallback seeds classify as official background when scholarly prov
   assert.equal(result.groundingDiagnostics?.canProceedToSourceReview, true);
   assert.equal(result.groundingDiagnostics?.canProceedToAcademicDraft, false);
   assert.equal(result.groundingDiagnostics?.canProceedToBackgroundDraft, true);
-  assert.match(result.groundingDiagnostics?.readinessReason ?? "", /自動學術延伸查詢/);
+  assert.match(
+    result.groundingDiagnostics?.readinessReason ?? "",
+    /自動學術延伸查詢/,
+  );
   assert.equal(
-    result.groundingDiagnostics?.sourceRetrieval?.attemptedProviders?.includes("OpenAlex"),
+    result.groundingDiagnostics?.sourceRetrieval?.attemptedProviders?.includes(
+      "OpenAlex",
+    ),
     true,
   );
   assert.equal(
-    result.groundingDiagnostics?.sourceRetrieval?.attemptedProviders?.includes("Crossref"),
+    result.groundingDiagnostics?.sourceRetrieval?.attemptedProviders?.includes(
+      "Crossref",
+    ),
     true,
   );
   assert.equal(
-    result.groundingDiagnostics?.sourceRetrieval?.degradedProviders?.includes("openalex"),
+    result.groundingDiagnostics?.sourceRetrieval?.degradedProviders?.includes(
+      "openalex",
+    ),
     true,
   );
   assert.equal(
-    result.groundingDiagnostics?.sourceRetrieval?.degradedProviders?.includes("crossref"),
+    result.groundingDiagnostics?.sourceRetrieval?.degradedProviders?.includes(
+      "crossref",
+    ),
     true,
   );
-  assert.equal(result.groundingDiagnostics?.sourceRetrieval?.fallbackReason, "trusted_seed_fallback");
-  assert.equal(result.groundingDiagnostics?.sourceRetrieval?.scholarlyMinimumMet, false);
-  assert.equal(result.groundingDiagnostics?.sourceRetrieval?.officialBackgroundMinimumMet, true);
+  assert.equal(
+    result.groundingDiagnostics?.sourceRetrieval?.fallbackReason,
+    "trusted_seed_fallback",
+  );
+  assert.equal(
+    result.groundingDiagnostics?.sourceRetrieval?.scholarlyMinimumMet,
+    false,
+  );
+  assert.equal(
+    result.groundingDiagnostics?.sourceRetrieval?.officialBackgroundMinimumMet,
+    true,
+  );
   assert.notEqual(result.groundingDiagnostics?.finalUiState, "provider_failed");
-  assert.notEqual(result.groundingDiagnostics?.finalUiState, "no_raw_results_retry_with_english_relaxed_queries");
+  assert.notEqual(
+    result.groundingDiagnostics?.finalUiState,
+    "no_raw_results_retry_with_english_relaxed_queries",
+  );
   assert.equal(
-    result.sourceCandidates?.every((source) => source.retrievalMode === "trusted_seed"),
+    result.sourceCandidates?.every(
+      (source) => source.retrievalMode === "trusted_seed",
+    ),
     true,
   );
   assert.equal(
@@ -2108,22 +2543,28 @@ test("trusted fallback seeds classify as official background when scholarly prov
     ),
     true,
   );
-  assert.match(result.groundingDiagnostics?.userVisibleStatus ?? "", /自動嘗試 2 輪學術延伸查詢/);
+  assert.match(
+    result.groundingDiagnostics?.userVisibleStatus ?? "",
+    /自動嘗試 2 輪學術延伸查詢/,
+  );
   assert.equal(
-    result.sourceCandidates?.every((source) => source.reviewStatus !== "accepted"),
+    result.sourceCandidates?.every(
+      (source) => source.reviewStatus !== "accepted",
+    ),
     true,
   );
+  assert.equal(result.evidenceCards?.length ?? 0, 0);
   assert.equal(
-    result.evidenceCards?.length ?? 0,
-    0,
-  );
-  assert.equal(
-    result.reportPlan?.evidenceGaps.some((gap) => /accepted evidence cards below/.test(gap)),
+    result.reportPlan?.evidenceGaps.some((gap) =>
+      /accepted evidence cards below/.test(gap),
+    ),
     true,
   );
   assert.equal(
     result.reportSections?.some((section) =>
-      section.evidenceGaps.some((gap) => /insufficient_evidence_cards|缺少同行評審/.test(gap)),
+      section.evidenceGaps.some((gap) =>
+        /insufficient_evidence_cards|缺少同行評審/.test(gap),
+      ),
     ),
     true,
   );
@@ -2131,7 +2572,11 @@ test("trusted fallback seeds classify as official background when scholarly prov
 
 test("academic retry expands sunset wavelength queries and recovers scholarly sources", async () => {
   const seedSources = sunsetOfficialBackgroundSources();
-  const calls: Array<{ topic: string; querySeedEn?: string[]; querySeedZh?: string[] }> = [];
+  const calls: Array<{
+    topic: string;
+    querySeedEn?: string[];
+    querySeedZh?: string[];
+  }> = [];
 
   const result = await runResearchGroundingPipeline(
     {
@@ -2160,8 +2605,16 @@ test("academic retry expands sunset wavelength queries and recovers scholarly so
               },
               seedSources,
               {
-                primaryConcepts: ["sunset color", "wavelength", "Rayleigh scattering"],
-                mustHaveTerms: ["sunset color", "wavelength", "Rayleigh scattering"],
+                primaryConcepts: [
+                  "sunset color",
+                  "wavelength",
+                  "Rayleigh scattering",
+                ],
+                mustHaveTerms: [
+                  "sunset color",
+                  "wavelength",
+                  "Rayleigh scattering",
+                ],
               },
             ),
             candidateSources: [],
@@ -2173,8 +2626,9 @@ test("academic retry expands sunset wavelength queries and recovers scholarly so
         }
 
         const retryQuery =
-          input.querySeedEn?.find((query) => /Rayleigh scattering|atmospheric optics/i.test(query)) ??
-          input.topic;
+          input.querySeedEn?.find((query) =>
+            /Rayleigh scattering|atmospheric optics/i.test(query),
+          ) ?? input.topic;
         const sources = academicSourceSet(
           {
             query: retryQuery,
@@ -2194,23 +2648,36 @@ test("academic retry expands sunset wavelength queries and recovers scholarly so
           },
           sources,
           {
-            primaryConcepts: ["sunset color", "wavelength", "Rayleigh scattering"],
-            mustHaveTerms: ["sunset color", "wavelength", "Rayleigh scattering"],
+            primaryConcepts: [
+              "sunset color",
+              "wavelength",
+              "Rayleigh scattering",
+            ],
+            mustHaveTerms: [
+              "sunset color",
+              "wavelength",
+              "Rayleigh scattering",
+            ],
           },
         ) as any;
       },
     },
   );
 
-  const retryQueries = calls.slice(1).flatMap((call) => [
-    ...(call.querySeedEn ?? []),
-    ...(call.querySeedZh ?? []),
-  ]);
+  const retryQueries = calls
+    .slice(1)
+    .flatMap((call) => [
+      ...(call.querySeedEn ?? []),
+      ...(call.querySeedZh ?? []),
+    ]);
   assert.equal(result.status, "source_review_ready");
   assert.equal(result.academicRetry?.count, 1);
   assert.equal(result.academicRetry?.exhausted, false);
   assert.equal(result.sourceQualitySummary?.academicEnough, true);
-  assert.equal((result.sourceQualitySummary?.peerReviewedOrDoiCount ?? 0) >= 3, true);
+  assert.equal(
+    (result.sourceQualitySummary?.peerReviewedOrDoiCount ?? 0) >= 3,
+    true,
+  );
   assert.match(retryQueries.join(" "), /Rayleigh scattering/);
   assert.match(retryQueries.join(" "), /atmospheric optics/);
   assert.match(retryQueries.join(" "), /sunset spectrum|spectral irradiance/);
@@ -2220,27 +2687,33 @@ test("academicRetryQueryExpansion covers requested Chinese topic families", asyn
   const cases: Array<{ topic: string; expected: RegExp }> = [
     {
       topic: "太陽餘暉所產生之光波波長研究",
-      expected: /Rayleigh scattering.*atmospheric optics|spectral irradiance.*atmospheric scattering/i,
+      expected:
+        /Rayleigh scattering.*atmospheric optics|spectral irradiance.*atmospheric scattering/i,
     },
     {
       topic: "校園噪音對高中生專注力的影響",
-      expected: /noise exposure.*attention.*adolescents.*school environment.*cognitive performance/i,
+      expected:
+        /noise exposure.*attention.*adolescents.*school environment.*cognitive performance/i,
     },
     {
       topic: "咖啡因攝取對青少年睡眠品質的影響",
-      expected: /caffeine intake.*adolescents.*sleep quality.*circadian rhythm.*systematic review/i,
+      expected:
+        /caffeine intake.*adolescents.*sleep quality.*circadian rhythm.*systematic review/i,
     },
     {
       topic: "太陽帆推進技術的物理原理、太空任務應用與限制",
-      expected: /solar sail propulsion radiation pressure|IKAROS LightSail NEA Scout solar sail/i,
+      expected:
+        /solar sail propulsion radiation pressure|IKAROS LightSail NEA Scout solar sail/i,
     },
     {
       topic: "玉佩在漢代禮制中的文化功能",
-      expected: /Han dynasty jade pendant ritual culture archaeology material culture/i,
+      expected:
+        /Han dynasty jade pendant ritual culture archaeology material culture/i,
     },
     {
       topic: "月兔神話在東亞文化傳播中的變形",
-      expected: /moon rabbit myth East Asia folklore transmission comparative mythology/i,
+      expected:
+        /moon rabbit myth East Asia folklore transmission comparative mythology/i,
     },
   ];
 
@@ -2252,7 +2725,11 @@ test("academicRetryQueryExpansion covers requested Chinese topic families", asyn
       parsedInput,
     });
     const titleParse = parseResearchTitleSentence(item.topic);
-    const seedQueryPlan = buildSeedQueryPlan({ topicAnalysis, titleParse, parsedInput });
+    const seedQueryPlan = buildSeedQueryPlan({
+      topicAnalysis,
+      titleParse,
+      parsedInput,
+    });
     const lexicalSignals = await collectLexicalSignals({
       topicAnalysis,
       titleParse,
@@ -2266,7 +2743,10 @@ test("academicRetryQueryExpansion covers requested Chinese topic families", asyn
     });
     const normalizedSearchTopic =
       seedQueryPlan.normalizedResearchTopic ??
-      normalizeResearchTopic(item.topic, topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW");
+      normalizeResearchTopic(
+        item.topic,
+        topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW",
+      );
     const expansion = academicRetryQueryExpansion({
       base: {
         workflowId: topicAnalysis.workflowId,
@@ -2332,10 +2812,15 @@ test("solar-panel roughness query plan preserves photovoltaic evidence concepts"
   assert.match(queryText, /reflectance|anti-reflection/i);
   assert.match(queryText, /power conversion efficiency|power output/i);
   assert.equal(queryPlan.domain, "energy / photovoltaic engineering");
-  assert.doesNotMatch(queryText, /data governance|social impact|information retrieval/i);
+  assert.doesNotMatch(
+    queryText,
+    /data governance|social impact|information retrieval/i,
+  );
   assert.equal(
     queryPlan.providerQueries.openalex.some((query) =>
-      /^(formation|development|optics|optical|optics formation(?: review| systematic review)?)$/i.test(query),
+      /^(formation|development|optics|optical|optics formation(?: review| systematic review)?)$/i.test(
+        query,
+      ),
     ),
     false,
   );
@@ -2360,7 +2845,8 @@ test("evidence-card acceptance topics keep provider and retry queries topic anch
       ],
       expectedDomain: /photovoltaic engineering/i,
       expected: /solar panel|photovoltaic/i,
-      forbidden: /optics formation|formation development|data governance|social impact/i,
+      forbidden:
+        /optics formation|formation development|data governance|social impact/i,
     },
     {
       topic: "睡眠不足對青少年工作記憶與注意力表現的影響",
@@ -2371,8 +2857,10 @@ test("evidence-card acceptance topics keep provider and retry queries topic anch
         "working memory",
       ],
       expectedDomain: /adolescent cognition/i,
-      expected: /sleep deprivation.*working memory|sleep restriction.*attention/i,
-      forbidden: /dental|oral biofilm|periodontal|^sleep deprivation$|^working memory$/i,
+      expected:
+        /sleep deprivation.*working memory|sleep restriction.*attention/i,
+      forbidden:
+        /dental|oral biofilm|periodontal|^sleep deprivation$|^working memory$/i,
     },
     {
       topic: "海岸人工夜間照明對海龜幼體入海行為的影響",
@@ -2384,7 +2872,8 @@ test("evidence-card acceptance topics keep provider and retry queries topic anch
       ],
       expectedDomain: /sea turtle hatchling orientation/i,
       expected: /sea turtle.*hatchling|artificial light/i,
-      forbidden: /habitat fragmentation|population distribution|conservation corridor|^sea turtle$/i,
+      forbidden:
+        /habitat fragmentation|population distribution|conservation corridor|^sea turtle$/i,
     },
     {
       topic: "同儕回饋對高中生第二語言寫作修訂品質的影響",
@@ -2396,7 +2885,8 @@ test("evidence-card acceptance topics keep provider and retry queries topic anch
       ],
       expectedDomain: /writing education|applied linguistics/i,
       expected: /peer feedback.*second language writing|L2 writing.*revision/i,
-      forbidden: /student engagement|generative AI|artificial intelligence|^peer review$/i,
+      forbidden:
+        /student engagement|generative AI|artificial intelligence|^peer review$/i,
     },
     {
       topic: "活性碳濾材對室內甲醛移除效率的影響因素",
@@ -2407,7 +2897,8 @@ test("evidence-card acceptance topics keep provider and retry queries topic anch
       ],
       expectedDomain: /adsorption engineering|indoor air/i,
       expected: /activated carbon.*formaldehyde|formaldehyde.*adsorption/i,
-      forbidden: /chemistry experiment analysis|laboratory experiment spectroscopy/i,
+      forbidden:
+        /chemistry experiment analysis|laboratory experiment spectroscopy/i,
     },
   ];
 
@@ -2439,7 +2930,10 @@ test("evidence-card acceptance topics keep provider and retry queries topic anch
     });
     const normalizedSearchTopic =
       seedQueryPlan.normalizedResearchTopic ??
-      normalizeResearchTopic(item.topic, topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW");
+      normalizeResearchTopic(
+        item.topic,
+        topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW",
+      );
     const expansion = academicRetryQueryExpansion({
       base: {
         workflowId: topicAnalysis.workflowId,
@@ -2468,7 +2962,11 @@ test("evidence-card acceptance topics keep provider and retry queries topic anch
 });
 
 test("initial grounding search seeds use topic anchors for direct Step 1 photovoltaic search", async () => {
-  const capturedInputs: Array<{ querySeedEn?: string[]; querySeedZh?: string[]; canonicalTopicEn?: string }> = [];
+  const capturedInputs: Array<{
+    querySeedEn?: string[];
+    querySeedZh?: string[];
+    canonicalTopicEn?: string;
+  }> = [];
   await runResearchGroundingPipeline(
     {
       workflowId: "wf-direct-solar-panel-roughness",
@@ -2508,8 +3006,14 @@ test("initial grounding search seeds use topic anchors for direct Step 1 photovo
   const firstInput = capturedInputs[0];
   assert.ok(firstInput, "initial search input should be captured");
   const enText = (firstInput.querySeedEn ?? []).join("\n");
-  assert.match(enText, /surface roughness.*photovoltaic|photovoltaic.*surface|surface texturing.*solar cells/i);
-  assert.doesNotMatch(enText, /(?:^|\n)(formation|development)(?:\n|$)|optics formation/i);
+  assert.match(
+    enText,
+    /surface roughness.*photovoltaic|photovoltaic.*surface|surface texturing.*solar cells/i,
+  );
+  assert.doesNotMatch(
+    enText,
+    /(?:^|\n)(formation|development)(?:\n|$)|optics formation/i,
+  );
   assert.match(firstInput.canonicalTopicEn ?? "", /solar panel|photovoltaic/i);
 });
 
@@ -2529,7 +3033,8 @@ test("runResearchGroundingPipeline accepts natural-science solar sail normalizat
       topic: "太陽帆推進技術的物理原理、太空任務應用與限制",
       normalizedTopic: "太陽帆推進技術的物理原理、太空任務應用與限制",
       selectedDomain: "natural_science",
-      researchQuestion: "太陽帆如何利用太陽輻射壓進行航天推進，其在深空任務中的應用價值與限制為何？",
+      researchQuestion:
+        "太陽帆如何利用太陽輻射壓進行航天推進，其在深空任務中的應用價值與限制為何？",
       bilingualQueries: {
         zh: [
           "太陽帆 輻射壓 推進 原理",
@@ -2543,7 +3048,13 @@ test("runResearchGroundingPipeline accepts natural-science solar sail normalizat
           "IKAROS LightSail NEA Scout solar sail",
         ],
       },
-      excludeTerms: ["sailboat", "sailing sport", "solar panel only", "astrology", "science fiction only"],
+      excludeTerms: [
+        "sailboat",
+        "sailing sport",
+        "solar panel only",
+        "astrology",
+        "science fiction only",
+      ],
       reportType: "研究報告",
       audience: "高中",
       searchProfile: "standard",
@@ -2577,7 +3088,11 @@ test("runResearchGroundingPipeline accepts natural-science solar sail normalizat
           },
           sources,
           {
-            primaryConcepts: ["solar sail propulsion", "radiation pressure", "spacecraft mission"],
+            primaryConcepts: [
+              "solar sail propulsion",
+              "radiation pressure",
+              "spacecraft mission",
+            ],
             mustHaveTerms: ["solar sail", "radiation pressure"],
           },
         );
@@ -2590,13 +3105,19 @@ test("runResearchGroundingPipeline accepts natural-science solar sail normalizat
   const allEn = (firstInput.querySeedEn ?? []).join(" ");
 
   assert.equal(result.originalTopic, "太陽帆與其利用價值");
-  assert.equal(result.normalizedTopic, "太陽帆推進技術的物理原理、太空任務應用與限制");
+  assert.equal(
+    result.normalizedTopic,
+    "太陽帆推進技術的物理原理、太空任務應用與限制",
+  );
   assert.equal(result.groundingDiagnostics?.selectedDomain, "natural_science");
   assert.equal(
     result.groundingDiagnostics?.researchQuestion,
     "太陽帆如何利用太陽輻射壓進行航天推進，其在深空任務中的應用價值與限制為何？",
   );
-  assert.equal(firstInput.topic, "太陽帆推進技術的物理原理、太空任務應用與限制");
+  assert.equal(
+    firstInput.topic,
+    "太陽帆推進技術的物理原理、太空任務應用與限制",
+  );
   assert.equal(firstInput.originalTopic, "太陽帆與其利用價值");
   assert.ok(firstInput.domainHints?.includes("natural_science"));
   assert.match(allZh, /太陽帆 輻射壓 推進 原理/);
@@ -2606,7 +3127,10 @@ test("runResearchGroundingPipeline accepts natural-science solar sail normalizat
   assert.match(allEn, /solar sail spacecraft mission applications/);
   assert.match(allEn, /solar sailing deep space exploration limitations/);
   assert.match(allEn, /IKAROS LightSail NEA Scout solar sail/);
-  assert.doesNotMatch(allEn, /artificial intelligence|generative AI|AI tutoring|AI in education/i);
+  assert.doesNotMatch(
+    allEn,
+    /artificial intelligence|generative AI|AI tutoring|AI in education/i,
+  );
   assert.ok(firstInput.excludeTerms?.includes("sailboat"));
   assert.equal(result.groundingDiagnostics?.canProceedToSourceReview, true);
   assert.ok((result.sourceCandidates?.length ?? 0) >= 4);
@@ -2623,8 +3147,14 @@ test("runResearchGroundingPipeline generates bilingual AI writing queries with t
     },
     {
       searchHandler: async (input) => {
-        assert.ok((input.querySeedZh ?? []).some((query) => /高中生|寫作/u.test(query)));
-        assert.ok((input.querySeedEn ?? []).some((query) => /generative AI|writing ability|AI literacy/i.test(query)));
+        assert.ok(
+          (input.querySeedZh ?? []).some((query) => /高中生|寫作/u.test(query)),
+        );
+        assert.ok(
+          (input.querySeedEn ?? []).some((query) =>
+            /generative AI|writing ability|AI literacy/i.test(query),
+          ),
+        );
         const sources = academicSourceSet(
           {
             query: "generative AI writing ability high school students",
@@ -2644,7 +3174,12 @@ test("runResearchGroundingPipeline generates bilingual AI writing queries with t
           },
           sources,
           {
-            primaryConcepts: ["generative AI", "writing ability", "AI literacy", "education"],
+            primaryConcepts: [
+              "generative AI",
+              "writing ability",
+              "AI literacy",
+              "education",
+            ],
             mustHaveTerms: ["generative AI", "writing ability"],
           },
         );
@@ -2652,7 +3187,8 @@ test("runResearchGroundingPipeline generates bilingual AI writing queries with t
     },
   );
 
-  const traceable = result.sourceCandidates?.filter((source) => source.doi || source.url) ?? [];
+  const traceable =
+    result.sourceCandidates?.filter((source) => source.doi || source.url) ?? [];
   assert.ok(traceable.length >= 5);
 });
 
@@ -2667,8 +3203,16 @@ test("runResearchGroundingPipeline expands English RAG citation accuracy topic w
     },
     {
       searchHandler: async (input) => {
-        assert.ok((input.querySeedEn ?? []).some((query) => /citation accuracy/i.test(query)));
-        assert.ok((input.querySeedEn ?? []).some((query) => /source attribution|faithfulness|factuality/i.test(query)));
+        assert.ok(
+          (input.querySeedEn ?? []).some((query) =>
+            /citation accuracy/i.test(query),
+          ),
+        );
+        assert.ok(
+          (input.querySeedEn ?? []).some((query) =>
+            /source attribution|faithfulness|factuality/i.test(query),
+          ),
+        );
         return mockedGroundingSearchResult(
           {
             topic: input.topic,
@@ -2687,22 +3231,38 @@ test("runResearchGroundingPipeline expands English RAG citation accuracy topic w
             5,
           ),
           {
-            primaryConcepts: ["retrieval augmented generation", "citation accuracy", "source attribution"],
-            mustHaveTerms: ["retrieval augmented generation", "citation accuracy"],
+            primaryConcepts: [
+              "retrieval augmented generation",
+              "citation accuracy",
+              "source attribution",
+            ],
+            mustHaveTerms: [
+              "retrieval augmented generation",
+              "citation accuracy",
+            ],
           },
         );
       },
     },
   );
 
-  assert.ok((result.groundingDiagnostics?.firstCandidateLatencyMs ?? 0) <= 6000);
+  assert.ok(
+    (result.groundingDiagnostics?.firstCandidateLatencyMs ?? 0) <= 6000,
+  );
   assert.ok((result.sourceCandidates?.length ?? 0) > 0);
-  assert.equal((result.groundingDiagnostics?.scholarlyRecommendedCount ?? 0) >= 5, true);
+  assert.equal(
+    (result.groundingDiagnostics?.scholarlyRecommendedCount ?? 0) >= 5,
+    true,
+  );
   assert.equal(result.groundingDiagnostics?.officialBackgroundCount ?? 0, 0);
   assert.equal(
     result.sourceCandidates
-      ?.filter((source) => source.recommendationBucket === "scholarly_recommended")
-      .every((source) => Boolean(source.doi || source.venue || source.isPeerReviewed)),
+      ?.filter(
+        (source) => source.recommendationBucket === "scholarly_recommended",
+      )
+      .every((source) =>
+        Boolean(source.doi || source.venue || source.isPeerReviewed),
+      ),
     true,
   );
 });
@@ -2769,9 +3329,15 @@ test("mixed source classification separates NASA, DOI journal, and wallpaper dri
     ),
   });
 
-  const nasaCandidate = result.sourceCandidates.find((source) => source.sourceId === nasa.id);
-  const journalCandidate = result.sourceCandidates.find((source) => source.sourceId === journal.id);
-  const wallpaperCandidate = result.sourceCandidates.find((source) => source.sourceId === wallpaper.id);
+  const nasaCandidate = result.sourceCandidates.find(
+    (source) => source.sourceId === nasa.id,
+  );
+  const journalCandidate = result.sourceCandidates.find(
+    (source) => source.sourceId === journal.id,
+  );
+  const wallpaperCandidate = result.sourceCandidates.find(
+    (source) => source.sourceId === wallpaper.id,
+  );
 
   assert.equal(nasaCandidate?.recommendationBucket, "official_background");
   assert.equal(nasaCandidate?.retrievalMode, "trusted_seed");
@@ -2815,7 +3381,8 @@ test("generic bilingual source classification requires the repeated subject anch
   };
   const dandelion = sourceRecord({
     id: "doi:10.1000/dandelion-terminal-speed",
-    title: "Aerodynamic Shape, Scaling Law of Drag and Terminal Speed of the Dandelion",
+    title:
+      "Aerodynamic Shape, Scaling Law of Drag and Terminal Speed of the Dandelion",
     abstract:
       "This study analyzes pappus shape, aerodynamic drag, and terminal speed during dandelion seed dispersal.",
     doi: "10.1000/dandelion-terminal-speed",
@@ -2825,7 +3392,8 @@ test("generic bilingual source classification requires the repeated subject anch
   });
   const bubbles = sourceRecord({
     id: "doi:10.1000/bubble-terminal-velocity",
-    title: "Terminal Velocity and Drag Coefficient of Single Air Bubbles in Water",
+    title:
+      "Terminal Velocity and Drag Coefficient of Single Air Bubbles in Water",
     abstract:
       "Bubble diameter, drag coefficient, and terminal velocity are measured in stagnant water.",
     doi: "10.1000/bubble-terminal-velocity",
@@ -2835,7 +3403,8 @@ test("generic bilingual source classification requires the repeated subject anch
   });
   const qinEmpire = sourceRecord({
     id: "doi:10.24112/sinohumanitas.122467",
-    title: "Relationship between the Flow of Decisional Messages and the Fall of the Qin Empire",
+    title:
+      "Relationship between the Flow of Decisional Messages and the Fall of the Qin Empire",
     abstract:
       "The fall of the Qin Empire depended on information flow, rational decision making, and education of the princes.",
     doi: "10.24112/sinohumanitas.122467",
@@ -2845,7 +3414,8 @@ test("generic bilingual source classification requires the repeated subject anch
   });
   const review = sourceRecord({
     id: "doi:10.1016/j.jhydrol.2019.06.040",
-    title: "Raindrop size distribution and terminal velocity for rainfall erosivity studies: A review",
+    title:
+      "Raindrop size distribution and terminal velocity for rainfall erosivity studies: A review",
     abstract:
       "This review evaluates raindrop diameter, terminal velocity, fall speed, and measurement evidence for rainfall erosivity studies.",
     doi: "10.1016/j.jhydrol.2019.06.040",
@@ -2886,15 +3456,29 @@ test("generic bilingual source classification requires the repeated subject anch
     ),
   });
 
-  const byId = new Map(result.sourceCandidates.map((source) => [source.sourceId, source]));
+  const byId = new Map(
+    result.sourceCandidates.map((source) => [source.sourceId, source]),
+  );
   assert.equal(byId.get(dandelion.id)?.recommendationBucket, "rejected");
   assert.equal(byId.get(bubbles.id)?.recommendationBucket, "rejected");
-  assert.notEqual(byId.get(qinEmpire.id)?.recommendationBucket, "scholarly_recommended");
+  assert.notEqual(
+    byId.get(qinEmpire.id)?.recommendationBucket,
+    "scholarly_recommended",
+  );
   assert.notEqual(byId.get(qinEmpire.id)?.reviewStatus, "accepted");
-  assert.equal(byId.get(review.id)?.recommendationBucket, "scholarly_recommended");
+  assert.equal(
+    byId.get(review.id)?.recommendationBucket,
+    "scholarly_recommended",
+  );
   assert.equal(byId.get(review.id)?.sourceBucket, "general_academic");
-  assert.equal(byId.get(review.id)?.matchedEntities?.includes("raindrop"), true);
-  assert.equal(byId.get(measurement.id)?.recommendationBucket, "scholarly_recommended");
+  assert.equal(
+    byId.get(review.id)?.matchedEntities?.includes("raindrop"),
+    true,
+  );
+  assert.equal(
+    byId.get(measurement.id)?.recommendationBucket,
+    "scholarly_recommended",
+  );
   assert.notEqual(byId.get(measurement.id)?.sourceBucket, "off_topic");
 
   const irrelevantOnly = buildSourceCandidates({
@@ -2918,7 +3502,9 @@ test("generic bilingual source classification requires the repeated subject anch
   });
 
   assert.equal(
-    irrelevantOnly.sourceCandidates.every((source) => source.reviewStatus === "rejected"),
+    irrelevantOnly.sourceCandidates.every(
+      (source) => source.reviewStatus === "rejected",
+    ),
     true,
   );
   assert.equal(
@@ -2975,7 +3561,10 @@ test("runResearchGroundingPipeline expands a rain topic into English search quer
         searchInputs.push(input);
         const querySeedEn = input.querySeedEn ?? [];
         assert.match(querySeedEn.join(" "), /raindrop terminal velocity/i);
-        assert.equal(querySeedEn.some((query) => /[\u3400-\u9fff]/u.test(query)), false);
+        assert.equal(
+          querySeedEn.some((query) => /[\u3400-\u9fff]/u.test(query)),
+          false,
+        );
         const sources = Array.from({ length: 12 }, (_, index) =>
           sourceRecord({
             id: `rain-expanded-${index + 1}`,
@@ -2992,7 +3581,12 @@ test("runResearchGroundingPipeline expands a rain topic into English search quer
           }),
         );
         return mockedGroundingSearchResult(input, sources, {
-          primaryConcepts: ["raindrop", "terminal velocity", "drop diameter", "aerodynamic drag"],
+          primaryConcepts: [
+            "raindrop",
+            "terminal velocity",
+            "drop diameter",
+            "aerodynamic drag",
+          ],
           mustHaveTerms: ["raindrop", "terminal velocity"],
         });
       },
@@ -3008,7 +3602,9 @@ test("runResearchGroundingPipeline expands a rain topic into English search quer
   assert.equal((result.evidenceCards?.length ?? 0) > 0, true);
   assert.equal(
     result.evidenceCards?.every((card) =>
-      /raindrop|terminal velocity/i.test(card.supportSpan ?? card.supportedByText ?? ""),
+      /raindrop|terminal velocity/i.test(
+        card.supportSpan ?? card.supportedByText ?? "",
+      ),
     ),
     true,
   );
@@ -3044,7 +3640,11 @@ test("runResearchGroundingPipeline keeps OpenAlex and Crossref candidates review
           },
           sources,
           {
-            primaryConcepts: ["sunset color", "wavelength", "Rayleigh scattering"],
+            primaryConcepts: [
+              "sunset color",
+              "wavelength",
+              "Rayleigh scattering",
+            ],
             mustHaveTerms: ["sunset color", "wavelength"],
           },
         );
@@ -3117,7 +3717,11 @@ test("runResearchGroundingPipeline reports stale cache without clearing source c
           },
           sources,
           {
-            primaryConcepts: ["sunset color", "wavelength", "Rayleigh scattering"],
+            primaryConcepts: [
+              "sunset color",
+              "wavelength",
+              "Rayleigh scattering",
+            ],
             mustHaveTerms: ["sunset color", "wavelength"],
           },
         );
@@ -3133,7 +3737,10 @@ test("runResearchGroundingPipeline reports stale cache without clearing source c
     },
   );
 
-  assert.equal(result.groundingDiagnostics?.cacheStatus, "refresh_failed_using_stale");
+  assert.equal(
+    result.groundingDiagnostics?.cacheStatus,
+    "refresh_failed_using_stale",
+  );
   assert.ok((result.sourceCandidates?.length ?? 0) > 0);
 });
 
@@ -3148,10 +3755,14 @@ test("parseResearchTitleSentence extracts independent and dependent variables", 
 
 test("compareTitleSemantics blocks semantic drift for over-broadened polished titles", () => {
   const original = parseResearchTitleSentence("不同溫度對牛奶變質速度的影響");
-  const allowed = parseResearchTitleSentence("不同保存溫度對牛奶變質速度之影響");
+  const allowed =
+    parseResearchTitleSentence("不同保存溫度對牛奶變質速度之影響");
   const blocked = parseResearchTitleSentence("牛奶保存條件與品質變化之探討");
 
-  assert.equal(compareTitleSemantics(original, allowed).isSemanticallyEquivalent, true);
+  assert.equal(
+    compareTitleSemantics(original, allowed).isSemanticallyEquivalent,
+    true,
+  );
   const blockedComparison = compareTitleSemantics(original, blocked);
   assert.equal(blockedComparison.isSemanticallyEquivalent, false);
   assert.equal(
@@ -3198,10 +3809,23 @@ test("analyzeTopicInput rejects generic report requests and ascii keyword garbag
 
   assert.equal(generic.isNonsenseInput, true);
   assert.equal(generic.topicCompleteness?.level, "nonsense_input");
-  assert.match(generic.topicCompleteness?.reason ?? "", /missing_research_subject/);
+  assert.match(
+    generic.topicCompleteness?.reason ?? "",
+    /missing_research_subject/,
+  );
   assert.equal(asciiGarbage.isNonsenseInput, true);
   assert.equal(asciiGarbage.topicCompleteness?.level, "nonsense_input");
   assert.match(asciiGarbage.topicCompleteness?.reason ?? "", /ascii_garbage/);
+});
+
+test("analyzeTopicInput accepts ordinary multi-word English research topics", () => {
+  for (const topic of [
+    "Association between insufficient sleep and academic performance among high school students",
+    "Comparison of LFP and NMC lithium-ion batteries in energy density cycle life and thermal safety",
+  ]) {
+    const analysis = analyzeTopicInput({ topic, workflowId: "qa-topic-english" });
+    assert.equal(analysis.isNonsenseInput, false, topic);
+  }
 });
 
 test("paleontology algae topics keep microfossil and paleoenvironment queries", async () => {
@@ -3227,7 +3851,10 @@ test("paleontology algae topics keep microfossil and paleoenvironment queries", 
 
   assert.match(allQueries, /algal microfossils|microfossils/i);
   assert.match(allQueries, /paleoenvironment|sedimentary environment/i);
-  assert.equal(/habitat ecology|conservation distribution/i.test(allQueries), false);
+  assert.equal(
+    /habitat ecology|conservation distribution/i.test(allQueries),
+    false,
+  );
 });
 
 test("paleontology algae candidates require source evidence before becoming review sources", async () => {
@@ -3292,20 +3919,22 @@ test("paleontology algae candidates require source evidence before becoming revi
         english: ["algal microfossils fossil record paleoenvironment"],
         highPrecision: ["algal microfossils fossil record paleoenvironment"],
         broad: ["algae fossil preservation paleoecology"],
-        coreEnglishAcademic: ["algal microfossils fossil record paleoenvironment"],
+        coreEnglishAcademic: [
+          "algal microfossils fossil record paleoenvironment",
+        ],
         academicSynonyms: [],
         education: [],
         chineseSupplemental: [topic],
         fallbackRelaxed: ["algae fossil preservation"],
-	        phases: [],
-	      },
-	      scoredSources: [softTissue, algalMicrofossils],
-	      candidateSources: [algalMicrofossils],
-	      rejectedSources: [softTissue],
-	      fallbackReviewSources: [],
-	      provider_status: [
-	        {
-	          ok: true,
+        phases: [],
+      },
+      scoredSources: [softTissue, algalMicrofossils],
+      candidateSources: [algalMicrofossils],
+      rejectedSources: [softTissue],
+      fallbackReviewSources: [],
+      provider_status: [
+        {
+          ok: true,
           provider: "OpenAlex",
           query: "algal microfossils fossil record paleoenvironment",
           results: [softTissue, algalMicrofossils],
@@ -3326,17 +3955,24 @@ test("paleontology algae candidates require source evidence before becoming revi
   assert.equal(softCandidate?.reviewStatus, "rejected");
   assert.equal(softCandidate?.rejectionReason, "missing_core_concept");
   assert.match(softCandidate?.abstractZh ?? "", /未顯示藻類、微化石/);
-  assert.equal(/可辨識的證據面向包括.*藻類化石/.test(softCandidate?.abstractZh ?? ""), false);
+  assert.equal(
+    /可辨識的證據面向包括.*藻類化石/.test(softCandidate?.abstractZh ?? ""),
+    false,
+  );
   assert.notEqual(algalCandidate?.reviewStatus, "rejected");
   assert.match(algalCandidate?.abstractZh ?? "", /微化石|藻類化石|古環境/);
 });
 
 test("astronomy education candidates require astronomy source evidence", async () => {
-  const topic = "星星距離我們多遠在科學教育、博物館展示與大眾理解中的角色 天文學 恆星距離 視差 光年 科學教育 博物館展示 大眾理解";
+  const topic =
+    "星星距離我們多遠在科學教育、博物館展示與大眾理解中的角色 天文學 恆星距離 視差 光年 科學教育 博物館展示 大眾理解";
   const parsedInput = parseResearchInput(topic);
   assert.equal(parsedInput.domain, "physics");
   assert.equal(parsedInput.researchIntent, "practical_application");
-  assert.match(parsedInput.queryPlan.enQueries.join(" "), /astronomy|stellar distance|parallax|light year/i);
+  assert.match(
+    parsedInput.queryPlan.enQueries.join(" "),
+    /astronomy|stellar distance|parallax|light year/i,
+  );
 
   const topicAnalysis = analyzeTopicInput({
     topic,
@@ -3351,7 +3987,8 @@ test("astronomy education candidates require astronomy source evidence", async (
   });
   const genericEducation = sourceRecord({
     id: "generic-education",
-    title: "Enhancing Student Motivation and Learning Outcomes through Physical Education",
+    title:
+      "Enhancing Student Motivation and Learning Outcomes through Physical Education",
     abstract:
       "This quasi-experimental study examines student motivation and learning outcomes in secondary school physical education.",
     queryUsed: "stellar distance parallax light year astronomy education",
@@ -3362,7 +3999,8 @@ test("astronomy education candidates require astronomy source evidence", async (
   });
   const astronomyEducation = sourceRecord({
     id: "astronomy-education",
-    title: "Teaching astronomical distances with parallax and light-year models in museum exhibitions",
+    title:
+      "Teaching astronomical distances with parallax and light-year models in museum exhibitions",
     abstract:
       "The study examines astronomy education materials that use stellar parallax, light-year scales, and museum exhibition design to improve public understanding of astronomical distance.",
     queryUsed: "stellar distance parallax light year astronomy education",
@@ -3383,7 +4021,12 @@ test("astronomy education candidates require astronomy source evidence", async (
       topicHash: topicAnalysis.topicHash,
       queryPlanHash: "query-plan-hash",
       searchIntent: {
-        primaryConcepts: ["stellar distance", "parallax", "light year", "astronomy education"],
+        primaryConcepts: [
+          "stellar distance",
+          "parallax",
+          "light year",
+          "astronomy education",
+        ],
         contextConcepts: ["museum exhibition", "public understanding"],
         outcomeConcepts: [],
         populationConcepts: [],
@@ -3396,22 +4039,26 @@ test("astronomy education candidates require astronomy source evidence", async (
         coreConcepts: ["stellar distance", "astronomy education"],
         chinese: [topic],
         english: ["stellar distance parallax light year astronomy education"],
-        highPrecision: ["stellar distance parallax light year astronomy education"],
+        highPrecision: [
+          "stellar distance parallax light year astronomy education",
+        ],
         broad: ["astronomy museum exhibition science education learning"],
-        coreEnglishAcademic: ["stellar distance parallax light year astronomy education"],
+        coreEnglishAcademic: [
+          "stellar distance parallax light year astronomy education",
+        ],
         academicSynonyms: [],
         education: [],
         chineseSupplemental: [topic],
         fallbackRelaxed: ["astronomy education"],
-	        phases: [],
-	      },
-	      scoredSources: [genericEducation, astronomyEducation],
-	      candidateSources: [astronomyEducation],
-	      rejectedSources: [genericEducation],
-	      fallbackReviewSources: [],
-	      provider_status: [
-	        {
-	          ok: true,
+        phases: [],
+      },
+      scoredSources: [genericEducation, astronomyEducation],
+      candidateSources: [astronomyEducation],
+      rejectedSources: [genericEducation],
+      fallbackReviewSources: [],
+      provider_status: [
+        {
+          ok: true,
           provider: "Crossref",
           query: "stellar distance parallax light year astronomy education",
           results: [genericEducation, astronomyEducation],
@@ -3433,15 +4080,22 @@ test("astronomy education candidates require astronomy source evidence", async (
   assert.equal(genericCandidate?.rejectionReason, "missing_core_concept");
   assert.match(genericCandidate?.abstractZh ?? "", /未顯示天文、恆星距離/);
   assert.notEqual(astronomyCandidate?.reviewStatus, "rejected");
-  assert.match(astronomyCandidate?.abstractZh ?? "", /天文距離|天文教育|光年|視差/);
+  assert.match(
+    astronomyCandidate?.abstractZh ?? "",
+    /天文距離|天文教育|光年|視差/,
+  );
 });
 
 test("agricultural waste pollution candidates require agricultural pollution evidence", async () => {
-  const topic = "農業廢料可能造成的污染 農業廢棄物 污染 水質 土壤 富營養化 廢棄物管理 環境影響";
+  const topic =
+    "農業廢料可能造成的污染 農業廢棄物 污染 水質 土壤 富營養化 廢棄物管理 環境影響";
   const parsedInput = parseResearchInput(topic);
   assert.equal(parsedInput.domain, "environment");
   assert.equal(parsedInput.researchIntent, "evaluate_impact");
-  assert.match(parsedInput.queryPlan.enQueries.join(" "), /agricultural waste|runoff|eutrophication/i);
+  assert.match(
+    parsedInput.queryPlan.enQueries.join(" "),
+    /agricultural waste|runoff|eutrophication/i,
+  );
 
   const topicAnalysis = analyzeTopicInput({
     topic,
@@ -3467,7 +4121,8 @@ test("agricultural waste pollution candidates require agricultural pollution evi
   });
   const agriculturalWaste = sourceRecord({
     id: "agricultural-waste-pollution",
-    title: "Agricultural waste and runoff impacts on water quality and soil contamination",
+    title:
+      "Agricultural waste and runoff impacts on water quality and soil contamination",
     abstract:
       "Agricultural residues, manure waste, and nutrient runoff contribute to water pollution, soil contamination, and eutrophication; waste management and pollution control can reduce environmental impacts.",
     queryUsed: "agricultural waste pollution water soil contamination",
@@ -3488,7 +4143,11 @@ test("agricultural waste pollution candidates require agricultural pollution evi
       topicHash: topicAnalysis.topicHash,
       queryPlanHash: "query-plan-hash",
       searchIntent: {
-        primaryConcepts: ["agricultural waste", "agricultural pollution", "water pollution"],
+        primaryConcepts: [
+          "agricultural waste",
+          "agricultural pollution",
+          "water pollution",
+        ],
         contextConcepts: ["runoff", "soil contamination", "eutrophication"],
         outcomeConcepts: ["environmental impact"],
         populationConcepts: [],
@@ -3501,22 +4160,26 @@ test("agricultural waste pollution candidates require agricultural pollution evi
         coreConcepts: ["農業廢棄物", "污染", "水質", "土壤"],
         chinese: [topic],
         english: ["agricultural waste pollution water soil contamination"],
-        highPrecision: ["agricultural waste pollution water soil contamination"],
+        highPrecision: [
+          "agricultural waste pollution water soil contamination",
+        ],
         broad: ["agricultural runoff nutrient pollution eutrophication"],
-        coreEnglishAcademic: ["agricultural waste pollution water soil contamination"],
+        coreEnglishAcademic: [
+          "agricultural waste pollution water soil contamination",
+        ],
         academicSynonyms: [],
         education: [],
         chineseSupplemental: [topic],
         fallbackRelaxed: ["agricultural waste pollution"],
-	        phases: [],
-	      },
-	      scoredSources: [salmonellaFoodSafety, agriculturalWaste],
-	      candidateSources: [agriculturalWaste],
-	      rejectedSources: [salmonellaFoodSafety],
-	      fallbackReviewSources: [],
-	      provider_status: [
-	        {
-	          ok: true,
+        phases: [],
+      },
+      scoredSources: [salmonellaFoodSafety, agriculturalWaste],
+      candidateSources: [agriculturalWaste],
+      rejectedSources: [salmonellaFoodSafety],
+      fallbackReviewSources: [],
+      provider_status: [
+        {
+          ok: true,
           provider: "Crossref",
           query: "agricultural waste pollution water soil contamination",
           results: [salmonellaFoodSafety, agriculturalWaste],
@@ -3542,10 +4205,14 @@ test("agricultural waste pollution candidates require agricultural pollution evi
 });
 
 test("AI work impact candidates require AI and workplace evidence", async () => {
-  const topic = "AI發展對於工作的本質影響 人工智慧 工作本質 勞動市場 職務變遷 組織管理 社會影響";
+  const topic =
+    "AI發展對於工作的本質影響 人工智慧 工作本質 勞動市場 職務變遷 組織管理 社會影響";
   const parsedInput = parseResearchInput(topic);
   assert.equal(parsedInput.researchIntent, "evaluate_impact");
-  assert.match(parsedInput.queryPlan.enQueries.join(" "), /artificial intelligence|labor market|work transformation/i);
+  assert.match(
+    parsedInput.queryPlan.enQueries.join(" "),
+    /artificial intelligence|labor market|work transformation/i,
+  );
 
   const topicAnalysis = analyzeTopicInput({
     topic,
@@ -3571,7 +4238,8 @@ test("AI work impact candidates require AI and workplace evidence", async () => 
   });
   const aiWork = sourceRecord({
     id: "ai-work-impact",
-    title: "Artificial intelligence, task automation, and labor market transformation",
+    title:
+      "Artificial intelligence, task automation, and labor market transformation",
     abstract:
       "The study evaluates how artificial intelligence and generative AI change work tasks, employment, skills demand, workplace practices, and organizational management.",
     queryUsed: "artificial intelligence impact on work labor market jobs",
@@ -3592,7 +4260,11 @@ test("AI work impact candidates require AI and workplace evidence", async () => 
       topicHash: topicAnalysis.topicHash,
       queryPlanHash: "query-plan-hash",
       searchIntent: {
-        primaryConcepts: ["artificial intelligence", "future of work", "labor market"],
+        primaryConcepts: [
+          "artificial intelligence",
+          "future of work",
+          "labor market",
+        ],
         contextConcepts: ["task automation", "skills demand", "workplace"],
         outcomeConcepts: ["job transformation", "employment"],
         populationConcepts: ["workers"],
@@ -3605,22 +4277,26 @@ test("AI work impact candidates require AI and workplace evidence", async () => 
         coreConcepts: ["人工智慧", "工作本質", "勞動市場"],
         chinese: [topic],
         english: ["artificial intelligence impact on work labor market jobs"],
-        highPrecision: ["artificial intelligence impact on work labor market jobs"],
+        highPrecision: [
+          "artificial intelligence impact on work labor market jobs",
+        ],
         broad: ["AI automation employment skills task transformation"],
-        coreEnglishAcademic: ["artificial intelligence impact on work labor market jobs"],
+        coreEnglishAcademic: [
+          "artificial intelligence impact on work labor market jobs",
+        ],
         academicSynonyms: [],
         education: [],
         chineseSupplemental: [topic],
         fallbackRelaxed: ["AI future of work"],
-	        phases: [],
-	      },
-	      scoredSources: [brandStrategy, aiWork],
-	      candidateSources: [aiWork],
-	      rejectedSources: [brandStrategy],
-	      fallbackReviewSources: [],
-	      provider_status: [
-	        {
-	          ok: true,
+        phases: [],
+      },
+      scoredSources: [brandStrategy, aiWork],
+      candidateSources: [aiWork],
+      rejectedSources: [brandStrategy],
+      fallbackReviewSources: [],
+      provider_status: [
+        {
+          ok: true,
           provider: "Crossref",
           query: "artificial intelligence impact on work labor market jobs",
           results: [brandStrategy, aiWork],
@@ -3646,10 +4322,14 @@ test("AI work impact candidates require AI and workplace evidence", async () => 
 });
 
 test("cola health candidates require beverage health evidence", async () => {
-  const topic = "可樂中的成分與攝取習慣對健康的影響 可樂 含糖飲料 糖分 咖啡因 攝取習慣 健康風險";
+  const topic =
+    "可樂中的成分與攝取習慣對健康的影響 可樂 含糖飲料 糖分 咖啡因 攝取習慣 健康風險";
   const parsedInput = parseResearchInput(topic);
   assert.equal(parsedInput.researchIntent, "evaluate_impact");
-  assert.match(parsedInput.queryPlan.enQueries.join(" "), /cola|soft drink|sugar-sweetened/i);
+  assert.match(
+    parsedInput.queryPlan.enQueries.join(" "),
+    /cola|soft drink|sugar-sweetened/i,
+  );
 
   const topicAnalysis = analyzeTopicInput({
     topic,
@@ -3675,10 +4355,12 @@ test("cola health candidates require beverage health evidence", async () => {
   });
   const sugaryDrinks = sourceRecord({
     id: "sugary-drinks-health",
-    title: "Sugar-sweetened beverage consumption and adolescent metabolic health",
+    title:
+      "Sugar-sweetened beverage consumption and adolescent metabolic health",
     abstract:
       "This cohort study examines soft drink and sugar-sweetened beverage intake, added sugar exposure, obesity, dental caries, and metabolic health outcomes among adolescents.",
-    queryUsed: "sugar-sweetened beverages consumption obesity metabolic health review",
+    queryUsed:
+      "sugar-sweetened beverages consumption obesity metabolic health review",
     sourceType: "Crossref",
     provider: "Crossref",
     relevanceScore: 86,
@@ -3696,35 +4378,48 @@ test("cola health candidates require beverage health evidence", async () => {
       topicHash: topicAnalysis.topicHash,
       queryPlanHash: "query-plan-hash",
       searchIntent: {
-        primaryConcepts: ["cola", "soft drink", "sugar-sweetened beverage", "含糖飲料"],
+        primaryConcepts: [
+          "cola",
+          "soft drink",
+          "sugar-sweetened beverage",
+          "含糖飲料",
+        ],
         contextConcepts: ["consumption", "dietary intake", "攝取習慣"],
-        outcomeConcepts: ["sugar", "caffeine", "health", "obesity", "dental caries"],
+        outcomeConcepts: [
+          "sugar",
+          "caffeine",
+          "health",
+          "obesity",
+          "dental caries",
+        ],
         populationConcepts: ["adolescents"],
         lowWeightTerms: [],
         mustHaveTerms: ["cola", "sugar", "health", "可樂", "健康"],
         plannerStatus: "rule_fallback",
         fallbackUsed: false,
       },
-	      queries: {
-	        coreConcepts: ["可樂", "含糖飲料", "糖分", "咖啡因", "健康"],
-	        chinese: [topic],
-	        english: ["cola sugar caffeine consumption health effects"],
-        highPrecision: ["sugar-sweetened beverages consumption obesity metabolic health review"],
+      queries: {
+        coreConcepts: ["可樂", "含糖飲料", "糖分", "咖啡因", "健康"],
+        chinese: [topic],
+        english: ["cola sugar caffeine consumption health effects"],
+        highPrecision: [
+          "sugar-sweetened beverages consumption obesity metabolic health review",
+        ],
         broad: ["soft drink consumption health effects"],
         coreEnglishAcademic: ["cola sugar caffeine consumption health effects"],
         academicSynonyms: [],
         education: [],
         chineseSupplemental: [topic],
-	        fallbackRelaxed: ["cola health"],
-	        phases: [],
-	      },
-	      scoredSources: [microplastics, sugaryDrinks],
-	      candidateSources: [sugaryDrinks],
-	      rejectedSources: [microplastics],
-	      fallbackReviewSources: [],
-	      provider_status: [
-	        {
-	          ok: true,
+        fallbackRelaxed: ["cola health"],
+        phases: [],
+      },
+      scoredSources: [microplastics, sugaryDrinks],
+      candidateSources: [sugaryDrinks],
+      rejectedSources: [microplastics],
+      fallbackReviewSources: [],
+      provider_status: [
+        {
+          ok: true,
           provider: "Crossref",
           query: "cola sugar caffeine consumption health effects",
           results: [microplastics, sugaryDrinks],
@@ -3744,13 +4439,20 @@ test("cola health candidates require beverage health evidence", async () => {
 
   assert.equal(microplasticCandidate?.reviewStatus, "rejected");
   assert.equal(microplasticCandidate?.rejectionReason, "low_topic_relevance");
-  assert.match(microplasticCandidate?.abstractZh ?? "", /未同時顯示可樂／含糖飲料/);
+  assert.match(
+    microplasticCandidate?.abstractZh ?? "",
+    /未同時顯示可樂／含糖飲料/,
+  );
   assert.notEqual(sugaryDrinkCandidate?.reviewStatus, "rejected");
-  assert.match(sugaryDrinkCandidate?.abstractZh ?? "", /含糖飲料|糖分與咖啡因|健康風險/);
+  assert.match(
+    sugaryDrinkCandidate?.abstractZh ?? "",
+    /含糖飲料|糖分與咖啡因|健康風險/,
+  );
 });
 
 test("cola health query plan ignores broad life-environment wording drift", async () => {
-  const topic = "可樂中的成分與攝取習慣對健康的影響 生命環境 生態影響 健康風險 管理";
+  const topic =
+    "可樂中的成分與攝取習慣對健康的影響 生命環境 生態影響 健康風險 管理";
   const topicAnalysis = analyzeTopicInput({
     topic,
     workflowId: "wf-cola-health-domain-hint",
@@ -3769,9 +4471,18 @@ test("cola health query plan ignores broad life-environment wording drift", asyn
     ...queryPlan.bilingualQueries.en,
   ].join(" ");
 
-  assert.match(queryText, /cola sugar caffeine|soft drink consumption|sugar-sweetened beverages/i);
-  assert.doesNotMatch(queryText, /microplastics human health|微塑膠 人體健康|Salmonella food safety/i);
-  assert.match(queryPlan.excludedDriftTerms.join(" "), /microplastics human health|Salmonella food safety/);
+  assert.match(
+    queryText,
+    /cola sugar caffeine|soft drink consumption|sugar-sweetened beverages/i,
+  );
+  assert.doesNotMatch(
+    queryText,
+    /microplastics human health|微塑膠 人體健康|Salmonella food safety/i,
+  );
+  assert.match(
+    queryPlan.excludedDriftTerms.join(" "),
+    /microplastics human health|Salmonella food safety/,
+  );
 });
 
 test("parseResearchTitleSentence recognizes compact mechanism titles", () => {
@@ -3828,8 +4539,14 @@ test("runResearchGroundingPipeline blocks dangerous actionable topics before any
   assert.equal(searchCalled, false);
   assert.equal(result.status, "partial");
   assert.equal(result.parsedInput?.nextAction, "block");
-  assert.equal(result.parsedInput?.safetyCategory, "illegal_drug_manufacturing");
-  assert.equal(result.warnings.some((warning) => warning.includes("非法藥物製造")), true);
+  assert.equal(
+    result.parsedInput?.safetyCategory,
+    "illegal_drug_manufacturing",
+  );
+  assert.equal(
+    result.warnings.some((warning) => warning.includes("非法藥物製造")),
+    true,
+  );
 });
 
 test("runResearchGroundingPipeline returns topic options for ambiguous short inputs without searching", async () => {
@@ -3878,7 +4595,9 @@ test("runResearchGroundingPipeline searches generic meaningful topics without fo
         const querySeedEn = input.querySeedEn ?? [];
         assert.match(input.originalTopic ?? input.topic, /少子化|高齡化/);
         assert.equal(
-          querySeedEn.some((query) => /low fertility|population aging|policy response/i.test(query)),
+          querySeedEn.some((query) =>
+            /low fertility|population aging|policy response/i.test(query),
+          ),
           true,
         );
         const good = sourceRecord({
@@ -3886,7 +4605,8 @@ test("runResearchGroundingPipeline searches generic meaningful topics without fo
           title: "Policy responses to low fertility and population aging",
           abstract:
             "This review discusses low fertility, population aging, policy responses, family support, and long-term care adaptation strategies.",
-          queryUsed: querySeedEn[0] ?? "low fertility population aging policy response",
+          queryUsed:
+            querySeedEn[0] ?? "low fertility population aging policy response",
           relevanceScore: 90,
           sourceQualityScore: 84,
           sourceType: "OpenAlex",
@@ -3900,7 +4620,12 @@ test("runResearchGroundingPipeline searches generic meaningful topics without fo
           topicHash: "topic-hash",
           queryPlanHash: "query-plan-hash",
           searchIntent: {
-            primaryConcepts: ["少子化", "高齡化", "low fertility", "population aging"],
+            primaryConcepts: [
+              "少子化",
+              "高齡化",
+              "low fertility",
+              "population aging",
+            ],
             contextConcepts: ["policy response"],
             outcomeConcepts: ["應對方式"],
             populationConcepts: [],
@@ -3927,7 +4652,9 @@ test("runResearchGroundingPipeline searches generic meaningful topics without fo
           provider_status: [
             {
               ok: true,
-              query: querySeedEn[0] ?? "low fertility population aging policy response",
+              query:
+                querySeedEn[0] ??
+                "low fertility population aging policy response",
               provider: "OpenAlex",
               results: [good],
               error_type: null,
@@ -3936,7 +4663,12 @@ test("runResearchGroundingPipeline searches generic meaningful topics without fo
           ],
           planner: {
             normalizedTopic: input.topic,
-            primaryConcepts: ["少子化", "高齡化", "low fertility", "population aging"],
+            primaryConcepts: [
+              "少子化",
+              "高齡化",
+              "low fertility",
+              "population aging",
+            ],
             contextConcepts: ["policy response"],
             outcomeConcepts: ["應對方式"],
             populationConcepts: [],
@@ -3976,7 +4708,8 @@ test("runResearchGroundingPipeline keeps accepted evidence cards source-grounded
         const good = sourceRecord({
           id: "openalex-1",
           title: "咖啡因對心率變化的影響：系統性回顧",
-          abstract: "本研究回顧指出，咖啡因攝取與心率短期上升之間存在可觀察關聯。",
+          abstract:
+            "本研究回顧指出，咖啡因攝取與心率短期上升之間存在可觀察關聯。",
           queryUsed: input.topic,
           relevanceScore: 92,
           sourceQualityScore: 86,
@@ -3986,7 +4719,8 @@ test("runResearchGroundingPipeline keeps accepted evidence cards source-grounded
         const review = sourceRecord({
           id: "crossref-2",
           title: "Caffeine and subjective alertness in students",
-          abstract: "This paper discusses caffeine, alertness, and study habits.",
+          abstract:
+            "This paper discusses caffeine, alertness, and study habits.",
           queryUsed: input.topic,
           relevanceScore: 58,
           sourceQualityScore: 78,
@@ -3996,7 +4730,8 @@ test("runResearchGroundingPipeline keeps accepted evidence cards source-grounded
         const bad = sourceRecord({
           id: "core-3",
           title: "Bridge structure load comparison",
-          abstract: "Engineering discussion unrelated to caffeine or heart rate.",
+          abstract:
+            "Engineering discussion unrelated to caffeine or heart rate.",
           queryUsed: input.topic,
           relevanceScore: 22,
           sourceQualityScore: 72,
@@ -4158,8 +4893,14 @@ test("runResearchGroundingPipeline keeps accepted evidence cards source-grounded
 
   assert.equal(result.status, "waiting_for_review");
   assert.equal(result.groundingDiagnostics?.canProceedToSourceReview, false);
-  assert.equal(result.sourceCandidates?.some((item) => item.reviewStatus === "accepted"), true);
-  assert.equal(result.sourceCandidates?.some((item) => item.reviewStatus === "review"), true);
+  assert.equal(
+    result.sourceCandidates?.some((item) => item.reviewStatus === "accepted"),
+    true,
+  );
+  assert.equal(
+    result.sourceCandidates?.some((item) => item.reviewStatus === "review"),
+    true,
+  );
   assert.equal(
     result.candidateSources?.every(
       (item) =>
@@ -4171,7 +4912,9 @@ test("runResearchGroundingPipeline keeps accepted evidence cards source-grounded
     true,
   );
   assert.equal(
-    result.sourceCandidates?.some((item) => /中文摘要：/.test(item.abstractZh ?? "")),
+    result.sourceCandidates?.some((item) =>
+      /中文摘要：/.test(item.abstractZh ?? ""),
+    ),
     true,
   );
   assert.equal(
@@ -4189,14 +4932,20 @@ test("runResearchGroundingPipeline keeps accepted evidence cards source-grounded
     result.evidenceCards?.length ?? 0,
   );
   assert.equal(
-    (result.groundingDiagnostics?.claimExtraction?.evidenceCardsWithSupportSpan ?? 0) >= 1,
+    (result.groundingDiagnostics?.claimExtraction
+      ?.evidenceCardsWithSupportSpan ?? 0) >= 1,
     true,
   );
-  assert.equal(result.evidenceCards?.some((card) => card.sourceId === "openalex-1"), true);
+  assert.equal(
+    result.evidenceCards?.some((card) => card.sourceId === "openalex-1"),
+    true,
+  );
   assert.equal(
     result.evidenceCards?.every((card) =>
       result.sourceCandidates?.some(
-        (source) => source.sourceId === card.sourceId && source.reviewStatus === "accepted",
+        (source) =>
+          source.sourceId === card.sourceId &&
+          source.reviewStatus === "accepted",
       ),
     ),
     true,
@@ -4217,7 +4966,8 @@ test("runResearchGroundingPipeline promotes top candidates to review when all in
           sourceRecord({
             id: `candidate-${index + 1}`,
             title: `Student alertness study ${index + 1}`,
-            abstract: "This study discusses caffeine intake patterns in students.",
+            abstract:
+              "This study discusses caffeine intake patterns in students.",
             queryUsed: "caffeine heart rate change",
             sourceType: index % 2 === 0 ? "Crossref" : "OpenAlex",
             provider: index % 2 === 0 ? "Crossref" : "OpenAlex",
@@ -4364,7 +5114,10 @@ test("runResearchGroundingPipeline promotes top candidates to review when all in
     },
   );
 
-  const reviewCount = result.sourceCandidates?.filter((source) => source.reviewStatus === "review").length ?? 0;
+  const reviewCount =
+    result.sourceCandidates?.filter(
+      (source) => source.reviewStatus === "review",
+    ).length ?? 0;
   assert.equal(reviewCount > 0, true);
   assert.equal(
     result.sourceCandidates
@@ -4383,7 +5136,10 @@ test("runResearchGroundingPipeline promotes top candidates to review when all in
   assert.equal(
     result.groundingDiagnostics?.canProceedToSourceReview,
     true,
-    JSON.stringify({ reviewCount, groundingDiagnostics: result.groundingDiagnostics }),
+    JSON.stringify({
+      reviewCount,
+      groundingDiagnostics: result.groundingDiagnostics,
+    }),
   );
 });
 
@@ -4395,7 +5151,11 @@ test("runResearchGroundingPipeline keeps normal science keyword topics searchabl
       title: "Saponification reaction and alkaline hydrolysis of esters",
       abstract:
         "This review explains saponification reaction, alkaline hydrolysis of esters, triglyceride hydrolysis, soap formation, glycerol, and fatty acid salts.",
-      primaryConcepts: ["saponification reaction", "alkaline hydrolysis", "ester hydrolysis"],
+      primaryConcepts: [
+        "saponification reaction",
+        "alkaline hydrolysis",
+        "ester hydrolysis",
+      ],
     },
     {
       topic: "氧化還原反應",
@@ -4403,7 +5163,11 @@ test("runResearchGroundingPipeline keeps normal science keyword topics searchabl
       title: "Redox reaction and oxidation-reduction electron transfer",
       abstract:
         "This review explains redox reaction, oxidation-reduction chemistry, electron transfer, oxidation state, oxidizing agent, and reducing agent.",
-      primaryConcepts: ["redox reaction", "oxidation-reduction reaction", "electron transfer"],
+      primaryConcepts: [
+        "redox reaction",
+        "oxidation-reduction reaction",
+        "electron transfer",
+      ],
     },
   ];
 
@@ -4438,7 +5202,10 @@ test("runResearchGroundingPipeline keeps normal science keyword topics searchabl
         },
       },
     );
-    const candidateCount = result.sourceCandidates?.filter((source) => source.reviewStatus !== "rejected").length ?? 0;
+    const candidateCount =
+      result.sourceCandidates?.filter(
+        (source) => source.reviewStatus !== "rejected",
+      ).length ?? 0;
     assert.equal(candidateCount >= 10, true, item.topic);
     assert.equal(
       result.warnings?.some((warning) => warning.includes("主題仍偏短或多義")),
@@ -4481,14 +5248,21 @@ test("runResearchGroundingPipeline searches protein muscle growth with English a
         );
 
         return mockedGroundingSearchResult(input, sources, {
-          primaryConcepts: ["protein intake", "muscle hypertrophy", "muscle protein synthesis"],
+          primaryConcepts: [
+            "protein intake",
+            "muscle hypertrophy",
+            "muscle protein synthesis",
+          ],
           mustHaveTerms: ["protein intake", "muscle hypertrophy"],
         });
       },
     },
   );
 
-  const candidateCount = result.sourceCandidates?.filter((source) => source.reviewStatus !== "rejected").length ?? 0;
+  const candidateCount =
+    result.sourceCandidates?.filter(
+      (source) => source.reviewStatus !== "rejected",
+    ).length ?? 0;
   assert.equal(searchCalled, true);
   assert.equal(result.parsedInput?.domain, "biology");
   assert.equal(candidateCount >= 10, true);
@@ -4526,7 +5300,9 @@ test("runResearchGroundingPipeline searches tea organ health with English academ
             title: `Green tea polyphenols catechins and organ health review ${index + 1}`,
             abstract:
               "This systematic review discusses tea polyphenols, catechins, EGCG, liver, kidney, cardiovascular health, metabolism, and organ health effects.",
-            queryUsed: querySeedEn[0] ?? "tea polyphenols catechins liver kidney cardiovascular health",
+            queryUsed:
+              querySeedEn[0] ??
+              "tea polyphenols catechins liver kidney cardiovascular health",
             sourceType: index % 2 === 0 ? "Crossref" : "OpenAlex",
             provider: index % 2 === 0 ? "Crossref" : "OpenAlex",
             doi: `10.1000/tea-organ-${index + 1}`,
@@ -4535,14 +5311,22 @@ test("runResearchGroundingPipeline searches tea organ health with English academ
         );
 
         return mockedGroundingSearchResult(input, sources, {
-          primaryConcepts: ["tea polyphenols", "catechins", "EGCG", "organ health"],
+          primaryConcepts: [
+            "tea polyphenols",
+            "catechins",
+            "EGCG",
+            "organ health",
+          ],
           mustHaveTerms: ["tea", "organ health"],
         });
       },
     },
   );
 
-  const candidateCount = result.sourceCandidates?.filter((source) => source.reviewStatus !== "rejected").length ?? 0;
+  const candidateCount =
+    result.sourceCandidates?.filter(
+      (source) => source.reviewStatus !== "rejected",
+    ).length ?? 0;
   assert.equal(searchCalled, true);
   assert.equal(result.parsedInput?.domain, "medicine");
   assert.equal(candidateCount >= 10, true);
@@ -4573,7 +5357,10 @@ test("runResearchGroundingPipeline does not call providers for nonsense input", 
   assert.equal(searchCalled, false);
   assert.equal(result.parsedInput?.inputType, "invalid");
   assert.equal(result.groundingDiagnostics?.finalUiState, "invalid_input");
-  assert.equal(result.warnings?.[0], "查無可辨識研究主題，請改用具體且有語意的關鍵詞。");
+  assert.equal(
+    result.warnings?.[0],
+    "查無可辨識研究主題，請改用具體且有語意的關鍵詞。",
+  );
 });
 
 test("legacy generic detector traces and suppresses banned output fields", () => {
@@ -4606,7 +5393,10 @@ test("legacy generic detector traces and suppresses banned output fields", () =>
     reportDraft: "討論\n生活連結與資料策略。",
   });
 
-  assert.equal(traces.some((trace) => trace.path === "researchCandidates[0]"), true);
+  assert.equal(
+    traces.some((trace) => trace.path === "researchCandidates[0]"),
+    true,
+  );
   assert.equal(
     traces.some((trace) => trace.path === "reportSections[0].synthesizedProse"),
     true,
@@ -4614,4 +5404,76 @@ test("legacy generic detector traces and suppresses banned output fields", () =>
   assert.deepEqual(sanitized.researchCandidates, []);
   assert.match(sanitized.reportDraft, /目前資料不足/);
   assert.equal(sanitized.warnings.length > 0, true);
+});
+
+test("runResearchGroundingPipeline executes at most three zero-direct-study queries and terminates explicitly", async () => {
+  let zeroDirectFallbackCalls = 0;
+
+  const result = await runResearchGroundingPipeline(
+    {
+      workflowId: "wf-zero-direct-terminal",
+      topic: "effect of Retrieval-Augmented Generation on large language model hallucination",
+      reportType: "正式二手研究報告",
+      audience: "大學",
+    },
+    {
+      searchHandler: async (input) => {
+        if (input.domainHints?.includes("zero_direct_study_query_cascade")) {
+          zeroDirectFallbackCalls += 1;
+        }
+        return mockedGroundingSearchResult(input, [], {
+          primaryConcepts: ["retrieval augmented generation", "hallucination"],
+          mustHaveTerms: ["retrieval", "hallucination"],
+        });
+      },
+    },
+  );
+
+  assert.equal(zeroDirectFallbackCalls, 3);
+  assert.equal(
+    result.fallbackAttempts?.filter(
+      (attempt) => attempt.fallbackReason.startsWith("ZERO_DIRECT_STUDY_QUERY_Q"),
+    ).length,
+    3,
+  );
+  assert.ok(result.fallbackAttempts?.filter((attempt) => attempt.fallbackReason.startsWith("ZERO_DIRECT_STUDY_QUERY_Q")).every((attempt) => attempt.admissionResult === "ZERO_DIRECT_STUDY"));
+  assert.equal(result.warnings?.includes("BLOCKED_NO_DIRECT_STUDY"), true);
+  assert.equal(result.acceptedSources?.length ?? 0, 0);
+});
+
+test("V3 zero-direct cascade stops when the reduced query finds an empirical direct study", async () => {
+  const cascadeQueries: string[] = [];
+  const direct = sourceRecord({
+    id: "rag-direct",
+    title: "Retrieval-augmented generation reduces hallucinations in large language models",
+    abstract: "An empirical benchmark found that RAG improved factuality and reduced hallucination rates across question-answering datasets.",
+    doi: "10.1234/rag-direct",
+    url: "https://doi.org/10.1234/rag-direct",
+    sourceKind: "conference",
+    sourceType: "OpenAlex",
+    provider: "OpenAlex",
+    relevanceScore: 95,
+    sourceQualityScore: 90,
+  });
+  const result = await runResearchGroundingPipeline({
+    workflowId: "wf-zero-direct-reduced",
+    topic: "effect of Retrieval-Augmented Generation on large language model hallucination",
+    reportType: "正式二手研究報告",
+    audience: "大學",
+  }, {
+    searchHandler: async (input) => {
+      const isCascade = input.domainHints?.includes("zero_direct_study_query_cascade") ?? false;
+      if (isCascade) cascadeQueries.push(input.topic);
+      const found = input.domainHints?.includes("zero_direct_study_q2") ? [direct] : [];
+      return mockedGroundingSearchResult(input, found, {
+        primaryConcepts: ["retrieval augmented generation", "hallucination"],
+        mustHaveTerms: ["retrieval", "hallucination"],
+      });
+    },
+  });
+  assert.equal(cascadeQueries.length, 2);
+  const trace = result.fallbackAttempts?.filter((attempt) => attempt.fallbackReason.startsWith("ZERO_DIRECT_STUDY_QUERY_Q")) ?? [];
+  assert.deepEqual(trace.map((attempt) => attempt.queryReason), ["STRICT_TOPIC", "REDUCED_CONJUNCTION"]);
+  assert.equal(trace.at(-1)?.admissionResult, "FOUND_DIRECT_STUDY");
+  assert.equal(result.warnings?.includes("BLOCKED_NO_DIRECT_STUDY"), false);
 });

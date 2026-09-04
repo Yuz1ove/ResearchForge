@@ -1,0 +1,438 @@
+{
+  "schemaVersion": "researchforge-ironman-source-ledger/v1",
+  "generatedAt": "2026-08-30T01:05:00+08:00",
+  "repository": {
+    "root": "/Users/Yuz1ove/Documents/報告工廠/Report-Builder-AI",
+    "branch": "codex/paper-search-performance-v1-20260716",
+    "head": "a89549a6e26a7ac3ae44ad52b5588101baf28b95",
+    "gitHistoryEndsAt": "2026-08-13T23:06:08+08:00",
+    "worktreeEvidenceContinuesThrough": "2026-08-29"
+  },
+  "evidencePolicy": {
+    "publicArticlesMayExposeInternalIdentifiers": false,
+    "gitAndWorktreeHistoryMustRemainDistinct": true,
+    "replayOrFixtureMayCountAsLive": false,
+    "http200MayCountAsFullText": false,
+    "unknownMayCollapseToZero": false,
+    "engineeringPassMayImplyContentAcceptance": false
+  },
+  "recordSchema": {
+    "requiredFields": ["source_id", "source_type", "path_or_commit", "commit_sha_if_applicable", "date", "historical_period", "topics", "reliability", "current_or_historical", "public_safe", "notes"],
+    "legacyAliases": {"id": "source_id", "kind": "source_type", "locator": "path_or_commit", "confidence": "reliability"},
+    "authority": "normalized_entries is the V1 field-complete view; entries is retained for compatibility with ARTICLE-FACT-MAP.json."
+  },
+  "entries": [
+    {
+      "id": "SRC-GIT-INITIAL",
+      "kind": "git_commit",
+      "date": "2026-06-10",
+      "locator": "a20f64a",
+      "supports": ["The first substantial application was an AI report-generator website centered on a large generator UI."],
+      "limitations": ["Does not establish source-grounded research behavior."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-GIT-MODES",
+      "kind": "git_commit",
+      "date": "2026-06-10",
+      "locator": "27cc69a",
+      "supports": ["Early work expanded report modes, styles, and generator behavior."],
+      "limitations": ["Feature expansion is not evidence validation."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-GIT-EXPORT",
+      "kind": "git_commit",
+      "date": "2026-06-10",
+      "locator": "79fce70",
+      "supports": ["Multiple document export options arrived before the mature research pipeline."],
+      "limitations": ["Exportability does not establish research quality."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-GIT-CITATION",
+      "kind": "git_commit",
+      "date": "2026-06-12",
+      "locator": "f0df507",
+      "supports": ["The citation foundation added source retrieval, normalized source records, review state, tests, and shared contracts."],
+      "limitations": ["This was the foundation, not the final canonical evidence model."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-GIT-SEARCH-CORE",
+      "kind": "git_commit",
+      "date": "2026-06-14",
+      "locator": "16b0807",
+      "supports": ["Keyword expansion, provider configuration, search preflight, diagnostics, and tests formed a resilient search core."],
+      "limitations": ["Provider reliability and topic drift remained unresolved."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-GIT-SEARCH-INTENT",
+      "kind": "git_commit",
+      "date": "2026-06-14",
+      "locator": "6a2e5dd",
+      "supports": ["The search intent planner and reranking entered committed history as a distinct step after the resilient search core."],
+      "limitations": ["The commit proves implementation history, not live provider success or research correctness."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-GIT-EVIDENCE-GATE",
+      "kind": "git_commit_group",
+      "date": "2026-06-17",
+      "locator": "db49aa4..a146d27",
+      "supports": ["The project added relevance, authority/language handling, accepted-source synthesis, and generation readiness."],
+      "limitations": ["Several modules still interpreted evidence independently."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-GIT-TOPIC",
+      "kind": "git_commit_group",
+      "date": "2026-06-20/2026-06-21",
+      "locator": "9299c58,a94c046",
+      "supports": ["Entity-aware topic grounding and a topic-understanding planner made search intent explicit."],
+      "limitations": ["Later work continued to repair query sanitation and cross-domain behavior."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-GIT-BUDGET-SEED",
+      "kind": "git_commit",
+      "date": "2026-07-06",
+      "locator": "f33a48c",
+      "supports": ["Search budgets became an explicit engineering concern before V5 unified execution authority."],
+      "limitations": ["This commit does not prove later external-side-effect accounting."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-GIT-DEPLOY",
+      "kind": "git_commit_group",
+      "date": "2026-07-11",
+      "locator": "c0fcf5c..630be8c",
+      "supports": ["A sequence of commits repaired Vercel API configuration, entrypoints, build output, and ESM loading."],
+      "limitations": ["Commit messages show the repairs, not a complete production incident timeline."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-GIT-DURABLE-JOBS",
+      "kind": "git_commit",
+      "date": "2026-07-11",
+      "locator": "3922d4a",
+      "supports": ["Research grounding jobs gained durable repository, deployment contracts, routes, tests, and diagnostics."],
+      "limitations": ["Later V4 work refined lifecycle, revision, and checkpoint semantics in the dirty worktree."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-GIT-PAPER-SEARCH",
+      "kind": "git_commit",
+      "date": "2026-07-16",
+      "locator": "912babd",
+      "supports": ["Direct paper search and summary handoff were added as a user-facing path."],
+      "limitations": ["A direct-search UI does not guarantee direct-study admission."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-GIT-INTELLIGENCE",
+      "kind": "git_commit",
+      "date": "2026-08-13",
+      "locator": "a89549a",
+      "supports": ["The large report-intelligence integration added facts, claim graphs, Writer checks, publication formats, quality gates, and QA artifacts."],
+      "limitations": ["Its own acceptance report was PARTIAL and did not prove multi-topic live generalization."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-DOC-LEARNING-LOG",
+      "kind": "repository_document",
+      "date": "2026-06-17",
+      "locator": "docs/learning-log-2026-06-10-to-2026-06-17.md",
+      "supports": ["The project owner's retrospective record of early goals, scope changes, difficulties, and product decisions."],
+      "limitations": ["Estimated time and retrospective interpretation are not exact runtime telemetry; corroborate implementation claims with git."],
+      "confidence": "medium"
+    },
+    {
+      "id": "SRC-DOC-README",
+      "kind": "repository_document",
+      "date": "committed 2026-08-13",
+      "locator": "README.md",
+      "supports": ["ResearchForge is the official product name; older internal names are retained to preserve package, import, deployment, and iteration history."],
+      "limitations": ["The README is a project description; use dated QA artifacts for later acceptance claims."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-DOC-ARCH-0618",
+      "kind": "repository_document",
+      "date": "2026-06-18",
+      "locator": "docs/ResearchForge/00_Project_Overview/ResearchForge_Architecture_Audit.md",
+      "supports": ["The documented source-first pipeline and key ownership files as of 6/18."],
+      "limitations": ["A historical snapshot; later architecture differs."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-DOC-PROGRESS-0626",
+      "kind": "repository_document",
+      "date": "2026-06-26",
+      "locator": "docs/ResearchForge/06_Codex_Handoffs/ResearchForge_Progress_Log.md",
+      "supports": ["Topic plan fields, search payload alignment, provider degradation, and known runtime risks."],
+      "limitations": ["Handoff notes describe that checkpoint, not the final system."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-SOURCE-SEARCH",
+      "kind": "source_code",
+      "date": "current worktree",
+      "locator": "artifacts/api-server/src/services/search-intent-planner.ts",
+      "supports": ["Current bilingual expansion, relevance scoring, provider coordination, deduplication, and budget-aware planning behavior."],
+      "limitations": ["Dirty-worktree source; not asserted as committed at HEAD."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-SOURCE-PROVIDERS",
+      "kind": "source_code",
+      "date": "current worktree",
+      "locator": "artifacts/api-server/src/services/source-retrieval.ts",
+      "supports": ["Provider-specific OpenAlex, Crossref, and Semantic Scholar normalization and health/retry handling."],
+      "limitations": ["Provider output and availability vary at runtime."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-SOURCE-EVIDENCE-CARDS",
+      "kind": "source_code",
+      "date": "current worktree",
+      "locator": "artifacts/report-factory/src/lib/evidenceCards.ts",
+      "supports": ["Evidence cards bind claims, citations, safety, source identity, and structured Study Facts."],
+      "limitations": ["The current model is more mature than the first evidence-card implementation."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-INTELLIGENCE",
+      "kind": "qa_report",
+      "date": "2026-08-13",
+      "locator": "artifacts/qa/researchforge-report-intelligence-upgrade-20260813/README.md",
+      "supports": ["A report-intelligence vertical slice passed deterministic regression but remained partial because live artifacts and current-model acceptance were incomplete."],
+      "limitations": ["Provider-free benchmarks are not live report acceptance."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-KNOWLEDGE",
+      "kind": "qa_report",
+      "date": "2026-08-13",
+      "locator": "artifacts/qa/researchforge-knowledge-reconstruction-20260813/FINAL-DELIVERY.md",
+      "supports": ["The real model run failed post-edit claim/citation entailment, and formal exports were withheld."],
+      "limitations": ["One controlled topic and model configuration; not a generalization result."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-WRITER-DENSITY",
+      "kind": "qa_report",
+      "date": "2026-08-23",
+      "locator": "artifacts/qa/researchforge-evidence-density-long-report-20260823/FINAL-REPORT.md",
+      "supports": ["Canonicalization removed unsupported/unrealized content; evidence supported a shorter brief rather than the requested long report."],
+      "limitations": ["Frozen/offline acceptance; no live Writer or export in that phase."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-PUBLICATION",
+      "kind": "qa_report",
+      "date": "2026-08-24",
+      "locator": "artifacts/qa/researchforge-publication-layout-citation-v1-20260824T161351+0800/FINAL-REPORT.md",
+      "supports": ["One accepted case passed citation, content-integrity, cross-format, and visual publication gates without Writer regeneration."],
+      "limitations": ["A second case remained blocked; this does not prove generalization."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-PUBLICATION-GEN",
+      "kind": "qa_report",
+      "date": "2026-08-24",
+      "locator": "artifacts/qa/researchforge-publication-v2-generalization-20260824T212745+0800/FINAL-REPORT.md",
+      "supports": ["The accepted publication case remained sound, but zero of three new topics passed the complete canonical export gate."],
+      "limitations": ["Three topics are a bounded stress test, not universal performance."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-INGESTION",
+      "kind": "qa_report",
+      "date": "2026-08-25",
+      "locator": "artifacts/qa/researchforge-general-research-ingestion-20260825T140800+0800/FINAL-REPORT.md",
+      "supports": ["A ten-topic live run produced 0/10 publishable cases; structured study-fact extraction and admission were identified as shared bottlenecks."],
+      "limitations": ["Provider rate limits and extraction-provider failures affected the cohort."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-SOURCE-STUDY-FACTS",
+      "kind": "source_code",
+      "date": "current worktree",
+      "locator": "artifacts/api-server/src/services/research/study-fact-extraction-v2.ts",
+      "supports": ["Study facts distinguish PRESENT, NOT_REPORTED, UNKNOWN, and NOT_APPLICABLE and retain exact provenance."],
+      "limitations": ["Deterministic extraction is intentionally conservative and cannot infer missing fields."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-STUDY-FACTS",
+      "kind": "qa_report",
+      "date": "2026-08-26",
+      "locator": "artifacts/qa/researchforge-general-study-fact-extraction-v2-20260826T222129+0800/FINAL-REPORT.md",
+      "supports": ["Fresh extraction reached 7/10 LIMITED and 0/10 FORMAL, so Writer/export remained closed; replay and live results were separated."],
+      "limitations": ["Frozen replay numbers cannot be promoted to live acceptance."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-EVIDENCE-GAP",
+      "kind": "qa_report",
+      "date": "2026-08-27",
+      "locator": "artifacts/qa/researchforge-evidence-gap-formal-synthesis-v3-20260827T150400+0800/FINAL-REPORT.md",
+      "supports": ["Live materialization was 2/10 LIMITED-or-better and 0/10 FORMAL; one eligible Writer output failed study-level-difference synthesis."],
+      "limitations": ["Five client waits expired before artifacts materialized; unknown counts remained unknown."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-ACQUISITION-V4",
+      "kind": "qa_report",
+      "date": "2026-08-28",
+      "locator": "artifacts/qa/researchforge-acquisition-completion-v4-20260828T003546+0800/FINAL-REPORT.md",
+      "supports": ["All ten jobs reached terminal states after lifecycle, checkpoint, revision, and client-wait semantics were separated."],
+      "limitations": ["Only 1/10 final outputs validated LIMITED-or-better and 0/10 FORMAL."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-SOURCE-CANONICAL",
+      "kind": "source_code",
+      "date": "current worktree",
+      "locator": "artifacts/api-server/src/services/research/canonical-study-admission.ts",
+      "supports": ["One typed owner binds identity, access, facts, provenance, revisions, admission class, and reason codes."],
+      "limitations": ["Control-plane consistency does not improve source availability by itself."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-CANONICAL",
+      "kind": "qa_report",
+      "date": "2026-08-28",
+      "locator": "artifacts/qa/researchforge-canonical-evidence-admission-substrate-v1-final-20260828T033500+0800/FINAL-REPORT.md",
+      "supports": ["Forty-six study decisions projected with zero mismatches; canonical substrate READY while generalization remained false."],
+      "limitations": ["Only 1/10 final reports validated LIMITED-or-better; 0/10 FORMAL."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-SOURCE-FULLTEXT",
+      "kind": "source_code",
+      "date": "current worktree",
+      "locator": "artifacts/api-server/src/services/research/grounding/fullTextAcquisitionV3.ts; artifacts/api-server/src/services/research/grounding/scholarlyPayloadMaterializer.ts",
+      "supports": ["Legal route planning, payload sniffing, format dispatch, identity validation, qualification, and canonical artifact selection are distinct stages."],
+      "limitations": ["Authorized provider availability and lawful access still constrain live recovery."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-FULLTEXT",
+      "kind": "qa_report",
+      "date": "2026-08-28",
+      "locator": "artifacts/qa/researchforge-full-text-acquisition-recovery-v1-20260828T223126+0800/FINAL-REPORT.md",
+      "supports": ["Metadata success had been conflated with artifact creation; the repair made HTTP 200 insufficient and achieved 2/10 qualifying coverage."],
+      "limitations": ["Coverage remained far below the 8/10 readiness gate."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-OA-V2",
+      "kind": "qa_report",
+      "date": "2026-08-29",
+      "locator": "artifacts/qa/researchforge-oa-fulltext-materialization-format-qualification-v2-20260829T073606+0800/FINAL-REPORT.md",
+      "supports": ["Payload forensics repaired narrow false negatives while keeping abstract, landing, scanned, and weak-identity payloads fail closed."],
+      "limitations": ["Fresh qualifying coverage was 2/10."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-DIRECT-V3",
+      "kind": "qa_report",
+      "date": "2026-08-29",
+      "locator": "artifacts/qa/researchforge-fulltext-recovery-direct-study-discovery-v3-20260829T103724+0800/FINAL-REPORT.md",
+      "supports": ["Direct-study discovery reached 9/10 while qualifying-full-text coverage stayed 2/10, separating discovery from materialization."],
+      "limitations": ["0/10 FORMAL; Writer was not run."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-V4-OVERRIDE",
+      "kind": "qa_report_override",
+      "date": "2026-08-29",
+      "locator": "artifacts/qa/researchforge-legal-oa-manifestation-resolution-v4-20260829T114159+0800/FINAL-REPORT.md",
+      "supports": ["A sealed audit superseded the original PARTIAL projection: one qualifying artifact belonged to a BLOCKED canonical source, and a nominal cascade expanded into 22 queries, six providers, and 90 attempt rows."],
+      "limitations": ["The original generated PARTIAL section remains in the file but is explicitly superseded."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-SOURCE-BUDGET",
+      "kind": "source_code",
+      "date": "current worktree",
+      "locator": "artifacts/api-server/src/services/research/authoritative-execution-budget.ts",
+      "supports": ["A single execution ledger distinguishes query, provider, request, retry, redirect, resolver, materialization, fallback, and elapsed-time limits before side effects."],
+      "limitations": ["Budget correctness does not establish content sufficiency."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-QA-V5",
+      "kind": "qa_report",
+      "date": "2026-08-29",
+      "locator": "artifacts/qa/researchforge-canonical-binding-budget-authority-v5-20260829T140709+0800/FINAL-REPORT.md",
+      "supports": ["Canonical binding and budget authority passed with zero mismatch, overrun, or hidden attempts."],
+      "limitations": ["The same fresh cohort had 1/10 direct-study and 0/10 qualifying-full-text coverage; generalization remained false."],
+      "confidence": "high"
+    },
+    {
+      "id": "SRC-ITHOME-2026",
+      "kind": "official_web",
+      "date": "2026-08-30 (recheck failed)",
+      "locator": "https://ithelp.ithome.com.tw/2026ironman/event",
+      "supports": ["Current event details were not rechecked; the official page returned HTTP 403 in this reconstruction run."],
+      "limitations": ["Do not publish category, schedule, registration, or platform-rule claims from this record without a successful current-page verification."],
+      "confidence": "unknown"
+    }
+  ],
+  "normalized_entries": [
+    {"source_id":"SRC-GIT-ROOT","source_type":"git_commit","path_or_commit":"2246770","commit_sha_if_applicable":"2246770e5ba37143aac652dce22b28453f9cff4f","date":"2026-05-28","historical_period":"COMMITTED_GIT","topics":["repository origin","workspace scaffold"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Initial repository scaffold; does not prove the later generator product."},
+    {"source_id":"SRC-GIT-INITIAL","source_type":"git_commit","path_or_commit":"a20f64a","commit_sha_if_applicable":"a20f64acd4ce1b22f887db28a1b73038f4ea2e89","date":"2026-06-10","historical_period":"COMMITTED_GIT","topics":["AI report generator","generator UI"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"First substantial application commit; no source-grounded quality claim."},
+    {"source_id":"SRC-GIT-MODES","source_type":"git_commit","path_or_commit":"27cc69a","commit_sha_if_applicable":"27cc69a16421ba6cd9b5ab1ad502b93be08603f2","date":"2026-06-10","historical_period":"COMMITTED_GIT","topics":["report modes","styles","generator"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Confirms early feature expansion."},
+    {"source_id":"SRC-GIT-EXPORT","source_type":"git_commit","path_or_commit":"79fce70","commit_sha_if_applicable":"79fce70db0ad9bfe30ccdf8523512e8d51d8723c","date":"2026-06-10","historical_period":"COMMITTED_GIT","topics":["document export"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Export path existed before mature research admission."},
+    {"source_id":"SRC-GIT-CITATION","source_type":"git_commit","path_or_commit":"f0df507","commit_sha_if_applicable":"f0df5079a57fef7bb7b69e97f7ad4238de29f873","date":"2026-06-12","historical_period":"COMMITTED_GIT","topics":["citation foundation","Crossref","Semantic Scholar","source records"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"First committed source-search/citation foundation; initial provider set was not yet OpenAlex."},
+    {"source_id":"SRC-GIT-SEARCH-CORE","source_type":"git_commit","path_or_commit":"16b0807","commit_sha_if_applicable":"16b0807daba658a713be2f2bb263ad24156128e8","date":"2026-06-14","historical_period":"COMMITTED_GIT","topics":["resilient source search","query expansion","diagnostics"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Search core implementation and tests; not a live provider success claim."},
+    {"source_id":"SRC-GIT-SEARCH-INTENT","source_type":"git_commit","path_or_commit":"6a2e5dd","commit_sha_if_applicable":"6a2e5dd289ef0aa58d574107a13ced264a383127","date":"2026-06-14","historical_period":"COMMITTED_GIT","topics":["search intent planner","reranking"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Verified commit adding the search intent planner and reranking; not a live-provider or research-correctness claim."},
+    {"source_id":"SRC-GIT-EVIDENCE-GATE","source_type":"git_commit_group","path_or_commit":"db49aa4..a146d27","commit_sha_if_applicable":"db49aa46189948cb449fd8c8c0e056a04dca667d; a146d27e9265cdf849e0629b33a6ea47b2a5137e","date":"2026-06-17","historical_period":"COMMITTED_GIT","topics":["relevance gate","authority","language","accepted sources","readiness"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Clustered commits; exact sub-feature arrival varies within the day."},
+    {"source_id":"SRC-GIT-TOPIC","source_type":"git_commit_group","path_or_commit":"9299c58,a94c046","commit_sha_if_applicable":"9299c5877d173f5a723bf358d0bf36b8a0c756e3; a94c046db80e0e1ec1785fc67ae1324de999369a","date":"2026-06-20/2026-06-21","historical_period":"COMMITTED_GIT","topics":["topic grounding","facets","query seeds","search intent"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Confirms explicit topic planning; later fields must not be backdated."},
+    {"source_id":"SRC-GIT-PROVIDERS-0626","source_type":"git_commit","path_or_commit":"ec20e43","commit_sha_if_applicable":"ec20e43d4e60c58f1468d27c136e1fe84aabac8f","date":"2026-06-26","historical_period":"COMMITTED_GIT","topics":["OpenAlex","Crossref","Semantic Scholar","provider adapters","parsers"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Research provider/parser tree appears in this commit; code existence is not broad live coverage."},
+    {"source_id":"SRC-GIT-DATA-PIPELINE-0626","source_type":"git_commit","path_or_commit":"ec20e43","commit_sha_if_applicable":"ec20e43d4e60c58f1468d27c136e1fe84aabac8f","date":"2026-06-26","historical_period":"COMMITTED_GIT","topics":["normalization","deduplication","evidence cards","research pipeline"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Confirms the research data-layer building blocks."},
+    {"source_id":"SRC-GIT-EVIDENCE-CARD-0626","source_type":"git_commit","path_or_commit":"ec20e43","commit_sha_if_applicable":"ec20e43d4e60c58f1468d27c136e1fe84aabac8f","date":"2026-06-26","historical_period":"COMMITTED_GIT","topics":["evidence card builder","evidence schema"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Backend evidence card builder is present; later canonical fields are not implied."},
+    {"source_id":"SRC-GIT-SYNTHESIS","source_type":"git_commit","path_or_commit":"80fbcbb,5cd5e48","commit_sha_if_applicable":"80fbcbb08a5d297884c4d32bbd56fb647a5c4291; 5cd5e48ef7ce74b30a30080c627248ca55b8262a","date":"2026-06-17/2026-06-18","historical_period":"COMMITTED_GIT","topics":["synthesis","accepted-source synthesis","source-card pasting"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Confirms synthesis direction and accepted-source helper."},
+    {"source_id":"SRC-GIT-REPORT-WRITER","source_type":"git_commit","path_or_commit":"ed05b87","commit_sha_if_applicable":"ed05b873956847be2d6ecad58b8fb1c442c95a55","date":"2026-06-20","historical_period":"COMMITTED_GIT","topics":["report writer","evidence-based report flow"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Writer service appears in the committed ResearchForge line."},
+    {"source_id":"SRC-GIT-BUDGET-SEED","source_type":"git_commit","path_or_commit":"f33a48c","commit_sha_if_applicable":"f33a48cd2870ad8564b1612f38e6a881fc8c209c","date":"2026-07-06","historical_period":"COMMITTED_GIT","topics":["search budget","routing","fallback"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Early budget concern; not the later authoritative execution ledger."},
+    {"source_id":"SRC-GIT-DEPLOY","source_type":"git_commit_group","path_or_commit":"c0fcf5c..630be8c","commit_sha_if_applicable":"c0fcf5c30b14647a7f0b9d49ecb481407f9e815f; 630be8c430e7aa45c09165498244a248840c828f","date":"2026-07-11","historical_period":"COMMITTED_GIT","topics":["Vercel","ESM","function entrypoint","build output"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Repair sequence; does not prove production deployment success."},
+    {"source_id":"SRC-GIT-DURABLE-JOBS","source_type":"git_commit","path_or_commit":"3922d4a","commit_sha_if_applicable":"3922d4a2b1c95128880c8f22c08ea125df480efe","date":"2026-07-11","historical_period":"COMMITTED_GIT","topics":["durable research jobs","grounding","Vercel persistence"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Confirms durable job repository and deployment contracts."},
+    {"source_id":"SRC-GIT-RELOAD","source_type":"git_commit","path_or_commit":"901b06a","commit_sha_if_applicable":"901b06a13de7898e5e6876bae618c2d2fe3fc8ab","date":"2026-07-12","historical_period":"BRANCH_LOCAL_GIT","topics":["reload recovery","partial job"],"reliability":"HIGH","current_or_historical":"BRANCH_LOCAL_HISTORY","public_safe":true,"notes":"Real branch/remote ref, not an ancestor of the reconstructed HEAD."},
+    {"source_id":"SRC-GIT-PAPER-SEARCH","source_type":"git_commit","path_or_commit":"912babd","commit_sha_if_applicable":"912babd725273703ec99b8904b75ba86e91e7f09","date":"2026-07-16","historical_period":"COMMITTED_GIT","topics":["direct paper search","summary workflow"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"User-facing paper search path; not direct-study admission."},
+    {"source_id":"SRC-GIT-INTELLIGENCE","source_type":"git_commit","path_or_commit":"a89549a","commit_sha_if_applicable":"a89549a6e26a7ac3ae44ad52b5588101baf28b95","date":"2026-08-13","historical_period":"COMMITTED_GIT","topics":["report intelligence","claim graph","facts","Writer","publication"],"reliability":"HIGH","current_or_historical":"HISTORICAL","public_safe":true,"notes":"Large committed vertical slice; its QA verdict was partial."},
+    {"source_id":"SRC-GIT-INTEGRITY-BRANCH","source_type":"git_commit_group","path_or_commit":"f74cd7e..8d75d0e","commit_sha_if_applicable":"f74cd7e6e46fe64a1d07b0b94a9248e78be37211; 8d75d0e2f66b849a192ea2fed2c226ed308293d9","date":"2026-08-03/2026-08-05","historical_period":"BRANCH_LOCAL_GIT","topics":["source integrity","citation integrity","topic anchors"],"reliability":"HIGH","current_or_historical":"BRANCH_LOCAL_HISTORY","public_safe":true,"notes":"Branch-local integrity history, not an ancestor of current HEAD; use only with that caveat."},
+    {"source_id":"SRC-GIT-DOCX-BRANCH","source_type":"git_commit","path_or_commit":"9fd8799","commit_sha_if_applicable":"9fd8799a812d64fce31bef0519e611ad7437a217","date":"2026-06-13","historical_period":"BRANCH_LOCAL_GIT","topics":["DOCX pipeline","academic report"],"reliability":"MEDIUM","current_or_historical":"BRANCH_LOCAL_HISTORY","public_safe":true,"notes":"Branch-local alpha checkpoint; exact successful end-to-end run is not established here."},
+    {"source_id":"SRC-DOC-LEARNING-LOG","source_type":"repository_document","path_or_commit":"docs/learning-log-2026-06-10-to-2026-06-17.md","commit_sha_if_applicable":null,"date":"2026-06-17","historical_period":"REPOSITORY_DOCUMENT","topics":["early goals","scope changes","retrospective motivation"],"reliability":"MEDIUM","current_or_historical":"HISTORICAL_DOCUMENT","public_safe":false,"notes":"Useful retrospective context; estimated hours and motivations need corroboration."},
+    {"source_id":"SRC-DOC-README","source_type":"repository_document","path_or_commit":"README.md","commit_sha_if_applicable":"a89549a6e26a7ac3ae44ad52b5588101baf28b95","date":"2026-08-13","historical_period":"COMMITTED_GIT","topics":["product naming","ResearchForge"],"reliability":"HIGH","current_or_historical":"HISTORICAL_DOCUMENT","public_safe":true,"notes":"Product naming and package continuity; not a dated acceptance report."},
+    {"source_id":"SRC-DOC-ARCH-0618","source_type":"repository_document","path_or_commit":"docs/ResearchForge/00_Project_Overview/ResearchForge_Architecture_Audit.md","commit_sha_if_applicable":null,"date":"2026-06-18","historical_period":"HISTORICAL_SNAPSHOT","topics":["source-first pipeline","workflow ownership","export"],"reliability":"HIGH","current_or_historical":"HISTORICAL_DOCUMENT","public_safe":false,"notes":"6/18 architecture snapshot; later state differs."},
+    {"source_id":"SRC-DOC-PROGRESS-0626","source_type":"repository_document","path_or_commit":"docs/ResearchForge/06_Codex_Handoffs/ResearchForge_Progress_Log.md","commit_sha_if_applicable":null,"date":"2026-06-26","historical_period":"HISTORICAL_SNAPSHOT","topics":["topic payload","provider degradation","runtime risks"],"reliability":"HIGH","current_or_historical":"HISTORICAL_DOCUMENT","public_safe":false,"notes":"Checkpoint log; not final-system evidence."},
+    {"source_id":"SRC-SOURCE-SEARCH","source_type":"source_code","path_or_commit":"artifacts/api-server/src/services/search-intent-planner.ts","commit_sha_if_applicable":null,"date":"2026-08-30","historical_period":"CURRENT_WORKTREE_SOURCE","topics":["query expansion","relevance","provider coordination","dedupe","budget"],"reliability":"HIGH","current_or_historical":"CURRENT_WORKTREE_SOURCE","public_safe":false,"notes":"Dirty-worktree source; proves observed current capability only."},
+    {"source_id":"SRC-SOURCE-PROVIDERS","source_type":"source_code","path_or_commit":"artifacts/api-server/src/services/source-retrieval.ts","commit_sha_if_applicable":null,"date":"2026-08-30","historical_period":"CURRENT_WORKTREE_SOURCE","topics":["OpenAlex","Crossref","Semantic Scholar","provider health","retry"],"reliability":"HIGH","current_or_historical":"CURRENT_WORKTREE_SOURCE","public_safe":false,"notes":"Current source normalization and diagnostics; runtime results vary."},
+    {"source_id":"SRC-SOURCE-EVIDENCE-CARDS","source_type":"source_code","path_or_commit":"artifacts/report-factory/src/lib/evidenceCards.ts","commit_sha_if_applicable":null,"date":"2026-08-30","historical_period":"CURRENT_WORKTREE_SOURCE","topics":["evidence cards","claims","citations","safety"],"reliability":"HIGH","current_or_historical":"CURRENT_WORKTREE_SOURCE","public_safe":false,"notes":"Current model is more mature than the first card implementation."},
+    {"source_id":"SRC-QA-INTELLIGENCE","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-report-intelligence-upgrade-20260813/README.md","commit_sha_if_applicable":"a89549a6e26a7ac3ae44ad52b5588101baf28b95","date":"2026-08-13","historical_period":"DATED_QA_ARTIFACT","topics":["report intelligence","deterministic regression","live block"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"828/828 configured regression passed; current-model/live acceptance remained partial."},
+    {"source_id":"SRC-QA-KNOWLEDGE","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-knowledge-reconstruction-20260813/FINAL-DELIVERY.md","commit_sha_if_applicable":"a89549a6e26a7ac3ae44ad52b5588101baf28b95","date":"2026-08-13","historical_period":"DATED_QA_ARTIFACT","topics":["claim graph","two-pass Writer","claim citation entailment"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"Actual qwen2.5:3b run was blocked after post-edit validation; no formal export."},
+    {"source_id":"SRC-QA-WRITER-DENSITY","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-evidence-density-long-report-20260823/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-23","historical_period":"DATED_QA_ARTIFACT","topics":["canonicalization","supported content","long report"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"Frozen/offline evidence; supported a shorter limited brief, not the requested long report."},
+    {"source_id":"SRC-QA-PUBLICATION","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-publication-layout-citation-v1-20260824T161351+0800/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-24","historical_period":"DATED_QA_ARTIFACT","topics":["citation","DOCX","PDF","visual QA","publication"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"Case A passed publication gates; Case B remained independently blocked."},
+    {"source_id":"SRC-QA-PUBLICATION-GEN","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-publication-v2-generalization-20260824T212745+0800/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-24","historical_period":"DATED_QA_ARTIFACT","topics":["unseen topics","generalization","canonical export"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"Three new topics produced zero complete canonical exports; bounded result only."},
+    {"source_id":"SRC-QA-INGESTION","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-general-research-ingestion-20260825T140800+0800/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-25","historical_period":"DATED_QA_ARTIFACT","topics":["general ingestion","study facts","first weak layer"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"Ten-topic current live run had 0/10 publishable outputs; no report artifacts were emitted for blocked cases."},
+    {"source_id":"SRC-SOURCE-STUDY-FACTS","source_type":"source_code","path_or_commit":"artifacts/api-server/src/services/research/study-fact-extraction-v2.ts","commit_sha_if_applicable":null,"date":"2026-08-30","historical_period":"CURRENT_WORKTREE_SOURCE","topics":["Study Facts","PRESENT","NOT_REPORTED","UNKNOWN","NOT_APPLICABLE"],"reliability":"HIGH","current_or_historical":"CURRENT_WORKTREE_SOURCE","public_safe":false,"notes":"Dirty-worktree V2 source; conservative extraction does not infer missing fields."},
+    {"source_id":"SRC-QA-STUDY-FACTS","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-general-study-fact-extraction-v2-20260826T222129+0800/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-26","historical_period":"DATED_QA_ARTIFACT","topics":["Study Facts V2","LIMITED","FORMAL","replay versus live"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"Fresh run reached 7/10 LIMITED and 0/10 FORMAL; Writer stayed at zero."},
+    {"source_id":"SRC-QA-EVIDENCE-GAP","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-evidence-gap-formal-synthesis-v3-20260827T150400+0800/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-27","historical_period":"DATED_QA_ARTIFACT","topics":["evidence gap","acquisition","formal synthesis","client wait"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"Current live was 2/10 LIMITED-or-better and 0/10 FORMAL; replay was kept separate."},
+    {"source_id":"SRC-QA-ACQUISITION-V4","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-acquisition-completion-v4-20260828T003546+0800/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-28","historical_period":"DATED_QA_ARTIFACT","topics":["durable acquisition","terminal state","resume","idempotency"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"All 10 jobs later reached explicit terminal states; content threshold still failed."},
+    {"source_id":"SRC-SOURCE-CANONICAL","source_type":"source_code","path_or_commit":"artifacts/api-server/src/services/research/canonical-study-admission.ts","commit_sha_if_applicable":null,"date":"2026-08-30","historical_period":"CURRENT_WORKTREE_SOURCE","topics":["canonical admission","identity","access","provenance","revision"],"reliability":"HIGH","current_or_historical":"CURRENT_WORKTREE_SOURCE","public_safe":false,"notes":"Observed current worktree owner; not committed at HEAD."},
+    {"source_id":"SRC-QA-CANONICAL","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-canonical-evidence-admission-substrate-v1-final-20260828T033500+0800/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-28","historical_period":"DATED_QA_ARTIFACT","topics":["canonical projections","LIMITED","FORMAL","BLOCKED","UNKNOWN"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"46 decisions had zero projection mismatches; substrate READY while content generalization stayed false."},
+    {"source_id":"SRC-SOURCE-FULLTEXT","source_type":"source_code","path_or_commit":"artifacts/api-server/src/services/research/grounding/fullTextAcquisitionV3.ts; artifacts/api-server/src/services/research/grounding/scholarlyPayloadMaterializer.ts","commit_sha_if_applicable":null,"date":"2026-08-30","historical_period":"CURRENT_WORKTREE_SOURCE","topics":["legal OA","payload","format detection","qualification","materialization"],"reliability":"HIGH","current_or_historical":"CURRENT_WORKTREE_SOURCE","public_safe":false,"notes":"Current source separates metadata, payload, identity, parser and qualification; no broad success claim."},
+    {"source_id":"SRC-QA-FULLTEXT","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-full-text-acquisition-recovery-v1-20260828T223126+0800/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-28","historical_period":"DATED_QA_ARTIFACT","topics":["full text","HTTP 200","resolver","JATS","PDF","OCR"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"Qualifying full-text coverage was 2/10; metadata success was separated from artifact creation."},
+    {"source_id":"SRC-QA-OA-V2","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-oa-fulltext-materialization-format-qualification-v2-20260829T073606+0800/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-29","historical_period":"DATED_QA_ARTIFACT","topics":["OA materialization","format qualification","identity false negative"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"Fresh coverage improved to 2/10; landing, abstract, scanned and weak-identity payloads stayed rejected."},
+    {"source_id":"SRC-QA-DIRECT-V3","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-fulltext-recovery-direct-study-discovery-v3-20260829T103724+0800/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-29","historical_period":"DATED_QA_ARTIFACT","topics":["direct study","full text","endpoint discovery","PDF fallback"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"Direct-study coverage reached 9/10 while qualifying full text remained 2/10."},
+    {"source_id":"SRC-QA-V4-OVERRIDE","source_type":"qa_report_override","path_or_commit":"artifacts/qa/researchforge-legal-oa-manifestation-resolution-v4-20260829T114159+0800/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-29","historical_period":"DATED_QA_ARTIFACT","topics":["post-closure audit","canonical binding","query fan-out","manifestation"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"Sealed audit supersedes the original PARTIAL projection; 22 queries, 6 providers and 90 attempts were observed in one cascade."},
+    {"source_id":"SRC-SOURCE-BUDGET","source_type":"source_code","path_or_commit":"artifacts/api-server/src/services/research/authoritative-execution-budget.ts","commit_sha_if_applicable":null,"date":"2026-08-30","historical_period":"CURRENT_WORKTREE_SOURCE","topics":["execution budget","side effects","retry","resolver","materialization"],"reliability":"HIGH","current_or_historical":"CURRENT_WORKTREE_SOURCE","public_safe":false,"notes":"Observed current V5 ledger; not committed at HEAD."},
+    {"source_id":"SRC-QA-V5","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-canonical-binding-budget-authority-v5-20260829T140709+0800/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-29","historical_period":"DATED_QA_ARTIFACT","topics":["canonical binding","budget authority","hidden attempts","generalization"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"Audit passed with zero mismatches, overruns and hidden attempts; direct-study 1/10 and qualifying full text 0/10."},
+    {"source_id":"SRC-QA-V6A","source_type":"qa_report","path_or_commit":"artifacts/qa/researchforge-fulltext-materialization-v6a-20260829T191009+0800/FINAL-REPORT.md","commit_sha_if_applicable":null,"date":"2026-08-29","historical_period":"DATED_QA_ARTIFACT","topics":["admitted materialization","legal policy","SHA provenance","live canary"],"reliability":"HIGH","current_or_historical":"DATED_QA_NOT_COMMITTED","public_safe":false,"notes":"Controlled matrix 18/18 passed; live canary was unavailable and no current qualifying artifact was bound."},
+    {"source_id":"SRC-ITHOME-2026","source_type":"official_web","path_or_commit":"https://ithelp.ithome.com.tw/2026ironman/event","commit_sha_if_applicable":null,"date":"2026-08-30","historical_period":"EXTERNAL_CURRENT_REFERENCE","topics":["iThome Ironman","30-day series"],"reliability":"UNKNOWN_IN_THIS_RUN","current_or_historical":"EXTERNAL_NOT_RECHECKED","public_safe":false,"notes":"The page returned HTTP 403 in this session; category, schedule and registration details are not frozen facts."}
+  ]
+}

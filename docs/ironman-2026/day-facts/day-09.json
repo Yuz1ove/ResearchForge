@@ -1,0 +1,33 @@
+{
+  "schema_version": "researchforge-ironman-day-facts/v1",
+  "day": 9,
+  "title_seed": "找得到不等於找對",
+  "historical_period": {"start": "2026-06-22", "end": "2026-07-06", "confidence": "HIGH"},
+  "evidence_boundary": "COMMITTED_GIT_AND_HISTORICAL_DOC",
+  "central_problem": "fallback、ranking 與 topic drift 如何被區分，而不是把所有結果湊成固定數量？",
+  "reader_takeaway": "保留診斷、relevance state 與 first weak layer，比靜默補結果更安全。",
+  "known_at_the_time": [
+    {"fact": "6/22 commits repeatedly refined domain-aware grouping, fallback diagnostics and source-record merge。", "source_refs": ["SRC-DOC-PROGRESS-0626"]},
+    {"fact": "f33a48c explicitly tightened source-search budget and seeded balanced topics。", "source_refs": ["SRC-GIT-BUDGET-SEED"]}
+  ],
+  "implemented_at_the_time": [{"fact": "provider fallback/diagnostics 與早期 search budget 已被當成工程責任記錄。", "source_refs": ["SRC-GIT-BUDGET-SEED", "SRC-DOC-PROGRESS-0626"]}],
+  "not_yet_available": [{"fact": "f33a48c 的 budget seed 不是後來 V5 的 pre-side-effect authoritative ledger。", "source_refs": ["SRC-GIT-BUDGET-SEED", "SRC-QA-V5"]}],
+  "observed_failures": [
+    {"failure_id": "PROVIDER_DEGRADED_OR_TOPIC_DRIFT", "date_or_range": "2026-06-22/2026-06-26", "historical_stage": "fallback and ranking", "symptom": "progress log records provider timeout/429/failure risk and generic phrasing entering queries.", "root_cause_if_known": "provider availability and query sanitation were still separate unresolved risks", "what_was_known_then": "fallback could preserve candidates, but relevance was not perfect", "later_resolution": "later systems retain low-confidence candidates and explicit admission/full-text boundaries", "source_refs": ["SRC-DOC-PROGRESS-0626", "SRC-SOURCE-SEARCH"]}
+  ],
+  "tests_and_metrics": [{"test_or_metric": "Three early budget dimensions are recorded as a concern; no universal fixed query/provider promise is asserted.", "result": "bounded historical concern", "source_refs": ["SRC-GIT-BUDGET-SEED", "SRC-DOC-PROGRESS-0626"]}],
+  "engineering_decisions": [{"decision": "不以固定筆數掩蓋 provider degradation；把 low-confidence candidates 與 diagnostics 留給 review。", "source_refs": ["SRC-DOC-PROGRESS-0626"]}],
+  "architecture_state": [{"state": "topic plan → multiple provider/fallback paths → relevance/ranking diagnostics → review", "source_refs": ["SRC-DOC-PROGRESS-0626", "SRC-GIT-BUDGET-SEED"]}],
+  "terminology_available_at_the_time": ["fallback", "degraded provider", "relevance level", "search budget", "diagnostics"],
+  "terminology_forbidden_due_to_hindsight": ["direct-study admission", "canonical full-text coverage", "blocked-by-budget ledger", "FORMAL safety"],
+  "safe_numbers": [{"value": "3 early budget dimensions are not asserted", "meaning": "the historical record shows a budget concern, but does not prove a universal 3-query/3-provider request promise", "source_refs": ["SRC-GIT-BUDGET-SEED", "SRC-QA-V4-OVERRIDE"]}],
+  "safe_public_facts": [{"fact": "搜不到、搜歪、provider 掛掉與來源不夠好是不同 failure classes。", "source_refs": ["SRC-DOC-PROGRESS-0626"]}],
+  "sensitive_or_internal_facts": ["provider error payloads", "exact budgets", "API endpoints and credentials"],
+  "retrospective_notes": [{"note": "後來 audit 才發現 nominal cascade 可能 fan out 成多個實際 side effects；不能說早期已經知道這個數字。", "source_refs": ["SRC-QA-V4-OVERRIDE"]}],
+  "source_refs": [
+    {"type": "doc", "ref": "SRC-DOC-PROGRESS-0626", "why_it_supports_this_fact": "dated degradation and query-risk snapshot"},
+    {"type": "commit", "ref": "SRC-GIT-BUDGET-SEED", "why_it_supports_this_fact": "early explicit search-budget concern"}
+  ],
+  "publication_risks": ["不能把後來 22/6/90 fan-out 數字放進早期 narrative。", "不要把 fallback candidate 寫成 accepted evidence。"],
+  "confidence": "HIGH"
+}

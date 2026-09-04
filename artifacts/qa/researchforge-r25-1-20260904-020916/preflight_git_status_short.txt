@@ -1,0 +1,204 @@
+ M artifacts/api-server/build.mjs
+ M artifacts/api-server/package.json
+ M artifacts/api-server/src/app.test.ts
+ M artifacts/api-server/src/app.ts
+ M artifacts/api-server/src/routes/index.ts
+ M artifacts/api-server/src/routes/paper-search.test.ts
+ M artifacts/api-server/src/routes/paper-search.ts
+ M artifacts/api-server/src/routes/report-drafts.test.ts
+ M artifacts/api-server/src/routes/report-drafts.ts
+ M artifacts/api-server/src/routes/report-exports.test.ts
+ M artifacts/api-server/src/routes/report-exports.ts
+ M artifacts/api-server/src/routes/research-grounding-jobs.test.ts
+ M artifacts/api-server/src/routes/research-grounding-jobs.ts
+ M artifacts/api-server/src/services/keyword-expansion.test.ts
+ M artifacts/api-server/src/services/keyword-expansion.ts
+ M artifacts/api-server/src/services/llm-adapter.test.ts
+ M artifacts/api-server/src/services/llm-adapter.ts
+ M artifacts/api-server/src/services/llm-service.ts
+ M artifacts/api-server/src/services/provider-smoke.test.ts
+ M artifacts/api-server/src/services/provider-smoke.ts
+ M artifacts/api-server/src/services/report-section-fit.ts
+ M artifacts/api-server/src/services/report-writer.test.ts
+ M artifacts/api-server/src/services/report-writer.ts
+ M artifacts/api-server/src/services/research-pipeline.ts
+ M artifacts/api-server/src/services/research/grounding/acceptedSourceEnrichment.ts
+ M artifacts/api-server/src/services/research/grounding/claimExtractionService.test.ts
+ M artifacts/api-server/src/services/research/grounding/claimExtractionService.ts
+ M artifacts/api-server/src/services/research/grounding/evidencePipelineGuards.ts
+ M artifacts/api-server/src/services/research/grounding/groundingJobRepository.ts
+ M artifacts/api-server/src/services/research/grounding/researchGroundingJobStore.test.ts
+ M artifacts/api-server/src/services/research/grounding/researchGroundingJobStore.ts
+ M artifacts/api-server/src/services/research/grounding/researchGroundingPipeline.test.ts
+ M artifacts/api-server/src/services/research/grounding/researchGroundingPipeline.ts
+ M artifacts/api-server/src/services/research/grounding/sourceContentExtractor.test.ts
+ M artifacts/api-server/src/services/research/grounding/sourceContentExtractor.ts
+ M artifacts/api-server/src/services/research/parsers/pdfminerWorker.ts
+ M artifacts/api-server/src/services/search-intent-planner.test.ts
+ M artifacts/api-server/src/services/search-intent-planner.ts
+ M artifacts/api-server/src/services/source-provider-config.ts
+ M artifacts/api-server/src/services/source-retrieval.ts
+ M artifacts/api-server/src/services/source-summarizer.test.ts
+ M artifacts/api-server/src/services/source-summarizer.ts
+ M artifacts/api-server/src/services/topic-anchor-contract.test.ts
+ M artifacts/api-server/src/services/topic-understanding.ts
+ M artifacts/report-factory/package.json
+ M artifacts/report-factory/src/App.tsx
+ M artifacts/report-factory/src/components/layout/footer.tsx
+ M artifacts/report-factory/src/components/layout/navbar.tsx
+ M artifacts/report-factory/src/lib/detailedReport.ts
+ M artifacts/report-factory/src/lib/embeddedCjkFont.test.ts
+ M artifacts/report-factory/src/lib/evidenceCards.ts
+ M artifacts/report-factory/src/lib/evidenceVisuals.test.ts
+ M artifacts/report-factory/src/lib/evidenceVisuals.ts
+ M artifacts/report-factory/src/lib/exportReport.test.ts
+ M artifacts/report-factory/src/lib/exportReport.ts
+ M artifacts/report-factory/src/lib/formalReportDocument.test.ts
+ M artifacts/report-factory/src/lib/formalReportDocument.ts
+ M artifacts/report-factory/src/lib/generateReport.ts
+ M artifacts/report-factory/src/lib/llmReportWriter.test.ts
+ M artifacts/report-factory/src/lib/llmReportWriter.ts
+ M artifacts/report-factory/src/lib/readerCitations.ts
+ M artifacts/report-factory/src/lib/reportComposer.ts
+ M artifacts/report-factory/src/lib/reportDraft.ts
+ M artifacts/report-factory/src/lib/reportIntelligence.test.ts
+ M artifacts/report-factory/src/lib/reportIntelligence.ts
+ M artifacts/report-factory/src/lib/reportPreviewGuards.test.ts
+ M artifacts/report-factory/src/lib/reportPreviewGuards.ts
+ M artifacts/report-factory/src/lib/reportPreviewLayout.test.ts
+ M artifacts/report-factory/src/lib/reportPreviewStatus.ts
+ M artifacts/report-factory/src/lib/reportQualityGate.test.ts
+ M artifacts/report-factory/src/lib/reportQualityGate.ts
+ M artifacts/report-factory/src/lib/reportWorkspace.ts
+ M artifacts/report-factory/src/lib/researchGrounding.test.ts
+ M artifacts/report-factory/src/lib/researchGrounding.ts
+ M artifacts/report-factory/src/lib/sourceRecords.test.ts
+ M artifacts/report-factory/src/lib/sourceRecords.ts
+ M artifacts/report-factory/src/lib/standardizedEvidenceFacts.test.ts
+ M artifacts/report-factory/src/lib/standardizedEvidenceFacts.ts
+ M artifacts/report-factory/src/lib/topicWorkflow.ts
+ M artifacts/report-factory/src/pages/generator.tsx
+ M artifacts/report-factory/src/pages/report-preview.tsx
+ M artifacts/report-factory/vite.config.ts
+ M lib/api-zod/package.json
+ M lib/api-zod/src/index.ts
+ M lib/api-zod/src/research-grounding.ts
+ M lib/api-zod/src/source-record.ts
+ M package.json
+ M pnpm-lock.yaml
+ M python/workers/parse_pdf.py
+?? artifacts/api-server/src/routes/existing-report-verification.ts
+?? artifacts/api-server/src/routes/research-product-workflow.test.ts
+?? artifacts/api-server/src/routes/research-product-workflow.ts
+?? artifacts/api-server/src/services/deterministic-supported-content-recovery.test.ts
+?? artifacts/api-server/src/services/deterministic-supported-content-recovery.ts
+?? artifacts/api-server/src/services/direct-study-relevance-v3.test.ts
+?? artifacts/api-server/src/services/direct-study-relevance-v3.ts
+?? artifacts/api-server/src/services/evidence-gap-driven-query-planner.test.ts
+?? artifacts/api-server/src/services/evidence-gap-driven-query-planner.ts
+?? artifacts/api-server/src/services/formal-research-architecture.test.ts
+?? artifacts/api-server/src/services/formal-research-architecture.ts
+?? artifacts/api-server/src/services/general-research-query-planner.test.ts
+?? artifacts/api-server/src/services/general-research-query-planner.ts
+?? artifacts/api-server/src/services/long-report-evidence.test.ts
+?? artifacts/api-server/src/services/long-report-evidence.ts
+?? artifacts/api-server/src/services/model-capability-registry.test.ts
+?? artifacts/api-server/src/services/model-capability-registry.ts
+?? artifacts/api-server/src/services/research/authoritative-execution-budget.test.ts
+?? artifacts/api-server/src/services/research/authoritative-execution-budget.ts
+?? artifacts/api-server/src/services/research/canonical-admission-projection.test.ts
+?? artifacts/api-server/src/services/research/canonical-admission-projection.ts
+?? artifacts/api-server/src/services/research/canonical-study-admission.test.ts
+?? artifacts/api-server/src/services/research/canonical-study-admission.ts
+?? artifacts/api-server/src/services/research/existing-report-verification.ts
+?? artifacts/api-server/src/services/research/grounding/admittedManifestationMaterializer.test.ts
+?? artifacts/api-server/src/services/research/grounding/admittedManifestationMaterializer.ts
+?? artifacts/api-server/src/services/research/grounding/canonicalFullTextV6d.test.ts
+?? artifacts/api-server/src/services/research/grounding/canonicalIdentityRestoration.test.ts
+?? artifacts/api-server/src/services/research/grounding/canonicalIdentityRestoration.ts
+?? artifacts/api-server/src/services/research/grounding/evidenceChunkRetrieval.test.ts
+?? artifacts/api-server/src/services/research/grounding/evidenceChunkRetrieval.ts
+?? artifacts/api-server/src/services/research/grounding/evidenceRecoveryService.test.ts
+?? artifacts/api-server/src/services/research/grounding/evidenceRecoveryService.ts
+?? artifacts/api-server/src/services/research/grounding/fullTextAcquisitionV3.test.ts
+?? artifacts/api-server/src/services/research/grounding/fullTextAcquisitionV3.ts
+?? artifacts/api-server/src/services/research/grounding/livePayloadIdentityV6b.test.ts
+?? artifacts/api-server/src/services/research/grounding/researchAcquisitionLifecycle.ts
+?? artifacts/api-server/src/services/research/grounding/scholarlyPayloadMaterializer.test.ts
+?? artifacts/api-server/src/services/research/grounding/scholarlyPayloadMaterializer.ts
+?? artifacts/api-server/src/services/research/grounding/sourceAugmentationService.test.ts
+?? artifacts/api-server/src/services/research/grounding/sourceAugmentationService.ts
+?? artifacts/api-server/src/services/research/grounding/studyManifestation.test.ts
+?? artifacts/api-server/src/services/research/grounding/studyManifestation.ts
+?? artifacts/api-server/src/services/research/live-product-discovery.ts
+?? artifacts/api-server/src/services/research/product-document-export.ts
+?? artifacts/api-server/src/services/research/product-workflow.test.ts
+?? artifacts/api-server/src/services/research/product-workflow.ts
+?? artifacts/api-server/src/services/research/qa-r24-live-journey.ts
+?? artifacts/api-server/src/services/research/qa-r24-postgres.ts
+?? artifacts/api-server/src/services/research/qa-r25-e2e-browser.ts
+?? artifacts/api-server/src/services/research/qa-r25-live-journey.ts
+?? artifacts/api-server/src/services/research/qa-r25-scenario-b.ts
+?? artifacts/api-server/src/services/research/study-fact-extraction-v2.test.ts
+?? artifacts/api-server/src/services/research/study-fact-extraction-v2.ts
+?? artifacts/api-server/src/services/topic-integrity.test.ts
+?? artifacts/api-server/src/services/writer-closure-replay.test.ts
+?? artifacts/qa/researchforge-r25-1-20260904-020916/
+?? artifacts/qa/researchforge-writer-closure-final-acceptance-20260823/
+?? artifacts/qa/researchforge-writer-final-closure-acceptance-20260823-123552/
+?? artifacts/qa/researchforge-writer-vnext-live-canonical-acceptance-20260823/
+?? artifacts/report-factory/src/lib/formalCanonicalPreservation.test.ts
+?? artifacts/report-factory/src/lib/generationUx.test.ts
+?? artifacts/report-factory/src/lib/generationUx.ts
+?? artifacts/report-factory/src/lib/publicationLayout.ts
+?? artifacts/report-factory/src/lib/readerCitations.test.ts
+?? artifacts/report-factory/src/lib/reportMethodologyRubric.test.ts
+?? artifacts/report-factory/src/lib/reportMethodologyRubric.ts
+?? artifacts/report-factory/src/lib/researchProductWorkflow.ts
+?? artifacts/report-factory/src/pages/research-project.tsx
+?? docs/ironman-2026/
+?? docs/report-intelligence-upgrade.md
+?? lib/api-zod/src/research-product-workflow.ts
+?? lib/api-zod/src/topic-integrity.ts
+?? scripts/build-case-a-targeted-evidence.ts
+?? scripts/build-case-b-source-reconciliation.ts
+?? scripts/build-case-b-targeted-evidence.ts
+?? scripts/build-legal-oa-prior-matrix.mjs
+?? scripts/build-oa-payload-forensics-v2.mjs
+?? scripts/build-offline-closure-contact-sheets.py
+?? scripts/build-publication-v2-contact-sheets.py
+?? scripts/finalize-canonical-admission-v1.mjs
+?? scripts/finalize-canonical-binding-budget-authority-v5.ts
+?? scripts/finalize-evidence-gap-formal-synthesis-v3-writer.ts
+?? scripts/finalize-evidence-gap-formal-synthesis-v3.ts
+?? scripts/finalize-formal-composer-vnext.ts
+?? scripts/finalize-full-text-acquisition-recovery-v1.mjs
+?? scripts/finalize-fulltext-recovery-direct-study-v3.mjs
+?? scripts/finalize-general-research-ingestion-v1.ts
+?? scripts/finalize-general-study-fact-extraction-v2.ts
+?? scripts/finalize-generalization-repair-acceptance.py
+?? scripts/finalize-legal-oa-discovery-and-qualification-coverage-v1.mjs
+?? scripts/finalize-legal-oa-manifestation-v4.mjs
+?? scripts/finalize-multitopic-acceptance.py
+?? scripts/finalize-oa-fulltext-materialization-v2.mjs
+?? scripts/finalize-offline-deterministic-closure.ts
+?? scripts/finalize-publication-layout-v1.py
+?? scripts/finalize-publication-v2-generalization.ts
+?? scripts/finalize-researchforge-closure-artifacts.ts
+?? scripts/materialize-evidence-gap-v3.ts
+?? scripts/materialize-publication-layout-v1.ts
+?? scripts/materialize-publication-v2.ts
+?? scripts/preflight-legal-oa-manifestation-v4.mjs
+?? scripts/prepare-generalization-workspace-v2.ts
+?? scripts/prepare-multitopic-workspace.ts
+?? scripts/qa-evidence-gap-formal-synthesis-v3-live.ts
+?? scripts/qa-formal-human-acceptance.ts
+?? scripts/qa-formal-human-live.ts
+?? scripts/qa-formal-research-live.ts
+?? scripts/qa-formal-writer-finalize.ts
+?? scripts/qa-general-research-ingestion-live.ts
+?? scripts/qa-offline-deterministic-closure.ts
+?? scripts/render-multitopic-pdfs.py
+?? scripts/replay-case-a-frozen.ts
+?? scripts/replay-evidence-gap-formal-synthesis-v3.ts
+?? scripts/run-v5-deterministic-gates.mjs

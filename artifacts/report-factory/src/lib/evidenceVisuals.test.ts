@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { EvidenceCard } from "./evidenceCards.ts";
 import {
+  academicFigureEligibilityDecisions,
   auditEvidenceVisualSemantics,
   buildEvidenceVisuals,
+  evidenceFigureGroundingManifest,
   evidenceVisualsHaveCompleteProvenance,
   generatedConceptImageRecordIsTruthful,
   mainBodyEvidenceVisualIssues,
@@ -415,14 +417,108 @@ test("statistical semantic routing is not restricted to topic-specific visual gr
     standardizedFacts,
   });
 
-  assert.deepEqual(visuals.map((visual) => visual.semanticData?.kind), [
-    "proportion_facets",
+  assert.deepEqual(visuals.flatMap((visual) => visual.semanticData ? [visual.semanticData.kind] : []), [
     "forest_plot",
     "correlation_structure",
   ]);
-  assert.ok(visuals.every((visual) => visual.visualId.startsWith("evidence-visual-generic-")));
+  assert.ok(academicFigureEligibilityDecisions({
+    topic: "跨領域觀察研究中的量化關聯",
+    evidenceCards,
+    sources,
+    standardizedFacts,
+  }).some((decision) =>
+    decision.evidenceClass === "heterogeneous_outcomes" &&
+    decision.status === "FIGURE_NOT_SUPPORTED_BY_AVAILABLE_EVIDENCE"
+  ));
+  assert.ok(visuals
+    .filter((visual) => visual.semanticData)
+    .every((visual) => visual.visualId.startsWith("evidence-visual-generic-")));
   assert.equal(evidenceVisualsHaveCompleteProvenance(visuals), true);
   assert.deepEqual(auditEvidenceVisualSemantics(visuals), []);
+});
+
+test("single-study single metric fails closed to prose or a compact table", () => {
+  const fixture = evidenceFixture({
+    index: 71,
+    title: "Single-study prevalence result",
+    author: "Lin, R.",
+    year: 2025,
+    setting: "secondary school",
+    design: "cross-sectional",
+    exposure: "generative AI assisted learning",
+    outcome: "poor sleep prevalence",
+    exactResult: "Among 205 secondary-school respondents, 58% reported poor sleep quality.",
+  });
+  const standardizedFacts = buildStandardizedEvidenceFacts([fixture.card], [fixture.source]);
+  const input = {
+    topic: "A general evidence synthesis topic",
+    evidenceCards: [fixture.card],
+    sources: [fixture.source],
+    standardizedFacts,
+  };
+  const visuals = buildEvidenceVisuals(input);
+  const decisions = academicFigureEligibilityDecisions(input);
+
+  assert.equal(visuals.some((visual) => visual.visualType === "prevalence_facets"), false);
+  assert.ok(decisions.some((decision) =>
+    decision.evidenceClass === "single_study_single_metric" &&
+    decision.status === "FIGURE_NOT_SUPPORTED_BY_AVAILABLE_EVIDENCE" &&
+    decision.recommendedRepresentation === "compact_evidence_statistic_or_table"
+  ));
+});
+
+test("non-comparable quantitative evidence falls back to a grounded study-design evidence map", () => {
+  const fixtures = [
+    evidenceFixture({
+      index: 72,
+      title: "Cross-sectional generative AI learning survey",
+      author: "Lin, R.",
+      year: 2025,
+      design: "cross-sectional survey",
+      exactResult: "The study reports a course-specific outcome without a comparable effect estimate.",
+    }),
+    evidenceFixture({
+      index: 73,
+      title: "Longitudinal generative AI learning cohort",
+      author: "Chen, S.",
+      year: 2026,
+      design: "longitudinal cohort",
+      exactResult: "The study reports a different learning outcome without a comparable effect estimate.",
+    }),
+  ];
+  const input = {
+    topic: "生成式人工智慧輔助學習",
+    evidenceCards: fixtures.map((fixture) => fixture.card),
+    sources: fixtures.map((fixture) => fixture.source),
+    standardizedFacts: buildStandardizedEvidenceFacts(
+      fixtures.map((fixture) => fixture.card),
+      fixtures.map((fixture) => fixture.source),
+    ),
+  };
+  const visuals = buildEvidenceVisuals(input);
+
+  assert.deepEqual(visuals.map((visual) => visual.visualType), ["study_design_distribution"]);
+  assert.equal(visuals[0]?.data.kind, "matrix");
+  assert.match(visuals[0]?.note ?? "", /不比較效果大小.*不執行 pooled estimate/u);
+  assert.equal(evidenceVisualsHaveCompleteProvenance(visuals), true);
+  assert.deepEqual(auditEvidenceVisualSemantics(visuals), []);
+});
+
+test("figure grounding manifest exposes reconstruction and no-pooling fields", () => {
+  const { visuals } = builtShortVideoSleepVisuals();
+  const manifest = evidenceFigureGroundingManifest(visuals);
+  assert.equal(manifest.length, visuals.length);
+  assert.ok(manifest.every((record) =>
+    record.figure_id &&
+    record.figure_type &&
+    record.source_ids.length > 0 &&
+    record.evidence_card_ids.length > 0 &&
+    record.transform_applied.length > 0 &&
+    record.pooling_status === "not_performed"
+  ));
+  const proportions = manifest.find((record) => record.figure_type === "proportion_facets");
+  assert.equal(proportions?.unit, "%");
+  assert.match(proportions?.denominator ?? "", /source study denominator/u);
 });
 
 test("visual_type_matches_statistic", () => {
@@ -549,6 +645,23 @@ test("main_body_contains_result_visuals", () => {
   assert.doesNotMatch(mediation.data.kind === "directed_graph"
     ? mediation.data.edges.map((edge) => edge.label).join(" ")
     : "", /0\.248|0\.149|62\.4|37\.6/u);
+});
+
+test("main-body visual gate adapts to the result visual supported by the evidence", () => {
+  const { visuals } = builtShortVideoSleepVisuals();
+  const adaptive = visuals.filter((visual) =>
+    visual.visualType === "sleep_evidence_coverage" ||
+    visual.visualType === "population_applicability_boundary" ||
+    visual.visualType === "correlation_structure"
+  );
+  assert.deepEqual(mainBodyEvidenceVisualIssues(shortVideoSleepTopic, adaptive), []);
+  assert.deepEqual(
+    mainBodyEvidenceVisualIssues(
+      shortVideoSleepTopic,
+      adaptive.filter((visual) => visual.visualType !== "correlation_structure"),
+    ),
+    ["main_body_has_result_visuals:missing:evidence_compatible_result_visual"],
+  );
 });
 
 test("live-shaped general-social-media sources stay outside short-video coverage while retaining explicit boundary roles", () => {

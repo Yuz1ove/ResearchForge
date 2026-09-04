@@ -1,0 +1,815 @@
+{
+  "schema_version": "researchforge-ironman-daily-publication/v1",
+  "series_name": "ResearchForge 鐵人賽 30 天開發紀錄",
+  "series_length": 30,
+  "created_at": "2026-08-30T14:01:37.649Z",
+  "updated_at": "2026-08-31T16:29:33.391Z",
+  "checksum_algorithm": "sha256",
+  "article_path_base": "repository_root",
+  "selection_rule": "Lowest day with daily_finalized=false; existing batch READY does not imply daily finalization.",
+  "last_finalized_day": 3,
+  "daily_finalized_count": 3,
+  "source_policy": "Repository facts and author reflections are separated in ARTICLE-FACT-MAP.json. No external research needed for Day 01.",
+  "repository_baseline": {
+    "head": "a89549a6e26a7ac3ae44ad52b5588101baf28b95",
+    "branch": "codex/paper-search-performance-v1-20260716",
+    "initial_git_capture": "/private/tmp/rf-daily-day01.DvmbkE/initial-git.json",
+    "file_checksum_baseline": "/private/tmp/rf-daily-day01.DvmbkE/baseline.json",
+    "note": "Temporary execution evidence, not public article material."
+  },
+  "entries": [
+    {
+      "day": 1,
+      "title": "從報告生成器開始：成品出現了，研究還沒有",
+      "article_path": "docs/ironman-2026/articles/day-01.md",
+      "daily_finalized": true,
+      "editorial_status": "READY_FOR_HUMAN_REVIEW",
+      "finalized_at": "2026-08-30T14:04:56.288Z",
+      "source_scope": [
+        "SRC-GIT-INITIAL",
+        "SRC-DOC-LEARNING-LOG"
+      ],
+      "article_checksum": "4ce77761ab869aeedafc7d0abae7bdd156effd59743ff6dd87654d0543b59d57",
+      "human_approved": false,
+      "published": false,
+      "review": {
+        "historical_scope": "Initial application a20f64acd4ce1b22f887db28a1b73038f4ea2e89 (2026-06-10); June 17 learning log is retrospective context only.",
+        "previous_day": null,
+        "next_day_context_only": "Day 02: 模板先完成，證據仍然缺席; read for continuity only, no editing or readiness review.",
+        "rounds": [
+          {
+            "round": 1,
+            "name": "事實稿",
+            "result": "Verified initial generator, routes, API schema, Git order, day packet and retrospective learning log. Drafted around actual timer and unused referenceMaterial; retained valid original core."
+          },
+          {
+            "round": 2,
+            "name": "結構修訂",
+            "result": "Reverse outline completed for 24 original prose paragraphs; removed repeated field-presence paragraph; strengthened progression from dead input to tracing method and its limit. Retained original title, visible-output versus research distinction, prototype value, and Day 02 bridge."
+          },
+          {
+            "round": 3,
+            "name": "讀者修訂",
+            "result": "Explained event-handler function in ordinary language and referenceMaterial on first use; kept the library example explicitly hypothetical; clarified callback-triggered completion and that input tracing does not establish correctness."
+          },
+          {
+            "round": 4,
+            "name": "語言與出版修訂",
+            "result": "Traditional Chinese and punctuation pass; corrected simplified character; shortened provenance caveat; retained two internal references, no external knowledge supplementation, no public identifiers or future capabilities."
+          }
+        ],
+        "reverse_outline": [
+          "01 以程式中的等待與預覽揭露計時器。",
+          "02 界定首版原型與中心問題。",
+          "03 說明確實存在的表單及步驟功能。",
+          "04 引入生成函式原文節錄。",
+          "05 解釋狀態、回呼與模擬等待設定。",
+          "06 區分固定正文與真實生成。",
+          "07 提醒變數名稱不能證明能力。",
+          "08 說明參考材料與來源開關的讀者期待。",
+          "09 證明材料未流入正文且来源清單固定。",
+          "10 用明示假設的圖書館例子呈現斷點。",
+          "11 從未使用輸入推到應先查資料流。",
+          "12 保留原型對互動討論的價值。",
+          "13 交代固定內容的取捨與誤判風險。",
+          "14 分清複製文字與尚未完成的檔案匯出。",
+          "15 修正籠統的『能產生報告』說法。",
+          "16 用事後學習紀錄補充範圍問題並限制歸因。",
+          "17 區分歷史程式與回顧文件的證據責任。",
+          "18 保留原稿對可見成品與可信內容的反思。",
+          "19 提出追蹤單一輸入的可移植方法。",
+          "20 以參考材料說明方法並排除早期測試宣稱。",
+          "21 追蹤完成狀態由什麼事件觸發。",
+          "22 說明輸入追蹤仍不能保證引用與內容成立。",
+          "23 只以一段銜接 Day 02 模式、模板及匯出。"
+        ],
+        "quality_scores": [
+          {
+            "criterion": "歷史與事實正確性",
+            "score": 4
+          },
+          {
+            "criterion": "技術解釋正確性",
+            "score": 4
+          },
+          {
+            "criterion": "對一般讀者的可理解度",
+            "score": 4
+          },
+          {
+            "criterion": "中心問題清晰度",
+            "score": 4
+          },
+          {
+            "criterion": "段落結構與推進",
+            "score": 4
+          },
+          {
+            "criterion": "真實開發經驗感",
+            "score": 3
+          },
+          {
+            "criterion": "證據與來源使用",
+            "score": 4
+          },
+          {
+            "criterion": "可遷移的讀者價值",
+            "score": 4
+          },
+          {
+            "criterion": "語言自然度",
+            "score": 3
+          },
+          {
+            "criterion": "出版安全",
+            "score": 4
+          }
+        ],
+        "quality_total": 38,
+        "quality_maximum": 40,
+        "scoring_boundary": "Editor self-assessment, not human approval.",
+        "validation": {
+          "article": "docs/ironman-2026/articles/day-01.md",
+          "sha256": "4ce77761ab869aeedafc7d0abae7bdd156effd59743ff6dd87654d0543b59d57",
+          "han_body_count": 1851,
+          "total_character_count": 2853,
+          "h1": 1,
+          "h2": 6,
+          "code_blocks": 1,
+          "code_lines": 9,
+          "reference_count": 2,
+          "relative_links": 0,
+          "mermaid": "NOT_APPLICABLE",
+          "front_matter": "NOT_APPLICABLE_EXISTING_CONVENTION",
+          "markdown_render": "PASS",
+          "historical_code_excerpt": "EXACT_EXCEPT_BLANK_LINES",
+          "timer_check": "ISOLATED_CALLBACK_HARNESS_NOT_PRODUCT_OR_LIVE_TEST",
+          "publication_safety_scan": "PASS",
+          "scope": "Single-article checks only; no application suite or live run",
+          "git_diff_check": "PASS",
+          "scope_validation": "PASS: authored changes limited to this article and four editorial ledger/manifest files; all preexisting out-of-scope files unchanged and none deleted.",
+          "concurrent_repository_activity": "35 unrelated V6D paths were newly created by another process during the captured interval, including one test source. They were not written, removed, or validated by this editorial task.",
+          "validated_at": "2026-08-30T14:04:56.288Z",
+          "other_days": "REGISTERED_ONLY_NOT_REVIEWED"
+        },
+        "human_confirmation": [
+          "作者確認第一人稱的回顧與取捨符合本人觀點。"
+        ]
+      }
+    },
+    {
+      "day": 2,
+      "title": "模板先完成，證據仍然缺席",
+      "article_path": "docs/ironman-2026/articles/day-02.md",
+      "daily_finalized": true,
+      "editorial_status": "READY_FOR_HUMAN_REVIEW",
+      "finalized_at": "2026-08-30T14:21:35.095Z",
+      "source_scope": [
+        "SRC-GIT-MODES",
+        "SRC-GIT-EXPORT"
+      ],
+      "article_checksum": "71c93480589318428aa025b7b622c82b0c5013bf0cee191c94838b5d6ee08eb3",
+      "human_approved": false,
+      "published": false,
+      "review": {
+        "historical_scope": "2026-06-10: modes/styles at 27cc69a16421ba6cd9b5ab1ad502b93be08603f2; export at 79fce70db0ad9bfe30ccdf8523512e8d51d8723c.",
+        "previous_day_context_only": "Day 01 finalized article read for the prototype-to-generator bridge; no modification.",
+        "next_day_context_only": "Day 03 opening and canonical Editorial Map read for source/citation bridge; no editing or readiness assessment.",
+        "rounds": [
+          {
+            "round": 1,
+            "name": "事實稿",
+            "result": "Read canonical Day 02 map/packet/article, source/fact ledgers, historical generator/export/UI/schema, neighboring context, and later-test introduction dates; rebuilt claims around typed blocks and check semantics without claiming later implementations."
+          },
+          {
+            "round": 2,
+            "name": "結構修訂",
+            "result": "對24個原始正文段落做reverse outline：保留模式與區塊→品質條件→匯出→三種完整→可移植方法的推進；合併孤立過渡句，刪減重複判斷，將品質段收束為作者目前的設計反思。"
+          },
+          {
+            "round": 3,
+            "name": "讀者修訂",
+            "result": "補上boolean通過值的白話解釋，重排過長程式行但保留語義；確認GeneratedReport、Markdown、內容區塊、Word/PDF流程均有就地解釋，讀者方法不被寫成當時已實作的防護。"
+          },
+          {
+            "round": 4,
+            "name": "語言與出版修訂",
+            "result": "完成臺灣繁體字、標點、語句及安全修訂；修正沒有字形，刪去開場不必要的反向澄清，保留原稿三種完整、模板價值及格式與證據分離的有效論點；兩項內部來源無私人網址或識別資訊。"
+          }
+        ],
+        "reverse_outline": [
+          "01 以已蒐集文獻與待補來源並存的模板矛盾開場。",
+          "02 承接Day 01並設定本日形式與研究完整度問題。",
+          "03 說明按主題與模式組裝章節的實作。",
+          "04 解釋報告物件與內容區塊如何供預覽共用。",
+          "05 限定為規則式模擬生成，非模型閱讀文獻。",
+          "06 以完整模式說明風格/長度真正改變的內容。",
+          "07 提出深度名稱應對應實際處理的反思。",
+          "08 引入品質檢查條件及歷史程式節錄。",
+          "09 解釋boolean與非空檢查，指出未比較結論的限制。",
+          "10 界定完整度是設定計算而非可信度機率。",
+          "11 由限制推到作者目前的標籤設計方法。",
+          "12 介紹共用報告物件的純文字/Markdown輸出及節錄。",
+          "13 解釋區塊轉換與來源提醒保留。",
+          "14 區分DOCX打包及瀏覽器列印，限制實測宣稱。",
+          "15 指出換格式不能補證據。",
+          "16 合併過渡與介面/文件完整度定義。",
+          "17 定義證據完整並明示為作者責任分類。",
+          "18 分開格式要求與證據要求的驗證。",
+          "19 保留模板工作對結構與交付討論的價值。",
+          "20 回扣文獻模板不能宣稱已做未做的研究。",
+          "21 保留當时來源提示、待填欄位及資料需求表的用途。",
+          "22 交付追查完成條件及保留缺口說明的方法。",
+          "23 以來源身分保存自然銜接Day 03後停止。"
+        ],
+        "quality_scores": [
+          {
+            "criterion": "歷史與事實正確性",
+            "score": 4
+          },
+          {
+            "criterion": "技術解釋正確性",
+            "score": 4
+          },
+          {
+            "criterion": "對一般讀者的可理解度",
+            "score": 4
+          },
+          {
+            "criterion": "中心問題清晰度",
+            "score": 4
+          },
+          {
+            "criterion": "段落結構與推進",
+            "score": 4
+          },
+          {
+            "criterion": "真實開發經驗感",
+            "score": 3
+          },
+          {
+            "criterion": "證據與來源使用",
+            "score": 4
+          },
+          {
+            "criterion": "可遷移的讀者價值",
+            "score": 4
+          },
+          {
+            "criterion": "語言自然度",
+            "score": 3
+          },
+          {
+            "criterion": "出版安全",
+            "score": 4
+          }
+        ],
+        "quality_total": 38,
+        "quality_maximum": 40,
+        "scoring_boundary": "Editor self-assessment only; no human approval.",
+        "validation": {
+          "article": "docs/ironman-2026/articles/day-02.md",
+          "sha256": "71c93480589318428aa025b7b622c82b0c5013bf0cee191c94838b5d6ee08eb3",
+          "han_body_count": 1994,
+          "total_character_count": 3394,
+          "h1": 1,
+          "h2": 6,
+          "code_blocks": 2,
+          "code_lines": [
+            12,
+            5
+          ],
+          "reference_count": 2,
+          "markdown_render": "PASS",
+          "historical_code_excerpts": "EXACT_EXCEPT_WHITESPACE",
+          "quality_check_harness": "ISOLATED_REPLAY_NOT_HISTORICAL_OR_LIVE_TEST",
+          "relative_links": "NOT_APPLICABLE_NONE",
+          "mermaid": "NOT_APPLICABLE_NONE",
+          "front_matter": "NOT_APPLICABLE_EXISTING_CONVENTION",
+          "publication_safety_scan": "PASS",
+          "external_research": "NOT_NEEDED_REPOSITORY_SOURCE_ONLY",
+          "checks_scope": "Single-article Markdown, provenance, code, and publication-safety checks. Isolated historical-function replay is current verification, not an old or live product result.",
+          "application_test_suite": "NOT_RUN_EDITORIAL_ONLY"
+        },
+        "protection": {
+          "head": "a89549a6e26a7ac3ae44ad52b5588101baf28b95",
+          "initial_git_capture": "/private/tmp/rf-daily-next.bB5jJ0/initial-git.json",
+          "file_checksum_baseline": "/private/tmp/rf-daily-next.bB5jJ0/baseline.json",
+          "declared_write_scope": [
+            "docs/ironman-2026/articles/day-02.md",
+            "docs/ironman-2026/internal/DAILY-PUBLICATION-LEDGER.json",
+            "docs/ironman-2026/internal/ARTICLE-FACT-MAP.json",
+            "docs/ironman-2026/publication-manifest.json",
+            "docs/ironman-2026/PUBLICATION-MANIFEST.md"
+          ],
+          "notes": "Before-write hash and mtime comparison required; unrelated concurrent work is preserved and accounted separately in the final temporary scope result."
+        },
+        "human_confirmation": [
+          "作者確認第一人稱的回顧與設計取捨符合本人觀點。"
+        ]
+      }
+    },
+    {
+      "day": 3,
+      "title": "引用在句尾，證據仍可能不成立",
+      "article_path": "docs/ironman-2026/articles/day-03.md",
+      "daily_finalized": true,
+      "editorial_status": "READY_FOR_HUMAN_REVIEW",
+      "finalized_at": "2026-08-31T16:29:33.391Z",
+      "source_scope": [
+        "SRC-GIT-CITATION"
+      ],
+      "article_checksum": "040212d39619275e36531afd3492da85fdb7864a34304a475cf811404d3f8a3c",
+      "human_approved": false,
+      "published": false,
+      "review": {
+        "historical_scope": "2026-06-12 citation foundation at f0df5079a57fef7bb7b69e97f7ad4238de29f873. The broader frozen packet includes June 17, but this article stays at the canonical Day 03 map boundary; later readiness gates are not imported.",
+        "previous_day_context_only": "Read Day 02 closing sections for the presentation/evidence bridge; no revision or new readiness assessment.",
+        "next_day_context_only": "Read canonical Day 04 plan and opening for the search-workflow bridge; no revision or readiness assessment.",
+        "outline_reuse": "No Day 03 outline exists; retained existing title, citation-versus-support argument, source-identity conclusion and diagnostic takeaway, correcting unsupported Writer APIs and hindsight.",
+        "rounds": [
+          {
+            "round": 1,
+            "name": "事實稿",
+            "result": "核對canonical map、frozen packet、既有文章與source/fact ledger；逐一閱讀6月12日來源搜尋、shared schema、審查、生成、匯出及測試。以真實提醒不阻擋的矛盾取代泛論，完成有來源的完整稿。"
+          },
+          {
+            "round": 2,
+            "name": "結構修訂",
+            "result": "對22段正文作reverse outline；保留引用存在與成立的中心，收束為共同紀錄→狀態篩選→警告限制→追查方法。刪除結尾重複三分法，合併篩選解說，改掉防禦式回報口吻。"
+          },
+          {
+            "round": 3,
+            "name": "讀者修訂",
+            "result": "就地解釋SourceRecord、DOI、中繼資料、null、filter與審查狀態，補充Markdown白話說明；假設例子不冒充歷史事故，讀者方法不冒充已實作功能。"
+          },
+          {
+            "round": 4,
+            "name": "語言與出版修訂",
+            "result": "修正繁體用字、核對引用編號與標點；保留三項實際使用的私有專案來源描述，不暴露私人路徑、帳號、端點或SHA。確認無未核對數字、醫療法律主張、虛構使用成果或外部發布宣稱。"
+          }
+        ],
+        "reverse_outline": [
+          "01 以引用不足會警告、卻仍可匯出的真實控制流程開場。",
+          "02 承接Day 02，設定引用是否支持句子的中心問題。",
+          "03 保留舊稿有效觀點，區分引用呈現與來源核對。",
+          "04 以明示假設的工具適用範圍例子說明主張超出材料。",
+          "05 定位6月12日來源紀錄與審查基礎，不回寫逐句查核。",
+          "06 說明兩個歷史來源服務與共同SourceRecord欄位。",
+          "07 就地解釋DOI與中繼資料，界定辨識與理解的差別。",
+          "08 連回可編輯審查畫面，說明共同格式的實際用途。",
+          "09 解釋null與空清單，呈現保留缺失的實作。",
+          "10 說明pending、accepted、rejected及輸入與參考資料篩選。",
+          "11 引入真實歷史函式，解釋filter的用途。",
+          "12 說明兩個函式的篩選範圍，以及未做語義核對的限制。",
+          "13 把操作狀態與品質標籤分開，標明為目前的作者反思。",
+          "14 以接受後仍可缺欄位的歷史測試呈現真實限制。",
+          "15 限定測試為資料處理規則，不提升為線上論文查核。",
+          "16 追到Markdown下載與生成按鈕，確認提醒不阻擋。",
+          "17 回扣開場，區分告知缺口與阻擋繼續的責任。",
+          "18 補明生成器仍是規則式模擬，不冒充模型研究能力。",
+          "19 保留舊稿可診斷的觀念，改以當時確實存在的狀態與組裝路徑說明。",
+          "20 交付逐來源追資料流、逐句回查支持範圍的具體方法。",
+          "21 刪減重複三分法，限定方法為作者回顧而非既有完整防護。",
+          "22 從審查名單往搜尋來源回追，自然銜接Day 04後停止。"
+        ],
+        "quality_scores": [
+          {
+            "criterion": "歷史與事實正確性",
+            "score": 4
+          },
+          {
+            "criterion": "技術解釋正確性",
+            "score": 4
+          },
+          {
+            "criterion": "對一般讀者的可理解度",
+            "score": 4
+          },
+          {
+            "criterion": "中心問題清晰度",
+            "score": 4
+          },
+          {
+            "criterion": "段落結構與推進",
+            "score": 4
+          },
+          {
+            "criterion": "真實開發經驗感",
+            "score": 3
+          },
+          {
+            "criterion": "證據與來源使用",
+            "score": 4
+          },
+          {
+            "criterion": "可遷移的讀者價值",
+            "score": 4
+          },
+          {
+            "criterion": "語言自然度",
+            "score": 3
+          },
+          {
+            "criterion": "出版安全",
+            "score": 4
+          }
+        ],
+        "quality_total": 38,
+        "quality_maximum": 40,
+        "scoring_boundary": "Editor self-assessment only; no human approval. Historical account is source-based and deliberately does not invent lived scenes or user outcomes.",
+        "validation": {
+          "article": "docs/ironman-2026/articles/day-03.md",
+          "sha256": "040212d39619275e36531afd3492da85fdb7864a34304a475cf811404d3f8a3c",
+          "han_body_count": 1971,
+          "total_character_count": 3168,
+          "h1": 1,
+          "h2": 6,
+          "prose_paragraphs": 22,
+          "code_blocks": 1,
+          "code_lines": [
+            7
+          ],
+          "reference_count": 3,
+          "markdown_render": "PASS",
+          "historical_code_excerpts": "EXACT_HISTORICAL_SOURCE",
+          "historical_fixture_replay": "PASS_CURRENT_OFFLINE_REPLAY_NOT_HISTORICAL_OR_LIVE_RESULT",
+          "relative_links": "NOT_APPLICABLE_NONE",
+          "mermaid": "NOT_APPLICABLE_NONE",
+          "front_matter": "NOT_APPLICABLE_EXISTING_CONVENTION",
+          "publication_safety_scan": "PASS",
+          "external_research": "NOT_NEEDED_REPOSITORY_SOURCE_ONLY",
+          "checks_scope": "Single-article Markdown/render, code, provenance, and publication-safety checks. Historical fixture suites replayed offline in memory; import rewiring only. Current replay is not historical execution or live research proof.",
+          "application_test_suite": "NOT_RUN_EDITORIAL_ONLY"
+        },
+        "protection": {
+          "head": "a89549a6e26a7ac3ae44ad52b5588101baf28b95",
+          "initial_git_capture": "/private/tmp/rf-daily-auto.LawQ6N/initial-git.json",
+          "file_checksum_baseline": "/private/tmp/rf-daily-auto.LawQ6N/baseline.json",
+          "declared_write_scope": [
+            "docs/ironman-2026/articles/day-03.md",
+            "docs/ironman-2026/internal/DAILY-PUBLICATION-LEDGER.json",
+            "docs/ironman-2026/internal/ARTICLE-FACT-MAP.json",
+            "docs/ironman-2026/publication-manifest.json",
+            "docs/ironman-2026/PUBLICATION-MANIFEST.md"
+          ],
+          "notes": "Before-write hash and mtime comparison covers all preexisting editorial files. Final whole-repository checksum comparison is saved in temporary scope-result.json; unrelated work is preserved."
+        },
+        "human_confirmation": [
+          "作者確認第一人稱回顧與設計取捨符合本人觀點。"
+        ]
+      }
+    },
+    {
+      "day": 4,
+      "title": "搜尋開始成為一條流程：API 回應只是第一站",
+      "article_path": "docs/ironman-2026/articles/day-04.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 5,
+      "title": "資料先過關：Accepted Source 如何建立單向流水線",
+      "article_path": "docs/ironman-2026/articles/day-05.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 6,
+      "title": "搜尋題目不是一個字串：Query Expansion 如何不搜歪",
+      "article_path": "docs/ironman-2026/articles/day-06.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 7,
+      "title": "三個學術 Provider，三種資料形狀",
+      "article_path": "docs/ironman-2026/articles/day-07.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 8,
+      "title": "DOI、作者與年份：去重其實在辨認研究",
+      "article_path": "docs/ironman-2026/articles/day-08.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 9,
+      "title": "每個字都對，題目卻變了：離題結果為何最難除錯",
+      "article_path": "docs/ironman-2026/articles/day-09.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 10,
+      "title": "從摘要到可主張證據：Evidence Card 的真正工作",
+      "article_path": "docs/ironman-2026/articles/day-10.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 11,
+      "title": "不要把十篇來源接成一篇：Synthesis 的第一道分界",
+      "article_path": "docs/ironman-2026/articles/day-11.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 12,
+      "title": "部署失敗也是架構訊號：本地能跑不代表入口正確",
+      "article_path": "docs/ironman-2026/articles/day-12.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 13,
+      "title": "瀏覽器關掉，研究工作還在嗎？",
+      "article_path": "docs/ironman-2026/articles/day-13.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 14,
+      "title": "Direct Paper Search 的權限邊界",
+      "article_path": "docs/ironman-2026/articles/day-14.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 15,
+      "title": "Report Intelligence 整合：測試全綠，真實輸出仍可被擋下",
+      "article_path": "docs/ironman-2026/articles/day-15.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 16,
+      "title": "Writer 之外，誰負責關閉出版閘門？",
+      "article_path": "docs/ironman-2026/articles/day-16.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 17,
+      "title": "長報告可能只剩短報告：證據決定可寫長度",
+      "article_path": "docs/ironman-2026/articles/day-17.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 18,
+      "title": "Case A 通過、Case B 擋下：出版驗收必須綁定個案",
+      "article_path": "docs/ironman-2026/articles/day-18.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 19,
+      "title": "三個新題，零個完整出口：成功 Demo 遇上泛化測試",
+      "article_path": "docs/ironman-2026/articles/day-19.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 20,
+      "title": "十個新題暴露共同瓶頸：先找第一個失敗層",
+      "article_path": "docs/ironman-2026/articles/day-20.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 21,
+      "title": "先把 Study Facts 變成可拒絕的資料",
+      "article_path": "docs/ironman-2026/articles/day-21.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 22,
+      "title": "Evidence Gap 要能驅動補查，而不是無限重搜",
+      "article_path": "docs/ironman-2026/articles/day-22.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 23,
+      "title": "Client Timeout 不是研究失敗：把生命週期交還給 Job",
+      "article_path": "docs/ironman-2026/articles/day-23.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 24,
+      "title": "同一研究只能有一個 Admission Owner",
+      "article_path": "docs/ironman-2026/articles/day-24.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 25,
+      "title": "HTTP 200 不是全文：從回應成功到可用 Artifact",
+      "article_path": "docs/ironman-2026/articles/day-25.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 26,
+      "title": "合法 Open Access 也可能只是 Landing Page",
+      "article_path": "docs/ironman-2026/articles/day-26.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 27,
+      "title": "9/10 找到研究，2/10 拿到全文：兩種 Coverage 不能合併",
+      "article_path": "docs/ironman-2026/articles/day-27.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 28,
+      "title": "先前的「通過」可能需要被撤回",
+      "article_path": "docs/ironman-2026/articles/day-28.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 29,
+      "title": "Retry 不是免費的：Execution Budget 必須管到 Side Effect",
+      "article_path": "docs/ironman-2026/articles/day-29.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    },
+    {
+      "day": 30,
+      "title": "讓「不知道」成為一級輸出",
+      "article_path": "docs/ironman-2026/articles/day-30.md",
+      "daily_finalized": false,
+      "editorial_status": "existing_draft",
+      "finalized_at": null,
+      "source_scope": [],
+      "article_checksum": null,
+      "human_approved": false,
+      "published": false,
+      "registration_note": "Existing batch-reviewed article registered only; not reviewed or finalized in this daily workflow."
+    }
+  ]
+}

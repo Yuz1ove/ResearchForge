@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">研究題目的 anchors 如何約束多組查詢</title><desc id="desc">族群、暴露或介入、結果與排除條件形成題目合約，多組中英文查詢都必須保留這些約束。</desc>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L9 3z" fill="#5eead4"/></marker><style>text{font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif}.t{fill:#f8fafc;font-size:34px;font-weight:700}.s{fill:#94a3b8;font-size:20px}.b{fill:#13233d;stroke:#5eead4;stroke-width:2}.h{fill:#e2e8f0;font-size:23px;font-weight:650}.d{fill:#94a3b8;font-size:18px}.l{stroke:#5eead4;stroke-width:3;marker-end:url(#a)}</style></defs>
+  <style>.l{fill:none}</style><rect width="1200" height="675" rx="28" fill="#08111f"/><text x="72" y="78" class="t">Query Expansion 不能改掉研究問題</text><text x="72" y="112" class="s">字詞可以替換；題目身分由 anchors 共同守住。</text>
+  <g transform="translate(70 210)"><rect class="b" width="190" height="105" rx="18"/><text class="h" x="95" y="45" text-anchor="middle">族群</text><text class="d" x="95" y="76" text-anchor="middle">Population</text></g>
+  <g transform="translate(310 210)"><rect class="b" width="190" height="105" rx="18"/><text class="h" x="95" y="45" text-anchor="middle">暴露／介入</text><text class="d" x="95" y="76" text-anchor="middle">Exposure</text></g>
+  <g transform="translate(550 210)"><rect class="b" width="190" height="105" rx="18"/><text class="h" x="95" y="45" text-anchor="middle">結果</text><text class="d" x="95" y="76" text-anchor="middle">Outcome</text></g>
+  <g transform="translate(790 210)"><rect class="b" width="190" height="105" rx="18"/><text class="h" x="95" y="45" text-anchor="middle">排除條件</text><text class="d" x="95" y="76" text-anchor="middle">Exclusions</text></g>
+  <path d="M165 315v88M405 315v88M645 315v88M885 315v88" stroke="#5eead4" stroke-width="3"/>
+  <g transform="translate(245 402)"><rect width="560" height="110" rx="20" fill="#143127" stroke="#fbbf24" stroke-width="2"/><text x="280" y="45" text-anchor="middle" class="h">Topic Contract</text><text x="280" y="78" text-anchor="middle" class="d">每條候選查詢都要通過同一組 anchors</text></g>
+  <path class="l" d="M805 457h115"/><g transform="translate(930 385)"><rect class="b" width="200" height="145" rx="18"/><text x="100" y="42" text-anchor="middle" class="h">查詢集合</text><text x="100" y="76" text-anchor="middle" class="d">中文 query</text><text x="100" y="104" text-anchor="middle" class="d">英文 query</text><text x="100" y="132" text-anchor="middle" class="d">facet query</text></g>
+  <text x="72" y="610" class="s">Expansion 增加入口，不增加證據資格。</text>
+</svg>

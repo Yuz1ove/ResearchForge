@@ -1,7 +1,4 @@
-import {
-  dedupeSourceRecords,
-  type SourceRecord,
-} from "@workspace/api-zod";
+import { dedupeSourceRecords, type SourceRecord } from "@workspace/api-zod";
 import {
   LlmAdapterError,
   requestOpenAICompatibleChatCompletion,
@@ -23,7 +20,12 @@ export interface KeywordExpansionRequest {
   language?: string;
 }
 
-export type KeywordLlmStatus = "success" | "timeout" | "quota_exceeded" | "failed" | "skipped";
+export type KeywordLlmStatus =
+  | "success"
+  | "timeout"
+  | "quota_exceeded"
+  | "failed"
+  | "skipped";
 
 export interface KeywordExpansionResult {
   normalized_topic: string;
@@ -59,7 +61,12 @@ export interface KeywordSourceSearchOptions extends KeywordExpansionOptions {
 type KeywordExpansionErrorCode =
   | "provider-unconfigured"
   | "model-missing"
+  | "context-window-exceeded"
+  | "output-budget-exhausted"
   | "provider-quota"
+  | "provider-auth"
+  | "provider-rate-limit"
+  | "provider-empty-output"
   | "provider-timeout"
   | "provider-failure"
   | "invalid-json";
@@ -104,25 +111,49 @@ const controlledDomainSet = new Set<string>(CONTROLLED_DOMAINS);
 
 const DOMAIN_CUES: Record<string, RegExp[]> = {
   general_academic_research: [/./],
-  education: [/教育|學生|高中|國中|大學|學校|課程|學習|teacher|student|school|education/i],
-  psychology: [/心理|注意力|認知|情緒|壓力|行為|專注|焦慮|attention|cognition|psychology|behavior|behaviour/i],
-  digital_media: [/短影音|社群媒體|社交媒體|影音|手機|螢幕|tiktok|reels|youtube shorts|short[- ]?form|social media|digital media/i],
+  education: [
+    /教育|學生|高中|國中|大學|學校|課程|學習|teacher|student|school|education/i,
+  ],
+  psychology: [
+    /心理|注意力|認知|情緒|壓力|行為|專注|焦慮|attention|cognition|psychology|behavior|behaviour/i,
+  ],
+  digital_media: [
+    /短影音|社群媒體|社交媒體|影音|手機|螢幕|tiktok|reels|youtube shorts|short[- ]?form|social media|digital media/i,
+  ],
   sleep_health: [/睡眠|失眠|睡眠品質|作息|sleep|insomnia|circadian/i],
-  student_wellbeing: [/學生|高中生|國中生|青少年|校園|身心|壓力|wellbeing|well-being|adolescent|teen/i],
-  public_health: [/健康|睡眠|公共衛生|青少年|流行病|health|public health|epidemiology/i],
-  artificial_intelligence: [/人工智慧|生成式|生成器|報告生成器|AI輸出|大型語言模型|機器學習|演算法|ai|llm|machine learning|artificial intelligence/i],
-  information_systems: [/資訊系統|平台|系統|資料庫|網站|app|dashboard|information system|platform/i],
-  software_engineering: [/軟體|程式|開發|部署|前端|後端|api|github|software|programming|frontend|backend/i],
+  student_wellbeing: [
+    /學生|高中生|國中生|青少年|校園|身心|壓力|wellbeing|well-being|adolescent|teen/i,
+  ],
+  public_health: [
+    /健康|睡眠|公共衛生|青少年|流行病|health|public health|epidemiology/i,
+  ],
+  artificial_intelligence: [
+    /人工智慧|生成式|生成器|報告生成器|AI輸出|大型語言模型|機器學習|演算法|ai|llm|machine learning|artificial intelligence/i,
+  ],
+  information_systems: [
+    /資訊系統|平台|系統|資料庫|網站|app|dashboard|information system|platform/i,
+  ],
+  software_engineering: [
+    /軟體|程式|開發|部署|前端|後端|api|github|software|programming|frontend|backend/i,
+  ],
   healthcare: [/醫療|臨床|病患|照護|healthcare|clinical|patient/i],
-  environmental_science: [/環境|生態|氣候|污染|保育|environment|ecology|climate|pollution/i],
+  environmental_science: [
+    /環境|生態|氣候|污染|保育|environment|ecology|climate|pollution/i,
+  ],
   agriculture: [/農業|農作|畜牧|作物|agriculture|crop|livestock/i],
   economics: [/經濟|市場|價格|成本|收入|economics|market|price|cost/i],
   business: [/商業|企業|品牌|行銷|管理|business|marketing|management/i],
   sociology: [/社會|族群|文化|家庭|sociology|social|culture|family/i],
-  public_policy: [/政策|政府|法規|公共政策|治理|government|policy|regulation|governance/i],
-  community_development: [/社區|地方創生|居民|社群參與|community|neighborhood|neighbourhood/i],
+  public_policy: [
+    /政策|政府|法規|公共政策|治理|government|policy|regulation|governance/i,
+  ],
+  community_development: [
+    /社區|地方創生|居民|社群參與|community|neighborhood|neighbourhood/i,
+  ],
   urban_studies: [/城市|都市|都會|城鄉|urban|city|cities|municipal/i],
-  transportation: [/交通|運輸|通勤|道路|車流|traffic|transport|mobility|commute/i],
+  transportation: [
+    /交通|運輸|通勤|道路|車流|traffic|transport|mobility|commute/i,
+  ],
 };
 
 const GATED_DOMAINS = new Set([
@@ -163,7 +194,9 @@ function cleanString(value: unknown): string | null {
 
 function stringArray(value: unknown, limit = 12): string[] {
   if (!Array.isArray(value)) return [];
-  return unique(value.map(cleanString).filter((item): item is string => Boolean(item))).slice(0, limit);
+  return unique(
+    value.map(cleanString).filter((item): item is string => Boolean(item)),
+  ).slice(0, limit);
 }
 
 function hasCue(domain: string, text: string): boolean {
@@ -171,15 +204,22 @@ function hasCue(domain: string, text: string): boolean {
 }
 
 function inferDomains(input: KeywordExpansionRequest): string[] {
-  const text = normalize(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+  const text = normalize(
+    `${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`,
+  );
   return CONTROLLED_DOMAINS.filter((domain) => {
     if (domain === "general_academic_research") return false;
     return hasCue(domain, text);
   });
 }
 
-function cleanupDomains(domains: string[], input: KeywordExpansionRequest): string[] {
-  const text = normalize(`${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`);
+function cleanupDomains(
+  domains: string[],
+  input: KeywordExpansionRequest,
+): string[] {
+  const text = normalize(
+    `${input.topic} ${input.reportType ?? ""} ${input.audience ?? ""}`,
+  );
   const supportedExisting = domains
     .filter((domain) => controlledDomainSet.has(domain))
     .filter((domain) => {
@@ -189,7 +229,13 @@ function cleanupDomains(domains: string[], input: KeywordExpansionRequest): stri
     });
   const inferred = inferDomains(input);
   const cleaned = unique([...supportedExisting, ...inferred])
-    .filter((domain) => !(domain === "general_academic_research" && supportedExisting.length + inferred.length > 1))
+    .filter(
+      (domain) =>
+        !(
+          domain === "general_academic_research" &&
+          supportedExisting.length + inferred.length > 1
+        ),
+    )
     .slice(0, 8);
 
   return cleaned.length ? cleaned : ["general_academic_research"];
@@ -218,11 +264,15 @@ function buildChineseQueries(input: KeywordExpansionRequest): string[] {
   ]).slice(0, 4);
 }
 
-function buildEnglishQueries(input: KeywordExpansionRequest, domains: string[]): string[] {
+function buildEnglishQueries(
+  input: KeywordExpansionRequest,
+  domains: string[],
+): string[] {
   const text = normalize(`${input.topic} ${input.audience ?? ""}`);
-  const isShortVideoStudentSleepTopic = domains.includes("digital_media")
-    && domains.includes("sleep_health")
-    && domains.includes("student_wellbeing");
+  const isShortVideoStudentSleepTopic =
+    domains.includes("digital_media") &&
+    domains.includes("sleep_health") &&
+    domains.includes("student_wellbeing");
 
   if (isShortVideoStudentSleepTopic) {
     return [
@@ -239,7 +289,9 @@ function buildEnglishQueries(input: KeywordExpansionRequest, domains: string[]):
     return [];
   }
 
-  const audience = hasAny(text, [/高中|學生|青少年|student|adolescent/i]) ? "students" : "people";
+  const audience = hasAny(text, [/高中|學生|青少年|student|adolescent/i])
+    ? "students"
+    : "people";
   const domainTerms = domains
     .filter((domain) => domain !== "general_academic_research")
     .map((domain) => domain.replace(/_/g, " "))
@@ -326,17 +378,24 @@ function coerceKeywordExpansion(
   fallbackUsed: boolean,
 ): KeywordExpansionResult {
   if (!value || typeof value !== "object") {
-    throw new KeywordExpansionError("invalid-json", "LLM response was not a JSON object.");
+    throw new KeywordExpansionError(
+      "invalid-json",
+      "LLM response was not a JSON object.",
+    );
   }
 
   const data = value as Record<string, unknown>;
-  const normalizedTopic = cleanString(data.normalized_topic) ?? input.topic.trim();
+  const normalizedTopic =
+    cleanString(data.normalized_topic) ?? input.topic.trim();
   const domains = cleanupDomains(stringArray(data.domains, 8), input);
   const chineseQueries = stringArray(data.chinese_queries, 4);
   const englishQueries = stringArray(data.english_queries, 4).filter(
     (query) => /[A-Za-z]/.test(query) && !/[\u3400-\u9fff]/u.test(query),
   );
-  const fallback = buildFallbackKeywordExpansion(input, "LLM returned incomplete keyword data; deterministic fields were merged.");
+  const fallback = buildFallbackKeywordExpansion(
+    input,
+    "LLM returned incomplete keyword data; deterministic fields were merged.",
+  );
   const searchQueries = unique([
     ...stringArray(data.search_queries, 6),
     ...englishQueries,
@@ -349,8 +408,12 @@ function coerceKeywordExpansion(
     normalized_topic: normalizedTopic,
     domains,
     search_queries: searchQueries,
-    english_queries: englishQueries.length ? englishQueries : fallback.english_queries,
-    chinese_queries: chineseQueries.length ? chineseQueries : fallback.chinese_queries,
+    english_queries: englishQueries.length
+      ? englishQueries
+      : fallback.english_queries,
+    chinese_queries: chineseQueries.length
+      ? chineseQueries
+      : fallback.chinese_queries,
     preferred_source_types: stringArray(data.preferred_source_types, 8).length
       ? stringArray(data.preferred_source_types, 8)
       : DEFAULT_PREFERRED_SOURCE_TYPES,
@@ -417,7 +480,11 @@ async function requestLlmKeywordExpansion(
     if (error instanceof LlmAdapterError) {
       throw new KeywordExpansionError(error.code, error.message, error);
     }
-    throw new KeywordExpansionError("provider-failure", "LLM keyword expansion request failed.", error);
+    throw new KeywordExpansionError(
+      "provider-failure",
+      "LLM keyword expansion request failed.",
+      error,
+    );
   }
 }
 
@@ -438,7 +505,11 @@ export async function expandSearchKeywords(
       fallback_used: false,
     };
   } catch (error) {
-    return buildFallbackKeywordExpansion(normalizedInput, fallbackReason(error), llmStatusFromError(error));
+    return buildFallbackKeywordExpansion(
+      normalizedInput,
+      fallbackReason(error),
+      llmStatusFromError(error),
+    );
   }
 }
 
@@ -447,12 +518,28 @@ export async function searchKeywordSources(
   options?: KeywordSourceSearchOptions,
 ): Promise<KeywordSourceSearchResult> {
   const keywordExpansion = await expandSearchKeywords(input, options);
-  const queryLimit = options?.queryLimit ?? (Number(process.env.KEYWORD_SEARCH_QUERY_LIMIT) || DEFAULT_KEYWORD_QUERY_LIMIT);
-  const queries = unique(keywordExpansion.search_queries.map((query) => query.trim()).filter(Boolean)).slice(0, queryLimit);
-  const groups = (await Promise.all(
-    queries.map((query) => searchSourceProviders(query, options?.sourceSearch ?? { fetchImpl: options?.fetchImpl })),
-  )).flat();
-  const sources = dedupeSourceRecords(groups.flatMap((group) => group.results)).slice(0, 24);
+  const queryLimit =
+    options?.queryLimit ??
+    (Number(process.env.KEYWORD_SEARCH_QUERY_LIMIT) ||
+      DEFAULT_KEYWORD_QUERY_LIMIT);
+  const queries = unique(
+    keywordExpansion.search_queries
+      .map((query) => query.trim())
+      .filter(Boolean),
+  ).slice(0, queryLimit);
+  const groups = (
+    await Promise.all(
+      queries.map((query) =>
+        searchSourceProviders(
+          query,
+          options?.sourceSearch ?? { fetchImpl: options?.fetchImpl },
+        ),
+      ),
+    )
+  ).flat();
+  const sources = dedupeSourceRecords(
+    groups.flatMap((group) => group.results),
+  ).slice(0, 24);
 
   return {
     ok: true,

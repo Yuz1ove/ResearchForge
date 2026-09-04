@@ -445,6 +445,27 @@ test("APA formatting handles provider family-name-first authors and terminal tit
   assert.doesNotMatch(reference.text, /temperature\.\./u);
 });
 
+test("APA formatting excludes affiliation strings while preserving real and organization authors", () => {
+  const reference = formatApaReference(source({
+    authors: [
+      "Triam Udom Suksa School, Pathum Wan, Bangkok, Thailand",
+      "Wachirawit Angkatavanich",
+      "Natcha Chaiburanont",
+      "Supaporn Barrameesangpet",
+    ],
+    title: "Associations between Duration and Type of Electronic Device Use and Sleep Quality among Bangkok's High School Students",
+  }));
+
+  assert.match(reference.text, /^Angkatavanich, W\., Chaiburanont, N\., & Barrameesangpet, S\./u);
+  assert.doesNotMatch(reference.text, /Thailand, T\.|Triam Udom Suksa School/u);
+
+  const organization = formatApaReference(source({
+    authors: ["World Health Organization"],
+    title: "Guideline on health policy",
+  }));
+  assert.match(organization.text, /^World Health Organization \(2020\)\./u);
+});
+
 test("APA references preserve journal volume/pages and conference event metadata", () => {
   const journal = formatApaReference(source({
     sourceKind: "journal",

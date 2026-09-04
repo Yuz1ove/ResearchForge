@@ -1,0 +1,33 @@
+{
+  "schema_version": "researchforge-ironman-day-facts/v1",
+  "day": 8,
+  "title_seed": "去重是在辨認研究，不是刪字串",
+  "historical_period": {"start": "2026-06-26", "end": "2026-07-06", "confidence": "HIGH"},
+  "evidence_boundary": "COMMITTED_GIT_AND_CURRENT_SOURCE_CONTEXT",
+  "central_problem": "不同 provider 回傳的同一研究，如何避免被當成多篇 evidence？",
+  "reader_takeaway": "work identity、provider lineage 與 field provenance 要比 UI card 更持久。",
+  "known_at_the_time": [
+    {"fact": "ec20e43 的 research normalizer/scoring tree 包含 normalizeSource、dedupe、relevance 與 source-quality modules。", "source_refs": ["SRC-GIT-DATA-PIPELINE-0626"]},
+    {"fact": "source records 與 provider metadata 在 current observed source layer 仍保留 provider IDs/DOI normalization concerns。", "source_refs": ["SRC-SOURCE-PROVIDERS"]}
+  ],
+  "implemented_at_the_time": [{"fact": "dedupe 與 normalization 已成為 research pipeline 的獨立責任，而非 UI string filtering。", "source_refs": ["SRC-GIT-DATA-PIPELINE-0626"]}],
+  "not_yet_available": [{"fact": "早期 dedupe 不等於後來的 canonical admission，也不等於某個 artifact 已可用。", "source_refs": ["SRC-GIT-DATA-PIPELINE-0626", "SRC-SOURCE-CANONICAL"]}],
+  "observed_failures": [
+    {"failure_id": "DUPLICATE_WORK_COUNT_RISK", "date_or_range": "2026-06-26/2026-07-06", "historical_stage": "identity and dedupe", "symptom": "若只看 provider rows，source counts 會被重複描述放大。", "root_cause_if_known": "provider record identity and scholarly work identity are separate layers", "what_was_known_then": "需要 normalize/dedupe modules", "later_resolution": "later manifestation layer further separated work identity from file/artifact identity", "source_refs": ["SRC-GIT-DATA-PIPELINE-0626", "SRC-SOURCE-FULLTEXT"]}
+  ],
+  "tests_and_metrics": [{"test_or_metric": "One identity layer with provider lineage is documented; no observed source-count reduction is claimed.", "result": "conceptual mapping verified", "source_refs": ["SRC-GIT-DATA-PIPELINE-0626"]}],
+  "engineering_decisions": [{"decision": "保留 provider lineage，同時用 normalized identity 去重；不能因 merge 就抹除來源差異。", "source_refs": ["SRC-GIT-DATA-PIPELINE-0626", "SRC-SOURCE-PROVIDERS"]}],
+  "architecture_state": [{"state": "provider records → normalized identity → dedupe/scoring → source/evidence candidates", "source_refs": ["SRC-GIT-DATA-PIPELINE-0626"]}],
+  "terminology_available_at_the_time": ["DOI normalization", "provider ID", "dedupe", "normalized source", "source identity"],
+  "terminology_forbidden_due_to_hindsight": ["canonical manifestation", "admitted artifact", "FULL_TEXT_STRUCTURED", "V6A materializer"],
+  "safe_numbers": [{"value": "1 identity layer plus provider lineage", "meaning": "conceptual mapping, not an observed source count", "source_refs": ["SRC-GIT-DATA-PIPELINE-0626"]}],
+  "safe_public_facts": [{"fact": "去重的目標是讓同一 scholarly work 不被重複計數，同時保留 provider provenance。", "source_refs": ["SRC-GIT-DATA-PIPELINE-0626"]}],
+  "sensitive_or_internal_facts": ["raw DOI/provider ID tables", "private source payloads", "artifact checksums"],
+  "retrospective_notes": [{"note": "後來同一 study 還會有 version-of-record、preprint、repository copy 與 HTML/PDF manifestations；不能把這些問題倒推成早期已解決。", "source_refs": ["SRC-SOURCE-FULLTEXT"]}],
+  "source_refs": [
+    {"type": "commit", "ref": "SRC-GIT-DATA-PIPELINE-0626", "why_it_supports_this_fact": "committed normalizer/dedupe/scoring building blocks"},
+    {"type": "source_code", "ref": "SRC-SOURCE-PROVIDERS", "why_it_supports_this_fact": "current provider identity lineage, explicitly current only"}
+  ],
+  "publication_risks": ["不要將 dedupe 當成 evidence admission。", "不要公開 raw identifiers 或 full-text artifact paths。"],
+  "confidence": "HIGH"
+}

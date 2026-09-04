@@ -51,15 +51,17 @@ test("/chat/completions 200 marks generation ok and parses output", async () => 
         return jsonResponse({ data: [{ id: "school-model-a" }] });
       }
       assert.equal(url, "https://ai.ccsh.tn.edu.tw/v1/chat/completions");
-      assert.equal(JSON.parse(String(init?.body)).model, "school-model-a");
-      return jsonResponse({ choices: [{ message: { content: "ok" } }] });
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.model, "school-model-a");
+      assert.equal(body.messages[0].content, "Reply with exactly: PING_OK");
+      return jsonResponse({ choices: [{ message: { content: "PING_OK" } }] });
     },
   });
 
   assert.equal(result.ok, true);
   assert.equal(result.generation.ok, true);
   assert.equal(result.generation.endpoint, "/chat/completions");
-  assert.equal(result.generation.outputPreview, "ok");
+  assert.equal(result.generation.outputPreview, "PING_OK");
 });
 
 test("responses 404 is endpoint_not_supported, not invalid_key", async () => {
@@ -85,17 +87,33 @@ test("chat 404 falls back to responses when endpoint is auto", async () => {
       if (url.endsWith("/models")) return jsonResponse({ data: [{ id: "school-model-a" }] });
       if (url.endsWith("/chat/completions")) return jsonResponse({ error: "not found" }, 404);
       assert.equal(url, "https://ai.ccsh.tn.edu.tw/v1/responses");
-      return jsonResponse({ output_text: "ok" });
+      return jsonResponse({ output_text: "PING_OK" });
     },
   });
 
   assert.equal(result.ok, true);
   assert.equal(result.generation.endpoint, "/responses");
-  assert.equal(result.generation.outputPreview, "ok");
+  assert.equal(result.generation.outputPreview, "PING_OK");
 });
 
-test("401 and 429 are classified without leaking the full key", async () => {
+test("401, provider-specific 403, and 429 failures are classified without leaking the full key", async () => {
   assert.equal(classifyProviderSmokeHttpError(401, "invalid api key", "/models"), "invalid_key");
+  assert.equal(
+    classifyProviderSmokeHttpError(
+      403,
+      JSON.stringify({ error: { code: "quota_exceeded", message: "monthly quota reached" } }),
+      "/chat/completions",
+    ),
+    "quota_exceeded",
+  );
+  assert.equal(
+    classifyProviderSmokeHttpError(
+      403,
+      JSON.stringify({ error: { code: "allocation_quarantined" } }),
+      "/chat/completions",
+    ),
+    "forbidden",
+  );
   assert.equal(classifyProviderSmokeHttpError(429, "rate limit", "/models"), "rate_limited");
   assert.equal(classifyProviderSmokeHttpError(429, "quota exceeded", "/models"), "quota_exceeded");
 

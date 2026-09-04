@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "researchforge-ironman-status/v2",
+  "currentDay": 1,
+  "published": [],
+  "approvedByUser": [],
+  "readyForHumanReview": [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+    11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    21, 22, 23, 24, 25, 26, 27, 28, 29, 30
+  ],
+  "drafting": [],
+  "outlined": [],
+  "blocked": [
+    {
+      "scope": "live_publication",
+      "reason": "No authenticated iThome authoring or publication action was authorized in this work session."
+    },
+    {
+      "scope": "human_approval",
+      "reason": "All 30 articles await explicit project-owner review and approval."
+    },
+    {
+      "scope": "ithome_event_metadata",
+      "reason": "The single bounded official-page verification returned HTTP 403; current event metadata remains unverified."
+    }
+  ],
+  "buffer": {
+    "readyForHumanReviewCount": 30,
+    "minimumRequired": 5,
+    "status": "MET_FOR_REVIEW_NOT_PUBLICATION"
+  },
+  "lastVerified": "2026-08-30T00:00:00+08:00",
+  "repositoryHead": "a89549a6e26a7ac3ae44ad52b5588101baf28b95",
+  "notes": [
+    "READY_FOR_HUMAN_REVIEW refers to local editorial readiness, not user approval or platform publication.",
+    "The 30 canonical article files remain under docs/ironman-2026/articles/.",
+    "Current ResearchForge generalization, deployment and publication remain unresolved.",
+    "No production application file was modified in Publication Review V1."
+  ]
+}

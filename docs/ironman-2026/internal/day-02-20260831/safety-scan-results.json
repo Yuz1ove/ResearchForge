@@ -1,0 +1,21 @@
+{
+  "scope": "DAY02_CANDIDATE_ONLY",
+  "method": "Exact scan definitions reused from unmodified validate-publication-v1.mjs",
+  "checks": [
+    "placeholder",
+    "absolute_path",
+    "secret_pattern",
+    "internal_source_id",
+    "raw_job_id",
+    "private_route",
+    "full_commit_sha",
+    "raw_verdict"
+  ],
+  "files": [
+    "articles/day-02-20260831/article-public.md",
+    "assets/day-02/20260831/stop-condition-flow.svg",
+    "assets/day-02/20260831/stop-condition-flow.mmd"
+  ],
+  "findings": [],
+  "verdict": "PASS"
+}

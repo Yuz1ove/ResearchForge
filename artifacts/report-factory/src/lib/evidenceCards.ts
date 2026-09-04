@@ -12,7 +12,7 @@ import {
 import { buildSourceEvidenceProfile } from "./sourceEvidence.ts";
 import { sourceHasUsableAbstract } from "./sourceSummaries.ts";
 import { buildTopicFacets } from "./topicFacets.ts";
-import type { EvidenceCardSafety, EvidenceDerivation } from "@workspace/api-zod";
+import type { EvidenceCardSafety, EvidenceDerivation, StructuredStudyFact } from "@workspace/api-zod";
 import {
   UNTRANSLATED_EVIDENCE_NOTICE,
   verifiedZhTwReportText,
@@ -52,6 +52,7 @@ export interface EvidenceCard {
   sourceExcerptOriginal: string;
   sourceSummaryZhTw: string;
   supportingClaims?: unknown[];
+  structuredStudyFact?: StructuredStudyFact;
   supportSpans?: Array<{
     claimId?: string;
     text?: string;
@@ -128,6 +129,7 @@ export interface EvidenceCard {
   studyDesign?: string | null;
   dataScope?: string | null;
   exposure?: string | null;
+  comparator?: string | null;
   outcome?: string | null;
   exactResult?: string | null;
   numericResult?: string | null;

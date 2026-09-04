@@ -1,0 +1,33 @@
+{
+  "schema_version": "researchforge-ironman-day-facts/v1",
+  "day": 6,
+  "title_seed": "搜尋題目不是一個字串",
+  "historical_period": {"start": "2026-06-20", "end": "2026-06-26", "confidence": "HIGH"},
+  "evidence_boundary": "COMMITTED_GIT_AND_HISTORICAL_DOC",
+  "central_problem": "query expansion 如何增加召回，又不丟掉研究對象、範圍與排除條件？",
+  "reader_takeaway": "查詢 expansion 應攜帶研究意圖，而不是只增加同義詞。",
+  "known_at_the_time": [
+    {"fact": "9299c58、a94c046 將 entity-aware topic grounding 與 topic understanding planner 加入搜尋前。", "source_refs": ["SRC-GIT-TOPIC"]},
+    {"fact": "6/26 progress log 記錄 canonical topic、雙語 query seeds、subtopics、must-include/exclude terms 與 domain hints 的 payload 對齊。", "source_refs": ["SRC-DOC-PROGRESS-0626"]}
+  ],
+  "implemented_at_the_time": [{"fact": "搜尋計畫開始明確攜帶題目理解與 facet/query fields，而不是只送 display title。", "source_refs": ["SRC-GIT-TOPIC", "SRC-DOC-PROGRESS-0626"]}],
+  "not_yet_available": [{"fact": "V5 side-effect budget 與 direct-study/full-text admission 不屬於這個早期 topic planning 階段。", "source_refs": ["SRC-GIT-BUDGET-SEED", "SRC-QA-DIRECT-V3"]}],
+  "observed_failures": [
+    {"failure_id": "TOPIC_DRIFT_RISK", "date_or_range": "2026-06-20/2026-06-26", "historical_stage": "topic grounding", "symptom": "progress log records generic phrasing and topic/search payload drift as remaining risk.", "root_cause_if_known": "query sanitation and deterministic fallback were still being refined", "what_was_known_then": "topic understanding had to precede source search", "later_resolution": "later branch-local integrity fixes preserve topic anchors; current worktree continues to record this as a risk boundary", "source_refs": ["SRC-DOC-PROGRESS-0626", "SRC-GIT-INTEGRITY-BRANCH"]}
+  ],
+  "tests_and_metrics": [{"test_or_metric": "The dated progress log describes two query-language seeds for bilingual grounding.", "result": "seed structure verified; no search-result count implied", "source_refs": ["SRC-DOC-PROGRESS-0626"]}],
+  "engineering_decisions": [{"decision": "把 display title 與 canonical/search fields 分開，讓 query 能被檢查是否仍帶著研究 anchors。", "source_refs": ["SRC-DOC-PROGRESS-0626", "SRC-GIT-TOPIC"]}],
+  "architecture_state": [{"state": "topic understanding → grounded query plan → provider search", "source_refs": ["SRC-GIT-TOPIC", "SRC-DOC-PROGRESS-0626"]}],
+  "terminology_available_at_the_time": ["topic grounding", "query seed", "subtopic", "must-include", "exclude terms", "domain hints"],
+  "terminology_forbidden_due_to_hindsight": ["direct-study admission", "canonical evidence owner", "legal route resolver", "qualifying artifact"],
+  "safe_numbers": [{"value": "2 query-language seeds", "meaning": "the dated progress log describes bilingual query seeds; no search-result count is implied", "source_refs": ["SRC-DOC-PROGRESS-0626"]}],
+  "safe_public_facts": [{"fact": "題目要先被理解成研究計畫，才適合被編譯成多條查詢。", "source_refs": ["SRC-GIT-TOPIC"]}],
+  "sensitive_or_internal_facts": ["exact query payloads", "provider URLs and diagnostics", "internal workflow IDs"],
+  "retrospective_notes": [{"note": "後來的 budget 與 admission 會問每一次外部 side effect 是否合理，但不能把這個問題寫成 6 月已解決。", "source_refs": ["SRC-GIT-BUDGET-SEED", "SRC-QA-V5"]}],
+  "source_refs": [
+    {"type": "commit_group", "ref": "SRC-GIT-TOPIC", "why_it_supports_this_fact": "entity-aware topic grounding and planner gate"},
+    {"type": "doc", "ref": "SRC-DOC-PROGRESS-0626", "why_it_supports_this_fact": "dated payload and remaining-risk snapshot"}
+  ],
+  "publication_risks": ["不要把 later anchor repairs 當成 6 月已完成。", "不要公開完整 query payload 或 private provider details。"],
+  "confidence": "HIGH"
+}

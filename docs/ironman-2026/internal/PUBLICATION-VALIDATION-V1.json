@@ -1,0 +1,46 @@
+{
+  "schema_version": "researchforge-ironman-publication-validation/v1",
+  "validated_at": "2026-08-30T00:00:00+08:00",
+  "verdict": "PASS",
+  "counts": {
+    "articles": 30,
+    "unique_titles": 30,
+    "visuals": 10,
+    "public_links": 2,
+    "manifest_entries": 30,
+    "fact_map_articles": 30,
+    "resolved_day_fact_source_refs": 47,
+    "unresolved_day_fact_source_refs": 0
+  },
+  "hard_failures": [],
+  "diagnostics": [
+    {
+      "gate": "published_token_boundary_mentions",
+      "count": 1,
+      "note": "Only explicit zero/not-published boundary statements are permitted."
+    },
+    {
+      "gate": "section_length_range",
+      "min": 222,
+      "max": 932,
+      "short_sections_under_120": 0,
+      "long_sections_over_1200": 0
+    },
+    {
+      "gate": "unique_opening_prefixes",
+      "count": 30
+    },
+    {
+      "gate": "near_duplicate_paragraphs_at_0.38",
+      "count": 0
+    }
+  ],
+  "semantic_review": {
+    "method": "Manual day-by-day review against frozen packets, history, source ledger, publication-safety rules, and final series reread.",
+    "unsupported_claims_remaining": 0,
+    "numeric_provenance_failures_remaining": 0,
+    "hindsight_violations_remaining": 0,
+    "chronology_contradictions_remaining": 0,
+    "publication_safety_violations_remaining": 0
+  }
+}

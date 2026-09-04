@@ -10,13 +10,15 @@
     "./llm-status": "./src/llm-status.ts",
     "./research-tools": "./src/research-tools.ts",
     "./research-grounding": "./src/research-grounding.ts",
+    "./research-product-workflow": "./src/research-product-workflow.ts",
     "./evidence-governance": "./src/evidence-governance.ts",
     "./research-intent": "./src/research-intent.ts",
     "./report-readiness": "./src/report-readiness.ts",
     "./domain-synonyms": "./src/domain-synonyms.ts",
     "./topic-expansion": "./src/topic-expansion.ts",
     "./topic-understanding": "./src/topic-understanding.ts"
-    ,"./research-topic-facets": "./src/research-topic-facets.ts"
+    ,"./research-topic-facets": "./src/research-topic-facets.ts",
+    "./topic-integrity": "./src/topic-integrity.ts"
   },
   "dependencies": {
     "zod": "catalog:"

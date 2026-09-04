@@ -200,6 +200,18 @@ test("reader-facing sanitizer removes internal report-pipeline vocabulary", () =
   assert.doesNotMatch(text, /supportSpan|evidence card|metadata|peer-reviewed|verifier/iu);
 });
 
+test("reader-facing sanitizer canonicalizes the saved Case A English topic phrase exactly", () => {
+  const text = sanitizeReaderFacingInternalLanguage(
+    "在納入證據中，此來源可用於檢視 Associations of screen time with sleep duration and sleep quality in adolescents adolescent digital media health student wellbeing students。",
+  );
+
+  assert.equal(
+    text,
+    "在納入證據中，此來源可用於檢視青少年螢幕使用與睡眠時長及睡眠品質之關聯。",
+  );
+  assert.doesNotMatch(text, /Associations of screen time/iu);
+});
+
 test("centralized reader-language guard covers report, bibliography, and service diagnostics terms", () => {
   const internal = [
     "metadata incomplete",

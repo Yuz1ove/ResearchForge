@@ -145,6 +145,9 @@ export type ResearchDepth = "quick" | "standard" | "deep";
 
 export interface ReportInput {
   topic: string;
+  /** Opt-in architecture; omitted inputs preserve the legacy evidence brief. */
+  researchReportMode?: "evidence_brief" | "formal_research_report";
+  citationDisplayMode?: "compact" | "academic";
   reportType: string;
   /** V3: academic level (國中／高中／大學／專業). Drives tone and reader framing. */
   academicLevel: string;
@@ -302,6 +305,10 @@ export interface ReportMeta {
     evidenceSetHash: string;
     writerEvidenceSetHash: string;
     filteredAfterPlanCount: number;
+    formalResearchValidationPassed: boolean;
+    contentIntegrityValidated: boolean;
+    resumeFrom: "source_relevance_review" | "writer_generation" | "validation" | "export";
+    safeToResume: boolean;
   };
 }
 

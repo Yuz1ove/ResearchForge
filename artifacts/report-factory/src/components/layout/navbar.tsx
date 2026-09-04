@@ -11,6 +11,7 @@ export function Navbar() {
   const navLinks = [
     { href: "/", label: "首頁" },
     { href: "/features", label: "功能介紹" },
+    { href: "/research-project", label: "研究專案" },
     { href: "/faq", label: "常見問題" },
   ];
 

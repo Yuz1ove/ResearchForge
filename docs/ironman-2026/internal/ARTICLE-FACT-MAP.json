@@ -1,0 +1,2752 @@
+{
+  "schema_version": "researchforge-article-fact-map/v2",
+  "generated_at": "2026-08-30T00:00:00+08:00",
+  "policy": "The frozen day packet is the authority for each article. Later interpretations must remain explicit. Unsupported prose is removed rather than inferred.",
+  "article_count": 30,
+  "articles": [
+    {
+      "article_id": "day-01",
+      "article_title": "從報告生成器開始：成品出現了，研究還沒有",
+      "packet_path": "day-facts/day-01.json",
+      "evidence_boundary": "COMMITTED_GIT",
+      "forbidden_hindsight_terms": [
+        "canonical admission",
+        "StudyFactEnvelopeV2",
+        "FORMAL/LIMITED/BLOCKED admission",
+        "authoritative execution budget",
+        "legal full-text qualification"
+      ],
+      "publication_risks": [
+        "不要把 learning-log 的估計工時寫成 telemetry。",
+        "不要說當時已有 source-grounded research。"
+      ],
+      "claims": [
+        {
+          "public_claim": "最初生成器具備主題、類型、讀者、語氣、材料設定、步驟切換與空白主題檢查。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-INITIAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "generator.tsx:31-65,229-318"
+        },
+        {
+          "public_claim": "生成函式僅切換狀態並排定計時器；2500 是毫秒設定值，不是模型延遲量測。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-INITIAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "generator.tsx:68-77"
+        },
+        {
+          "public_claim": "正文主要是固定文字，局部代入主題、讀者與語氣；生成函式沒有模型呼叫。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-INITIAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "generator.tsx:68-77,86-104,439-508; routes/index.ts; lib/api-spec/openapi.yaml"
+        },
+        {
+          "public_claim": "referenceMaterial 只有初始化與輸入綁定，未被生成、預覽或複製正文使用。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-INITIAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "generator.tsx:45,315-316; complete symbol-reference inspection"
+        },
+        {
+          "public_claim": "資料來源開關僅控制固定來源清單顯示，沒有來源檢索或查核程序。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-INITIAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "generator.tsx:285-294,510-521"
+        },
+        {
+          "public_claim": "複製 Markdown 使用剪貼簿 API；PDF 與 DOCX 按鈕只顯示 Coming soon，尚無檔案建立邏輯。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-INITIAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "generator.tsx:79-110,554-564"
+        },
+        {
+          "public_claim": "早期名稱與報告類型範圍反思來自事後整理的學習紀錄，不證明首版實作或精確工時。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-DOC-LEARNING-LOG"
+          ],
+          "confidence": "MEDIUM",
+          "kind": "HISTORICAL_DOCUMENT",
+          "locator": "docs/learning-log-2026-06-10-to-2026-06-17.md:9-20,96-116"
+        },
+        {
+          "public_claim": "圖書館題目會遇到固定商業建議，是依程式邏輯推演的假設例子，非真實使用者或模型執行結果。",
+          "classification": "AUTHOR_REFLECTION",
+          "evidence": [
+            "SRC-GIT-INITIAL"
+          ],
+          "confidence": "REFLECTION",
+          "kind": "EXPLICIT_HYPOTHETICAL_EXAMPLE",
+          "locator": "generator.tsx:439-477"
+        },
+        {
+          "public_claim": "原型可檢查互動，但輸入存在不代表材料被處理；應追蹤輸入與完成訊號，仍不保證內容正確。",
+          "classification": "AUTHOR_REFLECTION",
+          "evidence": [
+            "SRC-GIT-INITIAL"
+          ],
+          "confidence": "REFLECTION",
+          "kind": "LATER_INTERPRETATION",
+          "locator": "Interpretation of the verified initial generator, not an implemented validation subsystem"
+        }
+      ],
+      "daily_publication_review": {
+        "reviewed_at": "2026-08-30T14:01:37.649Z",
+        "review_scope": "Day 01 only; detailed verification of already-linked SRC-GIT-INITIAL, no expansion into later-day capability claims.",
+        "status": "READY_FOR_HUMAN_REVIEW",
+        "article_checksum": "4ce77761ab869aeedafc7d0abae7bdd156effd59743ff6dd87654d0543b59d57",
+        "checksum_algorithm": "sha256",
+        "excluded_unsupported_claims": [
+          {
+            "classification": "UNSUPPORTED",
+            "claim": "首個生成器已呼叫模型並可下載 PDF/DOCX。",
+            "resolution": "Replaced with exact timer, fixed-copy, and Coming soon implementation boundaries."
+          },
+          {
+            "classification": "UNSUPPORTED",
+            "claim": "作者起初把問題歸因於模板不夠多或模型不夠強。",
+            "resolution": "Removed unsupported autobiographical motive."
+          },
+          {
+            "classification": "UNSUPPORTED",
+            "claim": "摘要、全文、direct study 與未知欄位的後期流程可作為 Day 01 實作。",
+            "resolution": "Removed later architecture and medical example; retained origin scope only."
+          }
+        ],
+        "external_research": "NOT_NEEDED: all material technical assertions are directly about the inspected repository code; two internal references used."
+      }
+    },
+    {
+      "article_id": "day-02",
+      "article_title": "模板先完成，證據仍然缺席",
+      "packet_path": "day-facts/day-02.json",
+      "evidence_boundary": "COMMITTED_GIT",
+      "forbidden_hindsight_terms": [
+        "canonical evidence",
+        "qualifying full text",
+        "Writer admission",
+        "generalization cohort"
+      ],
+      "publication_risks": [
+        "不可把 export pass 寫成 content acceptance。",
+        "不可捏造早期使用者反應。"
+      ],
+      "claims": [
+        {
+          "public_claim": "要求來源的完整報告，文獻探討同時含已蒐集的宣稱與補來源提示。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-MODES"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "27cc69a:artifacts/report-factory/src/lib/generateReport.ts:1559-1566"
+        },
+        {
+          "public_claim": "生成器按主題類型與模式組裝GeneratedReport；章節與typed blocks供介面共用，尚為同步模擬生成。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-MODES"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "27cc69a:artifacts/report-factory/src/lib/generateReport.ts:135-172,1230-1250,1673-1734; pages/generator.tsx:77-218,241-259"
+        },
+        {
+          "public_claim": "在完整報告等敘事模式中，風格加入開頭提示，短版裁清單，深度長度加入補文獻建議而非取得研究。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-MODES"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "27cc69a:artifacts/report-factory/src/lib/generateReport.ts:1255-1332,1463-1503,1702-1706"
+        },
+        {
+          "public_claim": "品質檢查部分僅檢查欄位長度；段落完整與結論不重複等項目直接設為true，沒有語義比較。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-MODES"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "27cc69a:artifacts/report-factory/src/lib/generateReport.ts:1400-1437; article excerpt:1423-1428"
+        },
+        {
+          "public_claim": "完整度由模式/長度預設、補充資訊與圖表設定計算並設上限，不是研究可信度或通過機率。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-MODES"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "27cc69a:artifacts/report-factory/src/lib/generateReport.ts:1283-1332,1638-1668"
+        },
+        {
+          "public_claim": "來源區塊提醒補真實資料，引用格式是待填欄位，資料需求表列出需蒐集材料與用途。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-MODES"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "27cc69a:artifacts/report-factory/src/lib/generateReport.ts:1337-1395,1615-1625"
+        },
+        {
+          "public_claim": "純文字與Markdown沿用報告物件；Markdown逐章輸出標題並將blocks轉成文字行，note內容會保留。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-EXPORT"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "79fce70:artifacts/report-factory/src/lib/exportReport.ts:9-43,53-89; article excerpt:83-87"
+        },
+        {
+          "public_claim": "DOCX把章節與區塊轉為文件物件後打包；PDF透過列印網頁與瀏覽器列印，不據此宣稱跨裝置實測成功。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-EXPORT"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "79fce70:artifacts/report-factory/src/lib/exportReport.ts:122-291,339-393; pages/generator.tsx:302-319"
+        },
+        {
+          "public_claim": "模式/模板和匯出處理內容形式，不會讓原本缺乏來源的草稿取得研究證據。",
+          "classification": "AUTHOR_REFLECTION",
+          "evidence": [
+            "SRC-GIT-EXPORT"
+          ],
+          "confidence": "REFLECTION",
+          "kind": "LATER_INTERPRETATION",
+          "locator": "Interpretation bounded by inspected generation and serialization code; no live or product acceptance claim."
+        },
+        {
+          "public_claim": "介面完整、文件完整、證據完整應分開判斷；追查已完成提示背後條件並在匯出保留缺口是可移植的方法。",
+          "classification": "AUTHOR_REFLECTION",
+          "evidence": [
+            "SRC-GIT-MODES"
+          ],
+          "confidence": "REFLECTION",
+          "kind": "LATER_INTERPRETATION",
+          "locator": "Author taxonomy and current design advice, not a historical implementation or observed user outcome."
+        }
+      ],
+      "daily_publication_review": {
+        "reviewed_at": "2026-08-30T14:21:35.095Z",
+        "status": "READY_FOR_HUMAN_REVIEW",
+        "article_checksum": "71c93480589318428aa025b7b622c82b0c5013bf0cee191c94838b5d6ee08eb3",
+        "checksum_algorithm": "sha256",
+        "source_scope": "Day 02 only, using the two commits already linked by the frozen packet. No current source behavior or later tests backdated.",
+        "excluded_unsupported_claims": [
+          {
+            "classification": "UNSUPPORTED",
+            "claim": "完整模式與深度模式代表已取得研究材料或已有成熟證據分級。",
+            "resolution": "Replaced with the actual mock generator, rule-based content, and configuration semantics."
+          },
+          {
+            "classification": "UNSUPPORTED",
+            "claim": "collectAndReviewSources、evaluateEvidenceCapability等舊稿函式可作為本日實作示例。",
+            "resolution": "Removed invented illustrative API names; two verified historical excerpts replace them."
+          },
+          {
+            "classification": "UNSUPPORTED",
+            "claim": "舊版匯出路徑可等同當年DOCX/PDF全格式或真實使用驗收成功。",
+            "resolution": "Restricted to source implementation; distinguished DOCX packaging and print-to-PDF."
+          }
+        ],
+        "numeric_provenance": {
+          "article_taxonomy": "三種完整 is an author-defined classification, not a measured system result.",
+          "code_literals": "0 denotes source field-length conditions in the exact historical excerpt. No test totals, runtime performance, coverage, cost, or user metrics appear."
+        },
+        "external_research": "NOT_NEEDED; the article describes repository implementation and explicitly marked author reflections only."
+      }
+    },
+    {
+      "article_id": "day-03",
+      "article_title": "引用在句尾，證據仍可能不成立",
+      "packet_path": "day-facts/day-03.json",
+      "evidence_boundary": "COMMITTED_GIT",
+      "forbidden_hindsight_terms": [
+        "StudyFactEnvelopeV2",
+        "canonical-study-admission",
+        "FULL_TEXT_STRUCTURED",
+        "V5 authoritative ledger"
+      ],
+      "publication_risks": [
+        "不要把 early gates 寫成 canonical truth。",
+        "不要把 provider response 寫成 validated study evidence。"
+      ],
+      "claims": [
+        {
+          "public_claim": "2026年6月12日引用基礎加入來源搜尋、共同SourceRecord欄位與審查狀態；來源服務為Crossref與Semantic Scholar。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-CITATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "f0df507:artifacts/api-server/src/routes/search-sources.ts:1-40; artifacts/api-server/src/services/source-retrieval.ts:146-184,226-280; lib/api-zod/src/source-record.ts:1-20; lib/api-spec/openapi.yaml:84-162"
+        },
+        {
+          "public_claim": "共同紀錄包含標題、作者、年份、摘要、DOI、網址、來源服務與reviewState；缺年份/摘要/DOI保留null，缺作者保留空清單，不補造內容。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-CITATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "f0df507:lib/api-zod/src/source-record.ts:28-45,69-95; artifacts/api-server/src/services/source-retrieval.ts:146-184; artifacts/api-server/src/services/source-retrieval.test.ts:1-75"
+        },
+        {
+          "public_claim": "來源預設pending；介面可編輯標題、作者、年份等欄位，並由接受/拒絕/待審操作改變狀態。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-CITATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "f0df507:artifacts/report-factory/src/pages/generator.tsx:440-540,632-644; artifacts/api-server/src/services/source-retrieval.ts:146-184"
+        },
+        {
+          "public_claim": "前端以acceptedSourceRecords挑出已接受來源給生成輸入，buildBibliography也依接受狀態篩選；原碼節錄只讀reviewState，未比較報告句子與原文。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-CITATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "f0df507:lib/api-zod/src/source-record.ts:112-118 (exact article excerpt); artifacts/report-factory/src/lib/sourceRecords.ts:111-117,181-187; artifacts/report-factory/src/pages/generator.tsx:585-587,648-682"
+        },
+        {
+          "public_claim": "被接受的來源仍可能缺作者、年份或DOI/網址；參考資料格式化會標示缺漏，歷史fixture測試核對保留缺失與排除拒絕來源。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-CITATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "f0df507:artifacts/report-factory/src/lib/sourceRecords.ts:119-130,158-187; artifacts/report-factory/src/lib/sourceRecords.test.ts:64-150"
+        },
+        {
+          "public_claim": "引用提醒檢查無接受來源、中繼資料缺漏與待補引用字串；Markdown下載在提醒後仍直接執行，生成按鈕也不以來源不足停用。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-CITATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "f0df507:artifacts/report-factory/src/lib/sourceRecords.ts:196-232 (opening quote at213); artifacts/report-factory/src/pages/generator.tsx:648-682,706-714,729-734,968-973"
+        },
+        {
+          "public_claim": "報告生成器仍是同步規則式mock，並非已讓語言模型閱讀文獻與逐句查核。",
+          "classification": "REPOSITORY_VERIFIED",
+          "evidence": [
+            "SRC-GIT-CITATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME",
+          "locator": "f0df507:artifacts/report-factory/src/lib/generateReport.ts:1-12,2785-2857; artifacts/report-factory/src/pages/generator.tsx:670-681"
+        },
+        {
+          "public_claim": "文末出處與句尾引用不能替代支持關係核對；工具特定任務擴成所有工作的例子只是假設，不是當年事故。",
+          "classification": "AUTHOR_REFLECTION",
+          "evidence": [
+            "SRC-GIT-CITATION"
+          ],
+          "confidence": "REFLECTION",
+          "kind": "LATER_INTERPRETATION",
+          "locator": "Author-defined explanatory example; no real study, effect, user or historical failure is asserted."
+        },
+        {
+          "public_claim": "DOI在此用來識別文獻；中繼資料幫助辨認來源，不等於理解研究結論；操作狀態不應直接改稱內容已驗證。",
+          "classification": "AUTHOR_REFLECTION",
+          "evidence": [
+            "SRC-GIT-CITATION"
+          ],
+          "confidence": "REFLECTION",
+          "kind": "LATER_INTERPRETATION",
+          "locator": "f0df507:lib/api-zod/src/source-record.ts:54-64,112-118; author terminology explanation and current design interpretation."
+        },
+        {
+          "public_claim": "資料處理測試不是線上研究驗證；提醒與阻擋應分開確認。共同紀錄能協助逐來源追查，主張支持範圍仍需回到材料另行核對。",
+          "classification": "AUTHOR_REFLECTION",
+          "evidence": [
+            "SRC-GIT-CITATION"
+          ],
+          "confidence": "REFLECTION",
+          "kind": "LATER_INTERPRETATION",
+          "locator": "Bounded interpretation of inspected fixtures and UI control flow; reader method is current author advice, not already-completed historical protection."
+        }
+      ],
+      "daily_publication_review": {
+        "reviewed_at": "2026-08-31T16:29:33.391Z",
+        "status": "READY_FOR_HUMAN_REVIEW",
+        "article_checksum": "040212d39619275e36531afd3492da85fdb7864a34304a475cf811404d3f8a3c",
+        "checksum_algorithm": "sha256",
+        "source_scope": "Day 03 only; existing SRC-GIT-CITATION resolves to immutable June 12 commit. Frozen packet is preserved; broader June 17 gates reserved for later days.",
+        "excluded_unsupported_claims": [
+          {
+            "classification": "UNSUPPORTED",
+            "claim": "ReviewedSourceClaim與writerInput是本階段可用的忠實實作示例。",
+            "resolution": "Removed invented type/API and replaced with exact historical acceptedSourceRecords/rejectedSourceRecords excerpt."
+          },
+          {
+            "classification": "UNSUPPORTED",
+            "claim": "6月12日Writer已具備facts/claim-level admission、canonical資料閉合或來源不足就不生成的完整gate。",
+            "resolution": "Removed hindsight. Documented state filtering, mock generation and warnings that do not block download; no later capabilities backdated."
+          },
+          {
+            "classification": "UNSUPPORTED",
+            "claim": "作者因不相信LLM平滑輸出而在當時轉向來源系統，以及本文例子來自當年的實際失敗。",
+            "resolution": "Removed invented motivation and unobserved incident; used actual code limitation, explicit hypothetical example and clearly retrospective reflection."
+          }
+        ],
+        "numeric_provenance": {
+          "historical_date": "2026-06-12 from f0df507 commit timestamp; no precision borrowed from later QA.",
+          "day_and_references": "Day 03 and adjacent-day bridge derive from canonical Editorial Map; [1]-[3] are reference labels, not metrics.",
+          "code": "Both functions exactly match shared historical source lines112-118; no live rates, timing, costs, user counts or test totals in public prose."
+        },
+        "external_research": "NOT_NEEDED; historical repository behavior and explicit author reflection only."
+      }
+    },
+    {
+      "article_id": "day-04",
+      "article_title": "搜尋開始成為一條流程：API 回應只是第一站",
+      "packet_path": "day-facts/day-04.json",
+      "evidence_boundary": "COMMITTED_GIT",
+      "forbidden_hindsight_terms": [
+        "canonical admission",
+        "full-text materialization",
+        "direct-study coverage",
+        "budget authority"
+      ],
+      "publication_risks": [
+        "不要以後來 provider count 回填早期搜尋結果。",
+        "不要把 reranking 分數寫成研究正確性。"
+      ],
+      "claims": [
+        {
+          "public_claim": "16b0807 建立 resilient source search core、provider config、preflight、diagnostics 與 tests。",
+          "evidence": [
+            "SRC-GIT-SEARCH-CORE"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "6a2e5dd 將 search intent planner 與 reranking 加入流程。",
+          "evidence": [
+            "SRC-GIT-SEARCH-CORE"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "6/17 cluster 開始把 source relevance 與 generation readiness 變成 gate。",
+          "evidence": [
+            "SRC-GIT-EVIDENCE-GATE"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "搜尋路徑已不是單次 text prompt，而是帶有規劃、診斷與排序的 source workflow。",
+          "evidence": [
+            "SRC-GIT-SEARCH-CORE"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "搜尋第一次成為可測、可診斷的流程，而不是一個孤立的 API call。",
+          "evidence": [
+            "SRC-GIT-SEARCH-CORE"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "provider 失敗與可用來源品質需要分開表示。",
+          "evidence": [
+            "SRC-GIT-SEARCH-CORE",
+            "SRC-GIT-EVIDENCE-GATE"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "Three dated search steps are identifiable: resilient search core, intent planner/reranking, and the 6/17 quality-gate cluster. Result: historical sequence verified; not a provider success count.",
+          "evidence": [
+            "SRC-GIT-SEARCH-CORE",
+            "SRC-GIT-SEARCH-INTENT",
+            "SRC-GIT-EVIDENCE-GATE"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "3 dated search commits/steps: 16b0807, 6a2e5dd and 6/17 gate cluster; not a provider success count.",
+          "evidence": [
+            "SRC-GIT-SEARCH-CORE",
+            "SRC-GIT-EVIDENCE-GATE"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來的 full-text 與 canonical work 會把『搜尋到』再拆成更多狀態；這一日只處理 search core。",
+          "evidence": [
+            "SRC-SOURCE-FULLTEXT"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-05",
+      "article_title": "資料先過關：Accepted Source 如何建立單向流水線",
+      "packet_path": "day-facts/day-05.json",
+      "evidence_boundary": "COMMITTED_GIT_AND_HISTORICAL_DOC",
+      "forbidden_hindsight_terms": [
+        "canonical-study-admission",
+        "FORMAL",
+        "LIMITED",
+        "BLOCKED as canonical classes",
+        "full-text qualification"
+      ],
+      "publication_risks": [
+        "不要寫成 6 月已有 canonical authority。",
+        "不要將 accepted source 數量當成 evidence sufficiency。"
+      ],
+      "claims": [
+        {
+          "public_claim": "6/16–6/18 commits 增加 source cards、accepted source digest、evidence cards、accepted synthesis 與 generation readiness。",
+          "evidence": [
+            "SRC-GIT-EVIDENCE-CARD-0626",
+            "SRC-GIT-EVIDENCE-GATE"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "6/18 architecture audit 記錄 topic → search → review → accepted sources → evidence cards → draft → preview → export。",
+          "evidence": [
+            "SRC-DOC-ARCH-0618"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "report generation 的輸入被限定為 accepted source/evidence flow，而不是全部 raw search results。",
+          "evidence": [
+            "SRC-DOC-ARCH-0618",
+            "SRC-GIT-EVIDENCE-GATE"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "接受來源才是早期 report workflow 的下游輸入；這是一個流程邊界，不是成熟真值系統。",
+          "evidence": [
+            "SRC-DOC-ARCH-0618"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "workflow 已分階段，但 authority 仍散落於 UI state 與 helper modules。",
+          "evidence": [
+            "SRC-DOC-ARCH-0618",
+            "SRC-QA-CANONICAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The 6/18 architecture snapshot names eight workflow stages from topic through export. Result: workflow shape verified; not an acceptance score.",
+          "evidence": [
+            "SRC-DOC-ARCH-0618"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "8 workflow stages: the 6/18 documented flow stages, not an acceptance score.",
+          "evidence": [
+            "SRC-DOC-ARCH-0618"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來的 canonical admission 不是推翻 source-first 順序，而是把每一關的權限與 revision 收斂起來。",
+          "evidence": [
+            "SRC-QA-CANONICAL"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-06",
+      "article_title": "搜尋題目不是一個字串：Query Expansion 如何不搜歪",
+      "packet_path": "day-facts/day-06.json",
+      "evidence_boundary": "COMMITTED_GIT_AND_HISTORICAL_DOC",
+      "forbidden_hindsight_terms": [
+        "direct-study admission",
+        "canonical evidence owner",
+        "legal route resolver",
+        "qualifying artifact"
+      ],
+      "publication_risks": [
+        "不要把 later anchor repairs 當成 6 月已完成。",
+        "不要公開完整 query payload 或 private provider details。"
+      ],
+      "claims": [
+        {
+          "public_claim": "9299c58、a94c046 將 entity-aware topic grounding 與 topic understanding planner 加入搜尋前。",
+          "evidence": [
+            "SRC-GIT-TOPIC"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "6/26 progress log 記錄 canonical topic、雙語 query seeds、subtopics、must-include/exclude terms 與 domain hints 的 payload 對齊。",
+          "evidence": [
+            "SRC-DOC-PROGRESS-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "搜尋計畫開始明確攜帶題目理解與 facet/query fields，而不是只送 display title。",
+          "evidence": [
+            "SRC-GIT-TOPIC",
+            "SRC-DOC-PROGRESS-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "題目要先被理解成研究計畫，才適合被編譯成多條查詢。",
+          "evidence": [
+            "SRC-GIT-TOPIC"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "progress log records generic phrasing and topic/search payload drift as remaining risk.",
+          "evidence": [
+            "SRC-DOC-PROGRESS-0626",
+            "SRC-GIT-INTEGRITY-BRANCH"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The dated progress log describes two query-language seeds for bilingual grounding. Result: seed structure verified; no search-result count implied.",
+          "evidence": [
+            "SRC-DOC-PROGRESS-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "2 query-language seeds: the dated progress log describes bilingual query seeds; no search-result count is implied.",
+          "evidence": [
+            "SRC-DOC-PROGRESS-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來的 budget 與 admission 會問每一次外部 side effect 是否合理，但不能把這個問題寫成 6 月已解決。",
+          "evidence": [
+            "SRC-GIT-BUDGET-SEED",
+            "SRC-QA-V5"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-07",
+      "article_title": "三個學術 Provider，三種資料形狀",
+      "packet_path": "day-facts/day-07.json",
+      "evidence_boundary": "COMMITTED_GIT",
+      "forbidden_hindsight_terms": [
+        "canonical study admission",
+        "qualifying full text",
+        "FORMAL",
+        "direct-study coverage",
+        "V5 budget authority"
+      ],
+      "publication_risks": [
+        "不要把 adapter existence 寫成 provider reliability。",
+        "不要公開 provider credentials 或 raw payload。"
+      ],
+      "claims": [
+        {
+          "public_claim": "ec20e43 的 research tree 包含 Crossref、OpenAlex、Semantic Scholar、arXiv、Unpaywall、DOAJ provider modules/configuration。",
+          "evidence": [
+            "SRC-GIT-PROVIDERS-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "同一 commit 也包含 parser workers 與 research normalizer/scoring building blocks。",
+          "evidence": [
+            "SRC-GIT-PROVIDERS-0626",
+            "SRC-GIT-DATA-PIPELINE-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "provider-specific metadata could be represented through normalized research records and diagnostics paths。",
+          "evidence": [
+            "SRC-GIT-DATA-PIPELINE-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "接 provider 的第一個工程問題是資料形狀與健康狀態不一致，不是把三個 API 的結果直接串接。",
+          "evidence": [
+            "SRC-GIT-PROVIDERS-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "different provider metadata and health/fallback states needed normalization and diagnostics",
+          "evidence": [
+            "SRC-GIT-PROVIDERS-0626",
+            "SRC-SOURCE-PROVIDERS"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "Three scholarly provider adapters are named in the 6/26 research tree: Crossref, OpenAlex and Semantic Scholar. Result: adapter names verified; not a success rate.",
+          "evidence": [
+            "SRC-GIT-PROVIDERS-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "3 named scholarly provider adapters: Crossref, OpenAlex and Semantic Scholar are the editorial focus; not a success rate.",
+          "evidence": [
+            "SRC-GIT-PROVIDERS-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來的 live QA 顯示 provider response、metadata、payload 與 qualifying artifact 必須分開計數；這是後見審計結果。",
+          "evidence": [
+            "SRC-QA-FULLTEXT",
+            "SRC-QA-OA-V2"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-08",
+      "article_title": "DOI、作者與年份：去重其實在辨認研究",
+      "packet_path": "day-facts/day-08.json",
+      "evidence_boundary": "COMMITTED_GIT_AND_CURRENT_SOURCE_CONTEXT",
+      "forbidden_hindsight_terms": [
+        "canonical manifestation",
+        "admitted artifact",
+        "FULL_TEXT_STRUCTURED",
+        "V6A materializer"
+      ],
+      "publication_risks": [
+        "不要將 dedupe 當成 evidence admission。",
+        "不要公開 raw identifiers 或 full-text artifact paths。"
+      ],
+      "claims": [
+        {
+          "public_claim": "ec20e43 的 research normalizer/scoring tree 包含 normalizeSource、dedupe、relevance 與 source-quality modules。",
+          "evidence": [
+            "SRC-GIT-DATA-PIPELINE-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "source records 與 provider metadata 在 current observed source layer 仍保留 provider IDs/DOI normalization concerns。",
+          "evidence": [
+            "SRC-SOURCE-PROVIDERS"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "dedupe 與 normalization 已成為 research pipeline 的獨立責任，而非 UI string filtering。",
+          "evidence": [
+            "SRC-GIT-DATA-PIPELINE-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "去重的目標是讓同一 scholarly work 不被重複計數，同時保留 provider provenance。",
+          "evidence": [
+            "SRC-GIT-DATA-PIPELINE-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "若只看 provider rows，source counts 會被重複描述放大。",
+          "evidence": [
+            "SRC-GIT-DATA-PIPELINE-0626",
+            "SRC-SOURCE-FULLTEXT"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "One identity layer with provider lineage is documented; no observed source-count reduction is claimed. Result: conceptual mapping verified.",
+          "evidence": [
+            "SRC-GIT-DATA-PIPELINE-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "1 identity layer plus provider lineage: conceptual mapping, not an observed source count.",
+          "evidence": [
+            "SRC-GIT-DATA-PIPELINE-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來同一 study 還會有 version-of-record、preprint、repository copy 與 HTML/PDF manifestations；不能把這些問題倒推成早期已解決。",
+          "evidence": [
+            "SRC-SOURCE-FULLTEXT"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-09",
+      "article_title": "每個字都對，題目卻變了：離題結果為何最難除錯",
+      "packet_path": "day-facts/day-09.json",
+      "evidence_boundary": "COMMITTED_GIT_AND_HISTORICAL_DOC",
+      "forbidden_hindsight_terms": [
+        "direct-study admission",
+        "canonical full-text coverage",
+        "blocked-by-budget ledger",
+        "FORMAL safety"
+      ],
+      "publication_risks": [
+        "不能把後來 22/6/90 fan-out 數字放進早期 narrative。",
+        "不要把 fallback candidate 寫成 accepted evidence。"
+      ],
+      "claims": [
+        {
+          "public_claim": "6/22 commits repeatedly refined domain-aware grouping, fallback diagnostics and source-record merge。",
+          "evidence": [
+            "SRC-DOC-PROGRESS-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "f33a48c explicitly tightened source-search budget and seeded balanced topics。",
+          "evidence": [
+            "SRC-GIT-BUDGET-SEED"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "provider fallback/diagnostics 與早期 search budget 已被當成工程責任記錄。",
+          "evidence": [
+            "SRC-GIT-BUDGET-SEED",
+            "SRC-DOC-PROGRESS-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "搜不到、搜歪、provider 掛掉與來源不夠好是不同 failure classes。",
+          "evidence": [
+            "SRC-DOC-PROGRESS-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "progress log records provider timeout/429/failure risk and generic phrasing entering queries.",
+          "evidence": [
+            "SRC-DOC-PROGRESS-0626",
+            "SRC-SOURCE-SEARCH"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "Three early budget dimensions are recorded as a concern; no universal fixed query/provider promise is asserted. Result: bounded historical concern.",
+          "evidence": [
+            "SRC-GIT-BUDGET-SEED",
+            "SRC-DOC-PROGRESS-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "3 early budget dimensions are not asserted: the historical record shows a budget concern, but does not prove a universal 3-query/3-provider request promise.",
+          "evidence": [
+            "SRC-GIT-BUDGET-SEED",
+            "SRC-QA-V4-OVERRIDE"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來 audit 才發現 nominal cascade 可能 fan out 成多個實際 side effects；不能說早期已經知道這個數字。",
+          "evidence": [
+            "SRC-QA-V4-OVERRIDE"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-10",
+      "article_title": "從摘要到可主張證據：Evidence Card 的真正工作",
+      "packet_path": "day-facts/day-10.json",
+      "evidence_boundary": "COMMITTED_GIT",
+      "forbidden_hindsight_terms": [
+        "StudyFactEnvelopeV2",
+        "PRESENT/NOT_REPORTED/UNKNOWN",
+        "canonical admission revision",
+        "FORMAL/LIMITED/BLOCKED"
+      ],
+      "publication_risks": [
+        "不要把 current card schema 當成 6 月 schema。",
+        "不要公開 raw evidence payload。"
+      ],
+      "claims": [
+        {
+          "public_claim": "frontend evidence-card flow 在 6/16 開始演化，backend evidenceCardBuilder/evidenceSchema 在 6/26 committed tree 出現。",
+          "evidence": [
+            "SRC-GIT-EVIDENCE-CARD-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "source records、review and evidence pipeline were distinct from later canonical admission。",
+          "evidence": [
+            "SRC-GIT-CITATION",
+            "SRC-GIT-EVIDENCE-CARD-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "evidence cards became structured downstream material derived from reviewed/accepted sources, rather than plain provider abstracts。",
+          "evidence": [
+            "SRC-GIT-EVIDENCE-CARD-0626",
+            "SRC-DOC-ARCH-0618"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "摘要是輸入材料之一，但 Evidence Card 應保存能回到 source 的 claim/citation context。",
+          "evidence": [
+            "SRC-GIT-EVIDENCE-CARD-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "a summary/evidence card could be mistaken for a complete study-level fact record",
+          "evidence": [
+            "SRC-GIT-EVIDENCE-CARD-0626",
+            "SRC-SOURCE-STUDY-FACTS"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "One evidence-card transport layer is identifiable; no card-count or pass-rate claim is made. Result: architectural layer verified.",
+          "evidence": [
+            "SRC-GIT-EVIDENCE-CARD-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "1 evidence-card transport layer: architectural layer, not card count.",
+          "evidence": [
+            "SRC-GIT-EVIDENCE-CARD-0626"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來 card 會攜帶 owner-issued admission/provenance projection；早期 card 不應被描寫成同樣完整。",
+          "evidence": [
+            "SRC-SOURCE-EVIDENCE-CARDS",
+            "SRC-QA-CANONICAL"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-11",
+      "article_title": "不要把十篇來源接成一篇：Synthesis 的第一道分界",
+      "packet_path": "day-facts/day-11.json",
+      "evidence_boundary": "COMMITTED_GIT",
+      "forbidden_hindsight_terms": [
+        "claim graph",
+        "teach-back",
+        "canonical writer evidence set",
+        "Study Facts V2",
+        "FORMAL"
+      ],
+      "publication_risks": [
+        "不要把 later two-pass Writer 當成早期 implementation。",
+        "避免用 source count 代替 synthesis quality。"
+      ],
+      "claims": [
+        {
+          "public_claim": "80fbcbb 明確將 report synthesis 從 source-card pasting 重構開。",
+          "evidence": [
+            "SRC-GIT-SYNTHESIS"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "5cd5e48 增加 accepted-source synthesis helper，ed05b87 形成 evidence-based report flow。",
+          "evidence": [
+            "SRC-GIT-SYNTHESIS",
+            "SRC-GIT-REPORT-WRITER"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "accepted sources/evidence cards 成為 synthesis 的輸入，Writer 不再只是把來源摘要逐篇接起來。",
+          "evidence": [
+            "SRC-GIT-SYNTHESIS",
+            "SRC-GIT-REPORT-WRITER"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "『有很多來源』與『能回答研究問題』之間，必須有 synthesis layer。",
+          "evidence": [
+            "SRC-GIT-SYNTHESIS"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "source-by-source assembly could produce a report-shaped sequence without a question-shaped synthesis",
+          "evidence": [
+            "SRC-GIT-SYNTHESIS",
+            "SRC-QA-KNOWLEDGE"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "Two committed synthesis milestones are identifiable: 80fbcbb and 5cd5e48. Result: historical milestones verified; not a quality score.",
+          "evidence": [
+            "SRC-GIT-SYNTHESIS"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "2 committed synthesis milestones: 80fbcbb and 5cd5e48; not a quality score.",
+          "evidence": [
+            "SRC-GIT-SYNTHESIS"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來的 claim graph 與 sentence-level validation 是對 source-order echo 的後續回應，不能回寫成 6 月已完成。",
+          "evidence": [
+            "SRC-QA-KNOWLEDGE"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-12",
+      "article_title": "部署失敗也是架構訊號：本地能跑不代表入口正確",
+      "packet_path": "day-facts/day-12.json",
+      "evidence_boundary": "COMMITTED_GIT",
+      "forbidden_hindsight_terms": [
+        "canonical admission",
+        "live generalization ready",
+        "full-text qualifying artifact",
+        "V5 budget authority"
+      ],
+      "publication_risks": [
+        "不要把 repair commits 寫成 deployment 已成功上線。",
+        "不要公開 private deployment identifiers。"
+      ],
+      "claims": [
+        {
+          "public_claim": "7/11 出現一連串 Vercel API function、Express wrapper、ESM import、build output 與 SPA fallback 修復 commits。",
+          "evidence": [
+            "SRC-GIT-DEPLOY"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "API entrypoint、Vercel build configuration 與 frontend preview output 被逐步對齊。",
+          "evidence": [
+            "SRC-GIT-DEPLOY"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "部署問題不是 UI 細節；entrypoint、module system 與 build output 會決定研究工作能否被正確執行。",
+          "evidence": [
+            "SRC-GIT-DEPLOY"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "多個連續 fix commits 修復 function wrapper、ESM、build output 與 frontend fallback。",
+          "evidence": [
+            "SRC-GIT-DEPLOY",
+            "SRC-GIT-DURABLE-JOBS"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "A dense sequence of deployment repair commits records fixes across wrapper, ESM, build output and frontend fallback boundaries. Result: repair sequence verified; production deployment success not established.",
+          "evidence": [
+            "SRC-GIT-DEPLOY"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "a dense sequence of deployment repair commits: commit history records the sequence; exact count not used as a public claim.",
+          "evidence": [
+            "SRC-GIT-DEPLOY"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來 job durability 讓 runtime lifecycle 成為 evidence boundary 的一部分，但這不是 7/11 commit sequence 已證明的 content result。",
+          "evidence": [
+            "SRC-GIT-DURABLE-JOBS"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-13",
+      "article_title": "瀏覽器關掉，研究工作還在嗎？",
+      "packet_path": "day-facts/day-13.json",
+      "evidence_boundary": "COMMITTED_GIT_WITH_BRANCH_LOCAL_NOTE",
+      "forbidden_hindsight_terms": [
+        "canonical admission revision",
+        "direct-study coverage",
+        "legal OA qualification",
+        "V5 execution ledger"
+      ],
+      "publication_risks": [
+        "明確說 branch-local，不要寫成已合併主線。",
+        "不要公開 job IDs 或 database details。"
+      ],
+      "claims": [
+        {
+          "public_claim": "3922d4a 增加 Vercel durable research grounding jobs、repository、routes、contracts 與 tests。",
+          "evidence": [
+            "SRC-GIT-DURABLE-JOBS"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "901b06a 的 reload recovery 是存在於 branch/remote 的 branch-local fix，不是 current HEAD ancestor。",
+          "evidence": [
+            "SRC-GIT-RELOAD"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "研究工作可以由 job identity 與 persisted state 延續，不再只由瀏覽器 request memory 擁有。",
+          "evidence": [
+            "SRC-GIT-DURABLE-JOBS"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "研究任務若只存在瀏覽器記憶體，使用者一關頁面就無法區分工作未完成與工作已失敗。",
+          "evidence": [
+            "SRC-GIT-DURABLE-JOBS"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "reload/partial-job recovery 需要額外修復路徑",
+          "evidence": [
+            "SRC-GIT-DURABLE-JOBS",
+            "SRC-GIT-RELOAD",
+            "SRC-QA-ACQUISITION-V4"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "One durable job identity is represented in the historical deployment/research-job path; no job-volume claim is made. Result: architectural concept verified.",
+          "evidence": [
+            "SRC-GIT-DURABLE-JOBS"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "1 durable job identity: architectural concept, not job count.",
+          "evidence": [
+            "SRC-GIT-DURABLE-JOBS"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來 V4 才用 terminal manifest 與 revision 把 lifecycle 語義固定；901b06a 的 branch-local status 也不能被寫成 current HEAD 已合併。",
+          "evidence": [
+            "SRC-QA-ACQUISITION-V4",
+            "SRC-GIT-RELOAD"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-14",
+      "article_title": "Direct Paper Search 的權限邊界",
+      "packet_path": "day-facts/day-14.json",
+      "evidence_boundary": "COMMITTED_GIT",
+      "forbidden_hindsight_terms": [
+        "canonical direct-study admission",
+        "qualifying full text",
+        "LIMITED/FORMAL/BLOCKED classes",
+        "materialization"
+      ],
+      "publication_risks": [
+        "不要把 paper result count 寫成 evidence count。",
+        "不要公開 raw paper payload。"
+      ],
+      "claims": [
+        {
+          "public_claim": "912babd 加入 user-facing direct paper search and summary workflow。",
+          "evidence": [
+            "SRC-GIT-PAPER-SEARCH"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "後續同日 commits 增加先展示更多 papers、progressive summaries 與 irrelevant-result filtering。",
+          "evidence": [
+            "SRC-GIT-PAPER-SEARCH"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "paper-search page 與 API route 成為一條獨立的查找／摘要入口。",
+          "evidence": [
+            "SRC-GIT-PAPER-SEARCH"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "讓人找到一篇 paper，與讓系統安全地使用它，是兩個不同的產品問題。",
+          "evidence": [
+            "SRC-GIT-PAPER-SEARCH"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "paper search can return a useful-looking record without proving it answers the study question",
+          "evidence": [
+            "SRC-GIT-PAPER-SEARCH",
+            "SRC-QA-DIRECT-V3"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "One direct paper-search workflow is present in the 7/16 committed path; success coverage is not asserted. Result: feature existence verified.",
+          "evidence": [
+            "SRC-GIT-PAPER-SEARCH"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "1 direct paper search workflow: feature existence, not success count.",
+          "evidence": [
+            "SRC-GIT-PAPER-SEARCH"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來 direct-study coverage 與 qualifying full-text coverage 被分開報告；這是後來的 evidence accounting。",
+          "evidence": [
+            "SRC-QA-DIRECT-V3"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-15",
+      "article_title": "Report Intelligence 整合：測試全綠，真實輸出仍可被擋下",
+      "packet_path": "day-facts/day-15.json",
+      "evidence_boundary": "COMMITTED_GIT_AND_DATED_QA",
+      "forbidden_hindsight_terms": [
+        "canonical-study-admission owner",
+        "V5 execution ledger",
+        "V6A admitted materializer"
+      ],
+      "publication_risks": [
+        "不要把 828/828 寫成 live report acceptance。",
+        "model name、paths 與 prompts 留在 backstage。"
+      ],
+      "claims": [
+        {
+          "public_claim": "a89549a 將 report intelligence、structured facts、claim graph、Writer checks、formal document/export 與 quality gates 大量整合。",
+          "evidence": [
+            "SRC-GIT-INTELLIGENCE"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "8/13 QA 將 configured regression 與 required live cases 分開，整體判定為 partial。",
+          "evidence": [
+            "SRC-QA-INTELLIGENCE"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "report-intelligence vertical slice 具備 deterministic benchmark、writer-safe projection、citation/export integrity 與多面向 quality gate。",
+          "evidence": [
+            "SRC-GIT-INTELLIGENCE",
+            "SRC-QA-INTELLIGENCE"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "系統可以把許多 deterministic contracts 做對，仍然在真實模型輸出階段拒絕匯出。",
+          "evidence": [
+            "SRC-QA-INTELLIGENCE",
+            "SRC-QA-KNOWLEDGE"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "actual Ollama run produced readable sections but post-edit claim/citation entailment and fallback checks blocked formal export",
+          "evidence": [
+            "SRC-QA-KNOWLEDGE",
+            "SRC-QA-INTELLIGENCE"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The 8/13 QA records 828/828 configured regression checks and separately reports the live model run. Result: configured regression pass; overall report-intelligence verdict remained partial.",
+          "evidence": [
+            "SRC-QA-INTELLIGENCE"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "828/828 configured regression checks: the 8/13 QA reported configured package suites; not seven-case live acceptance.",
+          "evidence": [
+            "SRC-QA-INTELLIGENCE"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "這是 committed history 的最後主要 checkpoint；後續 canonical admission、legal acquisition 與 budget authority 都在 HEAD 後的 worktree/QA。",
+          "evidence": [
+            "SRC-GIT-INTELLIGENCE",
+            "SRC-SOURCE-CANONICAL"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-16",
+      "article_title": "Writer 之外，誰負責關閉出版閘門？",
+      "packet_path": "day-facts/day-16.json",
+      "evidence_boundary": "DATED_QA_ARTIFACT",
+      "forbidden_hindsight_terms": [
+        "single canonical admission owner",
+        "canonical manifestation",
+        "execution budget authority",
+        "V6A"
+      ],
+      "publication_risks": [
+        "不要只報 model section count 而忽略 blocked verdict。",
+        "不要公開 raw response 或 internal IDs。"
+      ],
+      "claims": [
+        {
+          "public_claim": "knowledge reconstruction QA 的實際 Ollama run 有 7/7 requested sections，但只有 4 個 model sections，3 個 fallback sections。",
+          "evidence": [
+            "SRC-QA-KNOWLEDGE"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "post-edit sentence-level claim/citation entailment failure 導致 formal export gate blocked。",
+          "evidence": [
+            "SRC-QA-KNOWLEDGE"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "two-pass teach-back → academic reconstruction、writer isolation 與 post-edit verification 已被實際 QA 記錄。",
+          "evidence": [
+            "SRC-QA-KNOWLEDGE",
+            "SRC-GIT-INTELLIGENCE"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "生成出段落不等於段落已經被證據驗證；失敗時不匯出是一種正確結果。",
+          "evidence": [
+            "SRC-QA-KNOWLEDGE"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "readable generated content failed sentence-level claim/citation entailment",
+          "evidence": [
+            "SRC-QA-KNOWLEDGE"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The actual dated run produced four model sections and three fallback sections, then failed post-edit validation before formal export. Result: readable output was not publication-ready.",
+          "evidence": [
+            "SRC-QA-KNOWLEDGE"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "4 model sections and 3 fallback sections: actual dated QA run; not a success rate.",
+          "evidence": [
+            "SRC-QA-KNOWLEDGE"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來更嚴格的 canonical admission 把『Writer 看到了什麼』往前固定，但這一日的核心證據仍是 Writer verification failure。",
+          "evidence": [
+            "SRC-QA-KNOWLEDGE",
+            "SRC-QA-CANONICAL"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-17",
+      "article_title": "長報告可能只剩短報告：證據決定可寫長度",
+      "packet_path": "day-facts/day-17.json",
+      "evidence_boundary": "DATED_QA_ARTIFACT_OFFLINE",
+      "forbidden_hindsight_terms": [
+        "V5 generalization ready",
+        "full-text materializer",
+        "legal OA resolver authority"
+      ],
+      "publication_risks": [
+        "明確標示 frozen/offline。",
+        "不要把 2,214 或其他 gate number 脫離 run context。"
+      ],
+      "claims": [
+        {
+          "public_claim": "frozen offline audit 將 raw content 經 validation、repair、trace reconstruction 到 canonicalization 的 stage loss 分開記錄。",
+          "evidence": [
+            "SRC-QA-WRITER-DENSITY"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "該 evidence 僅支援較短的 Limited Evidence Brief，而非要求的長報告。",
+          "evidence": [
+            "SRC-QA-WRITER-DENSITY"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "body/conclusion closure、supported-content feasibility 與 evidence-bearing quality gates 被用於阻止無根據擴寫。",
+          "evidence": [
+            "SRC-QA-WRITER-DENSITY"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "當證據只支持短報告時，系統應該縮短報告，而不是用語言把證據缺口藏起來。",
+          "evidence": [
+            "SRC-QA-WRITER-DENSITY"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "canonical supported content was much shorter than the requested long report",
+          "evidence": [
+            "SRC-QA-WRITER-DENSITY"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The frozen offline audit measured 2,214 canonical CJK characters and supported a shorter limited brief. Result: offline/frozen metric; not a live publication guarantee.",
+          "evidence": [
+            "SRC-QA-WRITER-DENSITY"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "2,214 canonical CJK in the frozen audit: offline run metric; use only with frozen/offline label.",
+          "evidence": [
+            "SRC-QA-WRITER-DENSITY"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來的 live generalization 會反覆證明這個 principle；本 packet 不把 offline metric 當成 live result。",
+          "evidence": [
+            "SRC-QA-WRITER-DENSITY",
+            "SRC-QA-PUBLICATION-GEN"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-18",
+      "article_title": "Case A 通過、Case B 擋下：出版驗收必須綁定個案",
+      "packet_path": "day-facts/day-18.json",
+      "evidence_boundary": "DATED_QA_ARTIFACT",
+      "forbidden_hindsight_terms": [
+        "generalization READY",
+        "V5 budget authority",
+        "V6A admitted artifact"
+      ],
+      "publication_risks": [
+        "不要把 Case A READY 改寫成 all-cases READY。",
+        "不要公開內部 case IDs 或 raw artifacts。"
+      ],
+      "claims": [
+        {
+          "public_claim": "publication layout/citation QA 對 Case A 通過 citation、content integrity、cross-format 與 visual gates。",
+          "evidence": [
+            "SRC-QA-PUBLICATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "Case B supported content 不足，因此沒有 DOCX/PDF export。",
+          "evidence": [
+            "SRC-QA-PUBLICATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "reader citation、canonical document、DOCX/PDF parity 與 rendered visual QA 被分開驗證。",
+          "evidence": [
+            "SRC-QA-PUBLICATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "一個可發布案例證明一條路可行，不證明每個輸入都能走完同一條路。",
+          "evidence": [
+            "SRC-QA-PUBLICATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "Case B remained below supported-content threshold despite other integrity checks",
+          "evidence": [
+            "SRC-QA-PUBLICATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "Publication QA Case A resolved 20/20 citations; the same report also records an independently blocked Case B. Result: case-scoped publication evidence.",
+          "evidence": [
+            "SRC-QA-PUBLICATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "20/20 citation resolution: publication QA Case A metric; case-scoped.",
+          "evidence": [
+            "SRC-QA-PUBLICATION"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "下一步必須換題目測試，而不是把 Case A 的 evidence 偷渡給新題。",
+          "evidence": [
+            "SRC-QA-PUBLICATION-GEN"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-19",
+      "article_title": "三個新題，零個完整出口：成功 Demo 遇上泛化測試",
+      "packet_path": "day-facts/day-19.json",
+      "evidence_boundary": "DATED_QA_ARTIFACT",
+      "forbidden_hindsight_terms": [
+        "direct-study V3",
+        "canonical admission owner",
+        "V5 budget authority"
+      ],
+      "publication_risks": [
+        "不要用 0/3 推論所有 topic 都失敗。",
+        "不要把 new-topic diagnostic artifact 當成 published report。"
+      ],
+      "claims": [
+        {
+          "public_claim": "publication V2 對 three new topics 的 complete canonical export 結果是 0/3。",
+          "evidence": [
+            "SRC-QA-PUBLICATION-GEN"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "其中一個 case Writer-level gate 通过，接回 canonical 後仍被更嚴格 gate 阻擋。",
+          "evidence": [
+            "SRC-QA-PUBLICATION-GEN"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "Case A 的 cross-format/citation/visual QA 與 new-topic canonical gate 被分開記錄。",
+          "evidence": [
+            "SRC-QA-PUBLICATION-GEN"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "把一個成功案例換成新題目，是測系統是否泛化，不是再展示同一個 demo。",
+          "evidence": [
+            "SRC-QA-PUBLICATION-GEN"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "0/3 new topics passed the complete canonical export gate",
+          "evidence": [
+            "SRC-QA-PUBLICATION-GEN",
+            "SRC-QA-INGESTION"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The fixed three-topic unseen cohort produced 0/3 complete canonical exports. Result: generalization gate failed for this dated cohort.",
+          "evidence": [
+            "SRC-QA-PUBLICATION-GEN"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "0/3 complete canonical exports: dated three-topic cohort only.",
+          "evidence": [
+            "SRC-QA-PUBLICATION-GEN"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來十題 run 才把同一壓力擴大，並把 first weak layer 更明確地記錄。",
+          "evidence": [
+            "SRC-QA-INGESTION"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-20",
+      "article_title": "十個新題暴露共同瓶頸：先找第一個失敗層",
+      "packet_path": "day-facts/day-20.json",
+      "evidence_boundary": "DATED_QA_CURRENT_LIVE",
+      "forbidden_hindsight_terms": [
+        "V5 control-plane READY",
+        "V6A admitted manifestation",
+        "canonical owner audit result"
+      ],
+      "publication_risks": [
+        "0/10 必須標 current-live、fixed cohort。",
+        "不要公開完整 provider traces 或內部題目資料。"
+      ],
+      "claims": [
+        {
+          "public_claim": "general ingestion current-live run 有 10 cases、0/10 publishable、0/10 FORMAL，且 blocked cases 沒有輸出 report/docx/pdf/chart。",
+          "evidence": [
+            "SRC-QA-INGESTION"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "報告將 structured study-fact extraction plus schema admission 識別為共同 bottleneck，同時保留 retrieval/access 作為較早 blocker。",
+          "evidence": [
+            "SRC-QA-INGESTION"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "per-provider traces、accepted/direct/full-text/design/direction/numeric/Writer fields 被放進同一個 cohort matrix。",
+          "evidence": [
+            "SRC-QA-INGESTION"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "當十題都在 Writer 前被擋住，最有效的問題不是『prompt 還要怎麼改』，而是『第一個缺口在哪一層』。",
+          "evidence": [
+            "SRC-QA-INGESTION"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "ten-topic live run produced no publishable output and Writer requests stayed at zero",
+          "evidence": [
+            "SRC-QA-INGESTION",
+            "SRC-QA-STUDY-FACTS"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The current-live ten-topic ingestion run produced 0/10 publishable and 0/10 FORMAL outputs. Result: common structured study-fact bottleneck observed; no blocked output was emitted.",
+          "evidence": [
+            "SRC-QA-INGESTION"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "0/10 publishable; 0/10 FORMAL: current-live ten-topic run; not universal performance.",
+          "evidence": [
+            "SRC-QA-INGESTION"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後續 Study Facts V2 把 missing/unknown/not-reported 分得更清楚；本日不把後續 status taxonomy 回寫成當時已成熟。",
+          "evidence": [
+            "SRC-QA-STUDY-FACTS"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-21",
+      "article_title": "先把 Study Facts 變成可拒絕的資料",
+      "packet_path": "day-facts/day-21.json",
+      "evidence_boundary": "DATED_QA_CURRENT_LIVE_AND_CURRENT_WORKTREE_SOURCE",
+      "forbidden_hindsight_terms": [
+        "V5 budget authority",
+        "V6A admitted materializer",
+        "post-closure override"
+      ],
+      "publication_risks": [
+        "0/10 FORMAL 不能寫成 0/10 有效研究。",
+        "replay 與 live 必須分段說明。"
+      ],
+      "claims": [
+        {
+          "public_claim": "Study Fact extraction V2 分開報告 frozen replay 與 fresh ten-topic extraction。",
+          "evidence": [
+            "SRC-QA-STUDY-FACTS"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "current-live benchmark reached 7/10 LIMITED and 0/10 FORMAL; Writer requests remained 0。",
+          "evidence": [
+            "SRC-QA-STUDY-FACTS"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "current worktree extraction code distinguishes PRESENT、NOT_REPORTED、UNKNOWN、NOT_APPLICABLE and preserves exact provenance。",
+          "evidence": [
+            "SRC-SOURCE-STUDY-FACTS"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "未知不是零，未報告也不是沒有發生；資料結構要保留這三者的差異。",
+          "evidence": [
+            "SRC-SOURCE-STUDY-FACTS"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "fresh extraction did not clear the 10/10 LIMITED and 8/10 FORMAL thresholds",
+          "evidence": [
+            "SRC-QA-STUDY-FACTS"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The fresh ten-topic Study Facts V2 run reached 7/10 LIMITED and 0/10 FORMAL, with Writer at zero. Result: study-fact extraction improved classification but did not establish formal publication.",
+          "evidence": [
+            "SRC-QA-STUDY-FACTS"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "7/10 LIMITED and 0/10 FORMAL: fresh ten-topic extraction run.",
+          "evidence": [
+            "SRC-QA-STUDY-FACTS"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來 canonical admission 把 Study Fact readiness 納入單一 owner，但本日仍聚焦在 fact status contract。",
+          "evidence": [
+            "SRC-QA-CANONICAL"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-22",
+      "article_title": "Evidence Gap 要能驅動補查，而不是無限重搜",
+      "packet_path": "day-facts/day-22.json",
+      "evidence_boundary": "DATED_QA_CURRENT_LIVE_WITH_REPLAY_SEPARATION",
+      "forbidden_hindsight_terms": [
+        "single canonical admission owner",
+        "budget authority V5",
+        "admitted manifestation materializer"
+      ],
+      "publication_risks": [
+        "replay 的 1/10 FORMAL 不可當 live result。",
+        "client timeout 不可自動改寫成 job failure。"
+      ],
+      "claims": [
+        {
+          "public_claim": "V3 implemented evidence-gap-driven acquisition and formal synthesis path。",
+          "evidence": [
+            "SRC-QA-EVIDENCE-GAP"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "current live materialized acceptance was 2/10 LIMITED-or-better and 0/10 FORMAL; frozen replay was 7/10 and 1/10 respectively。",
+          "evidence": [
+            "SRC-QA-EVIDENCE-GAP"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "query/acquisition work was organized around evidence gaps and bounded retries rather than unrestricted Writer reruns。",
+          "evidence": [
+            "SRC-QA-EVIDENCE-GAP"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "補查的目標不是讓輸出變長，而是填補一個被明確辨識的 evidence gap。",
+          "evidence": [
+            "SRC-QA-EVIDENCE-GAP"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "several client waits expired before server job artifacts materialized and full text remained sparse",
+          "evidence": [
+            "SRC-QA-EVIDENCE-GAP",
+            "SRC-QA-ACQUISITION-V4"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The current-live V3 cohort reached 2/10 LIMITED-or-better and 0/10 FORMAL; frozen replay separately reached 7/10 and 1/10. Result: live and replay results kept separate.",
+          "evidence": [
+            "SRC-QA-EVIDENCE-GAP"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "2/10 live LIMITED-or-better; 0/10 live FORMAL: current live V3 result.",
+          "evidence": [
+            "SRC-QA-EVIDENCE-GAP"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "7/10 replay LIMITED-or-better; 1/10 replay FORMAL: frozen replay, not live.",
+          "evidence": [
+            "SRC-QA-EVIDENCE-GAP"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "V4 會處理 client wait 與 server job 的生命週期；這一日不提前宣稱 V4 已解決。",
+          "evidence": [
+            "SRC-QA-ACQUISITION-V4"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-23",
+      "article_title": "Client Timeout 不是研究失敗：把生命週期交還給 Job",
+      "packet_path": "day-facts/day-23.json",
+      "evidence_boundary": "DATED_QA_CURRENT_LIVE",
+      "forbidden_hindsight_terms": [
+        "canonical admission owner",
+        "V5 budget authority",
+        "V6A current admission artifact"
+      ],
+      "publication_risks": [
+        "不要用 client timeout 數量當內容失敗數量。",
+        "不要把 terminal 10/10 寫成 formal 10/10。"
+      ],
+      "claims": [
+        {
+          "public_claim": "V4 official run had all 10 fresh jobs reach explicit terminal states。",
+          "evidence": [
+            "SRC-QA-ACQUISITION-V4"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "the run reported 1/10 validated LIMITED-or-better and 0/10 FORMAL, so generalization remained false。",
+          "evidence": [
+            "SRC-QA-ACQUISITION-V4"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "terminal status was explicit/immutable; checkpointed artifacts, idempotent resume and unknown downstream counts were preserved。",
+          "evidence": [
+            "SRC-QA-ACQUISITION-V4"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "一個 client request 結束等待，不代表 server-side research job 已經失敗。",
+          "evidence": [
+            "SRC-QA-ACQUISITION-V4"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "53 bounded client-wait expirations and 3 poll transport timeouts occurred while jobs later reached terminal states",
+          "evidence": [
+            "SRC-QA-ACQUISITION-V4"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "All 10 jobs reached explicit terminal states; the same run reported 1/10 LIMITED-or-better, 0/10 FORMAL, 53 client-wait expirations and 3 poll timeouts. Result: lifecycle terminality separated from content qualification.",
+          "evidence": [
+            "SRC-QA-ACQUISITION-V4"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "10/10 terminal; 1/10 LIMITED-or-better; 0/10 FORMAL: official V4 current-live run.",
+          "evidence": [
+            "SRC-QA-ACQUISITION-V4"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "53 client-wait expirations and 3 poll timeouts: same run lifecycle diagnostic.",
+          "evidence": [
+            "SRC-QA-ACQUISITION-V4"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來 canonical projections 還要校正各 consumer 對 admission 的理解；V4 只先解 lifecycle ownership。",
+          "evidence": [
+            "SRC-QA-CANONICAL"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-24",
+      "article_title": "同一研究只能有一個 Admission Owner",
+      "packet_path": "day-facts/day-24.json",
+      "evidence_boundary": "DATED_QA_CURRENT_WORKTREE_SOURCE",
+      "forbidden_hindsight_terms": [
+        "V5 budget authority",
+        "V6A admitted manifestation materializer"
+      ],
+      "publication_risks": [
+        "不要把 substrate READY 寫成 content READY。",
+        "不要公開 internal revision IDs 或完整 matrix。"
+      ],
+      "claims": [
+        {
+          "public_claim": "current worktree contains canonical-study-admission.ts as the typed owner binding identity, access, facts, provenance and revision。",
+          "evidence": [
+            "SRC-SOURCE-CANONICAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "canonical admission QA recorded 46 study decisions with zero terminal/architecture/Writer projection mismatches。",
+          "evidence": [
+            "SRC-QA-CANONICAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "canonical decisions distinguish FORMAL, LIMITED, BLOCKED, UNKNOWN and access states; consumers validate identity/revision and project the same decision。",
+          "evidence": [
+            "SRC-SOURCE-CANONICAL",
+            "SRC-QA-CANONICAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "當多個模組都能自己回答『這筆證據能不能用』，系統就可能同時產生多個互相矛盾的真相。",
+          "evidence": [
+            "SRC-QA-CANONICAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "earlier layers disagreed on inclusive LIMITED/direct/formal counts and stale evidence revisions",
+          "evidence": [
+            "SRC-QA-CANONICAL",
+            "SRC-SOURCE-CANONICAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The canonical admission substrate run recorded 46 decisions with 0 projection mismatches: 25 LIMITED, 21 BLOCKED and 0 FORMAL. Result: canonical projection consistency passed; content generalization remained false.",
+          "evidence": [
+            "SRC-QA-CANONICAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "46 decisions; 0 projection mismatches: official canonical admission substrate run.",
+          "evidence": [
+            "SRC-QA-CANONICAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "25 LIMITED and 21 BLOCKED; 0 FORMAL: canonical decision totals in that run.",
+          "evidence": [
+            "SRC-QA-CANONICAL"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "這是 post-HEAD current worktree/QA evidence；沒有對應的 committed canonical admission commit。",
+          "evidence": [
+            "SRC-SOURCE-CANONICAL",
+            "SRC-QA-CANONICAL"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-25",
+      "article_title": "HTTP 200 不是全文：從回應成功到可用 Artifact",
+      "packet_path": "day-facts/day-25.json",
+      "evidence_boundary": "DATED_QA_CURRENT_WORKTREE_SOURCE",
+      "forbidden_hindsight_terms": [
+        "V6A admitted manifestation materializer",
+        "budget authority V5"
+      ],
+      "publication_risks": [
+        "不能公開未授權全文或 private route。",
+        "不能把 metadata resolution count 當 qualifying full-text count。"
+      ],
+      "claims": [
+        {
+          "public_claim": "full-text recovery source separates legal route planning, payload validation, format dispatch, identity validation and canonical qualification。",
+          "evidence": [
+            "SRC-SOURCE-FULLTEXT"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "fresh qualifying-full-text case coverage was 2/10 and HTTP 200 alone was explicitly insufficient。",
+          "evidence": [
+            "SRC-QA-FULLTEXT"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "JATS/HTML/PDF/OCR routes, MIME/magic-byte checks, structural qualification and canonical admission were kept as separate stages。",
+          "evidence": [
+            "SRC-SOURCE-FULLTEXT",
+            "SRC-QA-FULLTEXT"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "HTTP 200 只表示一次 HTTP response 成功，不表示拿到正確、完整、可引用的研究全文。",
+          "evidence": [
+            "SRC-QA-FULLTEXT"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "OA/DOI metadata resolution could be recorded as success even when no usable document artifact existed",
+          "evidence": [
+            "SRC-QA-FULLTEXT",
+            "SRC-SOURCE-FULLTEXT"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The fresh full-text recovery V1 cohort qualified 2/10 cases; metadata or HTTP success was not counted as qualifying content. Result: full-text threshold remained the weak layer.",
+          "evidence": [
+            "SRC-QA-FULLTEXT"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "2/10 qualifying full-text cases: fresh current-live recovery V1.",
+          "evidence": [
+            "SRC-QA-FULLTEXT"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "後來 OA V2 與 V6A 又把 format-aware identity/materialization 綁得更嚴格；本日不宣稱 acquisition 已 ready。",
+          "evidence": [
+            "SRC-QA-OA-V2",
+            "SRC-QA-V6A"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-26",
+      "article_title": "合法 Open Access 也可能只是 Landing Page",
+      "packet_path": "day-facts/day-26.json",
+      "evidence_boundary": "DATED_QA_CURRENT_WORKTREE_SOURCE",
+      "forbidden_hindsight_terms": [
+        "V6A admitted manifestation owner",
+        "budget authority audit"
+      ],
+      "publication_risks": [
+        "不要列出可讓讀者直接下載的未授權 URL。",
+        "20/20 controlled 不可寫成 20/20 live。"
+      ],
+      "claims": [
+        {
+          "public_claim": "OA materialization V2 used bytes/MIME/HTML/JATS/TEI/PDF detection, bounded landing-to-full-text resolution and strict identity verification。",
+          "evidence": [
+            "SRC-QA-OA-V2"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "fresh current-live coverage improved to 2/10 qualifying full-text cases while the >=8/10 gate remained unmet。",
+          "evidence": [
+            "SRC-QA-OA-V2"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "a narrow PMC identity false-negative repair was added while abstract, landing, scanned, paywall, wrong-article and weak-identity payloads remained rejected。",
+          "evidence": [
+            "SRC-QA-OA-V2"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "合法可取得不代表拿到的 payload 就是該篇研究的完整正文；route、identity、format 與 structure 都要驗。",
+          "evidence": [
+            "SRC-QA-OA-V2"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "previous payloads included HTML articles, scanned PDFs, landing pages, abstract-only and binary-unknown classes",
+          "evidence": [
+            "SRC-QA-OA-V2"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The OA materialization V2 cohort qualified 2/10 cases and passed 20/20 controlled fixture scenarios. Result: controlled behavior passed; live coverage stayed limited.",
+          "evidence": [
+            "SRC-QA-OA-V2"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "2/10 qualifying full-text cases: fresh OA materialization V2 cohort.",
+          "evidence": [
+            "SRC-QA-OA-V2"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "20/20 controlled fixture scenarios: controlled matrix, not live coverage.",
+          "evidence": [
+            "SRC-QA-OA-V2"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "V6A 後來再把 admitted manifestation 與 current admission revision 綁在一起；本日只使用 OA V2 evidence。",
+          "evidence": [
+            "SRC-QA-V6A"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-27",
+      "article_title": "9/10 找到研究，2/10 拿到全文：兩種 Coverage 不能合併",
+      "packet_path": "day-facts/day-27.json",
+      "evidence_boundary": "DATED_QA_CURRENT_LIVE",
+      "forbidden_hindsight_terms": [
+        "post-closure V4 override",
+        "V5 execution ledger",
+        "V6A admitted materialization"
+      ],
+      "publication_risks": [
+        "不可把 9/10 讀成 9/10 可發布。",
+        "不要公開 paper raw payload 或未授權全文。"
+      ],
+      "claims": [
+        {
+          "public_claim": "direct-study discovery V3 reached 9/10 case coverage while qualifying-full-text coverage remained 2/10。",
+          "evidence": [
+            "SRC-QA-DIRECT-V3"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "the run used bounded endpoint discovery, body-first HTML extraction and PDF fallback without manual rescue or content rerun。",
+          "evidence": [
+            "SRC-QA-DIRECT-V3"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "zero-direct cases activated a bounded topic-anchored fallback only under the specified condition; direct-study counts and full-text counts stayed separate。",
+          "evidence": [
+            "SRC-QA-DIRECT-V3"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "搜尋找到研究與取得可引用全文之間，可能隔著一整條法律、格式、身分與 parser pipeline。",
+          "evidence": [
+            "SRC-QA-DIRECT-V3"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "many direct studies still had abstract/non-qualifying acquisition states",
+          "evidence": [
+            "SRC-QA-DIRECT-V3",
+            "SRC-QA-V5"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The fresh V3 cohort reached 9/10 direct-study discovery and 2/10 qualifying full-text coverage. Result: discovery and evidence metrics diverged; no Writer/replay rescue was counted.",
+          "evidence": [
+            "SRC-QA-DIRECT-V3"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "9/10 direct-study coverage; 2/10 qualifying-full-text coverage: fresh current-live V3 cohort.",
+          "evidence": [
+            "SRC-QA-DIRECT-V3"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "下一日會顯示 post-closure audit 如何重新檢查 canonical binding 與 budget fan-out；不要在本日先下那個結論。",
+          "evidence": [
+            "SRC-QA-V4-OVERRIDE"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-28",
+      "article_title": "先前的「通過」可能需要被撤回",
+      "packet_path": "day-facts/day-28.json",
+      "evidence_boundary": "DATED_QA_POST_CLOSURE_OVERRIDE",
+      "forbidden_hindsight_terms": [
+        "V5 READY",
+        "V6A current canary result"
+      ],
+      "publication_risks": [
+        "必須明確標示原始 PARTIAL 已被 supersede。",
+        "不要公開 raw attempt rows 或 internal IDs。"
+      ],
+      "claims": [
+        {
+          "public_claim": "sealed read-only audit found that the legal OA V4 finalizer projected every canonicalAdmissionRows member as admitted without checking canonical state。",
+          "evidence": [
+            "SRC-QA-V4-OVERRIDE"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "the defensible minimum after override was 3/10 qualifying cases, not the original generated 4/10 projection。",
+          "evidence": [
+            "SRC-QA-V4-OVERRIDE"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "the audit preserved the original generated PARTIAL output but marked it superseded by the canonical-binding audit。",
+          "evidence": [
+            "SRC-QA-V4-OVERRIDE"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "如果 summary layer 漏看 authority layer，系統可能把不應該通過的結果報成通過；因此 closure 也要能做 binding audit。",
+          "evidence": [
+            "SRC-QA-V4-OVERRIDE"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "a qualifying artifact belonged to a source whose canonical owner state was BLOCKED",
+          "evidence": [
+            "SRC-QA-V4-OVERRIDE"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "nominal 3-query/3-provider cascade expanded to 22 queries, 6 providers and 90 attempt rows",
+          "evidence": [
+            "SRC-QA-V4-OVERRIDE",
+            "SRC-QA-V5"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "One audited cascade expanded to 22 queries, 6 providers and 90 attempt rows; the post-closure audit set a defensible minimum of 3/10 qualifying cases. Result: superseded result retained and corrected by canonical state.",
+          "evidence": [
+            "SRC-QA-V4-OVERRIDE"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "22 queries, 6 providers, 90 attempt rows: one audited cascade; not a universal system count.",
+          "evidence": [
+            "SRC-QA-V4-OVERRIDE"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "3/10 defensible qualifying cases after override: minimum aggregate after canonical-state audit.",
+          "evidence": [
+            "SRC-QA-V4-OVERRIDE"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "這個 audit 直接促成下一日的 authoritative execution budget；不要把 V5 內容提前寫成已完成。",
+          "evidence": [
+            "SRC-QA-V5"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-29",
+      "article_title": "Retry 不是免費的：Execution Budget 必須管到 Side Effect",
+      "packet_path": "day-facts/day-29.json",
+      "evidence_boundary": "DATED_QA_CURRENT_WORKTREE_SOURCE",
+      "forbidden_hindsight_terms": [
+        "V6A live canary outcome"
+      ],
+      "publication_risks": [
+        "不要公開足以重現 private provider calls 的 budget/URL 細節。",
+        "V5 READY 必須加上 control-plane 限定。"
+      ],
+      "claims": [
+        {
+          "public_claim": "current worktree authoritative-execution-budget.ts defines typed query/provider/request/retry/redirect/resolver/materialization/fallback/elapsed-time accounting。",
+          "evidence": [
+            "SRC-SOURCE-BUDGET"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "V5 audit passed canonical binding and budget authority with zero mismatches, overruns and hidden attempts。",
+          "evidence": [
+            "SRC-QA-V5"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "V5 fresh cohort recorded 10/10 terminal, 1/10 canonical direct-study coverage, 0/10 qualifying-full-text coverage and zero Writer requests。",
+          "evidence": [
+            "SRC-QA-V5"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "retry、fallback 與 resolver 都是成本與風險，不應只在 planner 裡寫一個理想數字。",
+          "evidence": [
+            "SRC-QA-V4-OVERRIDE",
+            "SRC-QA-V5"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "a nominal 3-query/3-provider plan hid a much larger actual attempt fan-out",
+          "evidence": [
+            "SRC-QA-V4-OVERRIDE",
+            "SRC-SOURCE-BUDGET"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The V5 audit recorded 0 canonical mismatches, 0 budget overruns and 0 hidden attempts; its cohort had 1/10 direct-study and 0/10 qualifying-full-text coverage. Result: budget authority audit passed while content generalization remained not ready.",
+          "evidence": [
+            "SRC-QA-V5"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "0 canonical mismatches, 0 budget overruns, 0 hidden attempts: V5 audit.",
+          "evidence": [
+            "SRC-QA-V5"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "1/10 direct-study; 0/10 qualifying full text: same fresh cohort; content remained not ready.",
+          "evidence": [
+            "SRC-QA-V5"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "V5 把 control plane 收緊後，content coverage 仍然低；這不是矛盾，而是控制正確與材料不足的兩個結果。",
+          "evidence": [
+            "SRC-QA-V5"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    },
+    {
+      "article_id": "day-30",
+      "article_title": "讓「不知道」成為一級輸出",
+      "packet_path": "day-facts/day-30.json",
+      "evidence_boundary": "DATED_QA_CURRENT_WORKTREE",
+      "forbidden_hindsight_terms": [
+        "published",
+        "deployed",
+        "generalization ready",
+        "all topics supported"
+      ],
+      "publication_risks": [
+        "不得宣稱已部署、已投稿或已泛化。",
+        "不要公開 live route、hash、job ID 或 raw full text。"
+      ],
+      "claims": [
+        {
+          "public_claim": "V5 control-plane audit was READY within its defined scope, while generalization remained false with 0/10 qualifying full text in that cohort。",
+          "evidence": [
+            "SRC-QA-V5"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "V6A controlled materialization matrix passed 18/18, but the live canary was unavailable and no current qualifying artifact was bound。",
+          "evidence": [
+            "SRC-QA-V6A"
+          ],
+          "confidence": "HIGH",
+          "kind": "KNOWN_AT_THE_TIME"
+        },
+        {
+          "public_claim": "observed current worktree separates canonical admission, legal materialization, format/identity checks, provenance and execution budget; later implementation remains uncommitted。",
+          "evidence": [
+            "SRC-SOURCE-CANONICAL",
+            "SRC-SOURCE-FULLTEXT",
+            "SRC-SOURCE-BUDGET"
+          ],
+          "confidence": "HIGH",
+          "kind": "IMPLEMENTED_AT_THE_TIME"
+        },
+        {
+          "public_claim": "這個系列的終點不是宣稱系統什麼都會，而是能清楚說出什麼已經證明、什麼仍未知，以及下一個可修的 evidence gap。",
+          "evidence": [
+            "SRC-QA-V5",
+            "SRC-QA-V6A"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_PUBLIC_FACT"
+        },
+        {
+          "public_claim": "current environment could not re-fetch the canary route and no current identity-matched qualifying artifact was available",
+          "evidence": [
+            "SRC-QA-V6A"
+          ],
+          "confidence": "HIGH",
+          "kind": "OBSERVED_FAILURE"
+        },
+        {
+          "public_claim": "The controlled V6A materialization matrix passed 18/18 cases, while the current canary was unavailable and no current qualifying artifact was bound. Result: controlled safety behavior passed; live readiness remained partial.",
+          "evidence": [
+            "SRC-QA-V6A"
+          ],
+          "confidence": "HIGH",
+          "kind": "TEST_OR_METRIC"
+        },
+        {
+          "public_claim": "18/18 controlled V6A cases: controlled materialization matrix, not live cohort.",
+          "evidence": [
+            "SRC-QA-V6A"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "0/10 qualifying full text in V5 cohort: current live content boundary.",
+          "evidence": [
+            "SRC-QA-V5"
+          ],
+          "confidence": "HIGH",
+          "kind": "SAFE_NUMBER"
+        },
+        {
+          "public_claim": "下一階段應修 lawful live full-text coverage 與 first weak layer，再依 frozen facts 進入 Writer；不應先用 prompt 優化掩蓋 acquisition gap。",
+          "evidence": [
+            "SRC-QA-V5",
+            "SRC-QA-V6A"
+          ],
+          "confidence": "RETROSPECTIVE",
+          "kind": "LATER_INTERPRETATION"
+        }
+      ]
+    }
+  ]
+}

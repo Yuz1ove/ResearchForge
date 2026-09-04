@@ -860,6 +860,7 @@ export function validateAndRepairTopicQuery(
     role?: PlannedResearchQueryRole;
     provider?: string;
     repair?: boolean;
+    allowFullAnchorRestore?: boolean;
   } = {},
 ): TopicAnchorQueryDecision {
   const role = options.role ?? "primary";
@@ -910,7 +911,9 @@ export function validateAndRepairTopicQuery(
     return freezeObject(decision) as TopicAnchorQueryDecision;
   }
   if (options.repair ?? true) {
-    const repaired = repairTopicTextWithAnchors(originalQuery, contract);
+    const repaired = repairTopicTextWithAnchors(originalQuery, contract, {
+      allowFullAnchorRestore: options.allowFullAnchorRestore,
+    });
     if (repaired && repaired !== originalQuery) {
       const repairedValidation = validateTopicTextAgainstContract(repaired, contract);
       if (repairedValidation.valid) {

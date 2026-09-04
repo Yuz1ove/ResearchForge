@@ -1,0 +1,163 @@
+{
+  "scope": "DAY02_20260831_CANDIDATE_ONLY",
+  "verdict": "PASS",
+  "checks": [
+    {
+      "check": "reused_publication_scans",
+      "result": "PASS",
+      "detail": [
+        "placeholder",
+        "absolute_path",
+        "secret_pattern",
+        "internal_source_id",
+        "raw_job_id",
+        "private_route",
+        "full_commit_sha",
+        "raw_verdict"
+      ]
+    },
+    {
+      "check": "markdown_structure",
+      "result": "PASS",
+      "detail": {
+        "headings": [
+          "h1",
+          "h2",
+          "h2",
+          "h2",
+          "h2",
+          "h2",
+          "h2"
+        ],
+        "fences": 4
+      }
+    },
+    {
+      "check": "title_day_and_length",
+      "result": "PASS",
+      "detail": {
+        "unicode_characters": 3509,
+        "cjk_characters": 2255
+      }
+    },
+    {
+      "check": "internal_links",
+      "result": "PASS",
+      "detail": [
+        "../../assets/day-02/20260831/stop-condition-flow.svg"
+      ]
+    },
+    {
+      "check": "public_references",
+      "result": "PASS",
+      "detail": {
+        "citations": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+        ]
+      }
+    },
+    {
+      "check": "svg_xml",
+      "result": "PASS",
+      "detail": {
+        "viewBox": "0 0 680 1330"
+      }
+    },
+    {
+      "check": "svg_public_resources",
+      "result": "PASS",
+      "detail": "No foreignObject, external font, raster image, script, or external resource; XML namespace is not a resource request"
+    },
+    {
+      "check": "svg_markers",
+      "result": "PASS",
+      "detail": "All arrow marker references resolve"
+    },
+    {
+      "check": "diagram_model_labels",
+      "result": "PASS",
+      "detail": "Mermaid source is paired with a manually laid-out equivalent SVG; no claim of automated Mermaid rendering"
+    },
+    {
+      "check": "evidence_map_completeness",
+      "result": "PASS",
+      "detail": {
+        "claims": 16,
+        "sources": 15,
+        "failures": []
+      }
+    },
+    {
+      "check": "article_hash_binding",
+      "result": "PASS",
+      "detail": "Matches reviewed claims packet"
+    },
+    {
+      "check": "no_fabricated_test_totals",
+      "result": "PASS",
+      "detail": "Article publishes no test totals; historical suite PASS claims map to receipts"
+    },
+    {
+      "check": "conceptual_code_disclosure",
+      "result": "PASS",
+      "detail": "All pseudocode and figure are conceptual; actual source is separately mapped"
+    },
+    {
+      "check": "whitespace",
+      "result": "PASS",
+      "detail": "No trailing whitespace"
+    },
+    {
+      "check": "rendered_visual_review",
+      "result": "PASS",
+      "detail": {
+        "method": "Browser DOM inspection and visual screenshot review; local MarkdownIt preview, not iThome Preview",
+        "desktop": {
+          "viewport": [
+            1000,
+            1400
+          ],
+          "svg_width": 680,
+          "text_out_of_bounds": []
+        },
+        "mobile": {
+          "viewport": [
+            360,
+            900
+          ],
+          "article_scroll_width": 360,
+          "image_loaded": true,
+          "image_width": 323.9921875,
+          "table_count": 1
+        },
+        "manual_review": {
+          "arrows": "PASS: yes flows downward, no/unknown to BLOCKED, dashed next stage is conditional",
+          "mobile_readability": "PASS: vertical layout; image labels remain readable at 360px",
+          "no_clipping": "PASS",
+          "no_external_fonts": "PASS: system fonts only",
+          "no_foreign_object": "PASS"
+        },
+        "platform_preview": "NOT_RUN",
+        "screenshots": [
+          "diagram-desktop.png",
+          "diagram-mobile.png",
+          "article-desktop.png",
+          "article-mobile.png"
+        ]
+      }
+    },
+    {
+      "check": "legacy_scope_preserved",
+      "result": "PASS",
+      "detail": "Legacy full-series validator was already FAIL on old day-02.md; this check records the boundary, not a legacy PASS"
+    }
+  ],
+  "legacy_full_series_verdict": "FAIL",
+  "engineering_tests_this_task": "NOT_RUN",
+  "live_acquisition_this_task": "NOT_RUN",
+  "platform_preview": "NOT_RUN"
+}

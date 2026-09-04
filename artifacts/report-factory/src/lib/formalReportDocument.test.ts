@@ -177,6 +177,21 @@ function workspace(kind: "complete_research_report" | "limited_evidence_brief") 
     writerEvidenceSetHash: evidenceHash,
     filteredAfterPlanCount: 0,
     filteredEvidence: [],
+    formalResearchValidation: { pass: true },
+    formalResearchCheckpoint: {
+      schemaVersion: "formal-research-checkpoint.v2",
+      workflowId,
+      topicHash,
+      evidenceSetHash: evidenceHash,
+      acceptedSourceIds: sources.map((source) => source.id),
+      contentIntegrityValidated: true,
+      evidenceIds: cards.map((card) => card.id),
+      completedStages: ["source_normalization", "validation", "export"],
+      resumeFrom: "export",
+      safeToResume: true,
+      providerFailureCategories: [],
+      invalidatedBy: [],
+    },
   };
   return result;
 }
@@ -216,6 +231,18 @@ function rendererFixtureReport(result: ReportWorkspace) {
         ...report.meta.readerFacingAudit,
         status: "pass" as const,
         forbiddenTokens: [],
+      },
+      formalExportProof: {
+        planBuildStatus: "plan_built" as const,
+        readinessStatus: "ready_limited_report" as const,
+        evidenceSetHash: report.meta.formalExportProof?.evidenceSetHash ?? "a".repeat(64),
+        writerEvidenceSetHash:
+          report.meta.formalExportProof?.writerEvidenceSetHash ?? "a".repeat(64),
+        filteredAfterPlanCount: 0,
+        formalResearchValidationPassed: true,
+        contentIntegrityValidated: true,
+        resumeFrom: "export" as const,
+        safeToResume: true,
       },
     },
   };
@@ -363,6 +390,77 @@ test("table_overuse_gate", () => {
   assert.equal(mainBodyTables.some((table) => table.rows.length >= document.metadata.acceptedSourceCount), false);
   assert.ok(document.appendix.flatMap((section) => section.tables).length >= 1);
   assert.deepEqual(document.integrity.tableIssues, []);
+});
+
+test("long-form canonical body below the requested minimum blocks export", () => {
+  const result = archivedShortVideoSleepWorkspace();
+  result.input.wordCount = "7000";
+  const document = buildFormalReportDocument(result);
+
+  assert.equal(document.quality.blockExport, true);
+  assert.ok(
+    document.quality.dimensions.document_quality.failureLocations.some((location) =>
+      location.startsWith("report:length:"),
+    ),
+  );
+  assert.match(
+    document.quality.dimensions.document_quality.reason,
+    /long_form_body_below_minimum:/u,
+  );
+});
+
+test("canonical rendering preserves complete Writer vNext trace paragraphs across display rebalancing", () => {
+  const result = workspace("limited_evidence_brief");
+  const evidenceId = result.evidenceCards[0]!.id;
+  const sentences = [
+    "第一項可核對結果指出，綠覆較高的觀測區域通常對應較低地表溫度。",
+    "第二項可核對結果指出，樹冠遮蔭會改變校園活動空間的日間熱暴露。",
+    "第三項結果顯示，鋪面材料與建築排列也會共同影響局部熱環境。",
+    "第四項解讀邊界是，空間關聯本身不能證明綠覆直接造成固定幅度降溫。",
+    "第五項解讀邊界是，不同校園尺度與量測方法的結果不能直接合併。",
+    "第六項綜合判斷是，規劃評估必須同時保留植被結構與微氣候情境。",
+  ];
+  result.draft.sections = result.draft.sections.map((section) =>
+    section.sectionId !== "literature_review"
+      ? section
+      : {
+          ...section,
+          body: `${sentences.slice(0, 3).join(" [S1] ")} [S1]\n\n${sentences.slice(3).join(" [S1] ")} [S1]`,
+          synthesizedProseZhTw: sentences.join(""),
+          sentenceClaimTraces: sentences.map((sentence, index) => ({
+            sentenceId: `literature_review-p${index < 3 ? 1 : 2}-s${(index % 3) + 1}`,
+            sectionId: "literature_review",
+            paragraphId: `literature_review-p${index < 3 ? 1 : 2}`,
+            originalText: sentence,
+            finalText: sentence,
+            originalClaimIds: [`writer-claim-${index + 1}`],
+            finalClaimIds: [`writer-claim-${index + 1}`],
+            realizedClaimIds: [`writer-claim-${index + 1}`],
+            evidenceIds: [evidenceId],
+            citationSourceIds: ["source-1"],
+            citationIds: ["source-1"],
+            factual: true,
+            validation: "pass" as const,
+            action: "UNCHANGED" as const,
+            actionReason: "writer_validated_sentence",
+            repairStage: "A_PRESERVE" as const,
+            repairAttempts: 0,
+            providerUsed: null,
+            validationBefore: "pass" as const,
+            validationAfter: "pass" as const,
+            deleted: false,
+          })),
+        },
+  );
+
+  const document = buildFormalReportDocument(result);
+  const rendered = document.analysisSections
+    .find((section) => section.id === "literature_review")!
+    .blocks.map((block) => block.text)
+    .join("");
+
+  for (const sentence of sentences) assert.match(rendered, new RegExp(sentence, "u"));
+  assert.equal(new Set(sentences.filter((sentence) => rendered.includes(sentence))).size, 6);
 });
 
 test("short-video result visuals are placed in evidence-first main-body order with truthful Image2 fallback", () => {
@@ -681,6 +779,47 @@ test("formal document blocks a stated source count that exceeds its citation set
   );
 });
 
+test("formal source-count audit does not confuse a review's study count with report citations", () => {
+  const reviewWorkspace = workspace("limited_evidence_brief");
+  reviewWorkspace.draft.sections = reviewWorkspace.draft.sections.map((section) =>
+    section.sectionId === "discussion"
+      ? {
+          ...section,
+          body: "該系統性回顧從辨識出的60項研究中保留42項中高品質研究 [S1]。",
+          synthesizedProseZhTw: "該系統性回顧從辨識出的60項研究中保留42項中高品質研究 [S1]。",
+          citationIds: ["source-1"],
+          supportingSourceIds: ["source-1"],
+        }
+      : section,
+  );
+  const document = buildFormalReportDocument(reviewWorkspace);
+  assert.equal(
+    document.integrity.citationMappingIssues.some((issue) =>
+      issue.startsWith("final_stated_source_count_exceeds_citations:60:"),
+    ),
+    false,
+  );
+});
+
+test("formal idea ledger preserves distinct traceable limitations within one theme", () => {
+  const distinctWorkspace = workspace("limited_evidence_brief");
+  distinctWorkspace.draft.sections = distinctWorkspace.draft.sections.map((section) =>
+    section.sectionId === "limitations"
+      ? {
+          ...section,
+          body: "第一份研究是空間觀察，因此不能單獨排除土地使用干擾 [S1]。第二份研究顯示鋪面與建築排列共同影響熱暴露，因此不能只用單一綠覆比例解釋 [S2]。",
+          synthesizedProseZhTw: "第一份研究是空間觀察，因此不能單獨排除土地使用干擾 [S1]。第二份研究顯示鋪面與建築排列共同影響熱暴露，因此不能只用單一綠覆比例解釋 [S2]。",
+          citationIds: ["source-1", "source-2"],
+          supportingSourceIds: ["source-1", "source-2"],
+        }
+      : section,
+  );
+  const document = buildFormalReportDocument(distinctWorkspace);
+  const limitationText = document.limitations.blocks.map((block) => block.text).join("");
+  assert.match(limitationText, /不能單獨排除土地使用干擾/u);
+  assert.match(limitationText, /不能只用單一綠覆比例解釋/u);
+});
+
 test("complete and limited reports are explicit document variants", () => {
   const complete = buildFormalReportDocument(workspace("complete_research_report"));
   const limited = buildFormalReportDocument(workspace("limited_evidence_brief"));
@@ -787,13 +926,15 @@ test("Markdown, DOCX, and print HTML consume the same formal document", async ()
 
   for (const output of [markdown, html, documentXml]) {
     assert.match(output, /研究問題與核心回答/u);
-    assert.match(output, /參考文獻/u);
+    assert.match(output, /資料來源/u);
     assert.match(output, /結論/u);
     assert.match(output, /研究問題四要素的證據覆蓋與交集/u);
-    assert.match(output, /Chen, 2024/u);
-    assert.doesNotMatch(output, /\[\d+\]/u);
     assert.doesNotMatch(output, /\[S\d+\]|\{s\d+\}|source_\d+|citation_\d+/iu);
   }
+  assert.match(markdown, /\[〔\d+(?:–\d+)?〕\]\(#rf-reference-/u);
+  assert.match(html, /<span class="citation-cluster"><a href="#rf-reference-[^"]+">〔\d+(?:–\d+)?〕<\/a><\/span>/u);
+  assert.doesNotMatch(documentXml, /w:vertAlign w:val="superscript"/u);
+  assert.match(documentXml, /<w:hyperlink[^>]*w:anchor="rf-reference-/u);
   assert.match(markdown, /附錄：來源治理與逐來源核對/u);
   assert.match(markdown, /\| 來源 \| 研究脈絡／資料層級/u);
   assert.match(html, /class="rf-table"/u);
@@ -870,9 +1011,10 @@ test("six semantic visual families render from semanticData in HTML and DOCX", a
   const documentXml = await zip.file("word/document.xml")?.async("string") ?? "";
   const pngMedia = Object.keys(zip.files).filter((path) => /^word\/media\/[^/]+\.png$/u.test(path));
 
-  assert.equal(pngMedia.length, 6, "DOCX must embed one deterministic PNG drawing per semantic visual");
-  assert.equal((documentXml.match(/<w:drawing>/gu) ?? []).length, 6);
-  assert.equal((documentXml.match(/圖形資料：/gu) ?? []).length, 6);
+  assert.equal(pngMedia.length, 5, "DOCX uses five drawings and one publication table for six semantic visuals");
+  assert.equal((documentXml.match(/<w:drawing>/gu) ?? []).length, 5);
+  assert.match(documentXml, />獨立面板</u);
+  assert.equal((documentXml.match(/圖形資料：/gu) ?? []).length, 5);
   assert.doesNotMatch(documentXml, /可核對的圖形資料（文字 fallback）/u);
   const semanticVisualRows = [
     "獨立面板",
@@ -883,8 +1025,8 @@ test("six semantic visual families render from semanticData in HTML and DOCX", a
     "適用群體／情境",
   ];
   assert.ok(
-    semanticVisualRows.every((label) => !new RegExp(`<w:t[^>]*>${label}</w:t>`, "u").test(documentXml)),
-    "semantic drawings must not reappear as six extra body tables",
+    semanticVisualRows.slice(1).every((label) => !new RegExp(`<w:t[^>]*>${label}</w:t>`, "u").test(documentXml)),
+    "the five semantic drawings must not reappear as extra body tables",
   );
   for (const path of pngMedia) {
     const bytes = await zip.file(path)!.async("uint8array");
@@ -942,7 +1084,7 @@ test("unsupported location and method claims are excluded instead of reassigned 
   ));
 });
 
-test("complete DOCX uses a readable static TOC, page fields, and DOI hyperlinks", async () => {
+test("complete DOCX uses an updateable TOC, page fields, and DOI hyperlinks", async () => {
   const result = workspace("complete_research_report");
   const report = workspaceToGeneratedReport(result);
   const html = buildPrintHtml(report, result.input, DEFAULT_REPORT_PRESENTATION);
@@ -955,9 +1097,11 @@ test("complete DOCX uses a readable static TOC, page fields, and DOI hyperlinks"
   const relationshipsXml = await zip.file("word/_rels/document.xml.rels")?.async("string") ?? "";
   const footerXml = await zip.file("word/footer1.xml")?.async("string") ?? "";
 
-  assert.doesNotMatch(documentXml, /TOC \\h \\o/u);
-  assert.match(documentXml, />01　摘要與關鍵詞</u);
-  assert.match(documentXml, />09　參考文獻</u);
+  assert.match(documentXml, /TOC \\h \\o &quot;1-3&quot;/u);
+  assert.match(documentXml, />摘要與關鍵詞</u);
+  assert.match(documentXml, />附錄：來源治理與逐來源核對</u);
+  assert.match(documentXml, />資料來源</u);
+  assert.ok(documentXml.indexOf("附錄：來源治理與逐來源核對") < documentXml.lastIndexOf("資料來源"));
   assert.match(relationshipsXml, /Target="https:\/\/doi\.org\/10\.1000\/formal-1"/u);
   assert.match(footerXml, />PAGE</u);
   assert.match(footerXml, />NUMPAGES</u);

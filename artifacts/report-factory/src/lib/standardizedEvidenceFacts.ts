@@ -14,12 +14,21 @@ export type EvidenceDirection =
   | "difference"
   | "not_reported";
 
+export interface StudyDesignExtraction {
+  value: string;
+  sourceSpan: string;
+  sourceId: string;
+  confidence: number;
+  extractionLevel: "full_text_methods" | "abstract" | "structured_metadata" | "title" | "inference";
+}
+
 export interface StandardizedNumericalResult {
   resultId: string;
   factId: string;
   sourceId: string;
   sourceIdentity: string;
   evidenceId: string;
+  claimId: string;
   /** Scalar value when the source reports one; null for a range. */
   value: number | null;
   lowerBound: number | null;
@@ -28,13 +37,29 @@ export interface StandardizedNumericalResult {
   displayValue: string;
   unit: string;
   metric: string;
+  metricName: string;
   statisticType: string;
+  metricType: string;
   resultRole: "outcome" | "exposure" | "baseline" | "statistic";
   direction: EvidenceDirection;
   comparisonBasis: string | null;
+  exposure: string | null;
+  outcome: string | null;
+  comparison: string | null;
+  population: string | null;
+  sampleSize: number | null;
+  denominator: number | null;
+  ciLower: number | null;
+  ciUpper: number | null;
+  pValue: number | null;
+  timeContext: string | null;
+  sourceSpan: string;
   uncertainty: string | null;
   comparabilityKey: string;
+  comparableGroupId: string;
   isComparable: boolean;
+  aggregationAllowed: boolean;
+  researchQuestionRelevanceScore?: number;
   sourceField: "exactResult" | "numericResult";
   supportingText: string;
   locator: string;
@@ -58,6 +83,8 @@ export interface StandardizedEvidenceFact {
   sampleSize: number | null;
   geography: string | null;
   studyDesign: string | null;
+  reportedDesign: StudyDesignExtraction | null;
+  inferredDesign: StudyDesignExtraction | null;
   exposureConcept: string | null;
   exposureMeasure: string | null;
   outcomeConcept: string | null;
@@ -204,6 +231,38 @@ function inferUncertainty(sentence: string): string | null {
   ]);
 }
 
+function explicitDenominator(value: string): number | null {
+  const match = value.match(/\bn\s*=\s*(\d{1,7})\b/iu);
+  if (!match?.[1]) return null;
+  const parsed = Number(match[1]);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function inferTimeContext(value: string): string | null {
+  return firstMatch(value, [
+    /(?:last|final)\s+(?:hour|night|week|month|year)[^,.;，。；]{0,36}/iu,
+    /(?:before|after)\s+(?:sleep|bedtime|intervention)[^,.;，。；]{0,36}/iu,
+    /(?:follow[- ]?up|追蹤)\s*(?:of|for|期間為)?\s*\d+(?:\.\d+)?\s*(?:days?|weeks?|months?|years?|日|週|月|年)/iu,
+    /(?:睡前|介入後|過去)\s*\d+(?:\.\d+)?\s*(?:小時|日|週|月|年)/u,
+  ]);
+}
+
+function localEffectLabel(sentence: string, startIndex: number): string | null {
+  const prefix = sentence.slice(0, Math.max(0, startIndex))
+    .replace(/[（(]\s*$/u, "")
+    .trim();
+  const clause = prefix.split(/(?:^|[.;；。]|\band\b|\bwhile\b|\bthat\b)\s*/iu).filter(Boolean).at(-1) ?? prefix;
+  const label = compact(clause)
+    .replace(/^(?:although|however)\s+/iu, "")
+    .replace(/^(?:higher|lower|greater|increased|decreased)\s+/iu, "")
+    .replace(/\s+(?:negatively|positively|significantly|was|were|is|are|emerged\s+as\s+a\s+significant\s+(?:negative|positive))?\s*(?:predicted|predicts?|predictor|correlated|associated)[\s\S]*$/iu, "")
+    .replace(/\s+(?:did|does|was|were)\s+not\s*$/iu, "")
+    .replace(/^the\s+/iu, "")
+    .replace(/YIAT-SF scores?$/iu, "YIAT-SF score")
+    .trim();
+  return label || null;
+}
+
 interface NumericCandidate {
   rawValue: string;
   value: number | null;
@@ -258,7 +317,61 @@ function numericCandidates(sentence: string): NumericCandidate[] {
     });
   }
 
-  const correlationPattern = /r\s*=\s*(-?0?\.\d+)\s*,\s*(-?0?\.\d+)\s*,\s*(-?0?\.\d+)/iu;
+  const plainOddsRatioPattern = /\b(?:adjusted\s+)?OR\s*=?\s*(\d+(?:\.\d+)?)/giu;
+  for (const match of sentence.matchAll(plainOddsRatioPattern)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    if (occupied.some(([left, right]) => start >= left && end <= right)) continue;
+    const value = Number(match[1]);
+    if (!Number.isFinite(value)) continue;
+    const rawValue = compact(match[0]);
+    occupied.push([start, end]);
+    candidates.push({
+      rawValue,
+      value,
+      lowerBound: null,
+      upperBound: null,
+      unit: "OR",
+      displayValue: `OR = ${value}`,
+      metric: /(?:poor sleep|sleep quality|睡眠不佳|睡眠品質)/iu.test(sentence)
+        ? "poor_sleep_odds"
+        : "reported_odds",
+      statisticType: "odds_ratio",
+      resultRole: "statistic",
+      comparisonBasis: localEffectLabel(sentence, start),
+      uncertainty: inferUncertainty(sentence),
+      startIndex: start,
+    });
+  }
+
+  const betaPattern = /(?:\u03b2|beta)\s*=\s*([−-]?\d+(?:\.\d+)?)/giu;
+  for (const match of sentence.matchAll(betaPattern)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    if (occupied.some(([left, right]) => start >= left && end <= right)) continue;
+    const value = Number(match[1]?.replace("−", "-"));
+    if (!Number.isFinite(value)) continue;
+    const rawValue = compact(match[0]);
+    occupied.push([start, end]);
+    candidates.push({
+      rawValue,
+      value,
+      lowerBound: null,
+      upperBound: null,
+      unit: "beta",
+      displayValue: `\u03b2 = ${value}`,
+      metric: /(?:sleep quality|睡眠品質)/iu.test(sentence)
+        ? "sleep_quality_regression"
+        : "reported_regression",
+      statisticType: "regression_coefficient",
+      resultRole: "statistic",
+      comparisonBasis: localEffectLabel(sentence, start),
+      uncertainty: inferUncertainty(sentence),
+      startIndex: start,
+    });
+  }
+
+  const correlationPattern = /r\s*=\s*([−-]?0?\.\d+)\s*,\s*([−-]?0?\.\d+)\s*,\s*([−-]?0?\.\d+)/iu;
   const correlationMatch = sentence.match(correlationPattern);
   if (correlationMatch && correlationMatch.index != null) {
     occupied.push([correlationMatch.index, correlationMatch.index + correlationMatch[0].length]);
@@ -266,7 +379,7 @@ function numericCandidates(sentence: string): NumericCandidate[] {
       ? ["短影音成癮—睡眠品質", "短影音成癮—社交焦慮", "睡眠品質—社交焦慮"]
       : ["變項 1—變項 2", "變項 1—變項 3", "變項 2—變項 3"];
     correlationMatch.slice(1, 4).forEach((raw, index) => {
-      const value = Number(raw);
+      const value = Number(raw.replace("−", "-"));
       if (!Number.isFinite(value)) return;
       seen.add(raw);
       candidates.push({
@@ -285,11 +398,11 @@ function numericCandidates(sentence: string): NumericCandidate[] {
       });
     });
   }
-  for (const match of sentence.matchAll(/\br\s*=\s*(-?0?\.\d+)/giu)) {
+  for (const match of sentence.matchAll(/\br\s*=\s*([−-]?0?\.\d+)/giu)) {
     const start = match.index ?? 0;
     const end = start + match[0].length;
     if (occupied.some(([left, right]) => start >= left && end <= right)) continue;
-    const value = Number(match[1]);
+    const value = Number(match[1]?.replace("−", "-"));
     if (!Number.isFinite(value)) continue;
     const rawValue = compact(match[0]);
     occupied.push([start, end]);
@@ -303,7 +416,7 @@ function numericCandidates(sentence: string): NumericCandidate[] {
       metric: "correlation_structure",
       statisticType: "correlation_coefficient",
       resultRole: "statistic",
-      comparisonBasis: firstMatch(sentence.slice(0, start), [
+      comparisonBasis: localEffectLabel(sentence, start) ?? firstMatch(sentence.slice(0, start), [
         /[^；;。]{1,48}(?:與|—|-)[^；;。]{1,48}$/u,
       ]),
       uncertainty: firstMatch(sentence, [/P\s*[<=>]\s*0?\.\d+/iu]),
@@ -331,6 +444,32 @@ function numericCandidates(sentence: string): NumericCandidate[] {
       resultRole: "outcome",
       uncertainty: `SD ${sd}`,
       startIndex: match.index ?? 0,
+    });
+  }
+
+  const meanDurationPattern = /(?:average|mean)\s+([^.;]{0,48}?)\s+(?:was|were|is|of)\s+(\d+(?:\.\d+)?)\s*(h(?:ours?)?(?:\s+per\s+day|\/day)?)/giu;
+  for (const match of sentence.matchAll(meanDurationPattern)) {
+    const value = Number(match[2]);
+    if (!Number.isFinite(value)) continue;
+    const start = match.index ?? 0;
+    const valueStart = start + match[0].lastIndexOf(match[2]);
+    if (occupied.some(([left, right]) => valueStart >= left && valueStart < right)) continue;
+    const unit = /per\s+day|\/day/iu.test(match[3] ?? "") ? "h/day" : "h";
+    const rawValue = `${match[2]} ${unit}`;
+    occupied.push([valueStart, valueStart + match[2].length]);
+    candidates.push({
+      rawValue,
+      value,
+      lowerBound: null,
+      upperBound: null,
+      unit,
+      displayValue: rawValue,
+      metric: "mean_daily_screen_time",
+      statisticType: "mean_duration",
+      resultRole: "exposure",
+      comparisonBasis: compact(match[1]) || "screen time",
+      uncertainty: null,
+      startIndex: valueStart,
     });
   }
 
@@ -580,6 +719,7 @@ function buildNumericalResults(input: {
         sourceId: input.source.id,
         sourceIdentity: input.sourceIdentity,
         evidenceId: evidenceId(input.card),
+        claimId: input.card.claimIds?.[0] ?? input.factId,
         value: candidate.value,
         lowerBound: candidate.lowerBound,
         upperBound: candidate.upperBound,
@@ -591,13 +731,34 @@ function buildNumericalResults(input: {
         ),
         unit: candidate.unit,
         metric: candidateMetric,
+        metricName: candidateMetric,
         statisticType,
+        metricType: statisticType,
         resultRole: role,
         direction,
         comparisonBasis: candidateComparisonBasis,
+        exposure: compact(input.card.exposure) || inferExposure(input.exactResult) ||
+          (["odds_ratio", "regression_coefficient", "correlation_coefficient", "mean_duration"]
+              .includes(statisticType)
+            ? candidateComparisonBasis
+            : null),
+        outcome: compact(input.card.outcome) || inferOutcome(input.exactResult),
+        comparison: candidateComparisonBasis,
+        population: inferPopulationOrObject(input.exactResult),
+        sampleSize: inferSampleSize(input.exactResult),
+        denominator: candidate.unit === "%"
+          ? explicitDenominator(sentence) ?? explicitDenominator(input.exactResult) ?? inferSampleSize(input.exactResult)
+          : null,
+        ciLower: candidate.lowerBound,
+        ciUpper: candidate.upperBound,
+        pValue: statisticType === "p_value" ? candidate.value : inferPValue(sentence),
+        timeContext: inferTimeContext(sentence),
+        sourceSpan: sentence,
         uncertainty: candidateUncertainty,
         comparabilityKey,
+        comparableGroupId: comparabilityKey,
         isComparable: false,
+        aggregationAllowed: false,
         sourceField: "exactResult" as const,
         supportingText: sentence,
         locator: input.locator,
@@ -611,6 +772,7 @@ function buildNumericalResults(input: {
   return results.map((result) => ({
     ...result,
     isComparable: (counts.get(result.comparabilityKey) ?? 0) > 1,
+    aggregationAllowed: (counts.get(result.comparabilityKey) ?? 0) > 1,
   }));
 }
 
@@ -674,6 +836,91 @@ function inferDesign(text: string): string | null {
   ]);
 }
 
+const REPORTED_DESIGN_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
+  ["randomized controlled trial", /\b(?:randomi[sz]ed controlled trial|RCT)\b/iu],
+  ["cross-sectional", /\bcross[- ]sectional(?: study)?\b|橫斷(?:式|面)?研究?/iu],
+  ["longitudinal", /\blongitudinal(?: study)?\b|縱貫(?:式|面)?研究?/iu],
+  ["cohort", /\bcohort(?: study)?\b|世代研究/iu],
+  ["systematic review", /\bsystematic review\b|系統性回顧/iu],
+  ["meta-analysis", /\bmeta[- ]analysis\b|統合分析/iu],
+  ["descriptive correlational", /\bdescriptive correlational(?: study)?\b|描述性相關研究/iu],
+];
+
+function reportedDesignInText(value: string): { value: string; sourceSpan: string } | null {
+  for (const [design, pattern] of REPORTED_DESIGN_PATTERNS) {
+    const match = value.match(pattern);
+    if (match?.[0]) return { value: design, sourceSpan: compact(match[0]) };
+  }
+  return null;
+}
+
+function studyDesignExtractions(input: {
+  source: SourceRecord;
+  card: EvidenceCard;
+}): { reported: StudyDesignExtraction | null; inferred: StudyDesignExtraction | null } {
+  const methodsSections = (input.source.extractedSections ?? [])
+    .filter((section) => /methods?|methodology|方法|研究設計/iu.test(section.heading))
+    .map((section) => section.text);
+  for (const text of methodsSections) {
+    const match = reportedDesignInText(text);
+    if (match) return {
+      reported: {
+        ...match,
+        sourceId: input.source.id,
+        confidence: 0.99,
+        extractionLevel: "full_text_methods",
+      },
+      inferred: null,
+    };
+  }
+  const abstractMatch = reportedDesignInText(compact(input.source.abstract));
+  if (abstractMatch) return {
+    reported: {
+      ...abstractMatch,
+      sourceId: input.source.id,
+      confidence: 0.95,
+      extractionLevel: "abstract",
+    },
+    inferred: null,
+  };
+  const structured = reportedDesignInText(compact(input.card.studyDesign));
+  if (structured) return {
+    reported: {
+      ...structured,
+      sourceId: input.source.id,
+      confidence: 0.9,
+      extractionLevel: "structured_metadata",
+    },
+    inferred: null,
+  };
+  const titleMatch = reportedDesignInText(input.source.title);
+  if (titleMatch) return {
+    reported: {
+      ...titleMatch,
+      sourceId: input.source.id,
+      confidence: 0.82,
+      extractionLevel: "title",
+    },
+    inferred: null,
+  };
+  const inferenceText = compact(`${input.source.abstract ?? ""} ${factText(input.card)}`);
+  const inferredValue = /\b(?:questionnaire|surveyed?|single[- ]time assessment)\b|問卷|單次量測/iu.test(inferenceText)
+    ? "cross-sectional"
+    : null;
+  return {
+    reported: null,
+    inferred: inferredValue
+      ? {
+          value: inferredValue,
+          sourceSpan: firstMatch(inferenceText, [/[^.。；]{0,60}(?:questionnaire|surveyed?|single[- ]time assessment|問卷|單次量測)[^.。；]{0,60}/iu]) ?? inferenceText.slice(0, 120),
+          sourceId: input.source.id,
+          confidence: 0.55,
+          extractionLevel: "inference",
+        }
+      : null,
+  };
+}
+
 function inferAgeGroup(text: string): string | null {
   if (/(?:senior high school students?|high school students?|recruited from (?:three |\d+ )?high schools?|高中生)/iu.test(text)) return "高中生";
   if (/(?:secondary school students?|中學生)/iu.test(text)) return "中學生";
@@ -684,7 +931,7 @@ function inferAgeGroup(text: string): string | null {
 }
 
 function inferSampleSize(text: string): number | null {
-  const match = text.match(
+  const match = text.match(/\bn\s*=\s*(\d{2,6})\b/iu) ?? text.match(
     /(?:participants?\s+(?:included|comprised)|survey(?:ed|ing)?|conducted on|recruited(?: from)?|sample of|共納入|招募|調查)\s*(\d{2,6})\s*(?:participants?|students?|adolescents?|children|名)?/iu,
   ) ?? text.match(/\b(\d{2,6})\s+(?:senior high school students?|high school students?|secondary school students?|college students?|university students?|adolescents?|participants?)\b/iu);
   if (!match) return null;
@@ -780,6 +1027,7 @@ export function buildStandardizedEvidenceFacts(
     const method = inferMethod(searchText);
     const design = compact(card.studyDesign) || inferDesign(searchText);
     const directness = card.evidenceDirectnessTier ?? source.researchDirectnessTier ?? "C";
+    const designExtractions = studyDesignExtractions({ source, card });
     const limitations = unique([
       ...(card.limitationsZhTw ?? []),
       ...(card.limitations ?? []),
@@ -801,7 +1049,9 @@ export function buildStandardizedEvidenceFacts(
       ageGroup: inferAgeGroup(searchText),
       sampleSize: inferSampleSize(searchText),
       geography: location,
-      studyDesign: design,
+      studyDesign: designExtractions.reported?.value ?? null,
+      reportedDesign: designExtractions.reported,
+      inferredDesign: designExtractions.inferred,
       exposureConcept: inferExposureConcept(searchText),
       exposureMeasure: inferExposureMeasure(searchText),
       outcomeConcept: inferOutcomeConcept(searchText),
@@ -929,6 +1179,7 @@ export function buildStandardizedEvidenceFactsFromNormalizedPlan(
             sourceId: source.id,
             sourceIdentity,
             evidenceId: fact.evidenceId,
+            claimId: fact.factId,
             value: result.value,
             lowerBound: result.lowerCI ?? null,
             upperBound: result.upperCI ?? null,
@@ -936,13 +1187,28 @@ export function buildStandardizedEvidenceFactsFromNormalizedPlan(
             displayValue: rawValue,
             unit: compact(result.unit ?? fact.unit),
             metric,
+            metricName: metric,
             statisticType,
+            metricType: statisticType,
             resultRole: statisticType === "reported_value" ? "outcome" : "statistic",
             direction,
             comparisonBasis: result.comparisonBasis ?? null,
+            exposure: fact.exposure ?? fact.exposureConcept ?? null,
+            outcome: fact.outcome ?? fact.outcomeConcept ?? null,
+            comparison: result.comparisonBasis ?? null,
+            population: fact.population ?? null,
+            sampleSize: fact.sampleSize ?? null,
+            denominator: result.unit === "%" ? fact.sampleSize ?? null : null,
+            ciLower: result.lowerCI ?? null,
+            ciUpper: result.upperCI ?? null,
+            pValue: result.pValue ?? fact.pValue ?? null,
+            timeContext: inferTimeContext(exactResult),
+            sourceSpan: exactResult,
             uncertainty: compact(result.uncertainty ?? fact.uncertainty) || null,
             comparabilityKey: compact(fact.comparabilityKey) || `fact:${fact.factId}`,
+            comparableGroupId: compact(fact.comparabilityKey) || `fact:${fact.factId}`,
             isComparable: false,
+            aggregationAllowed: false,
             sourceField: "exactResult",
             supportingText,
             locator: compact(fact.locator) || "可核對內容摘錄",
@@ -968,6 +1234,16 @@ export function buildStandardizedEvidenceFactsFromNormalizedPlan(
         sampleSize: fact.sampleSize ?? null,
         geography: fact.geography ?? fact.location ?? null,
         studyDesign: fact.studyDesign ?? fact.method ?? null,
+        reportedDesign: fact.studyDesign || fact.method
+          ? {
+              value: fact.studyDesign ?? fact.method ?? "",
+              sourceSpan: exactResult,
+              sourceId: source.id,
+              confidence: fact.extractionConfidence ?? fact.confidence ?? 0.9,
+              extractionLevel: "structured_metadata",
+            }
+          : null,
+        inferredDesign: null,
         exposureConcept: fact.exposureConcept ?? fact.exposure ?? null,
         exposureMeasure: fact.exposureMeasure ?? null,
         outcomeConcept: fact.outcomeConcept ?? fact.outcome ?? null,
@@ -1014,6 +1290,7 @@ export function buildStandardizedEvidenceFactsFromNormalizedPlan(
       numericalResults: fact.numericalResults.map((result) => ({
         ...result,
         isComparable: (comparabilitySourceCounts.get(result.comparabilityKey)?.size ?? 0) >= 2,
+        aggregationAllowed: (comparabilitySourceCounts.get(result.comparabilityKey)?.size ?? 0) >= 2,
       })),
     }))
     .sort((left, right) =>
@@ -1036,7 +1313,68 @@ export function auditStandardizedEvidenceFacts(
       if (!result.sourceId || !result.evidenceId || !result.locator) {
         issues.push(`numeric_result_missing_provenance:${result.resultId}`);
       }
+      if (!result.claimId || !result.metricName || !result.metricType || !result.sourceSpan) {
+        issues.push(`numeric_result_missing_semantics:${result.resultId}`);
+      }
+      if (result.unit === "%" && result.denominator == null && result.sampleSize != null) {
+        issues.push(`numeric_result_missing_denominator:${result.resultId}`);
+      }
     }
   }
   return unique(issues).sort();
+}
+
+function relevanceTokens(value: string): Set<string> {
+  const normalized = value.toLocaleLowerCase()
+    .replace(/螢幕|屏幕/gu, " screen ")
+    .replace(/睡前/gu, " pre-sleep screen ")
+    .replace(/睡眠/gu, " sleep ")
+    .replace(/綠地/gu, " green space ")
+    .replace(/心理健康/gu, " mental health ")
+    .replace(/心肺適能/gu, " vo2 cardiorespiratory fitness ")
+    .replace(/減重|體重/gu, " weight loss body weight ");
+  return new Set(normalized.match(/[a-z][a-z0-9-]{2,}|[\u3400-\u9fff]{2,}/gu) ?? []);
+}
+
+function quantitativeRelevanceScore(
+  result: StandardizedNumericalResult,
+  researchQuestion: string,
+): number {
+  const question = relevanceTokens(researchQuestion);
+  const candidate = relevanceTokens([
+    result.metricName,
+    result.exposure,
+    result.outcome,
+    result.comparison,
+    result.sourceSpan,
+  ].filter(Boolean).join(" "));
+  const overlap = [...candidate].filter((token) => question.has(token)).length;
+  const typeScore = result.metricType === "p_value"
+    ? -50
+    : /odds_ratio|regression_coefficient|correlation_coefficient|risk_ratio|hazard_ratio/iu.test(result.metricType)
+      ? 24
+      : /prevalence|mean|group_difference|marginal_change/iu.test(result.metricType)
+        ? 16
+        : 4;
+  return overlap * 12 + typeScore + (result.resultRole === "outcome" ? 8 : 0) +
+    (result.comparison ? 3 : 0);
+}
+
+/** Keeps every traceable fact, but deterministically places RQ-direct results first. */
+export function prioritizeStandardizedEvidenceFacts(
+  facts: StandardizedEvidenceFact[],
+  researchQuestion: string,
+): StandardizedEvidenceFact[] {
+  return facts.map((fact) => ({
+    ...fact,
+    numericalResults: fact.numericalResults
+      .map((result) => ({
+        ...result,
+        researchQuestionRelevanceScore: quantitativeRelevanceScore(result, researchQuestion),
+      }))
+      .sort((left, right) =>
+        (right.researchQuestionRelevanceScore ?? 0) - (left.researchQuestionRelevanceScore ?? 0) ||
+        left.resultId.localeCompare(right.resultId),
+      ),
+  }));
 }

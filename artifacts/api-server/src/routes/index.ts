@@ -12,6 +12,8 @@ import researchGroundingJobsRouter from "./research-grounding-jobs";
 import llmRouter from "./llm";
 import paperSearchRouter from "./paper-search";
 import reportExportsRouter from "./report-exports";
+import researchProductWorkflowRouter from "./research-product-workflow";
+import { createExistingReportVerificationRouter } from "./existing-report-verification";
 
 const router: IRouter = Router();
 
@@ -28,6 +30,8 @@ router.use(researchGroundingJobsRouter);
 router.use(llmRouter);
 router.use(paperSearchRouter);
 router.use(reportExportsRouter);
+router.use(researchProductWorkflowRouter);
+router.use("/research-product", createExistingReportVerificationRouter());
 router.use((_req, res) => {
   res.status(404).json({
     code: "NOT_FOUND",

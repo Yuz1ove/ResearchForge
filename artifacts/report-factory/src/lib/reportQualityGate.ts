@@ -188,6 +188,26 @@ export interface QualityGateStructuralIssue {
   penalty?: number;
 }
 
+export interface QualityGateLongReportEvidence {
+  requested: boolean;
+  canonicalBodyCjk: number;
+  supportedFactualCjk: number;
+  supportedSynthesisCjk: number;
+  supportedEvidenceBearingCjk: number;
+  evidenceBearingRatio: number;
+  duplicateRatio: number;
+  unsupportedFactualClaimCount: number;
+  minimumCanonicalBodyCjk: number;
+  minimumSupportedEvidenceBearingCjk: number;
+  minimumEvidenceBearingRatio: number;
+  maximumDuplicateRatio: number;
+  centralAnswerAligned: boolean;
+  conclusionAligned: boolean;
+  allConclusionClaimsRealizedInBody: boolean;
+  conclusionClaimNovelty: number;
+  thresholdsDerivedFromFixtureIds: readonly string[];
+}
+
 export interface ReportQualityGateInput {
   facts?: readonly QualityGateFact[];
   claims?: readonly QualityGateClaim[];
@@ -198,6 +218,7 @@ export interface ReportQualityGateInput {
   formatParity?: QualityGateFormatParityAudit | null;
   audienceArchetype?: QualityGateAudienceArchetypeAudit | null;
   structuralIssues?: readonly QualityGateStructuralIssue[];
+  longReportEvidence?: QualityGateLongReportEvidence | null;
   limitedEvidence?: boolean;
   reportArchetype?: string | null;
   retryCount?: number;
@@ -330,6 +351,44 @@ function detectFailures(input: ReportQualityGateInput): DetectedFailure[] {
       blocksExport,
     });
   };
+
+  const longReport = input.longReportEvidence;
+  if (longReport?.requested) {
+    if (longReport.thresholdsDerivedFromFixtureIds.length < 2) {
+      add(
+        "evidence_integrity",
+        "evidence",
+        "report:long-report-thresholds",
+        "長報告門檻缺少至少兩個 accepted fixture 的推導紀錄。",
+      );
+    }
+    if (longReport.canonicalBodyCjk < longReport.minimumCanonicalBodyCjk) {
+      add("coherence", "coherence", "report:long-report-length", "Canonical 正文低於由 accepted fixtures 推導的長報告門檻。");
+    }
+    if (
+      longReport.supportedEvidenceBearingCjk <
+        longReport.minimumSupportedEvidenceBearingCjk ||
+      longReport.evidenceBearingRatio < longReport.minimumEvidenceBearingRatio
+    ) {
+      add("evidence_integrity", "evidence", "report:evidence-bearing-content", "可追溯 factual 與 synthesis 內容低於長報告證據承載門檻。");
+    }
+    if (longReport.duplicateRatio > longReport.maximumDuplicateRatio) {
+      add("coherence", "repetition", "report:duplicate-content", "語意重複內容超過 accepted fixture 分布允許值。");
+    }
+    if (longReport.unsupportedFactualClaimCount !== 0) {
+      add("evidence_integrity", "evidence", "report:unsupported-factual-claims", "長報告含有未被驗證證據支持的 factual claim。");
+    }
+    if (!longReport.centralAnswerAligned) {
+      add("coherence", "coherence", "report:central-answer", "正文未實現 deterministic Central Answer Contract。");
+    }
+    if (
+      !longReport.conclusionAligned ||
+      !longReport.allConclusionClaimsRealizedInBody ||
+      longReport.conclusionClaimNovelty !== 0
+    ) {
+      add("coherence", "coherence", "report:conclusion-closure", "結論含有正文未實現、未閉合或新增的 substantive claim。");
+    }
+  }
 
   for (const fact of facts) {
     const factLocation = location("fact", fact.factId, fact.location);
@@ -821,4 +880,179 @@ export class ReportQualityGate {
       passScore: input.passScore ?? this.passScore,
     });
   }
+}
+
+export interface QualityRetryAttemptAudit {
+  attempt: number;
+  retryStage: QualityRetryStage | "limited_evidence_downgrade";
+  dimensions: ReportQualityDimension[];
+  failureLocations: string[];
+  beforePassed: boolean;
+  afterPassed: boolean;
+  changed: boolean;
+  diagnostics: string[];
+}
+
+export interface ReportQualityRetryOrchestratorInput<State> {
+  initialState: State;
+  buildGateInput: (state: State) => ReportQualityGateInput | Promise<ReportQualityGateInput>;
+  repairStage: (input: {
+    state: State;
+    instruction: QualityRetryInstruction;
+    attempt: number;
+  }) => State | Promise<State>;
+  downgradeToLimitedBrief?: (input: {
+    state: State;
+    quality: ReportQualityGateResult;
+  }) => State | Promise<State>;
+  maxRetries?: number;
+  passScore?: number;
+}
+
+export interface ReportQualityRetryOrchestratorResult<State> {
+  state: State;
+  quality: ReportQualityGateResult;
+  attempts: QualityRetryAttemptAudit[];
+  exportAllowed: boolean;
+  terminalReason:
+    | "passed"
+    | "passed_after_limited_evidence_downgrade"
+    | "retry_exhausted"
+    | "no_retryable_stage"
+    | "repeated_failure_without_progress";
+}
+
+function qualityFailureSignature(quality: ReportQualityGateResult): string {
+  return quality.retryPlan.map((instruction) => [
+    instruction.retryStage,
+    ...instruction.dimensions,
+    ...instruction.failureLocations,
+    ...instruction.reasons,
+  ].join("|")).join("\n");
+}
+
+function blockingDimensions(quality: ReportQualityGateResult): ReportQualityDimension[] {
+  return REPORT_QUALITY_DIMENSIONS.filter((dimension) => quality.dimensions[dimension].blocksExport);
+}
+
+/**
+ * Runs the quality gate as an actual repair loop. Upstream stages stay injected
+ * as callbacks so the orchestrator can rerun extraction, citation mapping,
+ * planning, model writing, visual routing or export without duplicating those
+ * implementations. Every repair is re-audited before another stage may run.
+ */
+export async function orchestrateReportQualityRetries<State>(
+  input: ReportQualityRetryOrchestratorInput<State>,
+): Promise<ReportQualityRetryOrchestratorResult<State>> {
+  const maxRetries = boundedInteger(input.maxRetries, DEFAULT_QUALITY_GATE_MAX_RETRIES);
+  const passScore = boundedScore(input.passScore, DEFAULT_QUALITY_GATE_PASS_SCORE);
+  const attempts: QualityRetryAttemptAudit[] = [];
+  let state = input.initialState;
+  let quality = evaluateReportQuality({
+    ...(await input.buildGateInput(state)),
+    retryCount: 0,
+    maxRetries,
+    passScore,
+  });
+  if (quality.passed) {
+    return { state, quality, attempts, exportAllowed: true, terminalReason: "passed" };
+  }
+
+  if (quality.downgradeToLimitedBrief && input.downgradeToLimitedBrief) {
+    const beforeSignature = qualityFailureSignature(quality);
+    state = await input.downgradeToLimitedBrief({ state, quality });
+    quality = evaluateReportQuality({
+      ...(await input.buildGateInput(state)),
+      retryCount: 0,
+      maxRetries,
+      passScore,
+    });
+    attempts.push({
+      attempt: 0,
+      retryStage: "limited_evidence_downgrade",
+      dimensions: blockingDimensions(quality),
+      failureLocations: quality.retryPlan.flatMap((instruction) => instruction.failureLocations),
+      beforePassed: false,
+      afterPassed: quality.passed,
+      changed: beforeSignature !== qualityFailureSignature(quality),
+      diagnostics: ["evidence_limited_report_downgraded_before_repair"],
+    });
+    if (quality.passed) {
+      return {
+        state,
+        quality,
+        attempts,
+        exportAllowed: true,
+        terminalReason: "passed_after_limited_evidence_downgrade",
+      };
+    }
+  }
+
+  const seenSignatures = new Set<string>();
+  for (let retryCount = 0; retryCount < maxRetries; retryCount += 1) {
+    const signature = qualityFailureSignature(quality);
+    if (!signature || quality.retryPlan.length === 0) {
+      return {
+        state,
+        quality,
+        attempts,
+        exportAllowed: false,
+        terminalReason: "no_retryable_stage",
+      };
+    }
+    if (seenSignatures.has(signature)) {
+      return {
+        state,
+        quality,
+        attempts,
+        exportAllowed: false,
+        terminalReason: "repeated_failure_without_progress",
+      };
+    }
+    seenSignatures.add(signature);
+    const instruction = quality.retryPlan.find((item) => item.canRetry);
+    if (!instruction) {
+      return {
+        state,
+        quality,
+        attempts,
+        exportAllowed: false,
+        terminalReason: "no_retryable_stage",
+      };
+    }
+    const beforeQuality = quality;
+    state = await input.repairStage({
+      state,
+      instruction,
+      attempt: retryCount + 1,
+    });
+    quality = evaluateReportQuality({
+      ...(await input.buildGateInput(state)),
+      retryCount: retryCount + 1,
+      maxRetries,
+      passScore,
+    });
+    const changed = qualityFailureSignature(beforeQuality) !== qualityFailureSignature(quality);
+    attempts.push({
+      attempt: retryCount + 1,
+      retryStage: instruction.retryStage,
+      dimensions: instruction.dimensions,
+      failureLocations: instruction.failureLocations,
+      beforePassed: beforeQuality.passed,
+      afterPassed: quality.passed,
+      changed,
+      diagnostics: changed ? ["quality_failure_signature_changed"] : ["repair_made_no_auditable_progress"],
+    });
+    if (quality.passed) {
+      return { state, quality, attempts, exportAllowed: true, terminalReason: "passed" };
+    }
+  }
+
+  return {
+    state,
+    quality,
+    attempts,
+    exportAllowed: false,
+    terminalReason: "retry_exhausted",
+  };
 }

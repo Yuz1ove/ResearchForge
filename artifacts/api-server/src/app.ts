@@ -6,6 +6,7 @@ import { logger } from "./lib/logger";
 import { isAllowedResearchForgeOrigin } from "./config/cors";
 
 const app: Express = express();
+app.disable("x-powered-by");
 
 app.use(
   pinoHttp({

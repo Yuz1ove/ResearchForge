@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">Client request 與 durable research job 的生命週期分離</title><desc id="desc">Client 建立工作後可以停止等待或重新連線，durable job identity、狀態與結果仍保存在伺服器端 repository。</desc>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L9 3z" fill="#5eead4"/></marker><style>text{font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif}.t{fill:#f8fafc;font-size:34px;font-weight:700}.s{fill:#94a3b8;font-size:20px}.b{fill:#13233d;stroke:#5eead4;stroke-width:2}.h{fill:#e2e8f0;font-size:22px;font-weight:650}.d{fill:#94a3b8;font-size:18px}.l{stroke:#5eead4;stroke-width:3;marker-end:url(#a)}.dash{stroke:#64748b;stroke-width:2;stroke-dasharray:10 8}</style></defs>
+  <style>.l,.dash{fill:none}</style><rect width="1200" height="675" rx="28" fill="#08111f"/><text x="72" y="78" class="t">Request Lifetime ≠ Job Lifetime</text><text x="72" y="112" class="s">Transport 可以結束；研究工作仍有可再次查詢的身分。</text>
+  <text x="70" y="205" class="h">Client</text><text x="70" y="405" class="h">Server-side Job</text><path class="dash" d="M60 285h1080"/>
+  <g transform="translate(175 160)"><rect class="b" width="190" height="90" rx="18"/><text class="h" x="95" y="42" text-anchor="middle">建立工作</text><text class="d" x="95" y="68" text-anchor="middle">POST</text></g>
+  <path class="l" d="M365 205h115v235"/><g transform="translate(420 395)"><rect width="260" height="105" rx="20" fill="#143127" stroke="#fbbf24" stroke-width="2"/><text class="h" x="130" y="45" text-anchor="middle">Durable Job ID</text><text class="d" x="130" y="75" text-anchor="middle">state · diagnostics · result</text></g>
+  <g transform="translate(515 160)"><rect class="b" width="190" height="90" rx="18"/><text class="h" x="95" y="42" text-anchor="middle">停止等待</text><text class="d" x="95" y="68" text-anchor="middle">頁面關閉／逾時</text></g>
+  <path d="M610 250v110" stroke="#f87171" stroke-width="3"/><text x="632" y="322" fill="#fca5a5" font-size="18">只結束 client observation</text>
+  <path class="l" d="M680 447h150"/><g transform="translate(830 395)"><rect class="b" width="260" height="105" rx="20"/><text class="h" x="130" y="45" text-anchor="middle">重新取得</text><text class="d" x="130" y="75" text-anchor="middle">依 Job ID 查詢</text></g>
+  <path class="l" d="M960 395V250"/><text x="855" y="205" class="d">reconnect / reload</text><text x="72" y="610" class="s">Durable 保存的是可追蹤狀態，不是內容成功保證。</text>
+</svg>

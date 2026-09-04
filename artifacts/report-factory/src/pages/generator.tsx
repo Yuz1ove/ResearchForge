@@ -24,7 +24,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
@@ -164,6 +163,14 @@ import {
 import { sanitizeReaderFacingInternalLanguage } from "@/lib/reportPreviewGuards";
 import { buildStructuredReportPlan } from "@/lib/structuredReportPlan";
 import {
+  applyUserOutlineToReportPlan,
+  generationStages,
+  mapGenerationFailure,
+  type GenerationFailure,
+  type GenerationRunState,
+  type GenerationStageView,
+} from "@/lib/generationUx";
+import {
   Wand2,
   Loader2,
   Trash2,
@@ -180,12 +187,13 @@ import {
   Search,
   ExternalLink,
   AlertTriangle,
+  Plus,
 } from "lucide-react";
 
 // ─── Default form state ───────────────────────────────────────────────────────
 
 type ReportInputStringKey = {
-  [K in keyof ReportInput]: ReportInput[K] extends string ? K : never;
+  [K in keyof ReportInput]-?: NonNullable<ReportInput[K]> extends string ? K : never;
 }[keyof ReportInput];
 
 type KeywordSearchDebugState = {
@@ -668,6 +676,13 @@ type ReportGenerationDebugState = {
 };
 
 type GeneratorWorkflowStep = "topic" | "search" | "manage" | "generate";
+
+type EditablePlanSection = {
+  sectionId: string;
+  title: string;
+  evidenceCardCount: number;
+  isCustom: boolean;
+};
 
 const INTERNAL_TO_ROUTE_STEP: Record<GeneratorWorkflowStep, GeneratorRouteStep> = {
   topic: "topic_input",
@@ -5209,6 +5224,7 @@ function TopicStepPanel({
 
 function ManageStepPanel({
   sources,
+  evidenceCards,
   hasWorkspaceTopicMismatch,
   researchDepth,
   recommendedAcceptedSourceCount,
@@ -5225,6 +5241,7 @@ function ManageStepPanel({
   showTechnicalDetails,
 }: {
   sources: SourceRecord[];
+  evidenceCards: EvidenceCard[];
   hasWorkspaceTopicMismatch: boolean;
   researchDepth: ReportInput["researchDepth"];
   recommendedAcceptedSourceCount: number;
@@ -5286,6 +5303,99 @@ function ManageStepPanel({
         )}
       </div>
 
+      <section
+        className="rounded-lg border border-border bg-card p-4 shadow-sm"
+        aria-labelledby="accepted-evidence-heading"
+        data-testid="accepted-evidence-workspace"
+      >
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 id="accepted-evidence-heading" className="text-base font-semibold text-foreground">
+              已接受證據
+            </h2>
+            <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
+              Evidence Card 把來源、可用語句與限制分開呈現；找到來源不代表已自動採納。
+            </p>
+          </div>
+          <Badge variant={evidenceCards.length > 0 ? "secondary" : "outline"}>
+            {evidenceCards.length} 張 Evidence Card
+          </Badge>
+        </div>
+        {evidenceCards.length > 0 ? (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {evidenceCards.map((card) => {
+              const source = sources.find((item) => item.id === card.sourceId);
+              const claim = card.claimTextZhTw ?? card.claimText ?? card.mainClaimZhTw ?? card.mainClaim ?? card.claim;
+              const excerpt = card.supportSpans?.[0]?.text ?? card.supportSpan ?? card.supportedByText ?? card.sourceExcerptOriginal ?? card.evidence;
+              const limitations = Array.from(
+                new Set(
+                  [card.limitation, ...(card.limitationsZhTw ?? []), ...(card.limitations ?? [])]
+                    .map((item) => item?.trim())
+                    .filter((item): item is string => Boolean(item)),
+                ),
+              );
+              return (
+                <article key={card.id} className="rounded-md border border-border bg-background p-3.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="secondary">Evidence</Badge>
+                    <Badge variant="outline">{card.citationMarker || card.citationText || "引用待確認"}</Badge>
+                    <Badge variant={card.needsReview || card.needsManualReview ? "outline" : "secondary"}>
+                      {card.needsReview || card.needsManualReview ? "需人工複核" : "可用證據"}
+                    </Badge>
+                  </div>
+                  <h3 className="mt-3 text-sm font-semibold leading-6 text-foreground">
+                    {card.sourceTitle || source?.title || "來源標題待確認"}
+                  </h3>
+                  <div className="mt-3 space-y-3 text-sm leading-6">
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground">CLAIM</p>
+                      <p className="mt-1 text-foreground">{claim || "尚未抽取可用主張。"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground">EVIDENCE EXCERPT</p>
+                      <blockquote className="mt-1 border-l-2 border-primary/40 pl-3 text-foreground/85">
+                        {excerpt || "目前只有來源書目，尚無可核對摘錄。"}
+                      </blockquote>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      <span>{card.sourceLocation || card.pageOrLocation || "位置待確認"}</span>
+                      {typeof card.confidenceScore === "number" ? (
+                        <span>confidence {Math.round(card.confidenceScore * 100)}%</span>
+                      ) : null}
+                      {(card.usableSections ?? card.sectionTargets ?? []).slice(0, 3).map((section) => (
+                        <span key={section} className="rounded border border-border px-1.5 py-0.5">{section}</span>
+                      ))}
+                    </div>
+                    {limitations.length > 0 ? (
+                      <p className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs leading-5 text-amber-900">
+                        限制：{limitations.slice(0, 2).join("；")}
+                      </p>
+                    ) : null}
+                    {source?.url ? (
+                      <a
+                        href={source.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex min-h-[40px] items-center text-xs font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      >
+                        開啟原始來源 <ExternalLink className="ml-1 h-3.5 w-3.5" />
+                      </a>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed border-border bg-muted/20 px-4 py-8 text-center">
+            <h3 className="text-sm font-semibold text-foreground">尚無可用 Evidence Card</h3>
+            <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-muted-foreground">
+              請先接受具有摘要或全文片段的來源。沒有已接受證據時，生成會維持阻擋。
+            </p>
+          </div>
+        )}
+      </section>
+
       <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
         <Button
           type="button"
@@ -5332,7 +5442,14 @@ function GenerateStepPanel({
   generateErrorMessage,
   llmStatus,
   presentation,
+  planSections,
+  generationStageViews,
+  generationFailure,
   onPresentationChange,
+  onPlanTitleChange,
+  onPlanMove,
+  onPlanRemove,
+  onPlanAdd,
   onGenerate,
   onBack,
 }: {
@@ -5352,17 +5469,17 @@ function GenerateStepPanel({
   generateErrorMessage: string | null;
   llmStatus: LlmRuntimeStatus;
   presentation: ReportPresentationSettings;
+  planSections: EditablePlanSection[];
+  generationStageViews: GenerationStageView[];
+  generationFailure: GenerationFailure | null;
   onPresentationChange: (patch: Partial<ReportPresentationSettings>) => void;
+  onPlanTitleChange: (sectionId: string, title: string) => void;
+  onPlanMove: (sectionId: string, direction: -1 | 1) => void;
+  onPlanRemove: (sectionId: string) => void;
+  onPlanAdd: () => void;
   onGenerate: () => void;
   onBack: () => void;
 }) {
-  const progressValue = isGenerating
-    ? 72
-    : canGenerateReport && readiness.canGenerateFull
-      ? 100
-      : canGenerateReport
-        ? 60
-        : Math.min(45, acceptedCount * 9);
   const llmUserStatus = llmStatus.loading
     ? "正在檢查模型"
     : llmStatus.healthOk && llmStatus.smokeOk && llmStatus.modelConfigured
@@ -5446,7 +5563,116 @@ function GenerateStepPanel({
           </div>
         </div>
 
-        <Progress value={progressValue} />
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">報告計畫</h3>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                章節來自現有 evidence-bound planner。調整順序或名稱會送進本次 writer request；自訂章節若沒有證據會保留警告。
+              </p>
+            </div>
+            <Button type="button" variant="outline" size="sm" className="min-h-[38px]" onClick={onPlanAdd}>
+              <Plus className="mr-1.5 h-4 w-4" /> 新增章節
+            </Button>
+          </div>
+          {planSections.length > 0 ? (
+            <ol className="space-y-2" data-testid="generation-plan-editor">
+              {planSections.map((section, index) => (
+                <li key={section.sectionId} className="grid gap-2 rounded-md border border-border bg-background p-2.5 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-md bg-muted text-xs font-semibold text-muted-foreground">
+                    {index + 1}
+                  </span>
+                  <div className="min-w-0">
+                    <Label htmlFor={`plan-title-${section.sectionId}`} className="sr-only">
+                      第 {index + 1} 節標題
+                    </Label>
+                    <Input
+                      id={`plan-title-${section.sectionId}`}
+                      value={section.title}
+                      onChange={(event) => onPlanTitleChange(section.sectionId, event.target.value)}
+                      className="h-9"
+                    />
+                    <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      <span>{section.evidenceCardCount} 張 Evidence Card</span>
+                      {section.evidenceCardCount === 0 ? (
+                        <span className="text-amber-800">證據不足，輸出可能被阻擋</span>
+                      ) : null}
+                      {section.isCustom ? <span>自訂章節</span> : null}
+                    </div>
+                  </div>
+                  <div className="flex gap-1 sm:justify-end">
+                    <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => onPlanMove(section.sectionId, -1)} disabled={index === 0} aria-label={`上移「${section.title}」`}>
+                      <ChevronUp className="h-4 w-4" />
+                    </Button>
+                    <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => onPlanMove(section.sectionId, 1)} disabled={index === planSections.length - 1} aria-label={`下移「${section.title}」`}>
+                      <ChevronDown className="h-4 w-4" />
+                    </Button>
+                    <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => onPlanRemove(section.sectionId)} disabled={planSections.length <= 1} aria-label={`移除「${section.title}」`}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <div className="rounded-md border border-dashed border-border bg-background px-3 py-5 text-sm text-muted-foreground">
+              Evidence Card 尚不足以建立 canonical ReportPlan；生成會維持阻擋。
+            </div>
+          )}
+        </div>
+
+        <section
+          className="mt-4 rounded-md border border-border bg-background px-3 py-3"
+          aria-labelledby="generation-stages-heading"
+          aria-live="polite"
+          data-testid="generation-stage-list"
+        >
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h3 id="generation-stages-heading" className="text-sm font-semibold text-foreground">
+              生成階段
+            </h3>
+            <Badge variant={isGenerating ? "secondary" : generateStatus === "error" ? "destructive" : "outline"}>
+              {isGenerating ? "執行中" : generateStatus === "done" ? "已完成" : generateStatus === "error" ? "需要處理" : "尚未開始"}
+            </Badge>
+          </div>
+          <ol className="space-y-2">
+            {generationStageViews.map((stage) => (
+              <li key={stage.id} className="flex items-start gap-3 rounded-md border border-border bg-muted/15 px-3 py-2.5">
+                <div className="mt-0.5" aria-hidden="true">
+                  {stage.status === "running" ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-primary motion-reduce:animate-none" />
+                  ) : stage.status === "completed" ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-700" />
+                  ) : stage.status === "failed" || stage.status === "blocked" ? (
+                    <XCircle className="h-4 w-4 text-destructive" />
+                  ) : stage.status === "warning" ? (
+                    <AlertTriangle className="h-4 w-4 text-amber-700" />
+                  ) : (
+                    <span className="block h-4 w-4 rounded-full border border-border" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-medium text-foreground">{stage.name}</p>
+                    <Badge variant={stage.status === "failed" || stage.status === "blocked" ? "destructive" : stage.status === "running" || stage.status === "completed" ? "secondary" : "outline"}>
+                      {stage.status === "pending" ? "等待中" : stage.status === "running" ? "執行中" : stage.status === "completed" ? "已完成" : stage.status === "warning" ? "需複核" : stage.status === "blocked" ? "已阻擋" : "失敗"}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">{stage.explanation}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+          {generationFailure ? (
+            <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-3 text-sm text-destructive" role="alert">
+              <p className="font-semibold">{generationFailure.title} · {generationFailure.code}</p>
+              <p className="mt-1 leading-6">{sanitizeReaderFacingInternalLanguage(generationFailure.message)}</p>
+              <p className="mt-2 text-xs leading-5">{generationFailure.retainedState}</p>
+              <p className="text-xs leading-5">下一步：{generationFailure.action}</p>
+            </div>
+          ) : null}
+        </section>
+
         <div className="mt-4 flex flex-wrap gap-2 text-sm">
           <Badge
             variant={
@@ -6038,6 +6264,10 @@ export function Generator() {
     "idle" | "loading" | "done" | "error"
   >("idle");
   const [generateErrorMessage, setGenerateErrorMessage] = useState<string | null>(null);
+  const [generationRunState, setGenerationRunState] = useState<GenerationRunState>("idle");
+  const [generationFailure, setGenerationFailure] = useState<GenerationFailure | null>(null);
+  const [generationValidationWarning, setGenerationValidationWarning] = useState(false);
+  const [editablePlanSections, setEditablePlanSections] = useState<EditablePlanSection[]>([]);
   const [llmStatus, setLlmStatus] = useState<LlmRuntimeStatus>(DEFAULT_LLM_STATUS);
   const [expansions, setExpansions] = useState<TopicRunExpansionCard[]>([]);
   const [selectedDirection, setSelectedDirection] =
@@ -6116,6 +6346,7 @@ export function Generator() {
   const paperSearchHandoffLoadedRef = useRef(false);
   const paperSearchReviewContextRef =
     useRef<PaperSearchSourceReviewContext | null>(null);
+  const generationPlanIdentityRef = useRef<string | null>(null);
 
   useEffect(
     () => () => {
@@ -6345,6 +6576,83 @@ export function Generator() {
     ? "此主題已被標記為不可輸出操作性內容，因此不會進入一般報告生成。"
     : blockingReason;
   const canGenerateReport = !effectiveBlockingReason;
+  const reportPlanPreview = useMemo(
+    () =>
+      groundingJob?.reportPlan ??
+      (sourceWorkflowLock?.workflowId && sourceWorkflowLock.topicHash
+        ? buildStructuredReportPlan({
+            workflowId: sourceWorkflowLock.workflowId,
+            topicHash: sourceWorkflowLock.topicHash,
+            title: displayTitleValue || activeReportTopic,
+            researchQuestion: activeReportTopic,
+            reportType: input.reportType,
+            audience: input.targetAudience || input.academicLevel,
+            evidenceCards: acceptedEvidenceCards,
+            academicSafetyReview,
+          })
+        : null),
+    [
+      acceptedEvidenceCards,
+      academicSafetyReview,
+      activeReportTopic,
+      displayTitleValue,
+      groundingJob?.reportPlan,
+      input.academicLevel,
+      input.reportType,
+      input.targetAudience,
+      sourceWorkflowLock?.topicHash,
+      sourceWorkflowLock?.workflowId,
+    ],
+  );
+  const generationPlanIdentity = reportPlanPreview
+    ? [
+        reportPlanPreview.workflowId,
+        reportPlanPreview.topicHash,
+        ...reportPlanPreview.sections.map((section) =>
+          `${section.sectionId}:${section.evidenceCardIds.join(",")}`,
+        ),
+      ].join("|")
+    : null;
+  useEffect(() => {
+    if (!generationPlanIdentity || !reportPlanPreview) {
+      if (generationPlanIdentityRef.current !== null) {
+        generationPlanIdentityRef.current = null;
+        setEditablePlanSections([]);
+      }
+      return;
+    }
+    if (generationPlanIdentityRef.current === generationPlanIdentity) return;
+    generationPlanIdentityRef.current = generationPlanIdentity;
+    setEditablePlanSections(
+      reportPlanPreview.sections
+        .filter((section) => section.canonicalSectionRole !== "references")
+        .map((section) => ({
+          sectionId: section.sectionId,
+          title: section.title,
+          evidenceCardCount: section.evidenceCardIds.length,
+          isCustom: false,
+        })),
+    );
+    setGenerationRunState("idle");
+    setGenerationFailure(null);
+    setGenerationValidationWarning(false);
+  }, [generationPlanIdentity, reportPlanPreview]);
+  const generationStageViews = useMemo(
+    () =>
+      generationStages({
+        state: generationRunState,
+        evidenceReady: canGenerateReport && editablePlanSections.length > 0,
+        failedStage: generationFailure?.stage ?? null,
+        validationWarning: generationValidationWarning,
+      }),
+    [
+      canGenerateReport,
+      editablePlanSections.length,
+      generationFailure?.stage,
+      generationRunState,
+      generationValidationWarning,
+    ],
+  );
   const reportGenerationDebug: ReportGenerationDebugState = {
     workflowId: sourceWorkflowLock?.workflowId ?? null,
     topicHash: sourceWorkflowLock?.topicHash ?? null,
@@ -6734,6 +7042,11 @@ export function Generator() {
     setSourceSearchMessage("");
     setGenerateStatus("idle");
     setGenerateErrorMessage(null);
+    setGenerationRunState("idle");
+    setGenerationFailure(null);
+    setGenerationValidationWarning(false);
+    setEditablePlanSections([]);
+    generationPlanIdentityRef.current = null;
     setIsGenerating(false);
     setIsSearchingSources(false);
     setWorkspaceResume(null);
@@ -6984,6 +7297,9 @@ export function Generator() {
     );
     setGenerateStatus("idle");
     setGenerateErrorMessage(null);
+    setGenerationRunState("idle");
+    setGenerationFailure(null);
+    setGenerationValidationWarning(false);
     setIsGenerating(false);
     setIsSearchingSources(false);
     setGeneratorRunId(handoff.runId);
@@ -7679,6 +7995,9 @@ export function Generator() {
     setSourceSearchMessage("正在建立搜尋任務，來源服務尚未開始。");
     setGenerateStatus("idle");
     setGenerateErrorMessage(null);
+    setGenerationRunState("idle");
+    setGenerationFailure(null);
+    setGenerationValidationWarning(false);
     setIsGenerating(false);
     setIsSearchingSources(true);
     setWorkspaceResume(null);
@@ -8173,6 +8492,47 @@ export function Generator() {
     });
   };
 
+  const updatePlanTitle = (sectionId: string, title: string) => {
+    setEditablePlanSections((sections) =>
+      sections.map((section) =>
+        section.sectionId === sectionId ? { ...section, title } : section,
+      ),
+    );
+  };
+
+  const movePlanSection = (sectionId: string, direction: -1 | 1) => {
+    setEditablePlanSections((sections) => {
+      const index = sections.findIndex((section) => section.sectionId === sectionId);
+      const target = index + direction;
+      if (index < 0 || target < 0 || target >= sections.length) return sections;
+      const next = [...sections];
+      const [section] = next.splice(index, 1);
+      if (!section) return sections;
+      next.splice(target, 0, section);
+      return next;
+    });
+  };
+
+  const removePlanSection = (sectionId: string) => {
+    setEditablePlanSections((sections) =>
+      sections.length <= 1
+        ? sections
+        : sections.filter((section) => section.sectionId !== sectionId),
+    );
+  };
+
+  const addPlanSection = () => {
+    setEditablePlanSections((sections) => [
+      ...sections,
+      {
+        sectionId: `custom-${Date.now().toString(36)}`,
+        title: `自訂章節 ${sections.filter((section) => section.isCustom).length + 1}`,
+        evidenceCardCount: 0,
+        isCustom: true,
+      },
+    ]);
+  };
+
   // ── Generate ────────────────────────────────────────────────────────────────
 
   const handleGenerate = async () => {
@@ -8182,7 +8542,10 @@ export function Generator() {
       console.info("[ResearchForge][report-generation-gate]", reportGenerationDebug);
     }
     if (!input.topic.trim()) {
+      const failure = mapGenerationFailure(new Error("主題欄位不能為空，請輸入報告主題。"));
       setGenerateStatus("error");
+      setGenerationRunState("failed");
+      setGenerationFailure(failure);
       setActiveStep("topic");
       toast({
         title: "請填寫報告主題",
@@ -8208,10 +8571,28 @@ export function Generator() {
           topicHash: sourceWorkflowLock?.topicHash ?? null,
         });
     if (currentBlockingReason) {
+      const failure = mapGenerationFailure(new Error(currentBlockingReason));
       setGenerateStatus("error");
+      setGenerationRunState("failed");
+      setGenerationFailure(failure);
       toast({
         title: "目前無法生成報告",
         description: currentBlockingReason,
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!reportPlanPreview || editablePlanSections.length === 0) {
+      const failure = mapGenerationFailure(
+        new Error("Evidence Card 尚不足以建立 canonical ReportPlan。"),
+      );
+      setGenerateStatus("error");
+      setGenerateErrorMessage(failure.message);
+      setGenerationRunState("failed");
+      setGenerationFailure(failure);
+      toast({
+        title: failure.title,
+        description: failure.action,
         variant: "destructive",
       });
       return;
@@ -8242,6 +8623,9 @@ export function Generator() {
     setIsGenerating(true);
     setGenerateStatus("loading");
     setGenerateErrorMessage(null);
+    setGenerationRunState("validating_evidence");
+    setGenerationFailure(null);
+    setGenerationValidationWarning(false);
 
     beginStepTransition(
       "report",
@@ -8259,34 +8643,35 @@ export function Generator() {
             readinessEvidenceCards,
           );
           if (!readinessForWorkspace.canGenerate) {
-            setGenerateStatus("error");
-            setIsGenerating(false);
-            return;
+            throw new Error(
+              readinessForWorkspace.message ?? "已接受來源或 Evidence Card 尚未通過生成門檻。",
+            );
           }
           const generationMode = readinessForWorkspace.mode;
           if (generationMode === "blocked") {
-            setGenerateStatus("error");
-            setIsGenerating(false);
-            return;
+            throw new Error("Evidence Card 尚未通過生成門檻。 ");
           }
+          setGenerationRunState("planning");
           const workspaceWorkflowId =
             sourceWorkflowLock?.workflowId ?? groundingJob?.workflowId ?? null;
           const workspaceTopicHash =
             sourceWorkflowLock?.topicHash ?? groundingJob?.topicHash ?? null;
-          const structuredReportPlan =
+          const canonicalStructuredReportPlan =
             groundingJob?.reportPlan ??
-            (workspaceWorkflowId && workspaceTopicHash
-              ? buildStructuredReportPlan({
-                  workflowId: workspaceWorkflowId,
-                  topicHash: workspaceTopicHash,
-                  title: displayTitleValue || activeResearchTopic,
-                  researchQuestion: activeResearchTopic,
-                  reportType: effectiveInput.reportType,
-                  audience: effectiveInput.targetAudience || effectiveInput.academicLevel,
-                  evidenceCards: acceptedEvidenceCards,
-                  academicSafetyReview,
-                })
-              : null);
+            reportPlanPreview;
+          const userOutline = editablePlanSections
+            .map((section) => ({
+              sectionId: section.sectionId,
+              title: section.title.trim(),
+            }))
+            .filter((section) => section.title);
+          if (!canonicalStructuredReportPlan || userOutline.length === 0) {
+            throw new Error("Evidence Card 尚不足以建立可生成的報告計畫。 ");
+          }
+          const structuredReportPlan = applyUserOutlineToReportPlan(
+            canonicalStructuredReportPlan,
+            userOutline,
+          );
           let workspace = createReportWorkspace(
             effectiveInput,
             acceptedSources,
@@ -8305,30 +8690,62 @@ export function Generator() {
           );
           workspace = {
             ...workspace,
+            outline: {
+              ...workspace.outline,
+              sections: userOutline.map((section) => {
+                const existing = workspace.outline.sections.find(
+                  (item) => item.sectionId === section.sectionId,
+                );
+                return existing
+                  ? { ...existing, title: section.title }
+                  : {
+                      sectionId: section.sectionId,
+                      title: section.title,
+                      purpose: "使用者自訂研究段落。",
+                      suggestedEvidenceCardIds: [],
+                      writingHints: ["只有在已接受證據可支撐時才生成內容。"],
+                      notes: "目前無 canonical Evidence Card 綁定。",
+                    };
+              }),
+            },
             presentation: normalizeReportPresentation(presentation),
           };
+          setGenerationRunState("drafting");
           const llmDraft = await requestLlmReportDraft({
             reportInput: effectiveInput,
             workflowId: workspace.workflowId,
             jobId: groundingJobMeta?.jobId ?? null,
+            jobRevision: groundingJob?.revision ?? null,
+            canonicalCheckpointRevision:
+              groundingJob?.canonicalStudyAdmissions?.[0]?.checkpointRevision ??
+              null,
             topicHash: workspace.topicHash,
             originalTopic: originalTopicValue,
             displayTitle: displayTitleValue,
             acceptedSources,
             evidenceCards: workspace.evidenceCards,
+            canonicalStudyAdmissions:
+              groundingJob?.canonicalStudyAdmissions,
             academicSafetyReview,
             reportPlan: workspace.generationPayload.reportPlan ?? null,
             generationMode: workspace.generationMode,
-            outline: workspace.outline.sections,
+            outline: userOutline,
           });
-          if (!llmDraft.ok && llmDraft.status === "invalid_input") {
+          if (
+            !llmDraft.ok &&
+            (llmDraft.status === "invalid_input" ||
+              effectiveInput.researchReportMode === "formal_research_report")
+          ) {
             const message =
               llmDraft.message ??
               llmDraft.warning ??
               llmDraft.code ??
               "目前 GPT 模型無法完成報告生成，請檢查 /api/llm/health 與 /api/llm/smoke。";
+            const failure = mapGenerationFailure(new Error(message));
             setGenerateStatus("error");
             setGenerateErrorMessage(message);
+            setGenerationRunState("failed");
+            setGenerationFailure(failure);
             setIsGenerating(false);
             toast({
               title: "報告生成未完成",
@@ -8337,12 +8754,26 @@ export function Generator() {
             });
             return;
           }
+          setGenerationRunState("validating_output");
+          const formalValidation = llmDraft.formalResearchValidation;
+          const formalValidationFailed =
+            Boolean(formalValidation) &&
+            typeof formalValidation === "object" &&
+            (formalValidation as { pass?: unknown }).pass !== true;
+          setGenerationValidationWarning(
+            formalValidationFailed ||
+              llmDraft.fallbackUsed ||
+              llmDraft.degradedMode === true ||
+              llmDraft.reportGenerationStatus !== "success",
+          );
           workspace = applyDetailedReportSummary(
             mergeLlmReportDraft(workspace, llmDraft),
           );
+          setGenerationRunState("saving");
           saveReportWorkspace(workspace);
 
           setGenerateStatus("done");
+          setGenerationRunState("completed");
           setIsGenerating(false);
           if (
             llmDraft.fallbackUsed ||
@@ -8363,16 +8794,16 @@ export function Generator() {
             }),
           );
         } catch (error) {
-          const message =
-            error instanceof Error && error.message.trim()
-              ? error.message
-              : "報告生成失敗，請檢查 GPT 連線與來源證據卡狀態。";
+          const failure = mapGenerationFailure(error);
+          const message = failure.message;
           setGenerateStatus("error");
           setGenerateErrorMessage(message);
+          setGenerationRunState("failed");
+          setGenerationFailure(failure);
           setIsGenerating(false);
           toast({
-            title: "生成失敗",
-            description: message,
+            title: failure.title,
+            description: `${message} ${failure.action}`,
             variant: "destructive",
           });
         }
@@ -8913,6 +9344,7 @@ export function Generator() {
           ) : visibleStep === "manage" ? (
           <ManageStepPanel
             sources={currentWorkflowSources}
+            evidenceCards={acceptedEvidenceCards}
             hasWorkspaceTopicMismatch={hasWorkspaceTopicMismatch}
             researchDepth={input.researchDepth}
             recommendedAcceptedSourceCount={recommendedAcceptedSourceCount}
@@ -8946,11 +9378,18 @@ export function Generator() {
               generateErrorMessage={generateErrorMessage}
               llmStatus={llmStatus}
               presentation={presentation}
+              planSections={editablePlanSections}
+              generationStageViews={generationStageViews}
+              generationFailure={generationFailure}
               onPresentationChange={(patch) =>
                 setPresentation((current) =>
                   normalizeReportPresentation({ ...current, ...patch }),
                 )
               }
+              onPlanTitleChange={updatePlanTitle}
+              onPlanMove={movePlanSection}
+              onPlanRemove={removePlanSection}
+              onPlanAdd={addPlanSection}
               onGenerate={handleGenerate}
               onBack={goBackStep}
             />

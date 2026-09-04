@@ -256,6 +256,7 @@ function ReportReadinessPreview() {
 
 export function Home() {
   const reduceMotion = useReducedMotion();
+  const [heroTopic, setHeroTopic] = useState("塑膠微粒對海洋生物的影響");
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -322,21 +323,79 @@ export function Home() {
               搜尋結果保留作者、年份、期刊、DOI 與原始連結；需要時也能進入完整報告工作台。
             </motion.p>
 
+            {/* ── Dual Mode Primary Actions ────────────────────────────── */}
+            <div className="mt-8 mb-10 grid grid-cols-1 md:grid-cols-2 gap-6 text-left max-w-4xl mx-auto" data-testid="dual-mode-entry">
+              {/* Action 1: 建立研究報告 */}
+              <div className="rounded-2xl border-2 border-primary/25 bg-card/95 backdrop-blur p-6 shadow-xl flex flex-col justify-between hover:border-primary/50 transition-all">
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-primary/15 text-primary">
+                      模式 A · 學術檢索與生成
+                    </span>
+                  </div>
+                  <h2 className="text-2xl font-bold text-foreground mb-2">建立研究報告</h2>
+                  <p className="text-sm text-muted-foreground mb-4 leading-relaxed">
+                    輸入一個研究問題或主題，ResearchForge 將搜尋學術來源、整理證據，並建立具有可追溯引用的完整研究報告。
+                  </p>
+                  <div className="space-y-2 mb-4">
+                    <label htmlFor="home-hero-topic" className="text-xs font-medium text-foreground/80">研究主題</label>
+                    <input
+                      id="home-hero-topic"
+                      type="text"
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      value={heroTopic}
+                      onChange={(e) => setHeroTopic(e.target.value)}
+                      placeholder="例如：塑膠微粒對海洋生物的影響"
+                    />
+                  </div>
+                </div>
+                <Link href={`/research-project?mode=scenarioA&topic=${encodeURIComponent(heroTopic)}`}>
+                  <Button size="lg" className="w-full font-medium h-12 shadow" data-testid="button-hero-try">
+                    開始研究 <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </Link>
+              </div>
+
+              {/* Action 2: 驗證既有報告 */}
+              <div className="rounded-2xl border-2 border-blue-500/25 bg-card/95 backdrop-blur p-6 shadow-xl flex flex-col justify-between hover:border-blue-500/50 transition-all">
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/15 text-blue-600 dark:text-blue-400">
+                      模式 B · 報告審查與核對
+                    </span>
+                  </div>
+                  <h2 className="text-2xl font-bold text-foreground mb-2">驗證既有報告</h2>
+                  <p className="text-sm text-muted-foreground mb-4 leading-relaxed">
+                    上傳 PDF、DOCX、Markdown 或文字檔，ResearchForge 將分析重要主張，核對引用與來源，並標記可能有問題的內容。
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 mb-6">
+                    {["PDF 檔案", "DOCX 論文", "Markdown", "文字檔", "逐項 Claim 查核", "引用健康度"].map((tag) => (
+                      <span key={tag} className="text-[11px] px-2 py-0.5 rounded bg-muted text-muted-foreground border">
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <Link href="/research-project?mode=scenarioB" data-testid="button-hero-verify">
+                  <Button size="lg" variant="outline" className="w-full font-medium h-12 border-blue-500/40 hover:bg-blue-500/10 text-foreground">
+                    開始驗證既有報告 <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </Link>
+              </div>
+            </div>
+
             <motion.div
-              className="flex flex-col sm:flex-row items-center justify-center gap-4"
+              className="flex items-center justify-center gap-4 text-xs text-muted-foreground"
               initial={reduceMotion ? undefined : { opacity: 0, y: 12 }}
               animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
               transition={{ duration: 0.46, delay: 0.26 }}
             >
-              <Link href="/generator" data-testid="button-hero-try">
-                <Button size="lg" className="h-14 px-8 text-base shadow-lg">
-                  搜尋論文 <ArrowRight className="ml-2 h-5 w-5" />
-                </Button>
+              <Link href="/features" data-testid="button-hero-features" className="hover:underline">
+                查看整理功能與核心技術
               </Link>
-              <Link href="/features" data-testid="button-hero-features">
-                <Button size="lg" variant="outline" className="h-14 px-8 text-base">
-                  查看整理功能
-                </Button>
+              <span>·</span>
+              <Link href="/generator" className="hover:underline">
+                獨立論文搜尋入口
               </Link>
             </motion.div>
           </motion.div>

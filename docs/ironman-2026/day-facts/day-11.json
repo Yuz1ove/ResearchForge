@@ -1,0 +1,28 @@
+{
+  "schema_version": "researchforge-ironman-day-facts/v1",
+  "day": 11,
+  "title_seed": "不要把十篇來源接成一篇",
+  "historical_period": {"start": "2026-06-17", "end": "2026-06-20", "confidence": "HIGH"},
+  "evidence_boundary": "COMMITTED_GIT",
+  "central_problem": "來源很多是否自然形成一個有回答力的研究報告？",
+  "reader_takeaway": "synthesis 應按研究問題組織 claim，而不是照 provider/source card 順序貼接。",
+  "known_at_the_time": [
+    {"fact": "80fbcbb 明確將 report synthesis 從 source-card pasting 重構開。", "source_refs": ["SRC-GIT-SYNTHESIS"]},
+    {"fact": "5cd5e48 增加 accepted-source synthesis helper，ed05b87 形成 evidence-based report flow。", "source_refs": ["SRC-GIT-SYNTHESIS", "SRC-GIT-REPORT-WRITER"]}
+  ],
+  "implemented_at_the_time": [{"fact": "accepted sources/evidence cards 成為 synthesis 的輸入，Writer 不再只是把來源摘要逐篇接起來。", "source_refs": ["SRC-GIT-SYNTHESIS", "SRC-GIT-REPORT-WRITER"]}],
+  "not_yet_available": [{"fact": "claim graph、two-pass Writer、Study Facts V2 與 canonical admission 尚未可視為此階段既存。", "source_refs": ["SRC-GIT-REPORT-WRITER", "SRC-GIT-INTELLIGENCE", "SRC-SOURCE-CANONICAL"]}],
+  "observed_failures": [{"failure_id": "SOURCE_ORDER_STITCHING", "date_or_range": "2026-06-17", "historical_stage": "synthesis", "symptom": "source-by-source assembly could produce a report-shaped sequence without a question-shaped synthesis", "root_cause_if_known": "synthesis responsibility had been too close to card transport", "what_was_known_then": "accepted sources should ground the draft", "later_resolution": "later claim graphs and post-edit validation made this boundary more explicit", "source_refs": ["SRC-GIT-SYNTHESIS", "SRC-QA-KNOWLEDGE"]}],
+  "tests_and_metrics": [{"test_or_metric": "Two committed synthesis milestones are identifiable: 80fbcbb and 5cd5e48.", "result": "historical milestones verified; not a quality score", "source_refs": ["SRC-GIT-SYNTHESIS"]}],
+  "engineering_decisions": [{"decision": "把 synthesis 從 card paste 改成依研究問題組織的 report flow。", "source_refs": ["SRC-GIT-SYNTHESIS"]}],
+  "architecture_state": [{"state": "accepted sources → evidence cards → synthesis/report writer → draft", "source_refs": ["SRC-DOC-ARCH-0618", "SRC-GIT-REPORT-WRITER"]}],
+  "terminology_available_at_the_time": ["synthesis", "accepted-source synthesis", "report writer", "evidence-based report"],
+  "terminology_forbidden_due_to_hindsight": ["claim graph", "teach-back", "canonical writer evidence set", "Study Facts V2", "FORMAL"],
+  "safe_numbers": [{"value": "2 committed synthesis milestones", "meaning": "80fbcbb and 5cd5e48; not a quality score", "source_refs": ["SRC-GIT-SYNTHESIS"]}],
+  "safe_public_facts": [{"fact": "『有很多來源』與『能回答研究問題』之間，必須有 synthesis layer。", "source_refs": ["SRC-GIT-SYNTHESIS"]}],
+  "sensitive_or_internal_facts": ["raw accepted-source payloads", "writer prompts", "internal claim IDs"],
+  "retrospective_notes": [{"note": "後來的 claim graph 與 sentence-level validation 是對 source-order echo 的後續回應，不能回寫成 6 月已完成。", "source_refs": ["SRC-QA-KNOWLEDGE"]}],
+  "source_refs": [{"type":"commit_group","ref":"SRC-GIT-SYNTHESIS","why_it_supports_this_fact":"synthesis refactor and accepted-source helper"},{"type":"commit","ref":"SRC-GIT-REPORT-WRITER","why_it_supports_this_fact":"committed report-writer flow"}],
+  "publication_risks": ["不要把 later two-pass Writer 當成早期 implementation。", "避免用 source count 代替 synthesis quality。"],
+  "confidence": "HIGH"
+}

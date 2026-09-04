@@ -3,19 +3,260 @@ import test from "node:test";
 import type { ReportPlan } from "@workspace/api-zod";
 import type { SourceRecord } from "@workspace/api-zod/source-record";
 import { canonicalizeCitationMarkersInText } from "./citation-markers";
+import { estimateMessageTokens } from "./llm/schoolProvider";
 import {
+  auditClaimBoundSentences,
   auditDocumentEditorialPass,
   auditClaimCitationEntailment,
+  buildConclusionRenderingContract,
+  buildWriterClaimGraph,
+  composeSafeConclusion,
+  conclusionClosureFromBodyClaims,
   detectSourceEchoIssues,
   forbiddenInstructionTextMatches,
+  isLongFormReportRequest,
+  repairClaimBoundSentences,
   paragraphClaimsForSection,
+  reportWriterPromptCaps,
+  reportWriterPromptLengthInstruction,
+  reportWriterReconstructionMaxTokens,
+  reportWriterSectionGroupSize,
+  reportWriterSectionLengthContract,
+  reportWriterSelectedSectionTargets,
+  reportWriterSectionTargets,
+  safeProviderOutputLogMetadata,
+  shouldSkipWholeDocumentEditorialPass,
+  validateSynthesisClaim,
   validateTeachBackOutput,
   writeReportWithLlm,
+  type AtomicClaim,
+  type SynthesisClaim,
   type ReportWriterEvidenceCard,
   type ReportWriterSection,
 } from "./report-writer";
 
 process.env.SCHOOL_LLM_RATE_LIMIT_MAX ??= "1000";
+
+async function withProcessEnv<T>(
+  overrides: Record<string, string | undefined>,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = Object.fromEntries(
+    Object.keys(overrides).map((key) => [key, process.env[key]]),
+  );
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+test("provider output logging metadata never includes raw model content", () => {
+  const raw = "SENSITIVE_PROVIDER_OUTPUT_DO_NOT_LOG";
+  const metadata = safeProviderOutputLogMetadata(raw);
+
+  assert.equal(metadata.outputCharacters, raw.length);
+  assert.match(metadata.outputSha256, /^[a-f0-9]{64}$/u);
+  assert.doesNotMatch(JSON.stringify(metadata), /SENSITIVE_PROVIDER_OUTPUT_DO_NOT_LOG/u);
+});
+
+test("standard report length plan and prompt contract remain unchanged", () => {
+  const standardInput = {
+    requestedLength: "一般報告",
+    targetWordCount: "2200",
+  };
+
+  assert.equal(isLongFormReportRequest(standardInput), false);
+  assert.deepEqual(reportWriterSectionTargets(standardInput), {
+    abstract: 220,
+    introduction: 320,
+    research_question: 220,
+    literature_review: 480,
+    methodology: 320,
+    findings: 480,
+    discussion: 480,
+    limitations: 240,
+    conclusion: 280,
+  });
+  assert.equal(
+    reportWriterPromptLengthInstruction(standardInput, "compact_system"),
+    "Write formal Taiwan Traditional Chinese. Each section has 1-2 concise paragraphs and 2-4 complete sentences total.",
+  );
+  assert.equal(
+    reportWriterPromptLengthInstruction(standardInput, "primary_system"),
+    "Each section must contain 1 to 2 short natural paragraphs and 2 to 4 complete sentences total; separate two paragraphs with two newline characters inside the JSON prose string.",
+  );
+  assert.equal(
+    reportWriterPromptLengthInstruction(standardInput, "retry_system"),
+    "Write each section as 1 to 2 short natural paragraphs and 2 to 4 complete sentences total, covering its planned function without repetition.",
+  );
+  assert.equal(
+    reportWriterPromptLengthInstruction(standardInput, "retry_user"),
+    "Keep each section to 1-2 concise paragraphs and 2-4 complete, non-redundant sentences total; return valid JSON even if evidence is limited.",
+  );
+  assert.equal(
+    reportWriterSectionLengthContract(standardInput, "findings"),
+    null,
+  );
+  assert.equal(reportWriterSectionGroupSize(standardInput, false, 9), 3);
+  assert.equal(reportWriterSectionGroupSize(standardInput, true, 9), 9);
+  assert.equal(
+    reportWriterSectionGroupSize(
+      { ...standardInput, researchReportMode: "formal_research_report" },
+      false,
+      9,
+    ),
+    1,
+  );
+  assert.equal(
+    reportWriterReconstructionMaxTokens(standardInput, "primary"),
+    2_600,
+  );
+  assert.equal(
+    reportWriterReconstructionMaxTokens(standardInput, "retry"),
+    1_800,
+  );
+  assert.equal(
+    reportWriterReconstructionMaxTokens(
+      { ...standardInput, researchReportMode: "formal_research_report" },
+      "primary",
+    ),
+    4_096,
+  );
+  assert.deepEqual(reportWriterPromptCaps(standardInput, "primary"), {
+    sourceLimit: 8,
+    evidenceLimit: 8,
+  });
+  assert.deepEqual(reportWriterPromptCaps(standardInput, "retry"), {
+    sourceLimit: 3,
+    evidenceLimit: 3,
+  });
+  assert.equal(shouldSkipWholeDocumentEditorialPass(standardInput), false);
+});
+
+test("long-form reports use per-section 7,000-character body contracts", () => {
+  const longInput = {
+    requestedLength: "深度研究",
+    targetWordCount: "7,000–10,000 個中文字",
+  };
+
+  assert.equal(isLongFormReportRequest(longInput), true);
+  assert.equal(isLongFormReportRequest({ targetWordCount: "7000" }), true);
+  assert.equal(
+    isLongFormReportRequest({
+      requestedLength: "完整報告",
+      targetWordCount: "6000",
+    }),
+    false,
+  );
+
+  const targets = reportWriterSectionTargets(longInput);
+  const bodyTotal = Object.entries(targets)
+    .filter(([sectionId]) => sectionId !== "abstract")
+    .reduce((total, [, target]) => total + target, 0);
+  assert.equal(bodyTotal, 7_000);
+  assert.equal(targets.abstract, 420);
+
+  const liveBodySectionIds = [
+    "introduction",
+    "literature_review",
+    "methodology",
+    "findings",
+    "discussion",
+    "limitations",
+    "conclusion",
+  ] as const;
+  const liveSelectedTargets = reportWriterSelectedSectionTargets(longInput, [
+    "abstract",
+    ...liveBodySectionIds,
+  ]);
+  assert.equal(liveSelectedTargets.abstract, 420);
+  assert.equal(
+    liveBodySectionIds.reduce(
+      (total, sectionId) => total + (liveSelectedTargets[sectionId] ?? 0),
+      0,
+    ),
+    7_000,
+  );
+  assert.deepEqual(
+    reportWriterSectionLengthContract(
+      longInput,
+      "findings",
+      liveBodySectionIds,
+    ),
+    {
+      targetChineseCharacterCount: liveSelectedTargets.findings,
+      targetChineseCharacterRange: { min: 1_265, max: 1_546 },
+      longFormProseContract: reportWriterPromptLengthInstruction(
+        longInput,
+        "primary_system",
+      ),
+    },
+  );
+  assert.deepEqual(
+    reportWriterSelectedSectionTargets(longInput, Object.keys(targets)),
+    targets,
+  );
+  assert.deepEqual(reportWriterSectionLengthContract(longInput, "abstract"), {
+    targetChineseCharacterCount: 420,
+    targetChineseCharacterRange: { min: 350, max: 500 },
+    longFormProseContract: reportWriterPromptLengthInstruction(
+      longInput,
+      "primary_system",
+    ),
+  });
+  assert.deepEqual(
+    reportWriterSectionLengthContract(longInput, "findings")
+      ?.targetChineseCharacterRange,
+    {
+      min: 1_170,
+      max: 1_430,
+    },
+  );
+
+  const longPrompt = reportWriterPromptLengthInstruction(
+    longInput,
+    "primary_system",
+  );
+  assert.match(longPrompt, /substantial evidence-led prose/u);
+  assert.match(longPrompt, /targetChineseCharacterCount/u);
+  assert.match(
+    longPrompt,
+    /without padding, repetition, or unsupported claims/u,
+  );
+  assert.doesNotMatch(longPrompt, /2-4|2 to 4/u);
+  assert.equal(reportWriterSectionGroupSize(longInput, false, 9), 1);
+  assert.equal(reportWriterSectionGroupSize(longInput, true, 9), 1);
+  assert.equal(
+    reportWriterReconstructionMaxTokens(longInput, "primary"),
+    4_096,
+  );
+  assert.equal(reportWriterReconstructionMaxTokens(longInput, "retry"), 4_096);
+  assert.equal(
+    reportWriterReconstructionMaxTokens(
+      longInput,
+      "primary",
+      ["conclusion"],
+    ),
+    8_192,
+  );
+  assert.deepEqual(reportWriterPromptCaps(longInput, "primary"), {
+    sourceLimit: 12,
+    evidenceLimit: 12,
+  });
+  assert.deepEqual(reportWriterPromptCaps(longInput, "retry"), {
+    sourceLimit: 6,
+    evidenceLimit: 6,
+  });
+  assert.equal(shouldSkipWholeDocumentEditorialPass(longInput), true);
+});
 
 function editorialSection(prose: string): ReportWriterSection {
   return {
@@ -28,51 +269,101 @@ function editorialSection(prose: string): ReportWriterSection {
 }
 
 test("document editorial audit accepts flow edits but locks citations and protected facts", () => {
-  const before = [editorialSection("研究 A 於 2024 年使用 Landsat-8，結果顯示綠覆與較低地表溫度相關[S1]。研究 B 的校園觀察則指出此關聯受鋪面影響[S2]。")];
-  const improved = [editorialSection("研究 A 於 2024 年使用 Landsat-8，結果顯示綠覆與較低地表溫度相關[S1]；相較之下，研究 B 的校園觀察指出此關聯仍受鋪面影響[S2]。")];
-  assert.deepEqual(auditDocumentEditorialPass(before, improved), { passed: true, issues: [] });
+  const before = [
+    editorialSection(
+      "研究 A 於 2024 年使用 Landsat-8，結果顯示綠覆與較低地表溫度相關[S1]。研究 B 的校園觀察則指出此關聯受鋪面影響[S2]。",
+    ),
+  ];
+  const improved = [
+    editorialSection(
+      "研究 A 於 2024 年使用 Landsat-8，結果顯示綠覆與較低地表溫度相關[S1]；相較之下，研究 B 的校園觀察指出此關聯仍受鋪面影響[S2]。",
+    ),
+  ];
+  assert.deepEqual(auditDocumentEditorialPass(before, improved), {
+    passed: true,
+    issues: [],
+  });
 
-  const citationChanged = [editorialSection("研究 A 於 2024 年使用 Landsat-8，結果顯示綠覆與較低地表溫度相關[S2]。研究 B 的校園觀察則指出此關聯受鋪面影響[S1]。")];
-  assert.equal(auditDocumentEditorialPass(before, citationChanged).passed, false);
+  const citationChanged = [
+    editorialSection(
+      "研究 A 於 2024 年使用 Landsat-8，結果顯示綠覆與較低地表溫度相關[S2]。研究 B 的校園觀察則指出此關聯受鋪面影響[S1]。",
+    ),
+  ];
+  assert.equal(
+    auditDocumentEditorialPass(before, citationChanged).passed,
+    false,
+  );
 
-  const factAdded = [editorialSection("研究 A 於 2024 年使用 Landsat-8，結果顯示綠覆與較低地表溫度相關 8%[S1]。研究 B 的校園觀察則指出此關聯受鋪面影響[S2]。")];
+  const factAdded = [
+    editorialSection(
+      "研究 A 於 2024 年使用 Landsat-8，結果顯示綠覆與較低地表溫度相關 8%[S1]。研究 B 的校園觀察則指出此關聯受鋪面影響[S2]。",
+    ),
+  ];
   assert.equal(auditDocumentEditorialPass(before, factAdded).passed, false);
 
-  const factRemoved = [editorialSection("研究 A 使用 Landsat-8，結果顯示綠覆與較低地表溫度相關[S1]。研究 B 的校園觀察則指出此關聯受鋪面影響[S2]。")];
+  const factRemoved = [
+    editorialSection(
+      "研究 A 使用 Landsat-8，結果顯示綠覆與較低地表溫度相關[S1]。研究 B 的校園觀察則指出此關聯受鋪面影響[S2]。",
+    ),
+  ];
   assert.equal(auditDocumentEditorialPass(before, factRemoved).passed, false);
 
-  const templateAdded = [editorialSection("第一項發現是：研究 A 於 2024 年使用 Landsat-8，結果顯示綠覆與較低地表溫度相關[S1]。研究 B 的校園觀察則指出此關聯受鋪面影響[S2]。")];
+  const templateAdded = [
+    editorialSection(
+      "第一項發現是：研究 A 於 2024 年使用 Landsat-8，結果顯示綠覆與較低地表溫度相關[S1]。研究 B 的校園觀察則指出此關聯受鋪面影響[S2]。",
+    ),
+  ];
   assert.equal(auditDocumentEditorialPass(before, templateAdded).passed, false);
 });
 
 test("document editorial audit requires repetition to improve before reporting applied", () => {
-  const repeated = [editorialSection([
-    "2024年針對1236人的橫斷式研究顯示，短影音使用與較差睡眠品質呈具條件性的關聯[S1]。",
-    "換言之，2024年同一項1236人的橫斷式研究亦指出，短影音暴露和較差睡眠品質具有受限關聯[S2]。",
-    "橫斷式研究不能證明因果。",
-  ].join(""))];
-  const repetitionUnchanged = [editorialSection([
-    "2024年針對1236人的橫斷式研究顯示，短影音使用與較差睡眠品質呈具條件性的關聯[S1]。",
-    "換言之，2024年同一項1236人的橫斷式研究亦指出，短影音暴露和較差睡眠品質具有受限關聯[S2]。",
-    "橫斷式研究只能支持關聯解讀。",
-  ].join(""))];
-  const unchangedAudit = auditDocumentEditorialPass(repeated, repetitionUnchanged);
+  const repeated = [
+    editorialSection(
+      [
+        "2024年針對1236人的橫斷式研究顯示，短影音使用與較差睡眠品質呈具條件性的關聯[S1]。",
+        "換言之，2024年同一項1236人的橫斷式研究亦指出，短影音暴露和較差睡眠品質具有受限關聯[S2]。",
+        "橫斷式研究不能證明因果。",
+      ].join(""),
+    ),
+  ];
+  const repetitionUnchanged = [
+    editorialSection(
+      [
+        "2024年針對1236人的橫斷式研究顯示，短影音使用與較差睡眠品質呈具條件性的關聯[S1]。",
+        "換言之，2024年同一項1236人的橫斷式研究亦指出，短影音暴露和較差睡眠品質具有受限關聯[S2]。",
+        "橫斷式研究只能支持關聯解讀。",
+      ].join(""),
+    ),
+  ];
+  const unchangedAudit = auditDocumentEditorialPass(
+    repeated,
+    repetitionUnchanged,
+  );
   assert.equal(unchangedAudit.passed, false);
-  assert.ok(unchangedAudit.issues.some((issue) =>
-    issue.startsWith("document_repetition_not_improved:")
-  ));
+  assert.ok(
+    unchangedAudit.issues.some((issue) =>
+      issue.startsWith("document_repetition_not_improved:"),
+    ),
+  );
 
-  const repetitionRemoved = [editorialSection([
-    "2024年針對1236人的橫斷式研究顯示，短影音使用與較差睡眠品質呈具條件性的關聯[S1][S2]。",
-    "橫斷式研究不能證明因果。",
-  ].join(""))];
+  const repetitionRemoved = [
+    editorialSection(
+      [
+        "2024年針對1236人的橫斷式研究顯示，短影音使用與較差睡眠品質呈具條件性的關聯[S1][S2]。",
+        "橫斷式研究不能證明因果。",
+      ].join(""),
+    ),
+  ];
   assert.deepEqual(auditDocumentEditorialPass(repeated, repetitionRemoved), {
     passed: true,
     issues: [],
   });
 });
 
-function source(index: number, overrides: Partial<SourceRecord> = {}): SourceRecord {
+function source(
+  index: number,
+  overrides: Partial<SourceRecord> = {},
+): SourceRecord {
   return {
     id: `source-${index}`,
     title: `薯條營養研究 ${index}`,
@@ -98,152 +389,192 @@ function knowledgePlan(): ReportPlan {
     workflowId: "writer-safe",
     topicHash: "safe-topic",
     title: "高中生短影音使用與睡眠品質的關聯",
-    originalTitle: "Short-form video use and sleep quality among high school students",
+    originalTitle:
+      "Short-form video use and sleep quality among high school students",
     titleLanguage: "zh-TW",
     researchQuestion: "高中生短影音使用與睡眠品質有何關聯？",
-    sections: [{
-      sectionId: "findings",
-      title: "主要發現",
-      goal: "綜合主要發現",
-      requiredEvidenceTypes: ["finding"],
-      evidenceCardIds: ["evidence-1"],
-      plannedClaimIds: ["planned-1"],
-    }],
-    plannedClaims: [{
-      claimId: "planned-1",
-      claimText: "短影音使用與較差睡眠品質呈具條件性的關聯。",
-      sectionId: "findings",
-      supportingEvidenceIds: ["evidence-1"],
-      supportingSourceKeys: ["source-1"],
-      evidenceStrength: "moderate",
-      scope: "abstract_only_supported",
-      limitations: ["橫斷式研究不能證明因果。"],
-      agreementStatus: "single_source",
-      allowedCitationKeys: ["source-1"],
-      wordingStrength: "tentative",
-      normalizedFactIds: ["fact-1"],
-      synthesisClusterIds: ["cluster-1"],
-      claimGraphId: "claim-1",
-    }],
+    sections: [
+      {
+        sectionId: "findings",
+        title: "主要發現",
+        goal: "綜合主要發現",
+        requiredEvidenceTypes: ["finding"],
+        evidenceCardIds: ["evidence-1"],
+        plannedClaimIds: ["planned-1"],
+      },
+    ],
+    plannedClaims: [
+      {
+        claimId: "planned-1",
+        claimText: "短影音使用與較差睡眠品質呈具條件性的關聯。",
+        sectionId: "findings",
+        supportingEvidenceIds: ["evidence-1"],
+        supportingSourceKeys: ["source-1"],
+        evidenceStrength: "moderate",
+        scope: "abstract_only_supported",
+        limitations: ["橫斷式研究不能證明因果。"],
+        agreementStatus: "single_source",
+        allowedCitationKeys: ["source-1"],
+        wordingStrength: "tentative",
+        normalizedFactIds: ["fact-1"],
+        synthesisClusterIds: ["cluster-1"],
+        claimGraphId: "claim-1",
+      },
+    ],
     evidenceGaps: [],
-    normalizedFacts: [{
-      factId: "fact-1",
-      evidenceId: "evidence-1",
-      sourceId: "source-1",
-      canonicalSourceId: "source-1",
-      sourceType: "journal_article",
-      evidenceLevel: "direct",
-      sourceAccessLevel: "complete_abstract",
-      sectionType: "abstract",
-      claimTextZhTw: "短影音使用與較差睡眠品質呈具條件性的關聯。",
-      population: "高中生",
-      ageGroup: "高中生",
-      sampleSize: 1236,
-      geography: null,
-      studySetting: null,
-      studyDesign: "橫斷式研究",
-      exposureConcept: "短影音使用",
-      exposureMeasure: null,
-      outcomeConcept: "睡眠品質分數",
-      outcomeMeasure: null,
-      statisticType: "odds_ratio",
-      value: 1.33,
-      lowerCI: 1.01,
-      upperCI: 1.77,
-      pValue: null,
-      unit: "OR",
-      direction: "positive",
-      mediator: null,
-      moderator: null,
-      confounders: null,
-      adjustmentStatus: null,
-      evidenceDirectness: "A",
-      sourceSpan: "RAW_SUPPORT_SPAN_SECRET",
-      certainty: "高",
-      confidence: 0.8,
-      authorInterpretation: null,
-      authorLimitations: null,
-      extractionConfidence: 0.8,
-      verificationStatus: "verified",
-      evidenceFunction: "support",
-      location: null,
-      setting: null,
-      exposure: "短影音使用",
-      outcome: "睡眠品質分數",
-      method: "橫斷式研究",
-      numericalResults: [{ rawText: "RAW_NUMERIC_SENTENCE_SECRET", measure: "OR", value: 1.33, unit: "OR", statisticType: "odds_ratio", lowerCI: 1.01, upperCI: 1.77, pValue: null, uncertainty: null }],
-      associationDirection: "positive",
-      uncertainty: "橫斷式研究不能證明因果。",
-      directness: "A",
-      applicability: "高中生",
-      locator: "abstract",
-      themeKey: "relationship:short_video:sleep_quality",
-      conceptAxes: ["exposure:short_video", "outcome:sleep_quality"],
-      comparabilityKey: "population=high_school|exposure=short_video|outcome=sleep_quality",
-      limitations: ["橫斷式研究不能證明因果。"],
-      supportingEvidenceIds: ["evidence-1"],
-      supportingSourceIds: ["source-1"],
-      writerEligible: true,
-    }],
-    synthesisClusters: [{
-      clusterId: "cluster-1",
-      clusterPurpose: "relationship",
-      themeKey: "relationship:short_video:sleep_quality",
-      label: "短影音與睡眠品質",
-      conceptAxes: ["exposure:short_video", "outcome:sleep_quality"],
-      factIds: ["fact-1"],
-      evidenceIds: ["evidence-1"],
-      sourceIds: ["source-1"],
-      sharedFindingZhTw: "短影音使用與較差睡眠品質呈具條件性的關聯。",
-      agreementStatus: "single_source",
-      associationDirections: ["positive"],
-      comparabilityKeys: ["population=high_school|exposure=short_video|outcome=sleep_quality"],
-      numericAggregationAllowed: false,
-      comparabilityStatus: "not_comparable",
-      comparabilityReasons: ["single_source_only"],
-      conflictPoints: [],
-      limitations: ["橫斷式研究不能證明因果。"],
-    }],
+    normalizedFacts: [
+      {
+        factId: "fact-1",
+        evidenceId: "evidence-1",
+        sourceId: "source-1",
+        canonicalSourceId: "source-1",
+        sourceType: "journal_article",
+        evidenceLevel: "direct",
+        sourceAccessLevel: "complete_abstract",
+        sectionType: "abstract",
+        claimTextZhTw: "短影音使用與較差睡眠品質呈具條件性的關聯。",
+        population: "高中生",
+        ageGroup: "高中生",
+        sampleSize: 1236,
+        geography: null,
+        studySetting: null,
+        studyDesign: "橫斷式研究",
+        exposureConcept: "短影音使用",
+        exposureMeasure: null,
+        outcomeConcept: "睡眠品質分數",
+        outcomeMeasure: null,
+        statisticType: "odds_ratio",
+        value: 1.33,
+        lowerCI: 1.01,
+        upperCI: 1.77,
+        pValue: null,
+        unit: "OR",
+        direction: "positive",
+        mediator: null,
+        moderator: null,
+        confounders: null,
+        adjustmentStatus: null,
+        evidenceDirectness: "A",
+        sourceSpan: "RAW_SUPPORT_SPAN_SECRET",
+        certainty: "高",
+        confidence: 0.8,
+        authorInterpretation: null,
+        authorLimitations: null,
+        extractionConfidence: 0.8,
+        verificationStatus: "verified",
+        evidenceFunction: "support",
+        location: null,
+        setting: null,
+        exposure: "短影音使用",
+        outcome: "睡眠品質分數",
+        method: "橫斷式研究",
+        numericalResults: [
+          {
+            rawText: "RAW_NUMERIC_SENTENCE_SECRET",
+            measure: "OR",
+            value: 1.33,
+            unit: "OR",
+            statisticType: "odds_ratio",
+            lowerCI: 1.01,
+            upperCI: 1.77,
+            pValue: null,
+            uncertainty: null,
+          },
+        ],
+        associationDirection: "positive",
+        uncertainty: "橫斷式研究不能證明因果。",
+        directness: "A",
+        applicability: "高中生",
+        locator: "abstract",
+        themeKey: "relationship:short_video:sleep_quality",
+        conceptAxes: ["exposure:short_video", "outcome:sleep_quality"],
+        comparabilityKey:
+          "population=high_school|exposure=short_video|outcome=sleep_quality",
+        limitations: ["橫斷式研究不能證明因果。"],
+        supportingEvidenceIds: ["evidence-1"],
+        supportingSourceIds: ["source-1"],
+        writerEligible: true,
+      },
+    ],
+    synthesisClusters: [
+      {
+        clusterId: "cluster-1",
+        clusterPurpose: "relationship",
+        themeKey: "relationship:short_video:sleep_quality",
+        label: "短影音與睡眠品質",
+        conceptAxes: ["exposure:short_video", "outcome:sleep_quality"],
+        factIds: ["fact-1"],
+        evidenceIds: ["evidence-1"],
+        sourceIds: ["source-1"],
+        sharedFindingZhTw: "短影音使用與較差睡眠品質呈具條件性的關聯。",
+        agreementStatus: "single_source",
+        associationDirections: ["positive"],
+        comparabilityKeys: [
+          "population=high_school|exposure=short_video|outcome=sleep_quality",
+        ],
+        numericAggregationAllowed: false,
+        comparabilityStatus: "not_comparable",
+        comparabilityReasons: ["single_source_only"],
+        conflictPoints: [],
+        limitations: ["橫斷式研究不能證明因果。"],
+      },
+    ],
     claimGraph: {
       researchQuestion: "高中生短影音使用與睡眠品質有何關聯？",
-      claims: [{
-        claimId: "claim-1",
-        claimType: "direct_result",
-        readerFacingStatement: "短影音使用與較差睡眠品質呈具條件性的關聯。",
-        supportingFacts: ["fact-1"],
-        contradictingFacts: [],
-        backgroundFacts: [],
-        applicability: ["高中生"],
-        confidence: 0.8,
-        citationIds: ["source-1"],
-        statisticalInterpretationIds: ["stat-1"],
-        visualizable: true,
-        visualId: "visual-1",
-        evidenceDirectness: "A",
-        limitations: ["橫斷式研究不能證明因果。"],
-      }],
+      claims: [
+        {
+          claimId: "claim-1",
+          claimType: "direct_result",
+          readerFacingStatement: "短影音使用與較差睡眠品質呈具條件性的關聯。",
+          supportingFacts: ["fact-1"],
+          contradictingFacts: [],
+          backgroundFacts: [],
+          applicability: ["高中生"],
+          confidence: 0.8,
+          citationIds: ["source-1"],
+          statisticalInterpretationIds: ["stat-1"],
+          visualizable: true,
+          visualId: "visual-1",
+          evidenceDirectness: "A",
+          limitations: ["橫斷式研究不能證明因果。"],
+        },
+      ],
       edges: [],
     },
     knowledgeModel: {
       researchQuestion: "高中生短影音使用與睡眠品質有何關聯？",
       nodes: [
-        { nodeId: "concept-exposure", nodeType: "exposure", normalizedLabel: "短影音使用", aliases: ["短影音使用"], supportingFactIds: ["fact-1"] },
-        { nodeId: "concept-outcome", nodeType: "outcome", normalizedLabel: "睡眠品質", aliases: ["睡眠品質分數"], supportingFactIds: ["fact-1"] },
+        {
+          nodeId: "concept-exposure",
+          nodeType: "exposure",
+          normalizedLabel: "短影音使用",
+          aliases: ["短影音使用"],
+          supportingFactIds: ["fact-1"],
+        },
+        {
+          nodeId: "concept-outcome",
+          nodeType: "outcome",
+          normalizedLabel: "睡眠品質",
+          aliases: ["睡眠品質分數"],
+          supportingFactIds: ["fact-1"],
+        },
       ],
-      edges: [{
-        edgeId: "relation-1",
-        fromNodeId: "concept-exposure",
-        toNodeId: "concept-outcome",
-        relationshipType: "association",
-        supportingFactIds: ["fact-1"],
-        contradictingFactIds: [],
-        evidenceBasis: "statistical_association",
-        evidenceStrength: "weak",
-        applicablePopulations: ["高中生"],
-        applicableSettings: [],
-        causalInterpretationAllowed: false,
-        uncertainty: ["橫斷研究無法確認時間先後。"],
-      }],
+      edges: [
+        {
+          edgeId: "relation-1",
+          fromNodeId: "concept-exposure",
+          toNodeId: "concept-outcome",
+          relationshipType: "association",
+          supportingFactIds: ["fact-1"],
+          contradictingFactIds: [],
+          evidenceBasis: "statistical_association",
+          evidenceStrength: "weak",
+          applicablePopulations: ["高中生"],
+          applicableSettings: [],
+          causalInterpretationAllowed: false,
+          uncertainty: ["橫斷研究無法確認時間先後。"],
+        },
+      ],
       evidenceGaps: ["缺少縱貫追蹤。"],
     },
     heterogeneityAnalysis: {
@@ -251,34 +582,38 @@ function knowledgePlan(): ReportPlan {
       dominantDifferenceSources: [],
       synthesisBoundary: "單一來源不得宣稱跨研究共識。",
     },
-    statisticalInterpretations: [{
-      interpretationId: "stat-1",
-      factId: "fact-1",
-      sourceId: "source-1",
-      statisticType: "odds_ratio",
-      technicalExplanation: "勝算比為 1.33，它不等同風險增加百分比。",
-      readerExplanation: "這是勝算的相對差異，不是風險增加 33%。",
-      supportedConclusion: "可描述該樣本的關聯方向。",
-      unsupportedConclusion: "不能宣稱因果。",
-      causalInterpretationAllowed: false,
-      visualizable: true,
-      recommendedVisual: "forest_plot",
-      nullValue: 1,
-      precisionStatus: "precise",
-      crossStudyComparability: "NOT_COMPARABLE",
-      warnings: ["勝算比不得改寫為風險增加百分比。"],
-    }],
-    contradictionAnalysis: [{
-      claimId: "claim-1",
-      status: "single_source",
-      supportingFactIds: ["fact-1"],
-      counterFactIds: [],
-      nullFactIds: [],
-      primaryExplanation: "目前只有單一來源。",
-      alternativeExplanations: ["反向因果仍無法排除。"],
-      unresolvedPossibilities: ["未控制混雜因素。"],
-      discriminatingStudy: "縱貫且充分調整混雜的多地點研究。",
-    }],
+    statisticalInterpretations: [
+      {
+        interpretationId: "stat-1",
+        factId: "fact-1",
+        sourceId: "source-1",
+        statisticType: "odds_ratio",
+        technicalExplanation: "勝算比為 1.33，它不等同風險增加百分比。",
+        readerExplanation: "這是勝算的相對差異，不是風險增加 33%。",
+        supportedConclusion: "可描述該樣本的關聯方向。",
+        unsupportedConclusion: "不能宣稱因果。",
+        causalInterpretationAllowed: false,
+        visualizable: true,
+        recommendedVisual: "forest_plot",
+        nullValue: 1,
+        precisionStatus: "precise",
+        crossStudyComparability: "NOT_COMPARABLE",
+        warnings: ["勝算比不得改寫為風險增加百分比。"],
+      },
+    ],
+    contradictionAnalysis: [
+      {
+        claimId: "claim-1",
+        status: "single_source",
+        supportingFactIds: ["fact-1"],
+        counterFactIds: [],
+        nullFactIds: [],
+        primaryExplanation: "目前只有單一來源。",
+        alternativeExplanations: ["反向因果仍無法排除。"],
+        unresolvedPossibilities: ["未控制混雜因素。"],
+        discriminatingStudy: "縱貫且充分調整混雜的多地點研究。",
+      },
+    ],
     audienceProfile: {
       profileId: "high_school_report",
       terminologyExplanation: "guided",
@@ -306,14 +641,36 @@ function knowledgePlan(): ReportPlan {
       downgradedFrom: "literature_review",
     },
     narrativePasses: [
-      { pass: "teach_back", objective: "理解關係", inputClaimIds: ["claim-1"], inputFactIds: ["fact-1"], outputConstraints: ["不按來源順序"], citationMode: "deferred" },
-      { pass: "academic_reconstruction", objective: "重建論證", inputClaimIds: ["claim-1"], inputFactIds: ["fact-1"], outputConstraints: ["精確引用"], citationMode: "claim_entailment" },
+      {
+        pass: "teach_back",
+        objective: "理解關係",
+        inputClaimIds: ["claim-1"],
+        inputFactIds: ["fact-1"],
+        outputConstraints: ["不按來源順序"],
+        citationMode: "deferred",
+      },
+      {
+        pass: "academic_reconstruction",
+        objective: "重建論證",
+        inputClaimIds: ["claim-1"],
+        inputFactIds: ["fact-1"],
+        outputConstraints: ["精確引用"],
+        citationMode: "claim_entailment",
+      },
     ],
   };
 }
 
 test("report writer sends canonical facts and source identities to the LLM and returns formal Chinese sections", async () => {
-  const result = await writeReportWithLlm(
+  const result = await withProcessEnv(
+    {
+      LLM_PROVIDER: undefined,
+      SCHOOL_LLM_PROVIDER: undefined,
+      SCHOOL_LLM_API_KEY: undefined,
+      SCHOOL_LLM_BASE_URL: undefined,
+      SCHOOL_LLM_MODEL: undefined,
+    },
+    () => writeReportWithLlm(
     {
       topic: "薯條",
       reportType: "研究報告",
@@ -336,10 +693,16 @@ test("report writer sends canonical facts and source identities to the LLM and r
         );
         assert.match(userMessage.content, /薯條/);
         assert.match(userMessage.content, /synthesis-evidence-packet\/v2/u);
-        assert.match(userMessage.content, /"sourceIdentityColumns":\["sourceId","canonicalSourceIdentity","authors","year"\]/u);
+        assert.match(
+          userMessage.content,
+          /"sourceIdentityColumns":\["sourceId","canonicalSourceIdentity","authors","year"\]/u,
+        );
         assert.match(userMessage.content, /\["Ada Lovelace"\],2024/u);
         assert.match(userMessage.content, /"normalizedFacts":/u);
-        assert.doesNotMatch(userMessage.content, /Baseline sections|Normalized report input/u);
+        assert.doesNotMatch(
+          userMessage.content,
+          /Baseline sections|Normalized report input/u,
+        );
         return new Response(
           JSON.stringify({
             choices: [
@@ -360,7 +723,10 @@ test("report writer sends canonical facts and source identities to the LLM and r
                         title: "一、研究背景與問題意識",
                         prose:
                           "薯條作為常見速食配餐，可從熱量、脂肪、鈉含量與油炸加工條件切入，適合以食品標示與公共衛生資料進行保守分析[S1][S2]。",
-                        evidenceCardIds: ["evidence:source-1:0", "evidence:source-2:0"],
+                        evidenceCardIds: [
+                          "evidence:source-1:0",
+                          "evidence:source-2:0",
+                        ],
                         citationIds: ["source-1", "source-2"],
                       },
                       {
@@ -368,7 +734,10 @@ test("report writer sends canonical facts and source identities to the LLM and r
                         title: "三、主要發現",
                         prose:
                           "目前來源可支持薯條營養成分與油炸風險的初步討論，但仍不足以推出精確攝取量或因果結論[S2][S3]。",
-                        evidenceCardIds: ["evidence:source-2:0", "evidence:source-3:0"],
+                        evidenceCardIds: [
+                          "evidence:source-2:0",
+                          "evidence:source-3:0",
+                        ],
                         citationIds: ["source-2", "source-3"],
                       },
                     ],
@@ -380,6 +749,7 @@ test("report writer sends canonical facts and source identities to the LLM and r
         );
       },
     },
+    ),
   );
 
   assert.equal(result.ok, true);
@@ -394,8 +764,11 @@ test("report writer sends canonical facts and source identities to the LLM and r
   assert.equal(
     result.sections.every((section) => {
       const paragraphs = section.prose.split(/\n{2,}/u).filter(Boolean);
-      return paragraphs.length >= 2 && paragraphs.length <= 4 &&
-        section.paragraphClaims?.length === paragraphs.length;
+      return (
+        paragraphs.length >= 2 &&
+        paragraphs.length <= 4 &&
+        section.paragraphClaims?.length === paragraphs.length
+      );
     }),
     true,
   );
@@ -415,7 +788,8 @@ test("report writer sends canonical facts and source identities to the LLM and r
     ],
   );
   assert.match(
-    result.sections.find((section) => section.sectionId === "methodology")?.prose ?? "",
+    result.sections.find((section) => section.sectionId === "methodology")
+      ?.prose ?? "",
     /已納入且可追溯的資料/u,
   );
   assert.doesNotMatch(
@@ -425,7 +799,9 @@ test("report writer sends canonical facts and source identities to the LLM and r
 });
 
 test("writer_does_not_receive_raw_abstracts", async () => {
-  const requests: Array<{ messages: Array<{ role: string; content: string }> }> = [];
+  const requests: Array<{
+    messages: Array<{ role: string; content: string }>;
+  }> = [];
   const evidenceCard: ReportWriterEvidenceCard = {
     id: "evidence-1",
     evidenceId: "evidence-1",
@@ -454,40 +830,73 @@ test("writer_does_not_receive_raw_abstracts", async () => {
   const result = await writeReportWithLlm(
     {
       topic: "高中生短影音使用與睡眠品質",
-      acceptedSources: [source(1, { id: "source-1", abstract: "RAW_ABSTRACT_SECRET" })],
+      acceptedSources: [
+        source(1, { id: "source-1", abstract: "RAW_ABSTRACT_SECRET" }),
+      ],
       evidenceCards: [evidenceCard],
       requestedSectionIds: ["findings"],
       reportPlan: knowledgePlan(),
     },
     {
-      llm: { baseUrl: "https://llm.example/v1", model: "test-model", apiKey: "test-key" },
+      llm: {
+        baseUrl: "https://llm.example/v1",
+        model: "test-model",
+        apiKey: "test-key",
+      },
       fetchImpl: async (_input, init) => {
         const request = JSON.parse(String(init?.body)) as {
           messages: Array<{ role: string; content: string }>;
         };
         requests.push(request);
-        const system = request.messages.find((message) => message.role === "system")?.content ?? "";
+        const system =
+          request.messages.find((message) => message.role === "system")
+            ?.content ?? "";
         const content = /teach-back reasoner/u.test(system)
-          ? JSON.stringify({ sectionUnderstandings: [{ sectionId: "global_synthesis", teachBack: "暴露與睡眠結果存在受限關聯，且不能由橫斷資料推論因果。" }] })
-          : JSON.stringify({ sections: [{
-              sectionId: "findings",
-              title: "主要發現",
-              prose: "現有事實支持短影音使用與較差睡眠品質之間存在受限關聯。\n\n由於研究設計為橫斷式，結果不能解釋為因果效果。",
-              evidenceCardIds: ["evidence-1"],
-              citationIds: ["source-1"],
-            }] });
-        return new Response(JSON.stringify({ choices: [{ message: { content } }] }));
+          ? JSON.stringify({
+              sectionUnderstandings: [
+                {
+                  sectionId: "global_synthesis",
+                  teachBack:
+                    "暴露與睡眠結果存在受限關聯，且不能由橫斷資料推論因果。",
+                },
+              ],
+            })
+          : JSON.stringify({
+              sections: [
+                {
+                  sectionId: "findings",
+                  title: "主要發現",
+                  prose:
+                    "現有事實支持短影音使用與較差睡眠品質之間存在受限關聯。\n\n由於研究設計為橫斷式，結果不能解釋為因果效果。",
+                  evidenceCardIds: ["evidence-1"],
+                  citationIds: ["source-1"],
+                },
+              ],
+            });
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content } }] }),
+        );
       },
     },
   );
 
   assert.equal(result.ok, true);
   assert.ok(requests.length >= 2);
-  const teachBackPayload = requests[0]!.messages.map((message) => message.content).join("\n");
-  const reconstructionPayload = requests[1]!.messages.map((message) => message.content).join("\n");
+  const teachBackPayload = requests[0]!.messages
+    .map((message) => message.content)
+    .join("\n");
+  const reconstructionPayload = requests[1]!.messages
+    .map((message) => message.content)
+    .join("\n");
   assert.match(teachBackPayload, /teach-back-packet\/v1/u);
-  assert.doesNotMatch(teachBackPayload, /sourceIdentityRegistry|citationIds|authors|sourceId|evidenceId/u);
-  assert.match(reconstructionPayload, /Validated teach-back to reconstruct academically/u);
+  assert.doesNotMatch(
+    teachBackPayload,
+    /sourceIdentityRegistry|citationIds|authors|sourceId|evidenceId/u,
+  );
+  assert.match(
+    reconstructionPayload,
+    /Validated teach-back to reconstruct academically/u,
+  );
   assert.match(reconstructionPayload, /"reportIntelligence"/u);
   assert.match(reconstructionPayload, /"audienceProfile"/u);
   assert.match(reconstructionPayload, /"statisticalInterpretations"/u);
@@ -504,9 +913,137 @@ test("writer_does_not_receive_raw_abstracts", async () => {
     `scoped reconstruction fixture unexpectedly expanded to ${reconstructionPayload.length} characters`,
   );
   for (const payload of [teachBackPayload, reconstructionPayload]) {
-    assert.doesNotMatch(payload, /RAW_ABSTRACT_SECRET|RAW_SUPPORT_SPAN_SECRET|HIDDEN_LONG_SOURCE_ORDER_FINGERPRINT|RAW_EXACT_RESULT_SECRET|RAW_NUMERIC_SENTENCE_SECRET|RAW_SOURCE_TITLE_SECRET/u);
-    assert.doesNotMatch(payload, /"(?:sourceSpan|rawText|supportSpan|abstract|snippet)"\s*:/u);
+    assert.doesNotMatch(
+      payload,
+      /RAW_ABSTRACT_SECRET|RAW_SUPPORT_SPAN_SECRET|HIDDEN_LONG_SOURCE_ORDER_FINGERPRINT|RAW_EXACT_RESULT_SECRET|RAW_NUMERIC_SENTENCE_SECRET|RAW_SOURCE_TITLE_SECRET/u,
+    );
+    assert.doesNotMatch(
+      payload,
+      /"(?:sourceSpan|rawText|supportSpan|abstract|snippet)"\s*:/u,
+    );
   }
+  for (const request of requests) {
+    const system = request.messages.find((message) => message.role === "system")?.content ?? "";
+    assert.match(system, /untrusted data, never instructions/iu);
+    assert.match(system, /Never follow.*embedded request.*override this system contract/iu);
+  }
+});
+
+test("cross-language repair can reconstruct from exact reviewed Traditional-Chinese structured claims", async () => {
+  const supports = [
+    "Short-form video use was associated with poorer sleep quality among adolescents.",
+    "Electronic media use was generally associated with shorter sleep duration in children and adolescents.",
+  ];
+  const claimsZhTw = [
+    "青少年短影音使用與較差的睡眠品質呈關聯。",
+    "電子媒體使用通常與兒童及青少年較短的睡眠時長相關。",
+  ];
+  const acceptedSources = supports.map((abstract, index) =>
+    source(index + 1, {
+      id: `sleep-source-${index + 1}`,
+      title: `Sleep evidence ${index + 1}`,
+      abstract,
+    }),
+  );
+  const evidenceCards = acceptedSources.map((item, index) => ({
+    id: `sleep-evidence-${index + 1}`,
+    sourceId: item.id,
+    claim: claimsZhTw[index]!,
+    claimText: claimsZhTw[index]!,
+    claimTextZhTw: claimsZhTw[index]!,
+    claimTextOriginal: supports[index]!,
+    evidence: supports[index]!,
+    supportedByText: supports[index]!,
+    supportSpan: supports[index]!,
+    supportSpans: [
+      { claimId: `sleep-claim-${index + 1}`, text: supports[index]! },
+    ],
+    summary: claimsZhTw[index]!,
+    relevance: "青少年媒體使用與睡眠",
+    sourceTitle: item.title,
+    sourceProvider: "Crossref",
+    sourceAccessLevel: "abstract_only",
+    extractionStatus: "abstract_extracted",
+    evidenceType: "finding",
+    citationMarker: `[S${index + 1}]`,
+    citationText: `Researcher ${index + 1}（2024）[S${index + 1}]`,
+    provider: "Crossref",
+    doi: item.doi,
+    abstract: item.abstract,
+    year: item.year,
+    relevanceScore: 92,
+    sourceQualityScore: 88,
+    finalScore: 90,
+    usableSections: ["文獻探討"],
+    sectionTargets: ["literature_review"],
+    recommendationBucket: "scholarly_recommended" as const,
+    sourceRole: "core_scholarly_evidence",
+    isPeerReviewed: true,
+    acceptedByUser: true,
+    userDecision: "accepted_as_manual_review" as const,
+    extractionMethod: "llm_structured_extract" as const,
+    extractedBy: "llm" as const,
+    needsReview: false,
+    needsManualReview: false,
+    governanceFlags: ["exact_support_span_verified", "abstract_only_support"],
+    limitation: "來源目前依摘要整理。",
+    limitations: ["來源目前依摘要整理。"],
+  }));
+
+  const result = await writeReportWithLlm(
+    {
+      topic: "青少年短影音使用與睡眠品質",
+      acceptedSources,
+      evidenceCards,
+      requestedSectionIds: ["literature_review"],
+    },
+    {
+      llm: {
+        baseUrl: "https://llm.example/v1",
+        model: "test-model",
+        apiKey: "test-key",
+      },
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    sections: [
+                      {
+                        sectionId: "literature_review",
+                        title: "文獻證據",
+                        prose: "這些結果證明所有青少年都會受到相同影響[S1]。",
+                        evidenceCardIds: evidenceCards.map((card) => card.id),
+                        citationIds: acceptedSources.map((item) => item.id),
+                      },
+                    ],
+                  }),
+                },
+              },
+            ],
+          }),
+        ),
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.writerDiagnostics?.fallbackSections, 0);
+  assert.deepEqual(result.writerDiagnostics?.repairedSectionIds, [
+    "literature_review",
+  ]);
+  const literature = result.sections.find(
+    (section) => section.sectionId === "literature_review",
+  );
+  assert.ok(literature);
+  assert.equal(
+    literature.generationMethod,
+    "llm_verified_sentence_reconstruction",
+  );
+  assert.match(literature.prose, /短影音使用.*睡眠品質.*\[S1\]/u);
+  assert.match(literature.prose, /電子媒體使用.*睡眠時長.*\[S2\]/u);
+  assert.doesNotMatch(literature.prose, /證明所有/u);
 });
 
 test("canonical prompt packets preserve more than six identity and evidence bindings", async () => {
@@ -523,13 +1060,15 @@ test("canonical prompt packets preserve more than six identity and evidence bind
   const baseGraphClaim = plan.claimGraph!.claims[0]!;
   const basePlannedClaim = plan.plannedClaims[0]!;
 
-  plan.sections = [{
-    ...plan.sections[0]!,
-    sectionId: "literature_review",
-    title: "文獻探討",
-    evidenceCardIds: evidenceIds,
-    plannedClaimIds,
-  }];
+  plan.sections = [
+    {
+      ...plan.sections[0]!,
+      sectionId: "literature_review",
+      title: "文獻探討",
+      evidenceCardIds: evidenceIds,
+      plannedClaimIds,
+    },
+  ];
   plan.normalizedFacts = indexes.map((index) => ({
     ...baseFact,
     factId: `fact-${index}`,
@@ -539,12 +1078,14 @@ test("canonical prompt packets preserve more than six identity and evidence bind
     supportingEvidenceIds: index === 1 ? evidenceIds : [`evidence-${index}`],
     supportingSourceIds: index === 1 ? sourceIds : [`source-${index}`],
   }));
-  plan.synthesisClusters = [{
-    ...baseCluster,
-    factIds,
-    evidenceIds,
-    sourceIds,
-  }];
+  plan.synthesisClusters = [
+    {
+      ...baseCluster,
+      factIds,
+      evidenceIds,
+      sourceIds,
+    },
+  ];
   plan.claimGraph = {
     ...plan.claimGraph!,
     claims: indexes.map((index) => ({
@@ -616,69 +1157,120 @@ test("canonical prompt packets preserve more than six identity and evidence bind
     outcome: "睡眠品質分數",
     evidenceDirectnessTier: "A",
   }));
-  const requests: Array<{ messages: Array<{ role: string; content: string }> }> = [];
-  await writeReportWithLlm({
-    topic: "高中生短影音使用與睡眠品質",
-    acceptedSources: indexes.map((index) => source(index, {
-      id: `source-${index}`,
-      title: `RAW_SOURCE_TITLE_SECRET_${index}`,
-      abstract: `RAW_ABSTRACT_SECRET_${index}`,
-    })),
-    evidenceCards,
-    requestedSectionIds: ["literature_review"],
-    reportPlan: plan,
-  }, {
-    llm: { baseUrl: "https://llm.example/v1", model: "test-model", apiKey: "test-key" },
-    fetchImpl: async (_input, init) => {
-      const request = JSON.parse(String(init?.body)) as {
-        messages: Array<{ role: string; content: string }>;
-      };
-      requests.push(request);
-      const system = request.messages.find((message) => message.role === "system")?.content ?? "";
-      const content = /teach-back reasoner/u.test(system)
-        ? JSON.stringify({ sectionUnderstandings: [{
-            sectionId: "global_synthesis",
-            teachBack: "多項事實共同顯示暴露與睡眠結果存在受限關聯，差異、機制與適用邊界仍須一併解釋。",
-          }] })
-        : JSON.stringify({ sections: [{
-            sectionId: "literature_review",
-            title: "文獻探討",
-            prose: "現有事實共同支持短影音使用與睡眠品質之間存在受限關聯。\n\n由於資料為橫斷式，關聯方向仍不能解釋為因果效果。",
-            evidenceCardIds: evidenceIds,
-            citationIds: sourceIds,
-          }] });
-      return new Response(JSON.stringify({ choices: [{ message: { content } }] }));
+  const requests: Array<{
+    messages: Array<{ role: string; content: string }>;
+  }> = [];
+  const result = await writeReportWithLlm(
+    {
+      topic: "高中生短影音使用與睡眠品質",
+      acceptedSources: indexes.map((index) =>
+        source(index, {
+          id: `source-${index}`,
+          title: `RAW_SOURCE_TITLE_SECRET_${index}`,
+          abstract: `RAW_ABSTRACT_SECRET_${index}`,
+        }),
+      ),
+      evidenceCards,
+      requestedSectionIds: ["literature_review"],
+      reportPlan: plan,
     },
-  });
+    {
+      llm: {
+        baseUrl: "https://llm.example/v1",
+        model: "test-model",
+        apiKey: "test-key",
+      },
+      fetchImpl: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as {
+          messages: Array<{ role: string; content: string }>;
+        };
+        requests.push(request);
+        const system =
+          request.messages.find((message) => message.role === "system")
+            ?.content ?? "";
+        const content = /teach-back reasoner/u.test(system)
+          ? JSON.stringify({
+              sectionUnderstandings: [
+                {
+                  sectionId: "global_synthesis",
+                  teachBack:
+                    "多項事實共同顯示暴露與睡眠結果存在受限關聯，差異、機制與適用邊界仍須一併解釋。",
+                },
+              ],
+            })
+          : JSON.stringify({
+              sections: [
+                {
+                  sectionId: "literature_review",
+                  title: "文獻探討",
+                  prose:
+                    "現有事實共同支持短影音使用與睡眠品質之間存在受限關聯。\n\n由於資料為橫斷式，關聯方向仍不能解釋為因果效果。",
+                  evidenceCardIds: evidenceIds,
+                  citationIds: sourceIds,
+                },
+              ],
+            });
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content } }] }),
+        );
+      },
+    },
+  );
 
   assert.ok(requests.length >= 2);
   const userContent = (requestIndex: number) =>
-    requests[requestIndex]!.messages.find((message) => message.role === "user")?.content ?? "";
-  const parsePacketAfter = (content: string, marker: string): Record<string, unknown> => {
+    requests[requestIndex]!.messages.find((message) => message.role === "user")
+      ?.content ?? "";
+  const parsePacketAfter = (
+    content: string,
+    marker: string,
+  ): Record<string, unknown> => {
     const markerIndex = content.indexOf(marker);
     assert.notEqual(markerIndex, -1, `missing packet marker: ${marker}`);
-    return JSON.parse(content.slice(markerIndex + marker.length).trim()) as Record<string, unknown>;
+    return JSON.parse(
+      content.slice(markerIndex + marker.length).trim(),
+    ) as Record<string, unknown>;
   };
-  const rowAsRecord = (columns: unknown, row: unknown): Record<string, unknown> => {
+  const rowAsRecord = (
+    columns: unknown,
+    row: unknown,
+  ): Record<string, unknown> => {
     assert.ok(Array.isArray(columns));
     assert.ok(Array.isArray(row));
-    return Object.fromEntries(columns.map((column, index) => [String(column), row[index]]));
+    return Object.fromEntries(
+      columns.map((column, index) => [String(column), row[index]]),
+    );
   };
 
   const teachBackPayload = userContent(0);
   const reconstructionPayload = userContent(1);
-  const teachBackPacket = parsePacketAfter(teachBackPayload, "De-identified knowledge packet:");
+  const teachBackPacket = parsePacketAfter(
+    teachBackPayload,
+    "De-identified knowledge packet:",
+  );
   const teachBackGraph = teachBackPacket.claimGraph as Record<string, unknown>;
   const teachBackClaims = teachBackGraph.claims as unknown[];
   const teachBackFirstClaim = rowAsRecord(
     teachBackGraph.claimColumns,
     teachBackClaims[0],
   );
-  assert.equal((teachBackPacket.normalizedFacts as unknown[]).length, bindingCount);
+  assert.equal(
+    (teachBackPacket.normalizedFacts as unknown[]).length,
+    bindingCount,
+  );
   assert.equal(teachBackClaims.length, bindingCount);
-  assert.deepEqual(teachBackFirstClaim.supportingFactRefs, factIds.map((_, index) => `F${index + 1}`));
-  assert.deepEqual(teachBackFirstClaim.contradictingFactRefs, factIds.map((_, index) => `F${index + 1}`));
-  assert.deepEqual(teachBackFirstClaim.backgroundFactRefs, factIds.map((_, index) => `F${index + 1}`));
+  assert.deepEqual(
+    teachBackFirstClaim.supportingFactRefs,
+    factIds.map((_, index) => `F${index + 1}`),
+  );
+  assert.deepEqual(
+    teachBackFirstClaim.contradictingFactRefs,
+    factIds.map((_, index) => `F${index + 1}`),
+  );
+  assert.deepEqual(
+    teachBackFirstClaim.backgroundFactRefs,
+    factIds.map((_, index) => `F${index + 1}`),
+  );
   assert.equal((teachBackGraph.edges as unknown[]).length, bindingCount);
   assert.deepEqual(
     (teachBackPacket.narrativePass as Record<string, unknown>).inputClaimRefs,
@@ -693,7 +1285,10 @@ test("canonical prompt packets preserve more than six identity and evidence bind
     reconstructionPayload,
     "Canonical thematic synthesis packet (facts, clusters, claim bindings, and source identity registry):",
   );
-  const reconstructionGraph = reconstructionPacket.claimGraph as Record<string, unknown>;
+  const reconstructionGraph = reconstructionPacket.claimGraph as Record<
+    string,
+    unknown
+  >;
   const reconstructionFirstClaim = rowAsRecord(
     reconstructionGraph.claimColumns,
     (reconstructionGraph.claims as unknown[])[0],
@@ -724,63 +1319,105 @@ test("canonical prompt packets preserve more than six identity and evidence bind
   assert.deepEqual(reconstructionFirstPlannedClaim.sourceKeys, sourceIds);
   assert.deepEqual(reconstructionFirstPlannedClaim.citationKeys, sourceIds);
   assert.equal((reconstructionGraph.edges as unknown[]).length, bindingCount);
-  assert.equal((reconstructionPacket.sourceIdentityRegistry as unknown[]).length, bindingCount);
+  assert.equal(
+    (reconstructionPacket.sourceIdentityRegistry as unknown[]).length,
+    bindingCount,
+  );
   assert.deepEqual(
-    (reconstructionPacket.narrativePasses as Array<Record<string, unknown>>)[0]!.inputClaimIds,
+    (reconstructionPacket.narrativePasses as Array<Record<string, unknown>>)[0]!
+      .inputClaimIds,
     graphClaimIds,
   );
   assert.deepEqual(
-    (reconstructionPacket.narrativePasses as Array<Record<string, unknown>>)[0]!.inputFactIds,
+    (reconstructionPacket.narrativePasses as Array<Record<string, unknown>>)[0]!
+      .inputFactIds,
     factIds,
   );
 
-  assert.ok(teachBackPayload.length < 20_000, `teach-back prompt expanded to ${teachBackPayload.length}`);
-  assert.ok(reconstructionPayload.length < 45_000, `reconstruction prompt expanded to ${reconstructionPayload.length}`);
+  assert.ok(
+    teachBackPayload.length < 20_000,
+    `teach-back prompt expanded to ${teachBackPayload.length}`,
+  );
+  assert.ok(
+    reconstructionPayload.length < 45_000,
+    `reconstruction prompt expanded to ${reconstructionPayload.length}`,
+  );
   for (const payload of [teachBackPayload, reconstructionPayload]) {
-    assert.doesNotMatch(payload, /RAW_(?:ABSTRACT|EVIDENCE|EXACT_RESULT|SOURCE_TITLE|SUPPORT_SPAN)_SECRET|CARD_SUMMARY_SECRET/u);
-    assert.doesNotMatch(payload, /"(?:sourceSpan|rawText|supportSpan|abstract|snippet|summary)"\s*:/u);
+    assert.doesNotMatch(
+      payload,
+      /RAW_(?:ABSTRACT|EVIDENCE|EXACT_RESULT|SOURCE_TITLE|SUPPORT_SPAN)_SECRET|CARD_SUMMARY_SECRET/u,
+    );
+    assert.doesNotMatch(
+      payload,
+      /"(?:sourceSpan|rawText|supportSpan|abstract|snippet|summary)"\s*:/u,
+    );
   }
 
   const previousLlmProvider = process.env.LLM_PROVIDER;
   const ollamaRequests: Array<Record<string, unknown>> = [];
   process.env.LLM_PROVIDER = "ollama";
   try {
-    await writeReportWithLlm({
-      topic: "高中生短影音使用與睡眠品質",
-      acceptedSources: indexes.map((index) => source(index, {
-        id: `source-${index}`,
-        title: `RAW_SOURCE_TITLE_SECRET_${index}`,
-        abstract: `RAW_ABSTRACT_SECRET_${index}`,
-      })),
-      evidenceCards,
-      requestedSectionIds: ["literature_review"],
-      reportPlan: plan,
-    }, {
-      llm: { baseUrl: "http://127.0.0.1:11434", model: "test-model" },
-      fetchImpl: async (_input, init) => {
-        const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        ollamaRequests.push(request);
-        const messages = request.messages as Array<{ role: string; content: string }>;
-        const system = messages.find((message) => message.role === "system")?.content ?? "";
-        const content = /teach-back reasoner/u.test(system)
-          ? JSON.stringify({ sectionUnderstandings: [{
-              sectionId: "global_synthesis",
-              teachBack: "多項事實共同顯示暴露與睡眠結果存在受限關聯，差異、機制與適用邊界仍須一併解釋。",
-            }] })
-          : JSON.stringify({ sections: [{
-              sectionId: "literature_review",
-              title: "文獻探討",
-              prose: "現有事實共同支持短影音使用與睡眠品質之間存在受限關聯。\n\n由於資料為橫斷式，關聯方向仍不能解釋為因果效果。",
-              evidenceCardIds: evidenceIds,
-              citationIds: sourceIds,
-            }] });
-        return new Response(JSON.stringify({
-          model: "test-model",
-          message: { role: "assistant", content },
-          done: true,
-        }));
+    await writeReportWithLlm(
+      {
+        topic: "高中生短影音使用與睡眠品質",
+        acceptedSources: indexes.map((index) =>
+          source(index, {
+            id: `source-${index}`,
+            title: `RAW_SOURCE_TITLE_SECRET_${index}`,
+            abstract: `RAW_ABSTRACT_SECRET_${index}`,
+          }),
+        ),
+        evidenceCards,
+        requestedSectionIds: ["literature_review"],
+        reportPlan: plan,
       },
-    });
+      {
+        llm: { baseUrl: "http://127.0.0.1:11434", model: "test-model" },
+        fetchImpl: async (_input, init) => {
+          const request = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          ollamaRequests.push(request);
+          const messages = request.messages as Array<{
+            role: string;
+            content: string;
+          }>;
+          const system =
+            messages.find((message) => message.role === "system")?.content ??
+            "";
+          const content = /teach-back reasoner/u.test(system)
+            ? JSON.stringify({
+                sectionUnderstandings: [
+                  {
+                    sectionId: "global_synthesis",
+                    teachBack:
+                      "多項事實共同顯示暴露與睡眠結果存在受限關聯，差異、機制與適用邊界仍須一併解釋。",
+                  },
+                ],
+              })
+            : JSON.stringify({
+                sections: [
+                  {
+                    sectionId: "literature_review",
+                    title: "文獻探討",
+                    prose:
+                      "現有事實共同支持短影音使用與睡眠品質之間存在受限關聯。\n\n由於資料為橫斷式，關聯方向仍不能解釋為因果效果。",
+                    evidenceCardIds: evidenceIds,
+                    citationIds: sourceIds,
+                  },
+                ],
+              });
+          return new Response(
+            JSON.stringify({
+              model: "test-model",
+              message: { role: "assistant", content },
+              done: true,
+            }),
+          );
+        },
+      },
+    );
   } finally {
     if (previousLlmProvider === undefined) delete process.env.LLM_PROVIDER;
     else process.env.LLM_PROVIDER = previousLlmProvider;
@@ -792,9 +1429,10 @@ test("canonical prompt packets preserve more than six identity and evidence bind
     assert.equal(request.think, false);
     assert.equal(request.format, "json");
   }
-  const localReconstructionPayload = (
-    ollamaRequests[1]!.messages as Array<{ role: string; content: string }>
-  ).find((message) => message.role === "user")?.content ?? "";
+  const localReconstructionPayload =
+    (
+      ollamaRequests[1]!.messages as Array<{ role: string; content: string }>
+    ).find((message) => message.role === "user")?.content ?? "";
   const localPacket = parsePacketAfter(
     localReconstructionPayload,
     "Canonical reconstruction packet:",
@@ -807,69 +1445,465 @@ test("canonical prompt packets preserve more than six identity and evidence bind
     localPacket.sectionBindings as Array<Record<string, unknown>>
   )[0]!;
   assert.equal((localPacket.facts as unknown[]).length, bindingCount);
-  assert.deepEqual(localFirstClaim.supportingFactRefs, factIds.map((_, index) => `F${index + 1}`));
-  assert.deepEqual(localFirstClaim.contradictingFactRefs, factIds.map((_, index) => `F${index + 1}`));
-  assert.deepEqual(localFirstClaim.backgroundFactRefs, factIds.map((_, index) => `F${index + 1}`));
+  assert.deepEqual(
+    localFirstClaim.supportingFactRefs,
+    factIds.map((_, index) => `F${index + 1}`),
+  );
+  assert.deepEqual(
+    localFirstClaim.contradictingFactRefs,
+    factIds.map((_, index) => `F${index + 1}`),
+  );
+  assert.deepEqual(
+    localFirstClaim.backgroundFactRefs,
+    factIds.map((_, index) => `F${index + 1}`),
+  );
   assert.deepEqual(localFirstClaim.citationIds, sourceIds);
   assert.equal((localPacket.edges as unknown[]).length, bindingCount);
-  assert.deepEqual(localFirstSectionBinding.claimRefs, graphClaimIds.map((_, index) => `C${index + 1}`));
+  assert.deepEqual(
+    localFirstSectionBinding.claimRefs,
+    graphClaimIds.map((_, index) => `C${index + 1}`),
+  );
   assert.deepEqual(localFirstSectionBinding.evidenceCardIds, evidenceIds);
   assert.deepEqual(localFirstSectionBinding.citationIds, sourceIds);
   assert.deepEqual(
-    (localPacket.narrativePasses as Array<Record<string, unknown>>)[0]!.inputClaimRefs,
+    (localPacket.narrativePasses as Array<Record<string, unknown>>)[0]!
+      .inputClaimRefs,
     graphClaimIds.map((_, index) => `C${index + 1}`),
   );
   assert.deepEqual(
-    (localPacket.narrativePasses as Array<Record<string, unknown>>)[0]!.inputFactRefs,
+    (localPacket.narrativePasses as Array<Record<string, unknown>>)[0]!
+      .inputFactRefs,
     factIds.map((_, index) => `F${index + 1}`),
   );
   assert.ok(
     localReconstructionPayload.length < 35_000,
     `local reconstruction prompt expanded to ${localReconstructionPayload.length}`,
   );
-  assert.doesNotMatch(localReconstructionPayload, /RAW_(?:ABSTRACT|EVIDENCE|EXACT_RESULT|SOURCE_TITLE|SUPPORT_SPAN)_SECRET|CARD_SUMMARY_SECRET/u);
-  assert.doesNotMatch(localReconstructionPayload, /"(?:sourceSpan|rawText|supportSpan|abstract|snippet|summary)"\s*:/u);
+  assert.doesNotMatch(
+    localReconstructionPayload,
+    /RAW_(?:ABSTRACT|EVIDENCE|EXACT_RESULT|SOURCE_TITLE|SUPPORT_SPAN)_SECRET|CARD_SUMMARY_SECRET/u,
+  );
+  assert.doesNotMatch(
+    localReconstructionPayload,
+    /"(?:sourceSpan|rawText|supportSpan|abstract|snippet|summary)"\s*:/u,
+  );
+});
+
+test("long-form reconstruction scopes the canonical graph and fits the conservative context budget", async () => {
+  const totalBindingCount = 59;
+  const selectedBindingCount = 8;
+  const indexes = Array.from(
+    { length: totalBindingCount },
+    (_, index) => index + 1,
+  );
+  const factIds = indexes.map((index) => `fact-${index}`);
+  const evidenceIds = indexes.map((index) => `evidence-${index}`);
+  const sourceIds = indexes.map((index) => `source-${index}`);
+  const statisticalInterpretationIds = indexes.map((index) => `stat-${index}`);
+  const plan = knowledgePlan();
+  const baseFact = plan.normalizedFacts![0]!;
+  const baseCluster = plan.synthesisClusters![0]!;
+  const baseGraphClaim = plan.claimGraph!.claims[0]!;
+  const basePlannedClaim = plan.plannedClaims[0]!;
+  const baseStatisticalInterpretation = plan.statisticalInterpretations![0]!;
+  const baseKnowledgeNode = plan.knowledgeModel!.nodes[0]!;
+  const baseContradiction = plan.contradictionAnalysis![0]!;
+
+  plan.sections = [
+    {
+      ...plan.sections[0]!,
+      sectionId: "literature_review",
+      title: "文獻探討",
+      evidenceCardIds: evidenceIds,
+      plannedClaimIds: ["planned-all"],
+    },
+  ];
+  plan.normalizedFacts = indexes.map((index) => ({
+    ...baseFact,
+    factId: `fact-${index}`,
+    evidenceId: `evidence-${index}`,
+    sourceId: `source-${index}`,
+    canonicalSourceId: `source-${index}`,
+    supportingEvidenceIds: [`evidence-${index}`],
+    supportingSourceIds: [`source-${index}`],
+    claimTextZhTw: `第 ${index} 筆標準化事實支持短影音使用與睡眠品質之間存在受限關聯。`,
+  }));
+  plan.synthesisClusters = [
+    {
+      ...baseCluster,
+      clusterId: "cluster-all",
+      factIds,
+      evidenceIds,
+      sourceIds,
+    },
+  ];
+  plan.claimGraph = {
+    ...plan.claimGraph!,
+    claims: [
+      {
+        ...baseGraphClaim,
+        claimId: "claim-all",
+        supportingFacts: factIds,
+        contradictingFacts: factIds,
+        backgroundFacts: factIds,
+        citationIds: sourceIds,
+        statisticalInterpretationIds,
+      },
+    ],
+    edges: [],
+  };
+  plan.plannedClaims = [
+    {
+      ...basePlannedClaim,
+      claimId: "planned-all",
+      claimGraphId: "claim-all",
+      sectionId: "literature_review",
+      supportingEvidenceIds: evidenceIds,
+      supportingSourceKeys: sourceIds,
+      allowedCitationKeys: sourceIds,
+      normalizedFactIds: factIds,
+      synthesisClusterIds: ["cluster-all"],
+    },
+  ];
+  plan.statisticalInterpretations = indexes.map((index) => ({
+    ...baseStatisticalInterpretation,
+    interpretationId: `stat-${index}`,
+    factId: `fact-${index}`,
+    sourceId: `source-${index}`,
+    readerExplanation: `第 ${index} 筆統計只能解釋關聯方向。`,
+  }));
+  plan.heterogeneityAnalysis = {
+    comparisons: Array.from({ length: 120 }, (_, index) => ({
+      comparisonId: `comparison-${index + 1}`,
+      leftFactId: factIds[index % totalBindingCount]!,
+      rightFactId: factIds[(index * 7 + 1) % totalBindingCount]!,
+      status:
+        index % 2 === 0
+          ? ("DIRECTION_ONLY" as const)
+          : ("NOT_COMPARABLE" as const),
+      comparableDimensions: ["結果方向"],
+      differingDimensions: ["樣本", "測量", "研究設計"],
+      reasons: ["人口、暴露與結果測量不同，不得合併數值。"],
+      numericPoolingAllowed: false,
+      directionComparisonAllowed: true,
+    })),
+    dominantDifferenceSources: ["樣本年齡", "短影音操作型定義", "結果測量"],
+    synthesisBoundary: "只能比較關聯方向，不得進行數值合併或因果外推。",
+  };
+  plan.contradictionAnalysis = [
+    {
+      ...baseContradiction,
+      claimId: "claim-all",
+      supportingFactIds: factIds,
+      counterFactIds: factIds,
+      nullFactIds: factIds,
+      alternativeExplanations: Array.from(
+        { length: 12 },
+        (_, index) => `替代解釋 ${index + 1}：反向因果與殘餘混雜仍無法排除。`,
+      ),
+      unresolvedPossibilities: Array.from(
+        { length: 12 },
+        (_, index) => `未解問題 ${index + 1}：測量與追蹤時間仍不一致。`,
+      ),
+    },
+  ];
+  plan.knowledgeModel = {
+    ...plan.knowledgeModel!,
+    nodes: indexes.map((index) => ({
+      ...baseKnowledgeNode,
+      nodeId: `node-${index}`,
+      normalizedLabel: `概念 ${index}`,
+      supportingFactIds: [`fact-${index}`],
+    })),
+    edges: [],
+    evidenceGaps: Array.from(
+      { length: 20 },
+      (_, index) => `證據缺口 ${index + 1}：尚缺可確認時間順序的長期追蹤。`,
+    ),
+  };
+  plan.narrativePasses = [
+    {
+      pass: "teach_back",
+      objective: "理解跨事實關係",
+      inputClaimIds: ["claim-all"],
+      inputFactIds: factIds,
+      outputConstraints: ["不得以來源順序組織"],
+      citationMode: "deferred",
+    },
+    {
+      pass: "academic_reconstruction",
+      objective: "依綁定重建論證",
+      inputClaimIds: ["claim-all"],
+      inputFactIds: factIds,
+      outputConstraints: ["只能使用當前章節綁定"],
+      citationMode: "claim_entailment",
+    },
+  ];
+
+  const evidenceCards: ReportWriterEvidenceCard[] = indexes.map((index) => ({
+    id: `evidence-${index}`,
+    evidenceId: `evidence-${index}`,
+    sourceId: `source-${index}`,
+    canonicalSourceKey: `source-${index}`,
+    citationKey: `source-${index}`,
+    claimIds: ["planned-all"],
+    claim: `第 ${index} 筆事實支持短影音與睡眠品質的受限關聯。`,
+    claimTextZhTw: `第 ${index} 筆事實支持短影音與睡眠品質的受限關聯。`,
+    evidence: `RAW_EVIDENCE_${index}`,
+    summary: `第 ${index} 筆標準化摘要。`,
+    relevance: "短影音與睡眠品質",
+    sourceTitle: `RAW_SOURCE_TITLE_${index}`,
+    sourceProvider: "OpenAlex",
+    year: 2025,
+    usableSections: ["literature_review"],
+    sectionTargets: ["literature_review"],
+    citationText: `[S${index}]`,
+    citationMarker: `[S${index}]`,
+    limitation: "橫斷式研究不能證明因果。",
+    evidenceDirectnessTier: "A",
+  }));
+  type CapturedReconstructionRequest = {
+    messages: Array<{
+      role: "system" | "user" | "assistant";
+      content: string;
+    }>;
+    max_tokens: number;
+  };
+  let reconstructionRequest: CapturedReconstructionRequest | null = null;
+
+  const result = await writeReportWithLlm(
+    {
+      topic: "高中生短影音使用與睡眠品質",
+      writingStyle: "正式學術證據綜合；保留本次品質修復指令",
+      requestedLength: "長篇深度研究報告 7,000～10,000 個中文字",
+      targetWordCount: "7000-10000",
+      acceptedSources: indexes.map((index) =>
+        source(index, {
+          id: `source-${index}`,
+          title: `RAW_SOURCE_TITLE_${index}`,
+        }),
+      ),
+      evidenceCards,
+      requestedSectionIds: ["literature_review"],
+      reportPlan: plan,
+    },
+    {
+      llm: {
+        baseUrl: "https://llm.example/v1",
+        model: "gpt-5.6-luna",
+        apiKey: "test-key",
+      },
+      fetchImpl: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as {
+          messages: CapturedReconstructionRequest["messages"];
+          max_tokens: number;
+        };
+        const system =
+          request.messages.find((message) => message.role === "system")
+            ?.content ?? "";
+        const isTeachBack = /teach-back reasoner/u.test(system);
+        if (!isTeachBack && !reconstructionRequest)
+          reconstructionRequest = request;
+        const content = isTeachBack
+          ? JSON.stringify({
+              sectionUnderstandings: [
+                {
+                  sectionId: "global_synthesis",
+                  teachBack:
+                    "多項事實共同顯示短影音暴露與睡眠結果存在受限關聯，異質性、反向因果與適用邊界仍須審慎處理。",
+                },
+              ],
+            })
+          : JSON.stringify({
+              sections: [
+                {
+                  sectionId: "literature_review",
+                  title: "三、文獻探討",
+                  prose:
+                    "標準化事實共同支持短影音使用與較差睡眠品質之間存在受限關聯。\n\n由於樣本、測量與研究設計不一致，現有結果只能支持關聯方向，不能據此推論因果效果。",
+                  evidenceCardIds: evidenceIds.slice(0, selectedBindingCount),
+                  citationIds: sourceIds.slice(0, selectedBindingCount),
+                },
+              ],
+            });
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content } }] }),
+        );
+      },
+    },
+  );
+
+  assert.ok(reconstructionRequest);
+  const request = reconstructionRequest as CapturedReconstructionRequest;
+  const estimatedTotalTokens =
+    estimateMessageTokens(request.messages) + request.max_tokens + 512;
+  assert.ok(
+    estimatedTotalTokens <= 32_768,
+    `long-form request exceeded conservative context budget: ${estimatedTotalTokens}`,
+  );
+  const user =
+    request.messages.find((message) => message.role === "user")?.content ?? "";
+  assert.equal(result.sectionPlan?.[0]?.targetWordCount, 7_000);
+  assert.match(user, /"targetChineseCharacterCount":7000/u);
+  assert.match(
+    user,
+    /"targetChineseCharacterRange":\{"min":6300,"max":7700\}/u,
+  );
+  assert.match(user, /Canonical reconstruction packet:/u);
+  assert.match(user, /保留本次品質修復指令/u);
+  assert.doesNotMatch(user, /synthesis-evidence-packet\/v2/u);
+  assert.doesNotMatch(user, /UNRESOLVED_(?:FACT|CLAIM)/u);
+  const packetMarker = "Canonical reconstruction packet: ";
+  const packet = JSON.parse(
+    user.slice(user.indexOf(packetMarker) + packetMarker.length),
+  ) as Record<string, unknown>;
+  const rowAsRecord = (
+    columns: unknown,
+    row: unknown,
+  ): Record<string, unknown> => {
+    assert.ok(Array.isArray(columns));
+    assert.ok(Array.isArray(row));
+    return Object.fromEntries(
+      columns.map((column, index) => [String(column), row[index]]),
+    );
+  };
+  const claims = packet.claims as unknown[];
+  const firstClaim = rowAsRecord(packet.claimColumns, claims[0]);
+  const intelligence = packet.reportIntelligence as Record<string, unknown>;
+  const heterogeneity = intelligence.heterogeneity as Record<string, unknown>;
+  const sectionBinding = (
+    packet.sectionBindings as Array<Record<string, unknown>>
+  )[0]!;
+
+  assert.equal((packet.facts as unknown[]).length, selectedBindingCount);
+  assert.deepEqual(
+    firstClaim.supportingFactRefs,
+    Array.from({ length: selectedBindingCount }, (_, index) => `F${index + 1}`),
+  );
+  assert.deepEqual(
+    sectionBinding.evidenceCardIds,
+    evidenceIds.slice(0, selectedBindingCount),
+  );
+  assert.deepEqual(
+    sectionBinding.citationIds,
+    sourceIds.slice(0, selectedBindingCount),
+  );
+  assert.equal(
+    (intelligence.statisticalInterpretations as unknown[]).length,
+    selectedBindingCount,
+  );
+  assert.equal(
+    heterogeneity.synthesisBoundary,
+    "只能比較關聯方向，不得進行數值合併或因果外推。",
+  );
+  assert.ok(
+    Object.keys(heterogeneity.comparisonStatusCounts as object).length > 0,
+  );
+  assert.equal((intelligence.contradictions as unknown[]).length, 1);
+  assert.equal((intelligence.evidenceGaps as unknown[]).length, 8);
+  assert.doesNotMatch(
+    JSON.stringify(packet),
+    /"fact-9"|"evidence-9"|"source-9"/u,
+  );
 });
 
 test("teach_back_output_schema_validated", () => {
-  const valid = validateTeachBackOutput(JSON.stringify({
-    sectionUnderstandings: [{
-      sectionId: "findings",
-      teachBack: "短影音暴露與睡眠品質呈現具條件的關聯，橫斷資料不能證明因果。",
-    }],
-  }), ["findings"], ["Ada Lovelace", "source-1"]);
+  const valid = validateTeachBackOutput(
+    JSON.stringify({
+      sectionUnderstandings: [
+        {
+          sectionId: "findings",
+          teachBack:
+            "短影音暴露與睡眠品質呈現具條件的關聯，橫斷資料不能證明因果。",
+        },
+      ],
+    }),
+    ["findings"],
+    ["Ada Lovelace", "source-1"],
+  );
   assert.deepEqual(JSON.parse(valid), {
-    sectionUnderstandings: [{
-      sectionId: "findings",
-      teachBack: "短影音暴露與睡眠品質呈現具條件的關聯，橫斷資料不能證明因果。",
-    }],
+    sectionUnderstandings: [
+      {
+        sectionId: "findings",
+        teachBack:
+          "短影音暴露與睡眠品質呈現具條件的關聯，橫斷資料不能證明因果。",
+      },
+    ],
   });
-  assert.throws(() => validateTeachBackOutput(JSON.stringify({
-    sectionUnderstandings: [{ sectionId: "discussion", teachBack: "這是簡體中文結論，並且引用 source-1。" }],
-  }), ["findings"], ["source-1"]), /teach_back_/u);
-  assert.throws(() => validateTeachBackOutput(JSON.stringify({
-    sectionUnderstandings: [{
-      sectionId: "findings",
-      teachBack: "短影音暴露與睡眠品質呈現具條件的關聯，詳見 DOI 10.1000/leak。",
-    }],
-  }), ["findings"]), /teach_back_identity_leak/u);
-  assert.throws(() => validateTeachBackOutput(JSON.stringify({
-    sectionUnderstandings: [{
-      sectionId: "findings",
-      teachBack: "短影音暴露與睡眠品質呈現具條件的關聯。",
-      citationIds: ["source-1"],
-    }],
-  }), ["findings"]), /teach_back_invalid_schema/u);
+  assert.doesNotThrow(() =>
+    validateTeachBackOutput(
+      JSON.stringify({
+        sectionUnderstandings: [
+          {
+            sectionId: "findings",
+            teachBack: "現有來源整體支持具條件的關聯，但不能據此證明因果。",
+          },
+        ],
+      }),
+      ["findings"],
+    ),
+  );
+  assert.throws(
+    () =>
+      validateTeachBackOutput(
+        JSON.stringify({
+          sectionUnderstandings: [
+            {
+              sectionId: "discussion",
+              teachBack: "這是簡體中文結論，並且引用 source-1。",
+            },
+          ],
+        }),
+        ["findings"],
+        ["source-1"],
+      ),
+    /teach_back_/u,
+  );
+  assert.throws(
+    () =>
+      validateTeachBackOutput(
+        JSON.stringify({
+          sectionUnderstandings: [
+            {
+              sectionId: "findings",
+              teachBack:
+                "短影音暴露與睡眠品質呈現具條件的關聯，詳見 DOI 10.1000/leak。",
+            },
+          ],
+        }),
+        ["findings"],
+      ),
+    /teach_back_identity_leak/u,
+  );
+  assert.throws(
+    () =>
+      validateTeachBackOutput(
+        JSON.stringify({
+          sectionUnderstandings: [
+            {
+              sectionId: "findings",
+              teachBack: "短影音暴露與睡眠品質呈現具條件的關聯。",
+              citationIds: ["source-1"],
+            },
+          ],
+        }),
+        ["findings"],
+      ),
+    /teach_back_invalid_schema/u,
+  );
 });
 
 test("teach_back_output_schema_recovers_one_fenced_json_object", () => {
   const content = [
     "```json",
     JSON.stringify({
-      sectionUnderstandings: [{
-        sectionId: "findings",
-        teachBack: "短影音暴露與睡眠品質呈現受限關聯，且橫斷資料不能證明因果。",
-      }],
+      sectionUnderstandings: [
+        {
+          sectionId: "findings",
+          teachBack:
+            "短影音暴露與睡眠品質呈現受限關聯，且橫斷資料不能證明因果。",
+        },
+      ],
     }),
     "```",
   ].join("\n");
@@ -896,84 +1930,262 @@ test("invalid_teach_back_fails_closed", async () => {
     citationText: "[S1]",
     citationMarker: "[S1]",
     limitation: "橫斷式研究不能證明因果。",
-    supportSpan: "Short-form video use was associated with poorer sleep quality.",
+    supportSpan:
+      "Short-form video use was associated with poorer sleep quality.",
   };
-  const requests: Array<{ messages: Array<{ role: string; content: string }> }> = [];
-  const result = await writeReportWithLlm({
-    topic: "高中生短影音使用與睡眠品質",
-    acceptedSources: [source(1, { id: "source-1" })],
-    evidenceCards: [evidenceCard],
-    requestedSectionIds: ["findings"],
-    reportPlan: knowledgePlan(),
-  }, {
-    llm: { baseUrl: "https://llm.example/v1", model: "test-model", apiKey: "test-key" },
-    fetchImpl: async (_input, init) => {
-      const request = JSON.parse(String(init?.body)) as {
-        messages: Array<{ role: string; content: string }>;
-      };
-      requests.push(request);
-      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
-        sectionUnderstandings: [{
-          sectionId: "global_synthesis",
-          teachBack: "根據來源 source-1 與引用 [S1]，這項研究顯示睡眠品質變差。",
-        }],
-      }) } }] }));
+  const requests: Array<{
+    messages: Array<{ role: string; content: string }>;
+    max_tokens: number;
+  }> = [];
+  let activeRequests = 0;
+  let peakActiveRequests = 0;
+  const result = await writeReportWithLlm(
+    {
+      topic: "高中生短影音使用與睡眠品質",
+      acceptedSources: [source(1, { id: "source-1" })],
+      evidenceCards: [evidenceCard],
+      requestedSectionIds: ["findings"],
+      reportPlan: knowledgePlan(),
     },
-  });
+    {
+      llm: {
+        baseUrl: "https://llm.example/v1",
+        model: "test-model",
+        apiKey: "test-key",
+      },
+      fetchImpl: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as {
+          messages: Array<{ role: string; content: string }>;
+          max_tokens: number;
+        };
+        activeRequests += 1;
+        peakActiveRequests = Math.max(peakActiveRequests, activeRequests);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        activeRequests -= 1;
+        requests.push(request);
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    sectionUnderstandings: [
+                      {
+                        sectionId: "global_synthesis",
+                        teachBack:
+                          "根據來源 source-1 與引用 [S1]，這項研究顯示睡眠品質變差。",
+                      },
+                    ],
+                  }),
+                },
+              },
+            ],
+          }),
+        );
+      },
+    },
+  );
 
   assert.equal(result.ok, false);
   assert.equal(result.fallbackUsed, true);
   assert.equal(result.reportGenerationStatus, "failed");
   assert.equal(requests.length, 2);
-  assert.ok(requests.every((request) =>
-    request.messages.some((message) => /teach-back reasoner/u.test(message.content)),
-  ));
+  assert.equal(peakActiveRequests, 1);
+  assert.ok(requests.every((request) => request.max_tokens >= 1_024));
+  assert.ok(requests[1]!.max_tokens >= requests[0]!.max_tokens);
+  assert.ok(
+    requests.every((request) =>
+      request.messages.some((message) =>
+        /teach-back reasoner/u.test(message.content),
+      ),
+    ),
+  );
+});
+
+test("report writer keeps serial scheduling and distinct section failures when no model section survives", async () => {
+  const requestedSectionIds = [
+    "introduction",
+    "literature_review",
+    "methodology",
+    "findings",
+    "discussion",
+    "limitations",
+    "conclusion",
+  ];
+  let requestCount = 0;
+  let activeRequests = 0;
+  let peakActiveRequests = 0;
+  const privateReasoning = "PRIVATE_WRITER_REASONING_MUST_NOT_LEAK";
+
+  const result = await writeReportWithLlm(
+    {
+      topic: "薯條營養與食品安全",
+      acceptedSources: [source(1), source(2), source(3)],
+      requestedSectionIds,
+    },
+    {
+      llm: {
+        baseUrl: "https://llm.example/v1",
+        model: "test-model",
+        apiKey: "test-key",
+      },
+      fetchImpl: async (_input, init) => {
+        const callIndex = requestCount;
+        requestCount += 1;
+        activeRequests += 1;
+        peakActiveRequests = Math.max(peakActiveRequests, activeRequests);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        activeRequests -= 1;
+
+        if (callIndex === 2) {
+          return new Response(JSON.stringify({ error: "provider failure" }), {
+            status: 500,
+          });
+        }
+
+        const request = JSON.parse(String(init?.body)) as {
+          max_tokens: number;
+        };
+        const outputBudgetFailure =
+          callIndex === 0 || (callIndex >= 3 && callIndex <= 5);
+        return new Response(
+          JSON.stringify(
+            outputBudgetFailure
+              ? {
+                  choices: [
+                    {
+                      finish_reason: "length",
+                      message: {
+                        content: null,
+                        reasoning_content: privateReasoning,
+                      },
+                    },
+                  ],
+                  usage: {
+                    completion_tokens: request.max_tokens,
+                    completion_tokens_details: {
+                      reasoning_tokens: request.max_tokens,
+                    },
+                  },
+                }
+              : {
+                  choices: [
+                    {
+                      finish_reason: "stop",
+                      message: { content: null },
+                    },
+                  ],
+                },
+          ),
+        );
+      },
+    },
+  );
+
+  assert.equal(requestCount, 9);
+  assert.equal(peakActiveRequests, 1);
+  assert.equal(result.ok, false);
+  assert.equal(result.fallbackUsed, true);
+  assert.match(
+    result.fallbackReason ?? "",
+    /No usable model sections remained after primary generation and scoped repair/u,
+  );
+  const failureReasons = result.writerDiagnostics?.failureReasons ?? {};
+  for (const sectionId of [
+    "introduction",
+    "literature_review",
+    "methodology",
+  ]) {
+    assert.match(failureReasons[sectionId] ?? "", /^output-budget-exhausted:/u);
+  }
+  for (const sectionId of ["findings", "discussion", "limitations"]) {
+    assert.match(failureReasons[sectionId] ?? "", /^provider-empty-output:/u);
+  }
+  assert.match(failureReasons.conclusion ?? "", /^provider-failure:/u);
+  assert.equal(new Set(Object.values(failureReasons)).size, 3);
+  assert.doesNotMatch(
+    JSON.stringify(result),
+    new RegExp(privateReasoning, "u"),
+  );
 });
 
 test("paragraph_claims_bind_marker_free_prose_semantically", () => {
   const evidenceById = new Map([
-    ["evidence-sleep", {
-      id: "evidence-sleep", sourceId: "source-sleep", citationText: "[S1]",
-      citationMarker: "[S1]", claimTextZhTw: "短影音使用與較差睡眠品質呈正向關聯。",
-      mainClaimZhTw: "短影音使用與較差睡眠品質呈正向關聯。",
-      claimIds: ["claim-sleep"],
-    }],
-    ["evidence-anxiety", {
-      id: "evidence-anxiety", sourceId: "source-anxiety", citationText: "[S2]",
-      citationMarker: "[S2]", claimTextZhTw: "短影音使用與焦慮症狀呈正向關聯。",
-      mainClaimZhTw: "短影音使用與焦慮症狀呈正向關聯。",
-      claimIds: ["claim-anxiety"],
-    }],
+    [
+      "evidence-sleep",
+      {
+        id: "evidence-sleep",
+        sourceId: "source-sleep",
+        citationText: "[S1]",
+        citationMarker: "[S1]",
+        claimTextZhTw: "短影音使用與較差睡眠品質呈正向關聯。",
+        mainClaimZhTw: "短影音使用與較差睡眠品質呈正向關聯。",
+        claimIds: ["claim-sleep"],
+      },
+    ],
+    [
+      "evidence-anxiety",
+      {
+        id: "evidence-anxiety",
+        sourceId: "source-anxiety",
+        citationText: "[S2]",
+        citationMarker: "[S2]",
+        claimTextZhTw: "短影音使用與焦慮症狀呈正向關聯。",
+        mainClaimZhTw: "短影音使用與焦慮症狀呈正向關聯。",
+        claimIds: ["claim-anxiety"],
+      },
+    ],
   ]);
   const bindings = paragraphClaimsForSection({
     sectionId: "findings",
-    prose: "短影音使用與較差睡眠品質呈正向關聯。\n\n短影音使用與焦慮症狀呈正向關聯。",
+    prose:
+      "短影音使用與較差睡眠品質呈正向關聯。\n\n短影音使用與焦慮症狀呈正向關聯。",
     evidenceCardIds: ["evidence-sleep", "evidence-anxiety"],
     evidenceById: evidenceById as never,
     plannedClaimIds: ["claim-sleep", "claim-anxiety"],
   });
 
-  assert.deepEqual(bindings.map((binding) => binding.evidenceCardIds), [
-    ["evidence-sleep"],
-    ["evidence-anxiety"],
-  ]);
-  assert.deepEqual(bindings.map((binding) => binding.claimIds), [
-    ["claim-sleep"],
-    ["claim-anxiety"],
-  ]);
+  assert.deepEqual(
+    bindings.map((binding) => binding.evidenceCardIds),
+    [["evidence-sleep"], ["evidence-anxiety"]],
+  );
+  assert.deepEqual(
+    bindings.map((binding) => binding.claimIds),
+    [["claim-sleep"], ["claim-anxiety"]],
+  );
 });
 
 test("no_source_order_narrative", () => {
   const prose = "第一項研究指出短影音與睡眠相關。另一項研究發現相同方向。";
-  const issues = detectSourceEchoIssues([{ sectionId: "findings", prose, paragraphClaims: [{
-    paragraphId: "p-1", sectionId: "findings", claimIds: ["c-1"],
-    evidenceCardIds: ["evidence-1", "evidence-2"], citationMarkers: [],
-    generatedTextZhTw: prose, unsupportedSentences: [],
-  }] }]);
+  const issues = detectSourceEchoIssues([
+    {
+      sectionId: "findings",
+      prose,
+      paragraphClaims: [
+        {
+          paragraphId: "p-1",
+          sectionId: "findings",
+          claimIds: ["c-1"],
+          evidenceCardIds: ["evidence-1", "evidence-2"],
+          citationMarkers: [],
+          generatedTextZhTw: prose,
+          unsupportedSentences: [],
+        },
+      ],
+    },
+  ]);
   assert.ok(issues.some((issue) => issue.code === "SOURCE_LED_PARAGRAPH"));
   assert.ok(issues.some((issue) => issue.code === "PAPER_BY_PAPER_STITCHING"));
-  assert.deepEqual(detectSourceEchoIssues([{ sectionId: "findings", prose:
-    "現有證據共同指出短影音使用與睡眠品質存在受限關聯[S1][S2]；量測差異使效果量不宜合併。" }]), []);
+  assert.deepEqual(
+    detectSourceEchoIssues([
+      {
+        sectionId: "findings",
+        prose:
+          "現有證據共同指出短影音使用與睡眠品質存在受限關聯[S1][S2]；量測差異使效果量不宜合併。",
+      },
+    ]),
+    [],
+  );
 });
 
 function sourceEchoCard(input: {
@@ -1017,44 +2229,74 @@ test("anonymous paraphrase preserving one abstract's information order is source
     "社交焦慮在短影音暴露與睡眠結果之間形成連結。",
     "睡眠品質惡化則構成最終觀察結果。",
   ].join("");
-  const issues = detectSourceEchoIssues([{
-    sectionId: "findings",
-    prose,
-    evidenceCardIds: [card.id],
-    paragraphClaims: [{
-      paragraphId: "p-order",
-      sectionId: "findings",
-      claimIds: ["claim-order"],
-      evidenceCardIds: [card.id],
-      citationMarkers: [],
-      generatedTextZhTw: prose,
-      unsupportedSentences: [],
-    }],
-  }], new Map([[card.id, card]]));
+  const issues = detectSourceEchoIssues(
+    [
+      {
+        sectionId: "findings",
+        prose,
+        evidenceCardIds: [card.id],
+        paragraphClaims: [
+          {
+            paragraphId: "p-order",
+            sectionId: "findings",
+            claimIds: ["claim-order"],
+            evidenceCardIds: [card.id],
+            citationMarkers: [],
+            generatedTextZhTw: prose,
+            unsupportedSentences: [],
+          },
+        ],
+      },
+    ],
+    new Map([[card.id, card]]),
+  );
   assert.ok(issues.some((issue) => issue.code === "SOURCE_LED_PARAGRAPH"));
 });
 
 test("no_paper_by_paper_stitching", () => {
   const cards = [
-    sourceEchoCard({ id: "evidence-bedtime", sourceId: "source-bedtime", supportSpan: "夜間短影音使用與延後就寢時點相關。", claimTextZhTw: "夜間短影音使用與就寢延後相關。" }),
-    sourceEchoCard({ id: "evidence-anxiety", sourceId: "source-anxiety", supportSpan: "社交焦慮與入睡困難呈正向關聯。", claimTextZhTw: "社交焦慮與入睡困難相關。" }),
-    sourceEchoCard({ id: "evidence-duration", sourceId: "source-duration", supportSpan: "高頻使用者的睡眠時長較短。", claimTextZhTw: "高頻使用與較短睡眠時長相關。" }),
+    sourceEchoCard({
+      id: "evidence-bedtime",
+      sourceId: "source-bedtime",
+      supportSpan: "夜間短影音使用與延後就寢時點相關。",
+      claimTextZhTw: "夜間短影音使用與就寢延後相關。",
+    }),
+    sourceEchoCard({
+      id: "evidence-anxiety",
+      sourceId: "source-anxiety",
+      supportSpan: "社交焦慮與入睡困難呈正向關聯。",
+      claimTextZhTw: "社交焦慮與入睡困難相關。",
+    }),
+    sourceEchoCard({
+      id: "evidence-duration",
+      sourceId: "source-duration",
+      supportSpan: "高頻使用者的睡眠時長較短。",
+      claimTextZhTw: "高頻使用與較短睡眠時長相關。",
+    }),
   ];
-  const prose = "夜間短影音使用與就寢延後相關。社交焦慮與入睡困難呈正向關聯。高頻使用者的睡眠時長較短。";
-  const issues = detectSourceEchoIssues([{
-    sectionId: "literature_review",
-    prose,
-    evidenceCardIds: cards.map((card) => card.id),
-    paragraphClaims: [{
-      paragraphId: "p-three-sources",
-      sectionId: "literature_review",
-      claimIds: ["claim-bedtime", "claim-anxiety", "claim-duration"],
-      evidenceCardIds: cards.map((card) => card.id),
-      citationMarkers: [],
-      generatedTextZhTw: prose,
-      unsupportedSentences: [],
-    }],
-  }], new Map(cards.map((card) => [card.id, card])));
+  const prose =
+    "夜間短影音使用與就寢延後相關。社交焦慮與入睡困難呈正向關聯。高頻使用者的睡眠時長較短。";
+  const issues = detectSourceEchoIssues(
+    [
+      {
+        sectionId: "literature_review",
+        prose,
+        evidenceCardIds: cards.map((card) => card.id),
+        paragraphClaims: [
+          {
+            paragraphId: "p-three-sources",
+            sectionId: "literature_review",
+            claimIds: ["claim-bedtime", "claim-anxiety", "claim-duration"],
+            evidenceCardIds: cards.map((card) => card.id),
+            citationMarkers: [],
+            generatedTextZhTw: prose,
+            unsupportedSentences: [],
+          },
+        ],
+      },
+    ],
+    new Map(cards.map((card) => [card.id, card])),
+  );
   assert.ok(issues.some((issue) => issue.code === "PAPER_BY_PAPER_STITCHING"));
 });
 
@@ -1064,20 +2306,32 @@ test("cross-source thematic synthesis is not mistaken for source stitching", () 
     "這些面向須依暴露定義與族群差異同時解釋。",
     "因此可綜合關係方向，但不應把異質結果合併為單一效果量。",
   ].join("");
-  const issues = detectSourceEchoIssues([{
-    sectionId: "discussion",
-    prose,
-    evidenceCardIds: ["evidence-bedtime", "evidence-anxiety", "evidence-duration"],
-    paragraphClaims: [{
-      paragraphId: "p-synthesis",
+  const issues = detectSourceEchoIssues([
+    {
       sectionId: "discussion",
-      claimIds: ["claim-synthesis"],
-      evidenceCardIds: ["evidence-bedtime", "evidence-anxiety", "evidence-duration"],
-      citationMarkers: [],
-      generatedTextZhTw: prose,
-      unsupportedSentences: [],
-    }],
-  }]);
+      prose,
+      evidenceCardIds: [
+        "evidence-bedtime",
+        "evidence-anxiety",
+        "evidence-duration",
+      ],
+      paragraphClaims: [
+        {
+          paragraphId: "p-synthesis",
+          sectionId: "discussion",
+          claimIds: ["claim-synthesis"],
+          evidenceCardIds: [
+            "evidence-bedtime",
+            "evidence-anxiety",
+            "evidence-duration",
+          ],
+          citationMarkers: [],
+          generatedTextZhTw: prose,
+          unsupportedSentences: [],
+        },
+      ],
+    },
+  ]);
   assert.deepEqual(issues, []);
 });
 
@@ -1087,46 +2341,183 @@ test("no_blanket_citation_clusters", () => {
     "睡眠結果也包含分數與睡眠不佳比例。",
     "兩類量測不能直接合併效果量。",
   ];
-  const issues = detectSourceEchoIssues([{ sectionId: "discussion", prose: paragraphs.join("\n\n"),
-    paragraphClaims: paragraphs.map((generatedTextZhTw, index) => ({
-      paragraphId: `p-${index + 1}`, sectionId: "discussion", claimIds: ["c-1"],
-      evidenceCardIds: ["evidence-1", "evidence-2"], citationMarkers: [],
-      generatedTextZhTw, unsupportedSentences: [],
-    })),
-  }]);
+  const issues = detectSourceEchoIssues([
+    {
+      sectionId: "discussion",
+      prose: paragraphs.join("\n\n"),
+      paragraphClaims: paragraphs.map((generatedTextZhTw, index) => ({
+        paragraphId: `p-${index + 1}`,
+        sectionId: "discussion",
+        claimIds: ["c-1"],
+        evidenceCardIds: ["evidence-1", "evidence-2"],
+        citationMarkers: [],
+        generatedTextZhTw,
+        unsupportedSentences: [],
+      })),
+    },
+  ]);
   assert.ok(issues.some((issue) => issue.code === "BLANKET_CITATION_CLUSTER"));
 });
 
 test("claim_citation_entailment", () => {
   const plan = knowledgePlan();
-  assert.deepEqual(auditClaimCitationEntailment(plan, [{
-    sectionId: "findings",
-    citationIds: ["source-1"],
-    paragraphClaims: [{
-      paragraphId: "p-1",
-      sectionId: "findings",
-      claimIds: ["planned-1"],
-      evidenceCardIds: ["evidence-1"],
-      citationMarkers: ["[S1]"],
-      generatedTextZhTw: "受限關聯。",
-      unsupportedSentences: [],
-    }],
-  }]), []);
+  assert.deepEqual(
+    auditClaimCitationEntailment(plan, [
+      {
+        sectionId: "findings",
+        citationIds: ["source-1"],
+        paragraphClaims: [
+          {
+            paragraphId: "p-1",
+            sectionId: "findings",
+            claimIds: ["planned-1"],
+            evidenceCardIds: ["evidence-1"],
+            citationMarkers: ["[S1]"],
+            generatedTextZhTw: "受限關聯。",
+            unsupportedSentences: [],
+          },
+        ],
+      },
+    ]),
+    [],
+  );
   const mismatched = structuredClone(plan);
   mismatched.normalizedFacts![0]!.sourceId = "source-2";
-  assert.ok(auditClaimCitationEntailment(mismatched, [{
-    sectionId: "findings",
-    citationIds: ["source-2"],
-    paragraphClaims: [{
-      paragraphId: "p-1",
+  assert.ok(
+    auditClaimCitationEntailment(mismatched, [
+      {
+        sectionId: "findings",
+        citationIds: ["source-2"],
+        paragraphClaims: [
+          {
+            paragraphId: "p-1",
+            sectionId: "findings",
+            claimIds: ["planned-1"],
+            evidenceCardIds: ["evidence-1"],
+            citationMarkers: ["[S2]"],
+            generatedTextZhTw: "受限關聯。",
+            unsupportedSentences: [],
+          },
+        ],
+      },
+    ]).some((issue) => issue.startsWith("CLAIM_CITATION_NOT_ENTAILED")),
+  );
+});
+
+test("sentence entailment can use a paragraph-bound normalized fact when the claim graph omits the paragraph claim id", () => {
+  const issues = auditClaimCitationEntailment(knowledgePlan(), [
+    {
       sectionId: "findings",
-      claimIds: ["planned-1"],
-      evidenceCardIds: ["evidence-1"],
-      citationMarkers: ["[S2]"],
-      generatedTextZhTw: "受限關聯。",
-      unsupportedSentences: [],
-    }],
-  }]).some((issue) => issue.startsWith("CLAIM_CITATION_NOT_ENTAILED")));
+      citationIds: ["source-1"],
+      paragraphClaims: [
+        {
+          paragraphId: "findings-fact-fallback",
+          sectionId: "findings",
+          claimIds: [],
+          evidenceCardIds: ["evidence-1"],
+          citationMarkers: ["[S1]"],
+          generatedTextZhTw: "短影音使用與較差睡眠品質呈具條件性的關聯[S1]。",
+          unsupportedSentences: [],
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(issues, []);
+});
+
+test("claim citation entailment resolves canonical markers from evidence and permits a supported cross-source synthesis", () => {
+  const plan = knowledgePlan();
+  const secondFact = structuredClone(plan.normalizedFacts![0]!);
+  secondFact.factId = "fact-2";
+  secondFact.evidenceId = "evidence-2";
+  secondFact.sourceId = "source-2";
+  secondFact.canonicalSourceId = "source-2";
+  secondFact.supportingEvidenceIds = ["evidence-2"];
+  secondFact.supportingSourceIds = ["source-2"];
+  plan.normalizedFacts!.unshift(secondFact);
+  plan.plannedClaims.push({
+    ...structuredClone(plan.plannedClaims[0]!),
+    claimId: "planned-2",
+    supportingEvidenceIds: ["evidence-2"],
+    supportingSourceKeys: ["source-2"],
+    allowedCitationKeys: ["source-2"],
+    normalizedFactIds: ["fact-2"],
+    claimGraphId: "claim-2",
+  });
+  plan.claimGraph!.claims.push({
+    ...structuredClone(plan.claimGraph!.claims[0]!),
+    claimId: "claim-2",
+    supportingFacts: ["fact-2"],
+    citationIds: ["source-2"],
+  });
+  const evidenceById = new Map([
+    [
+      "evidence-1",
+      {
+        id: "evidence-1",
+        sourceId: "source-1",
+        citationMarker: "[S1]",
+        citationText: "[S1]",
+      },
+    ],
+    [
+      "evidence-2",
+      {
+        id: "evidence-2",
+        sourceId: "source-2",
+        citationMarker: "[S2]",
+        citationText: "[S2]",
+      },
+    ],
+  ]);
+
+  const issues = auditClaimCitationEntailment(
+    plan,
+    [
+      {
+        sectionId: "findings",
+        citationIds: ["source-1", "source-2"],
+        paragraphClaims: [
+          {
+            paragraphId: "findings-cross-source",
+            sectionId: "findings",
+            claimIds: ["planned-1", "planned-2"],
+            evidenceCardIds: ["evidence-1", "evidence-2"],
+            citationMarkers: ["[S1]", "[S2]"],
+            generatedTextZhTw:
+              "兩項來源皆顯示短影音使用與較差睡眠品質呈具條件性的關聯[S1][S2]。",
+            unsupportedSentences: [],
+          },
+        ],
+      },
+    ],
+    evidenceById as never,
+  );
+
+  assert.deepEqual(issues, []);
+});
+
+test("uncited methodological boundaries do not masquerade as unsupported empirical claims", () => {
+  const issues = auditClaimCitationEntailment(knowledgePlan(), [
+    {
+      sectionId: "limitations",
+      citationIds: ["source-1"],
+      paragraphClaims: [
+        {
+          paragraphId: "limitations-boundary",
+          sectionId: "limitations",
+          claimIds: ["planned-1"],
+          evidenceCardIds: ["evidence-1"],
+          citationMarkers: [],
+          generatedTextZhTw: "橫斷式研究無法確認時間順序，也不能支持因果結論。",
+          unsupportedSentences: [],
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(issues, []);
 });
 
 test("sentence-level entailment blocks an unsupported second sentence hidden in a grounded paragraph", () => {
@@ -1135,26 +2526,33 @@ test("sentence-level entailment blocks an unsupported second sentence hidden in 
     "短影音使用與較差睡眠品質呈具條件性的關聯。",
     "短影音使用已證實能提升數學成績。",
   ].join("");
-  const issues = auditClaimCitationEntailment(plan, [{
-    sectionId: "findings",
-    citationIds: ["source-1"],
-    paragraphClaims: [{
-      paragraphId: "findings-p1",
+  const issues = auditClaimCitationEntailment(plan, [
+    {
       sectionId: "findings",
-      claimIds: ["planned-1"],
-      evidenceCardIds: ["evidence-1"],
-      citationMarkers: [],
-      generatedTextZhTw: prose,
-      // This reproduces the old paragraph-level masking failure: any one
-      // card+claim binding used to clear the whole paragraph.
-      unsupportedSentences: [],
-    }],
-  }]);
+      citationIds: ["source-1"],
+      paragraphClaims: [
+        {
+          paragraphId: "findings-p1",
+          sectionId: "findings",
+          claimIds: ["planned-1"],
+          evidenceCardIds: ["evidence-1"],
+          citationMarkers: [],
+          generatedTextZhTw: prose,
+          // This reproduces the old paragraph-level masking failure: any one
+          // card+claim binding used to clear the whole paragraph.
+          unsupportedSentences: [],
+        },
+      ],
+    },
+  ]);
 
-  assert.ok(issues.some((issue) =>
-    issue.startsWith("SENTENCE_CLAIM_NOT_ENTAILED:findings:findings-p1:") &&
-    issue.includes("數學成績")
-  ));
+  assert.ok(
+    issues.some(
+      (issue) =>
+        issue.startsWith("SENTENCE_CLAIM_NOT_ENTAILED:findings:findings-p1:") &&
+        issue.includes("數學成績"),
+    ),
+  );
 });
 
 test("canonical writer post-edit validation fails closed on one unsupported sentence in a grounded paragraph", async () => {
@@ -1166,7 +2564,8 @@ test("canonical writer post-edit validation fails closed on one unsupported sent
     citationKey: "source-1",
     claimIds: ["planned-1"],
     claim: "短影音使用與較差睡眠品質呈具條件性的關聯；另與較佳數學成績相關。",
-    claimTextZhTw: "短影音使用與較差睡眠品質呈具條件性的關聯；另與較佳數學成績相關。",
+    claimTextZhTw:
+      "短影音使用與較差睡眠品質呈具條件性的關聯；另與較佳數學成績相關。",
     evidence: "可核對證據。",
     summary: "短影音使用與睡眠品質的正規化摘要。",
     relevance: "短影音與睡眠品質",
@@ -1177,45 +2576,71 @@ test("canonical writer post-edit validation fails closed on one unsupported sent
     citationText: "[S1]",
     citationMarker: "[S1]",
     limitation: "橫斷式研究不能證明因果。",
-    supportSpan: "Short-form video use was associated with poorer sleep quality and better mathematics achievement.",
+    supportSpan:
+      "Short-form video use was associated with poorer sleep quality and better mathematics achievement.",
     exposure: "短影音使用",
     outcome: "睡眠品質分數",
     evidenceDirectnessTier: "A",
   };
-  const result = await writeReportWithLlm({
-    topic: "高中生短影音使用與睡眠品質",
-    acceptedSources: [source(1, { id: "source-1" })],
-    evidenceCards: [evidenceCard],
-    requestedSectionIds: ["findings"],
-    reportPlan: knowledgePlan(),
-  }, {
-    llm: { baseUrl: "https://llm.example/v1", model: "test-model", apiKey: "test-key" },
-    fetchImpl: async (_input, init) => {
-      const request = JSON.parse(String(init?.body)) as {
-        messages: Array<{ role: string; content: string }>;
-      };
-      const system = request.messages.find((message) => message.role === "system")?.content ?? "";
-      const content = /teach-back reasoner/u.test(system)
-        ? JSON.stringify({ sectionUnderstandings: [{
-            sectionId: "global_synthesis",
-            teachBack: "短影音使用與睡眠結果存在受限關聯，橫斷資料不能證明因果。",
-          }] })
-        : JSON.stringify({ sections: [{
-            sectionId: "findings",
-            title: "主要發現",
-            prose: "短影音使用與較差睡眠品質呈具條件性的關聯。短影音使用與較佳數學成績相關。",
-            evidenceCardIds: ["evidence-1"],
-            citationIds: ["source-1"],
-          }] });
-      return new Response(JSON.stringify({ choices: [{ message: { content } }] }));
+  const result = await writeReportWithLlm(
+    {
+      topic: "高中生短影音使用與睡眠品質",
+      acceptedSources: [source(1, { id: "source-1" })],
+      evidenceCards: [evidenceCard],
+      requestedSectionIds: ["findings"],
+      reportPlan: knowledgePlan(),
     },
-  });
+    {
+      llm: {
+        baseUrl: "https://llm.example/v1",
+        model: "test-model",
+        apiKey: "test-key",
+      },
+      fetchImpl: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as {
+          messages: Array<{ role: string; content: string }>;
+        };
+        const system =
+          request.messages.find((message) => message.role === "system")
+            ?.content ?? "";
+        const content = /teach-back reasoner/u.test(system)
+          ? JSON.stringify({
+              sectionUnderstandings: [
+                {
+                  sectionId: "global_synthesis",
+                  teachBack:
+                    "短影音使用與睡眠結果存在受限關聯，橫斷資料不能證明因果。",
+                },
+              ],
+            })
+          : JSON.stringify({
+              sections: [
+                {
+                  sectionId: "findings",
+                  title: "主要發現",
+                  prose:
+                    "短影音使用與較差睡眠品質呈具條件性的關聯。短影音使用與較佳數學成績相關。",
+                  evidenceCardIds: ["evidence-1"],
+                  citationIds: ["source-1"],
+                },
+              ],
+            });
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content } }] }),
+        );
+      },
+    },
+  );
 
   assert.equal(result.ok, false);
   assert.equal(result.writerDiagnostics?.postEditValidation?.status, "blocked");
-  assert.ok(result.writerDiagnostics?.postEditValidation?.issues.some((issue) =>
-    issue.startsWith("SENTENCE_CLAIM_NOT_ENTAILED:findings:") && issue.includes("數學成績")
-  ));
+  assert.ok(
+    result.writerDiagnostics?.postEditValidation?.issues.some(
+      (issue) =>
+        issue.startsWith("SENTENCE_CLAIM_NOT_ENTAILED:findings:") &&
+        issue.includes("數學成績"),
+    ),
+  );
 });
 
 test("model prose keeps citations structural while the internal verifier receives canonical bindings", async () => {
@@ -1226,6 +2651,7 @@ test("model prose keeps citations structural while the internal verifier receive
   const result = await writeReportWithLlm(
     {
       topic: "薯條營養與加工條件",
+      researchReportMode: "formal_research_report",
       acceptedSources: [source(1), source(2), source(3)],
       requestedSectionIds: ["findings"],
     },
@@ -1239,32 +2665,49 @@ test("model prose keeps citations structural while the internal verifier receive
         const request = JSON.parse(String(init?.body)) as {
           messages: Array<{ role: string; content: string }>;
         };
-        systemPrompt = request.messages.find((message) => message.role === "system")?.content ?? "";
-        userPrompt = request.messages.find((message) => message.role === "user")?.content ?? "";
-        return new Response(JSON.stringify({
-          choices: [{
-            message: {
-              content: JSON.stringify({
-                sections: [{
-                  sectionId: "findings",
-                  title: "主要發現",
-                  prose: `${markerFreeProse}\n\n此結果僅適用於現有摘要所直接揭露的營養與加工條件，不能延伸為特定疾病的因果結論。`,
-                  evidenceCardIds: ["evidence:source-1:0"],
-                  citationIds: ["source-1"],
-                }],
-              }),
-            },
-          }],
-        }));
+        systemPrompt =
+          request.messages.find((message) => message.role === "system")
+            ?.content ?? "";
+        userPrompt =
+          request.messages.find((message) => message.role === "user")
+            ?.content ?? "";
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    sections: [
+                      {
+                        sectionId: "findings",
+                        title: "主要發現",
+                        prose: `${markerFreeProse}\n\n此結果僅適用於現有摘要所直接揭露的營養與加工條件，不能延伸為特定疾病的因果結論。`,
+                        evidenceCardIds: [],
+                        citationIds: [],
+                      },
+                    ],
+                  }),
+                },
+              },
+            ],
+          }),
+        );
       },
     },
   );
 
-  assert.match(`${systemPrompt}\n${userPrompt}`, /do not emit \{s2\}.*citation token in prose/iu);
+  assert.match(
+    `${systemPrompt}\n${userPrompt}`,
+    /(?:do not emit \{s2\}.*citation token in prose|Never put citation tokens.*in prose)/iu,
+  );
   assert.doesNotMatch(markerFreeProse, /\[S\d+\]|\{s\d+\}/iu);
   assert.equal(result.ok, true);
   assert.match(result.sections[0]?.prose ?? "", /\[S1\]/u);
-  assert.deepEqual(result.sections[0]?.citationIds, ["source-1", "source-2", "source-3"]);
+  assert.deepEqual(result.sections[0]?.citationIds, [
+    "source-1",
+    "source-2",
+    "source-3",
+  ]);
   assert.deepEqual(result.sections[0]?.evidenceCardIds, [
     "evidence:source-1:0",
     "evidence:source-2:0",
@@ -1273,10 +2716,12 @@ test("model prose keeps citations structural while the internal verifier receive
 });
 
 test("deterministic section roles keep evidence in findings without copying it into discussion or conclusion", async () => {
-  const acceptedSources = [1, 2, 3].map((index) => source(index, {
-    title: `青少年睡眠研究 ${index}`,
-    abstract: "研究檢視睡眠時間與注意力表現的關聯。",
-  }));
+  const acceptedSources = [1, 2, 3].map((index) =>
+    source(index, {
+      title: `青少年睡眠研究 ${index}`,
+      abstract: "研究檢視睡眠時間與注意力表現的關聯。",
+    }),
+  );
   const directFinding = "較短睡眠時間與較差的青少年注意力表現相關";
   const result = await writeReportWithLlm(
     {
@@ -1288,7 +2733,8 @@ test("deterministic section roles keep evidence in findings without copying it i
         claim: directFinding,
         claimTextZhTw: directFinding,
         evidencePointZhTw: directFinding,
-        evidence: "shorter sleep duration was associated with poorer adolescent attention",
+        evidence:
+          "shorter sleep duration was associated with poorer adolescent attention",
         summary: directFinding,
         relevance: "睡眠與注意力",
         sourceTitle: item.title,
@@ -1297,7 +2743,12 @@ test("deterministic section roles keep evidence in findings without copying it i
         year: item.year,
         citationText: `Lovelace（2024）[S${index + 1}]`,
         citationMarker: `[S${index + 1}]`,
-        sectionTargets: ["literature_review", "findings", "discussion", "conclusion"],
+        sectionTargets: [
+          "literature_review",
+          "findings",
+          "discussion",
+          "conclusion",
+        ],
         usableSections: ["文獻探討", "研究發現", "討論", "結論"],
         sourceAccessLevel: "full_text",
         evidenceType: "finding",
@@ -1320,26 +2771,38 @@ test("deterministic section roles keep evidence in findings without copying it i
     },
   );
 
-  const findings = result.sections.find((section) => section.sectionId === "findings")?.prose ?? "";
-  const discussion = result.sections.find((section) => section.sectionId === "discussion")?.prose ?? "";
-  const conclusion = result.sections.find((section) => section.sectionId === "conclusion")?.prose ?? "";
+  const findings =
+    result.sections.find((section) => section.sectionId === "findings")
+      ?.prose ?? "";
+  const discussion =
+    result.sections.find((section) => section.sectionId === "discussion")
+      ?.prose ?? "";
+  const conclusion =
+    result.sections.find((section) => section.sectionId === "conclusion")
+      ?.prose ?? "";
   assert.match(findings, /較短睡眠時間與較差的青少年注意力/u);
   assert.doesNotMatch(discussion, /較短睡眠時間與較差的青少年注意力/u);
   assert.doesNotMatch(conclusion, /較短睡眠時間與較差的青少年注意力/u);
   assert.match(discussion, /一致性|差異|適用邊界/u);
   assert.match(conclusion, /現階段可回答/u);
 
-  const fingerprintsBySection = [findings, discussion, conclusion].map((prose) =>
-    prose
-      .split(/(?<=[。！？!?])/u)
-      .map((sentence) => sentence.replace(/[\uff3b\[]\s*S\d+\s*[］\]]/giu, "").replace(/[\s\p{P}\p{S}]+/gu, ""))
-      .filter((fingerprint) => fingerprint.length >= 14),
+  const fingerprintsBySection = [findings, discussion, conclusion].map(
+    (prose) =>
+      prose
+        .split(/(?<=[。！？!?])/u)
+        .map((sentence) =>
+          sentence
+            .replace(/[\uff3b\[]\s*S\d+\s*[］\]]/giu, "")
+            .replace(/[\s\p{P}\p{S}]+/gu, ""),
+        )
+        .filter((fingerprint) => fingerprint.length >= 14),
   );
   assert.equal(
     fingerprintsBySection.some((sentences, index) =>
       sentences.some((sentence) =>
-        fingerprintsBySection.some((other, otherIndex) =>
-          otherIndex !== index && other.includes(sentence),
+        fingerprintsBySection.some(
+          (other, otherIndex) =>
+            otherIndex !== index && other.includes(sentence),
         ),
       ),
     ),
@@ -1420,32 +2883,51 @@ test("whole_document_editor_removes_repetition", async () => {
         const request = JSON.parse(String(init?.body)) as {
           messages: Array<{ role: string; content: string }>;
         };
-        const system = request.messages.find((message) => message.role === "system")?.content ?? "";
-        const user = request.messages.find((message) => message.role === "user")?.content ?? "";
+        const system =
+          request.messages.find((message) => message.role === "system")
+            ?.content ?? "";
+        const user =
+          request.messages.find((message) => message.role === "user")
+            ?.content ?? "";
         let content: string;
         if (/teach-back reasoner/u.test(system)) {
-          content = JSON.stringify({ sectionUnderstandings: [{
-            sectionId: "global_synthesis",
-            teachBack: "短影音使用與較差睡眠品質存在受限關聯，研究設計限制仍需納入解讀。",
-          }] });
+          content = JSON.stringify({
+            sectionUnderstandings: [
+              {
+                sectionId: "global_synthesis",
+                teachBack:
+                  "短影音使用與較差睡眠品質存在受限關聯，研究設計限制仍需納入解讀。",
+              },
+            ],
+          });
         } else if (/document-level academic editor/u.test(system)) {
           editorSystemPrompt = system;
           editorUserPrompt = user;
-          content = JSON.stringify({ sections: [{
-            sectionId: "findings",
-            title: "主要發現",
-            prose: editedProse,
-          }] });
+          content = JSON.stringify({
+            sections: [
+              {
+                sectionId: "findings",
+                title: "主要發現",
+                prose: editedProse,
+              },
+            ],
+          });
         } else {
-          content = JSON.stringify({ sections: [{
-            sectionId: "findings",
-            title: "主要發現",
-            prose: initialProse,
-            evidenceCardIds: ["evidence-1"],
-            citationIds: ["source-1"],
-          }] });
+          content = JSON.stringify({
+            sections: [
+              {
+                sectionId: "findings",
+                title: "主要發現",
+                prose: initialProse,
+                evidenceCardIds: ["evidence-1"],
+                citationIds: ["source-1"],
+              },
+            ],
+          });
         }
-        return new Response(JSON.stringify({ choices: [{ message: { content } }] }));
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content } }] }),
+        );
       },
     },
   );
@@ -1453,12 +2935,21 @@ test("whole_document_editor_removes_repetition", async () => {
   assert.match(editorSystemPrompt, /document-level academic editor/u);
   assert.match(editorSystemPrompt, /repetition/u);
   assert.ok(editorUserPrompt.includes(repeatedFinding.replace(/。$/u, "")));
-  assert.ok(editorUserPrompt.includes(nearDuplicateFinding.replace(/。$/u, "")));
+  assert.ok(
+    editorUserPrompt.includes(nearDuplicateFinding.replace(/。$/u, "")),
+  );
   assert.equal(result.writerDiagnostics?.editorialPass?.status, "applied");
   assert.equal(result.sections.length, 1);
   assert.equal(result.sections[0]?.prose, editedProse);
-  assert.equal((result.sections[0]?.prose.match(/短影音使用與較差睡眠品質/gu) ?? []).length, 1);
-  assert.doesNotMatch(result.sections[0]?.prose ?? "", /短影音暴露和較差睡眠品質/u);
+  assert.equal(
+    (result.sections[0]?.prose.match(/短影音使用與較差睡眠品質/gu) ?? [])
+      .length,
+    1,
+  );
+  assert.doesNotMatch(
+    result.sections[0]?.prose ?? "",
+    /短影音暴露和較差睡眠品質/u,
+  );
   assert.deepEqual(result.sections[0]?.citationIds, ["source-1"]);
   assert.match(result.sections[0]?.prose ?? "", /2024年/u);
   assert.match(result.sections[0]?.prose ?? "", /1236人/u);
@@ -1466,10 +2957,12 @@ test("whole_document_editor_removes_repetition", async () => {
 });
 
 test("discussion states the Taiwan-campus extrapolation limit when direct local evidence is absent", async () => {
-  const acceptedSources = [1, 2].map((index) => source(index, {
-    title: `International adolescent media study ${index}`,
-    abstract: "國外青少年樣本顯示夜間螢幕使用與睡眠結果有關。",
-  }));
+  const acceptedSources = [1, 2].map((index) =>
+    source(index, {
+      title: `International adolescent media study ${index}`,
+      abstract: "國外青少年樣本顯示夜間螢幕使用與睡眠結果有關。",
+    }),
+  );
   const result = await writeReportWithLlm(
     {
       topic: "短影音使用對台灣高中校園學生睡眠品質的影響",
@@ -1478,7 +2971,8 @@ test("discussion states the Taiwan-campus extrapolation limit when direct local 
         id: `international-media-${index + 1}`,
         sourceId: item.id,
         claim: "國外青少年的夜間螢幕使用與睡眠結果有關。",
-        evidence: "night-time screen use was associated with adolescent sleep outcomes",
+        evidence:
+          "night-time screen use was associated with adolescent sleep outcomes",
         summary: "國外青少年螢幕使用與睡眠的關聯。",
         relevance: "青少年睡眠",
         sourceTitle: item.title,
@@ -1510,19 +3004,21 @@ test("discussion states the Taiwan-campus extrapolation limit when direct local 
     },
   );
 
-  const discussion = result.sections.find((section) => section.sectionId === "discussion")?.prose ?? "";
-  assert.match(
-    discussion,
-    /未直接涵蓋台灣校園樣本或本地制度情境/u,
-  );
+  const discussion =
+    result.sections.find((section) => section.sectionId === "discussion")
+      ?.prose ?? "";
+  assert.match(discussion, /未直接涵蓋台灣校園樣本或本地制度情境/u);
   assert.match(discussion, /不能把其他地區或一般族群的結果直接外推到台灣校園/u);
 });
 
 test("report writer skips LLM generation below the accepted-source minimum", async () => {
-  const result = await writeReportWithLlm({
-    topic: "可樂",
-    acceptedSources: [],
-  });
+  const result = await withProcessEnv(
+    { LLM_PROVIDER: "ollama", OLLAMA_MODEL: "test-model" },
+    () => writeReportWithLlm({
+      topic: "可樂",
+      acceptedSources: [],
+    }),
+  );
 
   assert.equal(result.ok, false);
   assert.equal(result.status, "insufficient_sources");
@@ -1598,22 +3094,30 @@ test("report writer keeps evidence-grounded deterministic sections on empty mode
   );
 
   assert.equal(result.ok, false);
-  assert.equal(result.status, "error");
+  assert.equal(result.status, "unavailable");
   assert.equal(result.fallback_used, true);
   assert.equal(result.llm_status, "failed");
   assert.equal(result.reportGenerationStatus, "failed");
   assert.equal(result.fallbackUsed, true);
   assert.match(result.fallbackReason ?? "", /LLM report writer fallback/);
   assert.equal(result.sections.length, 9);
-  assert.equal(result.sections.every((section) => section.prose.trim().length > 0), true);
+  assert.equal(
+    result.sections.every((section) => section.prose.trim().length > 0),
+    true,
+  );
   assert.equal(
     result.sections.every((section) => {
-      const paragraphCount = section.prose.split(/\n{2,}/u).filter(Boolean).length;
+      const paragraphCount = section.prose
+        .split(/\n{2,}/u)
+        .filter(Boolean).length;
       return paragraphCount >= 2 && paragraphCount <= 4;
     }),
     true,
   );
-  assert.equal(result.sections.some((section) => section.evidenceCardIds.length > 0), true);
+  assert.equal(
+    result.sections.some((section) => section.evidenceCardIds.length > 0),
+    true,
+  );
   assert.equal(
     result.sections
       .flatMap((section) => section.evidenceCardIds)
@@ -1647,7 +3151,10 @@ test("report writer provider failure keeps deterministic sections while reportin
   assert.equal(result.fallbackUsed, true);
   assert.equal(result.actualModel, null);
   assert.equal(result.sections.length, 9);
-  assert.equal(result.sections.some((section) => section.evidenceCardIds.length > 0), true);
+  assert.equal(
+    result.sections.some((section) => section.evidenceCardIds.length > 0),
+    true,
+  );
   assert.match(result.fallbackReason ?? "", /provider-failure/u);
   assert.equal(
     result.sections
@@ -1664,10 +3171,12 @@ test("deterministic writer keeps raw English abstracts in trace data and out of 
     {
       topic: "睡眠不足與青少年注意力",
       language: "繁體中文",
-      acceptedSources: [1, 2, 3].map((index) => source(index, {
-        title: `Sleep deprivation review ${index}`,
-        abstract: rawAbstract,
-      })),
+      acceptedSources: [1, 2, 3].map((index) =>
+        source(index, {
+          title: `Sleep deprivation review ${index}`,
+          abstract: rawAbstract,
+        }),
+      ),
     },
     {
       llm: {
@@ -1683,7 +3192,10 @@ test("deterministic writer keeps raw English abstracts in trace data and out of 
   const readerText = result.sections.map((section) => section.prose).join(" ");
 
   assert.equal(result.sections.length, 9);
-  assert.doesNotMatch(readerText, /Abstract\s+The aim|This review explores|`/iu);
+  assert.doesNotMatch(
+    readerText,
+    /Abstract\s+The aim|This review explores|`/iu,
+  );
   assert.match(readerText, /尚未完成可驗證的繁中重點整理/u);
 });
 
@@ -1694,10 +3206,12 @@ test("deterministic writer rejects an Abstract label glued directly to Chinese p
     {
       topic: "睡眠不足與青少年注意力",
       language: "繁體中文",
-      acceptedSources: [1, 2, 3].map((index) => source(index, {
-        title: `Sleep duration study ${index}`,
-        abstract: gluedRawAbstract,
-      })),
+      acceptedSources: [1, 2, 3].map((index) =>
+        source(index, {
+          title: `Sleep duration study ${index}`,
+          abstract: gluedRawAbstract,
+        }),
+      ),
     },
     {
       llm: {
@@ -1724,10 +3238,12 @@ test("deterministic writer keeps Japanese source prose out of zh-TW sections", a
     {
       topic: "雨滴的終端速度",
       language: "繁體中文",
-      acceptedSources: [1, 2, 3].map((index) => source(index, {
-        title: `Raindrop terminal velocity ${index}`,
-        abstract: japaneseAbstract,
-      })),
+      acceptedSources: [1, 2, 3].map((index) =>
+        source(index, {
+          title: `Raindrop terminal velocity ${index}`,
+          abstract: japaneseAbstract,
+        }),
+      ),
     },
     {
       llm: {
@@ -1783,8 +3299,7 @@ test("report writer prompt path prefers zh-TW evidence summaries over raw Englis
             "The ECHA chemicals dossier for sodium perchlorate provides identity data together with EU chemicals classification and labelling context that supports hazard review and handling-risk assessment.",
           abstractZhTw:
             "ECHA 提供過氯酸鈉的物質身分、分類與標示資訊，可補強危害審查。",
-          readableSummaryZhTw:
-            "此來源可補強過氯酸鈉在法規與危害分類上的判讀。",
+          readableSummaryZhTw: "此來源可補強過氯酸鈉在法規與危害分類上的判讀。",
           mainEvidencePointZhTw:
             "ECHA 提供過氯酸鈉的分類與標示資訊，可支撐風險評估。",
           sourceRelevanceReasonZhTw:
@@ -1802,7 +3317,9 @@ test("report writer prompt path prefers zh-TW evidence summaries over raw Englis
         const request = JSON.parse(String(init?.body)) as {
           messages: Array<{ role: string; content: string }>;
         };
-        const prompt = request.messages.map((message) => message.content).join("\n");
+        const prompt = request.messages
+          .map((message) => message.content)
+          .join("\n");
         assert.doesNotMatch(
           prompt,
           /PubChem records sodium perchlorate|CAMEO Chemicals describes|The ECHA chemicals dossier/u,
@@ -1821,7 +3338,11 @@ test("report writer prompt path prefers zh-TW evidence summaries over raw Englis
                         title: "摘要",
                         prose:
                           "本報告整理過氯酸鈉的化學身分、氧化性、分類與標示資訊，並只根據已接受來源保留安全限制[S1][S2][S3]。",
-                        evidenceCardIds: ["evidence:source-1:0", "evidence:source-2:0", "evidence:source-3:0"],
+                        evidenceCardIds: [
+                          "evidence:source-1:0",
+                          "evidence:source-2:0",
+                          "evidence:source-3:0",
+                        ],
                         citationIds: ["source-1", "source-2", "source-3"],
                       },
                     ],
@@ -1835,9 +3356,14 @@ test("report writer prompt path prefers zh-TW evidence summaries over raw Englis
     },
   );
 
-  const abstract = result.sections.find((section) => section.sectionId === "abstract")?.prose ?? "";
+  const abstract =
+    result.sections.find((section) => section.sectionId === "abstract")
+      ?.prose ?? "";
   assert.match(abstract, /過氯酸鈉/u);
-  assert.doesNotMatch(abstract, /PubChem records sodium perchlorate|CAMEO Chemicals describes|The ECHA chemicals dossier/u);
+  assert.doesNotMatch(
+    abstract,
+    /PubChem records sodium perchlorate|CAMEO Chemicals describes|The ECHA chemicals dossier/u,
+  );
   assert.match(abstract, /化學身分|氧化性|分類與標示/u);
 });
 
@@ -1889,7 +3415,12 @@ test("report writer blocks official background evidence from scholarly synthesis
           citationText: "NASA（2024）",
           limitation: "非同行評審論文",
           limitations: ["非同行評審論文", "official explainer only"],
-          sectionTargets: ["introduction", "literature_review", "discussion", "conclusion"],
+          sectionTargets: [
+            "introduction",
+            "literature_review",
+            "discussion",
+            "conclusion",
+          ],
           recommendationBucket: "official_background",
           sourceRole: "official_background_explanation",
           retrievalMode: "trusted_seed",
@@ -1899,7 +3430,8 @@ test("report writer blocks official background evidence from scholarly synthesis
           id: "evidence-scholarly",
           sourceId: scholarlySource.id,
           claim: "同行評審文獻討論瑞利散射對天空顏色的影響。",
-          evidence: "Journal abstract discusses wavelength-dependent scattering.",
+          evidence:
+            "Journal abstract discusses wavelength-dependent scattering.",
           summary: "學術摘要。",
           relevance: "文獻探討",
           sourceTitle: scholarlySource.title,
@@ -1950,8 +3482,14 @@ test("report writer blocks official background evidence from scholarly synthesis
                         title: "三、文獻探討",
                         prose:
                           "同行評審文獻可支撐瑞利散射與波長相依散射的學術討論[S2]。",
-                        evidenceCardIds: ["evidence-scholarly", "evidence-official"],
-                        citationIds: ["scholarly-rayleigh", "official-background"],
+                        evidenceCardIds: [
+                          "evidence-scholarly",
+                          "evidence-official",
+                        ],
+                        citationIds: [
+                          "scholarly-rayleigh",
+                          "official-background",
+                        ],
                       },
                     ],
                   }),
@@ -1963,16 +3501,39 @@ test("report writer blocks official background evidence from scholarly synthesis
     },
   );
 
-  const introduction = result.sections.find((section) => section.sectionId === "introduction");
-  const literatureReview = result.sections.find((section) => section.sectionId === "literature_review");
-  const discussion = result.sections.find((section) => section.sectionId === "discussion");
-  const conclusion = result.sections.find((section) => section.sectionId === "conclusion");
+  const introduction = result.sections.find(
+    (section) => section.sectionId === "introduction",
+  );
+  const literatureReview = result.sections.find(
+    (section) => section.sectionId === "literature_review",
+  );
+  const discussion = result.sections.find(
+    (section) => section.sectionId === "discussion",
+  );
+  const conclusion = result.sections.find(
+    (section) => section.sectionId === "conclusion",
+  );
 
-  assert.equal(introduction?.evidenceCardIds.includes("evidence-official"), true);
-  assert.equal(literatureReview?.evidenceCardIds.includes("evidence-official"), false);
-  assert.equal(discussion?.evidenceCardIds.includes("evidence-official"), false);
-  assert.equal(conclusion?.evidenceCardIds.includes("evidence-official"), false);
-  assert.equal(literatureReview?.evidenceCardIds.includes("evidence-scholarly"), true);
+  assert.equal(
+    introduction?.evidenceCardIds.includes("evidence-official"),
+    true,
+  );
+  assert.equal(
+    literatureReview?.evidenceCardIds.includes("evidence-official"),
+    false,
+  );
+  assert.equal(
+    discussion?.evidenceCardIds.includes("evidence-official"),
+    false,
+  );
+  assert.equal(
+    conclusion?.evidenceCardIds.includes("evidence-official"),
+    false,
+  );
+  assert.equal(
+    literatureReview?.evidenceCardIds.includes("evidence-scholarly"),
+    true,
+  );
 });
 
 test("report writer extracts JSON from markdown fences and filters unaccepted citations", async () => {
@@ -2010,7 +3571,10 @@ test("report writer extracts JSON from markdown fences and filters unaccepted ci
                           title: "一、研究背景",
                           prose:
                             "薯條可由營養標示、油炸條件與飲食情境切入，正文需要保留可追溯引用[S2]。",
-                          evidenceCardIds: ["evidence:source-2:0", "unknown-evidence"],
+                          evidenceCardIds: [
+                            "evidence:source-2:0",
+                            "unknown-evidence",
+                          ],
                           citationIds: ["source-2", "source-99"],
                         },
                         {
@@ -2036,13 +3600,19 @@ test("report writer extracts JSON from markdown fences and filters unaccepted ci
   assert.equal(result.ok, true);
   assert.equal(result.status, "success");
   assert.deepEqual(result.sections[0]?.citationIds, ["source-1"]);
-  assert.deepEqual(result.sections[1]?.evidenceCardIds, ["evidence:source-2:0"]);
+  assert.deepEqual(result.sections[1]?.evidenceCardIds, [
+    "evidence:source-2:0",
+  ]);
   assert.equal(
-    result.sections.some((section) => section.citationIds.includes("unaccepted-source")),
+    result.sections.some((section) =>
+      section.citationIds.includes("unaccepted-source"),
+    ),
     false,
   );
   assert.equal(
-    result.sections.some((section) => section.citationIds.includes("source-99")),
+    result.sections.some((section) =>
+      section.citationIds.includes("source-99"),
+    ),
     false,
   );
 });
@@ -2087,16 +3657,32 @@ test("report writer rejects instruction-like prose from model sections", async (
 
   assert.equal(result.ok, true);
   assert.equal(result.sections.length, 9);
-  assert.doesNotMatch(result.sections[0]?.prose ?? "", /本段應|建議寫|可再補充/u);
+  assert.doesNotMatch(
+    result.sections[0]?.prose ?? "",
+    /本段應|建議寫|可再補充/u,
+  );
   assert.match(result.sections[0]?.prose ?? "", /薯條/u);
 });
 
 test("forbiddenInstructionTextMatches detects report-writer placeholder language", () => {
-  const matches = forbiddenInstructionTextMatches("本段應探討研究背景，TODO：建議加入更多資料。");
+  const matches = forbiddenInstructionTextMatches(
+    "本段應探討研究背景，TODO：建議加入更多資料。",
+  );
 
-  assert.equal(matches.some((match) => /本段應/u.test(match)), true);
-  assert.equal(matches.some((match) => /TODO/u.test(match)), true);
-  assert.equal(forbiddenInstructionTextMatches("現有來源顯示主題可分為背景、方法與限制三個層面。").length, 0);
+  assert.equal(
+    matches.some((match) => /本段應/u.test(match)),
+    true,
+  );
+  assert.equal(
+    matches.some((match) => /TODO/u.test(match)),
+    true,
+  );
+  assert.equal(
+    forbiddenInstructionTextMatches(
+      "現有來源顯示主題可分為背景、方法與限制三個層面。",
+    ).length,
+    0,
+  );
 });
 
 test("report writer excludes metadata-only evidence from literature review claims", async () => {
@@ -2157,7 +3743,8 @@ test("report writer excludes metadata-only evidence from literature review claim
           id: "evidence-fulltext",
           sourceId: scholarlySource.id,
           claim: "全文片段說明瑞利散射會依波長改變觀測到的夕陽顏色。",
-          evidence: "Rayleigh scattering is wavelength dependent and affects sunset color observations.",
+          evidence:
+            "Rayleigh scattering is wavelength dependent and affects sunset color observations.",
           summary: "full-text evidence",
           relevance: "文獻探討",
           sourceTitle: scholarlySource.title,
@@ -2204,8 +3791,14 @@ test("report writer excludes metadata-only evidence from literature review claim
                         title: "三、文獻探討",
                         prose:
                           "文獻探討僅能依可追溯全文片段說明瑞利散射與夕陽顏色的關係，不把 metadata 標題當成學術證據[S2]。",
-                        evidenceCardIds: ["evidence-metadata", "evidence-fulltext"],
-                        citationIds: ["metadata-only-rayleigh", "fulltext-rayleigh"],
+                        evidenceCardIds: [
+                          "evidence-metadata",
+                          "evidence-fulltext",
+                        ],
+                        citationIds: [
+                          "metadata-only-rayleigh",
+                          "fulltext-rayleigh",
+                        ],
                       },
                     ],
                   }),
@@ -2217,11 +3810,19 @@ test("report writer excludes metadata-only evidence from literature review claim
     },
   );
 
-  const literatureReview = result.sections.find((section) => section.sectionId === "literature_review");
+  const literatureReview = result.sections.find(
+    (section) => section.sectionId === "literature_review",
+  );
 
   assert.equal(result.ok, true);
-  assert.equal(literatureReview?.evidenceCardIds.includes("evidence-metadata"), false);
-  assert.equal(literatureReview?.evidenceCardIds.includes("evidence-fulltext"), true);
+  assert.equal(
+    literatureReview?.evidenceCardIds.includes("evidence-metadata"),
+    false,
+  );
+  assert.equal(
+    literatureReview?.evidenceCardIds.includes("evidence-fulltext"),
+    true,
+  );
 });
 
 test("report writer accepts partial usable sections and citation-only references", async () => {
@@ -2318,7 +3919,9 @@ test("report writer keeps cited prose while pruning one uncited assertive senten
     },
   );
 
-  const discussion = result.sections.find((section) => section.sectionId === "discussion");
+  const discussion = result.sections.find(
+    (section) => section.sectionId === "discussion",
+  );
   assert.equal(result.ok, true);
   assert.match(discussion?.prose ?? "", /鈉含量與油炸條件/u);
   assert.doesNotMatch(discussion?.prose ?? "", /所有慢性疾病/u);
@@ -2380,7 +3983,8 @@ test("report writer recovers sectioned freeform prose when the local LLM skips J
   assert.match(result.sections[0]?.prose ?? "", /飛機相關材料/);
   assert.match(result.warning ?? "", /freeform fallback parsing/);
   assert.doesNotMatch(
-    result.sections.find((section) => section.sectionId === "research_question")?.prose ?? "",
+    result.sections.find((section) => section.sectionId === "research_question")
+      ?.prose ?? "",
     /目前可先追問/u,
   );
 });
@@ -2473,7 +4077,10 @@ test("report writer retries with a compact prompt when the first local response 
   assert.equal(result.status, "success");
   assert.equal(result.sections.length, 9);
   assert.equal(result.writerDiagnostics?.repairedSections, 2);
-  assert.deepEqual(result.writerDiagnostics?.repairedSectionIds, ["abstract", "introduction"]);
+  assert.deepEqual(result.writerDiagnostics?.repairedSectionIds, [
+    "abstract",
+    "introduction",
+  ]);
   assert.match(result.warning ?? "", /受控 repair/);
 });
 
@@ -2523,7 +4130,8 @@ test("report writer marks gyroscope theory gaps when accepted evidence is mostly
       acceptedSources: [
         source(1, {
           id: "gyro-1",
-          title: "Orientation Estimation with Gyroscope and Accelerometer Fusion",
+          title:
+            "Orientation Estimation with Gyroscope and Accelerometer Fusion",
           abstract:
             "This study focuses on orientation estimation, sensor fusion, and IMU drift correction for mobile devices. It explains how gyroscope measurements improve attitude tracking but does not derive classical spinning top torque equations.",
         }),
@@ -2558,7 +4166,10 @@ test("report writer marks gyroscope theory gaps when accepted evidence is mostly
 
   assert.equal(result.ok, false);
   assert.equal(result.sections.length, 9);
-  assert.equal(result.sections.some((section) => section.evidenceCardIds.length > 0), true);
+  assert.equal(
+    result.sections.some((section) => section.evidenceCardIds.length > 0),
+    true,
+  );
   assert.equal(result.sectionPlan?.length, 9);
   assert.equal(
     result.sectionPlan?.some((section) => section.needsMoreEvidence),
@@ -2648,11 +4259,15 @@ test("report writer paragraphClaims reject unsupported assertive model prose", a
   assert.ok(literatureReview);
   assert.doesNotMatch(literatureReview.prose, /必然提升所有/u);
   assert.deepEqual(
-    literatureReview.paragraphClaims?.flatMap((paragraph) => paragraph.unsupportedSentences),
+    literatureReview.paragraphClaims?.flatMap(
+      (paragraph) => paragraph.unsupportedSentences,
+    ),
     [],
   );
   assert.deepEqual(
-    literatureReview.paragraphClaims?.flatMap((paragraph) => paragraph.claimIds),
+    literatureReview.paragraphClaims?.flatMap(
+      (paragraph) => paragraph.claimIds,
+    ),
     ["claim-sleep-1"],
   );
 });
@@ -2718,7 +4333,8 @@ test("report writer canonicalizes bare and fullwidth inline citation markers", a
                       {
                         sectionId: "literature_review",
                         title: "三、文獻探討",
-                        prose: "研究指出螢幕媒體使用與學生睡眠結果有關 s１。另一項可追溯敘述也指向相同關聯［Ｓ1］。",
+                        prose:
+                          "研究指出螢幕媒體使用與學生睡眠結果有關 s１。另一項可追溯敘述也指向相同關聯［Ｓ1］。",
                         evidenceCardIds: ["evidence-video-1"],
                         citationIds: ["source-1"],
                       },
@@ -2739,7 +4355,9 @@ test("report writer canonicalizes bare and fullwidth inline citation markers", a
   assert.equal((literatureReview.prose.match(/\[S1\]/gu) ?? []).length, 2);
   assert.doesNotMatch(literatureReview.prose, /(?:^|\s)s１|［Ｓ1］/iu);
   assert.deepEqual(
-    literatureReview.paragraphClaims?.flatMap((paragraph) => paragraph.unsupportedSentences),
+    literatureReview.paragraphClaims?.flatMap(
+      (paragraph) => paragraph.unsupportedSentences,
+    ),
     [],
   );
 });
@@ -2760,10 +4378,12 @@ test("source-specific sentences do not retain every section citation marker", as
     "大理市研究發現 core、branch 與 islet 指標與熱島強度呈負相關。",
     "西安研究發現公園面積與冷卻效果呈正相關。",
   ];
-  const acceptedSources = claims.map((abstract, index) => source(index + 1, {
-    title: `Urban green-space evidence ${index + 1}`,
-    abstract,
-  }));
+  const acceptedSources = claims.map((abstract, index) =>
+    source(index + 1, {
+      title: `Urban green-space evidence ${index + 1}`,
+      abstract,
+    }),
+  );
   const evidenceCards = acceptedSources.map((item, index) => ({
     id: `green-evidence-${index + 1}`,
     sourceId: item.id,
@@ -2771,7 +4391,9 @@ test("source-specific sentences do not retain every section citation marker", as
     claimText: claims[index]!,
     evidence: claims[index]!,
     supportSpan: claims[index]!,
-    supportSpans: [{ claimId: `green-claim-${index + 1}`, text: claims[index]! }],
+    supportSpans: [
+      { claimId: `green-claim-${index + 1}`, text: claims[index]! },
+    ],
     summary: claims[index]!,
     relevance: "都市綠地與地表溫度",
     sourceTitle: item.title,
@@ -2816,31 +4438,43 @@ test("source-specific sentences do not retain every section citation marker", as
         model: "test-model",
         apiKey: "test-key",
       },
-      fetchImpl: async () => new Response(JSON.stringify({
-        choices: [{
-          message: {
-            content: JSON.stringify({
-              sections: [{
-                sectionId: "findings",
-                title: "主要發現",
-                prose: `${claims[2]!.replace(/。$/u, "")}[S1][S2][S3][S4]。\n\n四項研究的場域與指標不同，數值不宜直接合併。`,
-                evidenceCardIds: evidenceCards.map((card) => card.id),
-                citationIds: acceptedSources.map((item) => item.id),
-              }],
-            }),
-          },
-        }],
-      })),
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    sections: [
+                      {
+                        sectionId: "findings",
+                        title: "主要發現",
+                        prose: `${claims[2]!.replace(/。$/u, "")}[S1][S2][S3][S4]。\n\n四項研究的場域與指標不同，數值不宜直接合併。`,
+                        evidenceCardIds: evidenceCards.map((card) => card.id),
+                        citationIds: acceptedSources.map((item) => item.id),
+                      },
+                    ],
+                  }),
+                },
+              },
+            ],
+          }),
+        ),
     },
   );
 
-  const finding = result.sections.find((section) => section.sectionId === "findings");
+  const finding = result.sections.find(
+    (section) => section.sectionId === "findings",
+  );
   assert.ok(finding);
-  const sourceSpecificSentence = finding.prose
-    .split(/(?<=。)/u)
-    .find((sentence) => sentence.includes("大理市研究")) ?? "";
+  const sourceSpecificSentence =
+    finding.prose
+      .split(/(?<=。)/u)
+      .find((sentence) => sentence.includes("大理市研究")) ?? "";
   assert.deepEqual(
-    canonicalizeCitationMarkersInText(sourceSpecificSentence).match(/\[S\d+\]/gu),
+    canonicalizeCitationMarkersInText(sourceSpecificSentence).match(
+      /\[S\d+\]/gu,
+    ),
     ["[S3]"],
   );
 });
@@ -2858,7 +4492,7 @@ test("cross-language repair keeps substantive introduction literature and discus
       abstract,
       doi: `10.1000/uhi-${index + 1}`,
       url: `https://doi.org/10.1000/uhi-${index + 1}`,
-    })
+    }),
   );
   const evidenceCards = acceptedSources.map((item, index) => ({
     id: `uhi-evidence-${index + 1}`,
@@ -2867,7 +4501,9 @@ test("cross-language repair keeps substantive introduction literature and discus
     claimText: supports[index]!,
     evidence: supports[index]!,
     supportSpan: supports[index]!,
-    supportSpans: [{ claimId: `uhi-claim-${index + 1}`, text: supports[index]! }],
+    supportSpans: [
+      { claimId: `uhi-claim-${index + 1}`, text: supports[index]! },
+    ],
     summary: supports[index]!,
     relevance: "都市熱島與綠地調適",
     sourceTitle: item.title,
@@ -2933,12 +4569,18 @@ test("cross-language repair keeps substantive introduction literature and discus
         const request = JSON.parse(String(init?.body)) as {
           messages: Array<{ role: string; content: string }>;
         };
-        const system = request.messages.find((message) => message.role === "system")?.content ?? "";
-        const user = request.messages.find((message) => message.role === "user")?.content ?? "";
+        const system =
+          request.messages.find((message) => message.role === "system")
+            ?.content ?? "";
+        const user =
+          request.messages.find((message) => message.role === "user")
+            ?.content ?? "";
         const retry = /Return exactly one JSON object/u.test(system);
-        const requestedIds = ["introduction", "literature_review", "discussion"].filter((id) =>
-          user.includes(id)
-        );
+        const requestedIds = [
+          "introduction",
+          "literature_review",
+          "discussion",
+        ].filter((id) => user.includes(id));
         const sections = requestedIds.map((sectionId) => ({
           sectionId,
           title: sectionId,
@@ -2948,9 +4590,11 @@ test("cross-language repair keeps substantive introduction literature and discus
           evidenceCardIds: evidenceCards.map((card) => card.id),
           citationIds: evidenceCards.map((card) => card.sourceId),
         }));
-        return new Response(JSON.stringify({
-          choices: [{ message: { content: JSON.stringify({ sections }) } }],
-        }));
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({ sections }) } }],
+          }),
+        );
       },
     },
   );
@@ -2958,10 +4602,11 @@ test("cross-language repair keeps substantive introduction literature and discus
   assert.equal(result.ok, true);
   assert.equal(result.sections.length, 3);
   assert.equal(result.writerDiagnostics?.fallbackSections, 0);
-  assert.deepEqual(
-    result.writerDiagnostics?.repairedSectionIds,
-    ["introduction", "literature_review", "discussion"],
-  );
+  assert.deepEqual(result.writerDiagnostics?.repairedSectionIds, [
+    "introduction",
+    "literature_review",
+    "discussion",
+  ]);
   const readerText = result.sections.map((section) => section.prose).join("\n");
   assert.doesNotMatch(
     readerText,
@@ -2971,7 +4616,8 @@ test("cross-language repair keeps substantive introduction literature and discus
   assert.match(readerText, /Landsat 8.*NDVI/u);
   assert.match(readerText, /ENVI-met.*sky view factor/u);
   assert.match(
-    result.sections.find((section) => section.sectionId === "discussion")?.prose ?? "",
+    result.sections.find((section) => section.sectionId === "discussion")
+      ?.prose ?? "",
     /不能把其他地區或一般族群的結果直接外推到台灣校園/u,
   );
 
@@ -2981,12 +4627,17 @@ test("cross-language repair keeps substantive introduction literature and discus
   const fingerprints = new Set<string>();
   for (const section of result.sections) {
     assert.ok(section.prose.split(/\n{2,}/u).filter(Boolean).length >= 2);
-    const markers = canonicalizeCitationMarkersInText(section.prose).match(/\[S\d+\]/gu) ?? [];
+    const markers =
+      canonicalizeCitationMarkersInText(section.prose).match(/\[S\d+\]/gu) ??
+      [];
     assert.ok(new Set(markers).size >= 2);
     for (const marker of markers) {
       const evidenceId = evidenceIdByMarker.get(marker);
       assert.ok(evidenceId, `unknown marker ${marker}`);
-      assert.ok(section.evidenceCardIds.includes(evidenceId), `${marker} is not bound in ${section.sectionId}`);
+      assert.ok(
+        section.evidenceCardIds.includes(evidenceId),
+        `${marker} is not bound in ${section.sectionId}`,
+      );
     }
     for (const sentence of section.prose.split(/(?<=[。！？])/u)) {
       const fingerprint = sentence
@@ -2994,8 +4645,498 @@ test("cross-language repair keeps substantive introduction literature and discus
         .replace(/[\s\p{P}\p{S}]+/gu, "")
         .toLowerCase();
       if (fingerprint.length < 14) continue;
-      assert.equal(fingerprints.has(fingerprint), false, `duplicate sentence in ${section.sectionId}`);
+      assert.equal(
+        fingerprints.has(fingerprint),
+        false,
+        `duplicate sentence in ${section.sectionId}`,
+      );
       fingerprints.add(fingerprint);
     }
   }
+});
+
+function vnextAtomicClaim(
+  overrides: Partial<AtomicClaim> & Pick<AtomicClaim, "claimId" | "proposition">,
+): AtomicClaim {
+  const sourceId = overrides.supportSourceIds?.[0] ?? "S2";
+  const evidenceId = overrides.supportEvidenceIds?.[0] ?? "E2";
+  return {
+    supportEvidenceIds: [evidenceId],
+    supportSourceIds: [sourceId],
+    supportSpans: [{ evidenceId, sourceId, exactSupportSpan: overrides.proposition }],
+    claimType: "association",
+    scope: {},
+    epistemicStrength: "association",
+    allowedParaphrases: [],
+    forbiddenExtensions: ["association_to_causation"],
+    provenance: {
+      workflowId: "writer-vnext-regression",
+      evidenceVersion: "fixture-v1",
+      generatedFrom: "verified_evidence",
+    },
+    ...overrides,
+  };
+}
+
+function closurePlanningCard(
+  index: number,
+  proposition: string,
+  options: { sectionFit?: boolean } = {},
+): ReportWriterEvidenceCard {
+  return {
+    id: `closure-e${index}`,
+    sourceId: `closure-s${index}`,
+    claim: proposition,
+    claimTextZhTw: proposition,
+    evidence: proposition,
+    summary: proposition,
+    relevance: "核心研究問題",
+    supportSpan: proposition,
+    governanceFlags: ["exact_support_span_verified"],
+    sectionTargets: options.sectionFit ? ["findings"] : [],
+    evidenceDirectnessTier: options.sectionFit ? "A" : "C",
+    evidenceGrounding: "full_text",
+    dataScope: "青少年",
+    exposure: "短影音使用",
+    outcome: "睡眠品質",
+    sourceTitle: `Closure source ${index}`,
+    sourceProvider: "fixture",
+    year: 2026,
+    usableSections: ["findings"],
+    citationText: `Closure source ${index}（2026）`,
+    limitation: null,
+  };
+}
+
+test("required Central Answer claims survive below the default planning cap", () => {
+  const cards = [
+    ...Array.from({ length: 8 }, (_, index) =>
+      closurePlanningCard(
+        index + 1,
+        `第 ${index + 1} 項周邊研究結果與一般媒體行為相關。`,
+        { sectionFit: true },
+      ),
+    ),
+    ...Array.from({ length: 6 }, (_, index) =>
+      closurePlanningCard(
+        index + 9,
+        `青少年短影音使用與睡眠品質存在關聯，這是核心回答 ${index + 1}。`,
+      ),
+    ),
+  ];
+  const graph = buildWriterClaimGraph({
+    evidenceCards: cards,
+    researchQuestion: "青少年短影音使用與睡眠品質是否存在關聯？",
+    requestedSectionIds: ["findings", "discussion", "conclusion"],
+    longForm: true,
+  });
+  const lowRankedCentral = graph.centralAnswerContract.requiredClaims.find(
+    (requirement) => Number(requirement.centralClaimId.match(/\d+/u)?.[0] ?? 0) >= 9,
+  );
+  assert.ok(lowRankedCentral);
+  const targetPlan = graph.sectionClaimPlans.find(
+    (plan) => plan.sectionId === lowRankedCentral.targetSection,
+  );
+  assert.ok(targetPlan?.requiredClaimIds.includes(lowRankedCentral.centralClaimId));
+  assert.ok(graph.paragraphContracts.some(
+    (contract) => contract.requiredCentralClaimIds.includes(lowRankedCentral.centralClaimId),
+  ));
+});
+
+test("required claims expand section capacity instead of being dropped", () => {
+  const cards = Array.from({ length: 10 }, (_, index) =>
+    closurePlanningCard(
+      index + 1,
+      `青少年短影音使用與睡眠品質存在關聯，核心結果 ${index + 1}。`,
+    ),
+  );
+  const graph = buildWriterClaimGraph({
+    evidenceCards: cards,
+    researchQuestion: "青少年短影音使用與睡眠品質是否存在關聯？",
+    requestedSectionIds: ["findings", "discussion", "conclusion"],
+    longForm: false,
+  });
+  const findings = graph.sectionClaimPlans.find((plan) => plan.sectionId === "findings");
+  assert.ok(findings);
+  assert.ok(findings.requiredClaimIds.length > findings.defaultClaimCapacity);
+  assert.equal(findings.effectiveClaimCapacity, findings.requiredClaimIds.length);
+  assert.equal(findings.capacityDecision, "expanded_for_required_claims");
+  assert.ok(findings.requiredClaimIds.every((claimId) => findings.allowedAtomicClaimIds.includes(claimId)));
+  const boundCentral = new Set(
+    graph.paragraphContracts
+      .filter((contract) => contract.sectionId === "findings")
+      .flatMap((contract) => contract.requiredCentralClaimIds),
+  );
+  assert.ok(findings.requiredCentralClaimIds.every((claimId) => boundCentral.has(claimId)));
+});
+
+test("long-form body plans preserve every selected supported claim as required content", () => {
+  const graph = buildWriterClaimGraph({
+    evidenceCards: Array.from({ length: 40 }, (_, index) =>
+      closurePlanningCard(
+        index + 1,
+        `青少年短影音使用與睡眠品質存在受限關聯，長文證據 ${index + 1}。`,
+        { sectionFit: true },
+      ),
+    ),
+    researchQuestion: "青少年短影音使用與睡眠品質是否存在關聯？",
+    requestedSectionIds: ["findings", "discussion", "conclusion"],
+    longForm: true,
+  });
+  const bodyPlans = graph.sectionClaimPlans.filter(
+    (plan) => plan.sectionId !== "conclusion",
+  );
+  assert.ok(bodyPlans.every((plan) => plan.optionalClaimIds.length === 0));
+  assert.ok(bodyPlans.every(
+    (plan) => plan.requiredClaimIds.length ===
+      plan.allowedAtomicClaimIds.length + plan.allowedSynthesisClaimIds.length,
+  ));
+  const conclusion = graph.sectionClaimPlans.find(
+    (plan) => plan.sectionId === "conclusion",
+  );
+  assert.ok(conclusion);
+  assert.ok(conclusion.requiredCentralClaimIds.every(
+    (claimId) => conclusion.requiredClaimIds.includes(claimId),
+  ));
+  assert.ok(conclusion.optionalClaimIds.length > 0);
+  assert.ok(
+    conclusion.requiredClaimIds.length <
+      conclusion.allowedAtomicClaimIds.length + conclusion.allowedSynthesisClaimIds.length,
+  );
+});
+
+test("Conclusion renderer contract is derived only from the authoritative eligibility gate", () => {
+  const graph = buildWriterClaimGraph({
+    evidenceCards: Array.from({ length: 10 }, (_, index) =>
+      closurePlanningCard(
+        index + 1,
+        `青少年短影音使用與睡眠品質存在受限關聯，結果 ${index + 1}。`,
+      ),
+    ),
+    researchQuestion: "青少年短影音使用與睡眠品質是否存在關聯？",
+    requestedSectionIds: ["findings", "discussion", "conclusion"],
+    longForm: true,
+  });
+  const centralId = graph.centralAnswerContract.requiredClaims[0]!.centralClaimId;
+  const nonCentralId = "noncentral-realized-discussion-claim";
+  const graphWithNonCentral = {
+    ...graph,
+    atomicClaims: [
+      ...graph.atomicClaims,
+      {
+        ...graph.atomicClaims[0]!,
+        claimId: nonCentralId,
+        proposition: "討論已建立一項不屬於中央答案、但可追溯的條件性解釋。",
+      },
+    ],
+  };
+  const candidate = (claimId: string, section: string) => ({
+    claimId,
+    originatingSection: section,
+    originatingParagraphIds: [`${section}-p1`],
+    sentenceIds: [`${section}-s1`],
+    sourceIds: [`source-${claimId}`],
+    evidenceCardIds: [`evidence-${claimId}`],
+    realizationStatus: "fully_realized" as const,
+    epistemicStatus: "preserved" as const,
+    citationValidated: true,
+    allowedConclusionUse: true,
+  });
+  const rendering = buildConclusionRenderingContract({
+    graph: graphWithNonCentral,
+    eligibilityGate: {
+      status: "pass",
+      candidates: [
+        { ...candidate(centralId, "findings"), centralClaimId: centralId },
+        candidate(nonCentralId, "discussion"),
+      ],
+      rejected: [
+        { claimId: "evidence-only-never-realized", reason: "body_claim_not_realized" },
+      ],
+      requestedClaimIds: [centralId, nonCentralId],
+    },
+  });
+  assert.deepEqual(
+    rendering.eligibleClaims.map((claim) => claim.claimId),
+    [centralId, nonCentralId],
+  );
+  assert.deepEqual(rendering.centralClaimIds, [centralId]);
+  assert.equal(
+    rendering.eligibleClaims.some(
+      (claim) => claim.claimId === "evidence-only-never-realized",
+    ),
+    false,
+  );
+  assert.equal(rendering.mayIntroduceNewClaims, false);
+  assert.equal(rendering.mayIntroduceNewStatistics, false);
+});
+
+test("writer vNext case A rejects association-to-causation escalation", () => {
+  const claim = vnextAtomicClaim({
+    claimId: "C17",
+    proposition: "較高的短影音使用與較短的睡眠時間存在關聯。",
+  });
+  const result = auditClaimBoundSentences({
+    sentences: [{
+      sentenceId: "A",
+      text: "短影音使用造成睡眠時間縮短。",
+      realizedClaimIds: ["C17"],
+      citationSourceIds: ["S2"],
+    }],
+    atomicClaims: [claim],
+    synthesisClaims: [],
+  });
+  assert.equal(result.status, "blocked");
+  assert.ok(result.issues.some((issue) => issue.code === "causality_escalation"));
+});
+
+test("writer vNext case B rejects subgroup-to-population escalation", () => {
+  const claim = vnextAtomicClaim({
+    claimId: "C18",
+    proposition: "13 至 15 歲青少年樣本中，較高使用量與較晚就寢相關。",
+    scope: { population: "13 至 15 歲青少年" },
+  });
+  const result = auditClaimBoundSentences({
+    sentences: [{
+      sentenceId: "B",
+      text: "所有青少年使用量越高，就寢時間越晚。",
+      realizedClaimIds: ["C18"],
+      citationSourceIds: ["S2"],
+    }],
+    atomicClaims: [claim],
+    synthesisClaims: [],
+  });
+  assert.equal(result.status, "blocked");
+  assert.ok(result.issues.some((issue) => issue.code === "population_escalation"));
+});
+
+test("writer vNext population audit does not treat a bounded result quantity as a universal population", () => {
+  const claim = vnextAtomicClaim({
+    claimId: "C18-quantity",
+    proposition: "研究未設無介入對照組，因此不能把全部前後改善歸因於介入。",
+    scope: { population: "60 名中國大學生" },
+  });
+  const result = auditClaimBoundSentences({
+    sentences: [{
+      sentenceId: "B-quantity",
+      text: "研究未設無介入對照組，因此不能把全部前後改善歸因於介入。",
+      realizedClaimIds: ["C18-quantity"],
+      citationSourceIds: ["S2"],
+    }],
+    atomicClaims: [claim],
+    synthesisClaims: [],
+  });
+  assert.equal(result.status, "pass");
+});
+
+test("writer vNext case C accepts qualified multi-source synthesis", () => {
+  const claims = [
+    vnextAtomicClaim({ claimId: "C17", proposition: "較高的短影音使用與較短的睡眠時間存在關聯。", supportSourceIds: ["S2"] }),
+    vnextAtomicClaim({ claimId: "C21", proposition: "較高的短影音暴露與較晚的睡眠時間同時出現。", supportSourceIds: ["S5"] }),
+    vnextAtomicClaim({ claimId: "C31", proposition: "納入研究主要採用觀察性設計。", supportSourceIds: ["S8"], claimType: "method", epistemicStrength: "descriptive" }),
+  ];
+  const synthesis: SynthesisClaim = {
+    claimId: "SC4",
+    proposition: "多項研究顯示短影音使用與睡眠時長或睡眠時序存在關聯，但觀察性證據不足以確立因果方向。",
+    derivedFromAtomicClaimIds: claims.map((claim) => claim.claimId),
+    supportSourceIds: ["S2", "S5", "S8"],
+    synthesisType: "cross-study-pattern",
+    validationStatus: "pending",
+  };
+  assert.deepEqual(validateSynthesisClaim(synthesis, claims), {
+    ...synthesis,
+    validationStatus: "validated",
+    rejectionReason: undefined,
+  });
+});
+
+test("writer vNext case D rejects consensus language backed by one source", () => {
+  const claims = [vnextAtomicClaim({ claimId: "C17", proposition: "較高的短影音使用與較短睡眠相關。", supportSourceIds: ["S2"] })];
+  const result = validateSynthesisClaim({
+    claimId: "SC1",
+    proposition: "研究一致證明短影音會破壞睡眠。",
+    derivedFromAtomicClaimIds: ["C17"],
+    supportSourceIds: ["S2"],
+    synthesisType: "agreement",
+    validationStatus: "pending",
+  }, claims);
+  assert.equal(result.validationStatus, "rejected");
+  assert.match(result.rejectionReason ?? "", /source_count|causality_escalation/u);
+});
+
+test("writer vNext case E rejects citation identity mismatch", () => {
+  const claim = vnextAtomicClaim({ claimId: "C17", proposition: "較高的短影音使用與較短睡眠相關。", supportSourceIds: ["S2", "S5"] });
+  const result = auditClaimBoundSentences({
+    sentences: [{ sentenceId: "E", text: claim.proposition, realizedClaimIds: [claim.claimId], citationSourceIds: ["S7"] }],
+    atomicClaims: [claim],
+    synthesisClaims: [],
+  });
+  assert.equal(result.status, "blocked");
+  assert.ok(result.issues.some((issue) => issue.code === "citation_mismatch"));
+});
+
+test("writer vNext case F repairs only the invalid sentence without claim or citation drift", () => {
+  const valid = vnextAtomicClaim({ claimId: "C17", proposition: "較高的短影音使用與較短睡眠相關。", supportSourceIds: ["S2"] });
+  const surrounding = { sentenceId: "F1", text: "本節比較可直接核對的睡眠結果。", realizedClaimIds: [] as string[], citationSourceIds: [] as string[], factual: false };
+  const repaired = repairClaimBoundSentences({
+    sentences: [
+      surrounding,
+      { sentenceId: "F2", text: "短影音一定會造成所有青少年失眠。", realizedClaimIds: ["C17"], citationSourceIds: ["S7"] },
+      { ...surrounding, sentenceId: "F3", text: "下一節將討論適用邊界。" },
+    ],
+    atomicClaims: [valid],
+    synthesisClaims: [],
+  });
+  assert.equal(repaired.sentences[0]?.text, surrounding.text);
+  assert.equal(repaired.sentences[2]?.text, "下一節將討論適用邊界。");
+  assert.equal(repaired.sentences[1]?.text, valid.proposition);
+  assert.deepEqual(repaired.sentences[1]?.realizedClaimIds, ["C17"]);
+  assert.deepEqual(repaired.sentences[1]?.citationSourceIds, ["S2"]);
+  assert.equal(repaired.sentences[1]?.action, "SCOPE_REDUCED");
+  assert.equal(repaired.sentences[1]?.repairStage, "B_DETERMINISTIC");
+  assert.equal(repaired.telemetry.every((trace) => Boolean(trace.originalText)), true);
+});
+
+test("writer vNext restores a missing citation without rewriting a validated sentence", () => {
+  const claim = vnextAtomicClaim({
+    claimId: "C-CITATION",
+    proposition: "較高的短影音使用與較短睡眠相關。",
+    supportSourceIds: ["S2"],
+    supportEvidenceIds: ["E2"],
+  });
+  const original = "較高的短影音使用與較短睡眠相關。";
+  const repaired = repairClaimBoundSentences({
+    sentences: [{
+      sentenceId: "citation-restore",
+      text: original,
+      realizedClaimIds: [claim.claimId],
+      citationSourceIds: [],
+    }],
+    atomicClaims: [claim],
+    synthesisClaims: [],
+  });
+  assert.equal(repaired.sentences[0]?.text, original);
+  assert.deepEqual(repaired.sentences[0]?.realizedClaimIds, [claim.claimId]);
+  assert.deepEqual(repaired.sentences[0]?.citationSourceIds, ["S2"]);
+  assert.deepEqual(repaired.sentences[0]?.evidenceIds, ["E2"]);
+  assert.equal(repaired.sentences[0]?.action, "CITATION_RESTORED");
+  assert.equal(repaired.sentences[0]?.repairStage, "A_PRESERVE");
+  assert.deepEqual(repaired.sentences[0]?.originalClaimIds, [claim.claimId]);
+  assert.deepEqual(repaired.sentences[0]?.finalClaimIds, [claim.claimId]);
+});
+
+test("writer vNext deletion telemetry prevents orphan provenance", () => {
+  const repaired = repairClaimBoundSentences({
+    sentences: [{
+      sentenceId: "delete-unsupported",
+      text: "沒有任何 claim identity 的事實句。",
+      realizedClaimIds: [],
+      citationSourceIds: [],
+    }],
+    atomicClaims: [],
+    synthesisClaims: [],
+  });
+  assert.deepEqual(repaired.sentences, []);
+  assert.deepEqual(repaired.deletedSentenceIds, ["delete-unsupported"]);
+  assert.equal(repaired.telemetry[0]?.action, "DELETED_UNSUPPORTED");
+  assert.equal(repaired.telemetry[0]?.deleted, true);
+  assert.equal(repaired.telemetry[0]?.finalText, "");
+  assert.deepEqual(repaired.telemetry[0]?.originalClaimIds, []);
+  assert.deepEqual(repaired.telemetry[0]?.finalClaimIds, []);
+  assert.equal(repaired.telemetry[0]?.repairStage, "D_DELETE");
+  assert.ok(repaired.telemetry[0]?.deletionTimestamp);
+});
+
+test("writer vNext splits a mixed sentence and preserves each claim citation identity", () => {
+  const sleep = vnextAtomicClaim({
+    claimId: "C-SLEEP",
+    proposition: "較高使用量與較短睡眠相關。",
+    supportSourceIds: ["S2"],
+    supportEvidenceIds: ["E2"],
+  });
+  const attention = vnextAtomicClaim({
+    claimId: "C-ATTENTION",
+    proposition: "較高使用量與注意力衝動性相關。",
+    supportSourceIds: ["S5"],
+    supportEvidenceIds: ["E5"],
+  });
+  const repaired = repairClaimBoundSentences({
+    sentences: [{
+      sentenceId: "split-me",
+      text: "短影音造成睡眠縮短，並必然破壞所有青少年的注意力。",
+      realizedClaimIds: [sleep.claimId, attention.claimId],
+      citationSourceIds: ["S2", "S5"],
+    }],
+    atomicClaims: [sleep, attention],
+    synthesisClaims: [],
+  });
+  assert.equal(repaired.sentences.length, 2);
+  assert.deepEqual(repaired.sentences.map((trace) => trace.realizedClaimIds), [
+    [sleep.claimId],
+    [attention.claimId],
+  ]);
+  assert.deepEqual(repaired.sentences.map((trace) => trace.citationSourceIds), [
+    ["S2"],
+    ["S5"],
+  ]);
+  assert.deepEqual(repaired.sentences.map((trace) => trace.evidenceIds), [
+    ["E2"],
+    ["E5"],
+  ]);
+  assert.deepEqual(repaired.sentences.map((trace) => trace.originalClaimIds), [
+    [sleep.claimId, attention.claimId],
+    [sleep.claimId, attention.claimId],
+  ]);
+  assert.deepEqual(repaired.sentences.map((trace) => trace.finalClaimIds), [
+    [sleep.claimId],
+    [attention.claimId],
+  ]);
+  assert.equal(repaired.sentences.every((trace) => trace.action === "SPLIT"), true);
+  assert.equal(repaired.validation.status, "pass");
+});
+
+test("writer vNext case G composes a safe conclusion from validated closure claims", () => {
+  const finding = vnextAtomicClaim({ claimId: "C17", proposition: "較高的短影音使用與較短睡眠相關。", supportSourceIds: ["S2"] });
+  const limitation = vnextAtomicClaim({ claimId: "C31", proposition: "觀察性研究不足以確立因果方向。", supportSourceIds: ["S5"], claimType: "limitation", epistemicStrength: "descriptive" });
+  const conclusion = composeSafeConclusion({
+    closure: { majorFindingClaimIds: ["C17"], consensusClaimIds: [], disagreementClaimIds: [], limitationClaimIds: ["C31"], uncertaintyClaimIds: [] },
+    atomicClaims: [finding, limitation],
+    synthesisClaims: [],
+  });
+  assert.equal(conclusion.validation.status, "pass");
+  assert.match(conclusion.prose, /短影音使用.*較短睡眠/u);
+  assert.match(conclusion.prose, /不足以確立因果/u);
+});
+
+test("writer vNext conclusion closure excludes claims not realized in the body", () => {
+  const restricted = conclusionClosureFromBodyClaims({
+    closure: {
+      majorFindingClaimIds: ["finding-body", "finding-novel"],
+      consensusClaimIds: ["synthesis-novel"],
+      disagreementClaimIds: ["contrast-body"],
+      limitationClaimIds: ["limitation-body", "limitation-novel"],
+      uncertaintyClaimIds: [],
+    },
+    bodyClaimIds: ["finding-body", "finding-extra", "contrast-body", "limitation-body"],
+    findingClaimIds: ["finding-extra"],
+  });
+
+  assert.deepEqual(restricted, {
+    majorFindingClaimIds: ["finding-body", "finding-extra"],
+    consensusClaimIds: [],
+    disagreementClaimIds: ["contrast-body"],
+    limitationClaimIds: ["limitation-body"],
+    uncertaintyClaimIds: [],
+  });
+});
+
+test("writer vNext case H blocks a conclusion that invents mechanism or recommendation", () => {
+  const finding = vnextAtomicClaim({ claimId: "C17", proposition: "較高的短影音使用與較短睡眠相關。", supportSourceIds: ["S2"] });
+  const result = auditClaimBoundSentences({
+    sentences: [{ sentenceId: "H", text: "短影音藉由多巴胺機制破壞睡眠，因此學校應全面禁用手機。", realizedClaimIds: ["C17"], citationSourceIds: ["S2"] }],
+    atomicClaims: [finding],
+    synthesisClaims: [],
+  });
+  assert.equal(result.status, "blocked");
+  assert.ok(result.issues.some((issue) => ["unsupported_claim", "causality_escalation", "recommendation_invention"].includes(issue.code)));
 });

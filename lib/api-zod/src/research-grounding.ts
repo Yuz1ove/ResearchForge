@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ParsedResearchInputSchema } from "./research-intent";
+import { FormalEvidenceRoleSchema, TopicIntegrityAssessmentSchema } from "./topic-integrity";
 
 export const SourceSearchProfileSchema = z.enum(["quick", "standard", "deep"]);
 export type SourceSearchProfile = z.infer<typeof SourceSearchProfileSchema>;
@@ -368,6 +369,11 @@ export const SourceContentExtractionMethodSchema = z.enum([
   "pdf_text",
   "ocr",
   "html",
+  "docx_native",
+  "epub_native",
+  "jats_xml",
+  "tei_xml",
+  "xml",
   "abstract",
   "failed",
 ]);
@@ -409,6 +415,120 @@ export const ClaimCandidateStatusSchema = z.enum([
 ]);
 export type ClaimCandidateStatus = z.infer<typeof ClaimCandidateStatusSchema>;
 
+export const StudyDesignSchema = z.enum([
+  "randomized_controlled_trial", "quasi_experimental", "prospective_cohort",
+  "retrospective_cohort", "cross_sectional", "case_control",
+  "longitudinal_observational", "systematic_review", "meta_analysis",
+  "scoping_review", "qualitative", "mixed_methods", "simulation",
+  "benchmark", "technical_evaluation", "experimental_lab", "other", "unknown",
+]);
+export type StudyDesign = z.infer<typeof StudyDesignSchema>;
+
+export const StudyEffectDirectionSchema = z.enum([
+  "positive", "negative", "null", "mixed", "nonlinear", "not_applicable", "unclear",
+]);
+export type StudyEffectDirection = z.infer<typeof StudyEffectDirectionSchema>;
+
+export const StudyFactProvenanceSchema = z.object({
+  sourceId: z.string().trim().min(1),
+  sourceSpanText: z.string().trim().min(1),
+  sectionOrLocation: z.string().trim().min(1).nullable().default(null),
+  page: z.number().int().nullable().default(null),
+  confidence: z.number().min(0).max(1),
+  extractionMethod: z.enum(["llm_structured_fact", "deterministic_exact_span", "manual_review"]),
+});
+export type StudyFactProvenance = z.infer<typeof StudyFactProvenanceSchema>;
+
+export const StudyModeratorFactSchema = z.object({
+  factor: z.string().trim().min(1),
+  role: z.enum(["moderator", "mediator", "covariate", "confounder", "subgroup"]),
+  effect: z.string().trim().min(1).nullable().default(null),
+  provenance: StudyFactProvenanceSchema,
+});
+export type StudyModeratorFact = z.infer<typeof StudyModeratorFactSchema>;
+
+export const StudyQuantitativeFactSchema = z.object({
+  metric: z.enum([
+    "mean", "median", "percentage", "risk_ratio", "odds_ratio", "hazard_ratio",
+    "correlation", "beta", "standardized_beta", "effect_size", "accuracy", "F1",
+    "AUC", "latency", "energy", "sample_size", "other",
+  ]),
+  value: z.number().finite().nullable().default(null),
+  rawValue: z.string().trim().min(1),
+  unit: z.string().trim().min(1).nullable().default(null),
+  population: z.string().trim().min(1).nullable().default(null),
+  denominator: z.number().int().positive().nullable().default(null),
+  comparison: z.string().trim().min(1).nullable().default(null),
+  timepoint: z.string().trim().min(1).nullable().default(null),
+  ciLower: z.number().finite().nullable().default(null),
+  ciUpper: z.number().finite().nullable().default(null),
+  standardError: z.number().finite().nullable().default(null),
+  standardDeviation: z.number().finite().nullable().default(null),
+  pValue: z.string().trim().min(1).nullable().default(null),
+  effectDirection: StudyEffectDirectionSchema,
+  provenance: StudyFactProvenanceSchema,
+});
+export type StudyQuantitativeFact = z.infer<typeof StudyQuantitativeFactSchema>;
+
+/** Stage-1 study facts. Missing source information stays null/unknown. */
+export const StructuredStudyFactSchema = z.object({
+  studyId: z.string().trim().min(1).nullable().default(null),
+  sourceId: z.string().trim().min(1),
+  title: z.string().trim().min(1).nullable().default(null),
+  authors: z.array(z.string().trim().min(1)).nullable().default(null),
+  year: z.number().int().nullable().default(null),
+  venue: z.string().trim().min(1).nullable().default(null),
+  doi: z.string().trim().min(1).nullable().default(null),
+  url: z.string().trim().min(1).nullable().default(null),
+  evidenceLevel: z.string().trim().min(1).nullable().default(null),
+  contentAccessLevel: z.enum(["metadata_only", "abstract_only", "partial_full_text", "full_text"]),
+  metadataOnly: z.boolean(),
+  abstractAvailable: z.boolean(),
+  fullTextAvailable: z.boolean(),
+  studyDesign: StudyDesignSchema,
+  studyDesignExplicit: z.boolean(),
+  population: z.string().trim().min(1).nullable().default(null),
+  populationDescription: z.string().trim().min(1).nullable().default(null),
+  populationAgeMin: z.number().finite().nullable().default(null),
+  populationAgeMax: z.number().finite().nullable().default(null),
+  populationAgeMean: z.number().finite().nullable().default(null),
+  populationSampleSize: z.number().int().positive().nullable().default(null),
+  populationLocation: z.string().trim().min(1).nullable().default(null),
+  populationSetting: z.string().trim().min(1).nullable().default(null),
+  exposure: z.string().trim().min(1).nullable().default(null),
+  exposureDefinition: z.string().trim().min(1).nullable().default(null),
+  exposureMeasurement: z.string().trim().min(1).nullable().default(null),
+  exposureTiming: z.string().trim().min(1).nullable().default(null),
+  exposureDuration: z.string().trim().min(1).nullable().default(null),
+  comparator: z.string().trim().min(1).nullable().default(null),
+  comparatorDefinition: z.string().trim().min(1).nullable().default(null),
+  outcome: z.string().trim().min(1).nullable().default(null),
+  outcomeDefinition: z.string().trim().min(1).nullable().default(null),
+  outcomeMeasurement: z.string().trim().min(1).nullable().default(null),
+  outcomeTimepoint: z.string().trim().min(1).nullable().default(null),
+  effectDirection: StudyEffectDirectionSchema,
+  effectDirectionConfidence: z.number().min(0).max(1).nullable().default(null),
+  adjustedOrUnadjusted: z.enum(["adjusted", "unadjusted", "mixed", "unknown"]),
+  covariates: z.array(z.string().trim().min(1)),
+  confounders: z.array(z.string().trim().min(1)),
+  moderators: z.array(StudyModeratorFactSchema),
+  mediators: z.array(StudyModeratorFactSchema),
+  subgroups: z.array(StudyModeratorFactSchema),
+  primaryResult: z.string().trim().min(1).nullable().default(null),
+  secondaryResults: z.array(z.string().trim().min(1)),
+  limitations: z.array(z.string().trim().min(1)),
+  authorCautions: z.array(z.string().trim().min(1)),
+  quantitativeFacts: z.array(StudyQuantitativeFactSchema),
+  fieldProvenance: z.record(z.string(), StudyFactProvenanceSchema),
+  evidenceConfidence: z.number().min(0).max(1),
+  extractionMethod: z.enum(["llm_structured_fact", "deterministic_exact_span", "manual_review"]),
+  /** Typed and produced by the API study-fact V2 layer; retained here as a
+   * forward-compatible transport envelope so downstream gates do not reparse
+   * raw snippets. The API module performs the structural/runtime validation. */
+  studyFactV2: z.record(z.string(), z.unknown()).optional(),
+});
+export type StructuredStudyFact = z.infer<typeof StructuredStudyFactSchema>;
+
 const ExtractedChunkSchema = z.object({
   chunk_id: z.string().trim().min(1),
   text: z.string().trim().min(1),
@@ -440,6 +560,7 @@ export const ClaimCandidateSchema = z.object({
   sourceQualityScore: z.number().min(0).max(1).optional(),
   usableSections: z.array(ClaimUsableSectionSchema),
   limitations: z.array(z.string().trim().min(1)),
+  structuredStudyFact: StructuredStudyFactSchema.optional(),
   extractionMode: ClaimExtractionModeSchema,
   status: ClaimCandidateStatusSchema,
   rejectionReason: z.string().trim().min(1).optional(),
@@ -449,6 +570,384 @@ export const ClaimCandidateSchema = z.object({
   createdAt: z.string().trim().min(1),
 });
 export type ClaimCandidate = z.infer<typeof ClaimCandidateSchema>;
+
+export const CanonicalStudyAccessStateSchema = z.enum([
+  "FULL_TEXT_STRUCTURED",
+  "FULL_TEXT_HTML",
+  "FULL_TEXT_PDF",
+  "FULL_TEXT_OCR",
+  "FULL_TEXT_REPOSITORY_COPY",
+  "ABSTRACT_ONLY",
+  "ACCESS_DENIED",
+  "PAYWALLED",
+  "NO_USABLE_ARTIFACT",
+  "RATE_LIMITED",
+  "SERVER_ERROR",
+  "RESOLVER_ERROR",
+  "UNKNOWN",
+]);
+export type CanonicalStudyAccessState = z.infer<typeof CanonicalStudyAccessStateSchema>;
+
+export const FullTextAcquisitionOutcomeSchema = z.enum([
+  "NO_FULL_TEXT_DISCOVERED",
+  "OA_LOOKUP_SUCCESS",
+  "OA_LOOKUP_MISS",
+  "DOI_RESOLUTION_FAILED",
+  "LANDING_PAGE_ONLY",
+  "ABSTRACT_ONLY",
+  "HTML_FULL_TEXT_FOUND",
+  "XML_JATS_FULL_TEXT_FOUND",
+  "XML_TEI_FULL_TEXT_FOUND",
+  "PDF_URL_FOUND",
+  "PDF_DOWNLOAD_SUCCESS",
+  "PDF_DOWNLOAD_BLOCKED",
+  "HTTP_401",
+  "HTTP_403",
+  "HTTP_404",
+  "HTTP_429",
+  "PROVIDER_TIMEOUT",
+  "PROVIDER_NETWORK_ERROR",
+  "PROVIDER_SERVER_ERROR",
+  "PROVIDER_CIRCUIT_OPEN",
+  "ROBOTS_OR_TOS_BLOCKED",
+  "ACCESS_BLOCKED",
+  "RIGHTS_OR_LICENSE_BLOCKED",
+  "INVALID_CONTENT_TYPE",
+  "HTML_RETURNED_AS_PDF",
+  "CORRUPT_PDF",
+  "ENCRYPTED_PDF",
+  "SCANNED_PDF",
+  "MACHINE_TEXT_PDF",
+  "PARSER_FAILED",
+  "OCR_REQUIRED",
+  "OCR_FAILED",
+  "FULL_TEXT_TOO_SHORT",
+  "FULL_TEXT_STRUCTURE_INVALID",
+  "WRONG_ARTICLE_VERSION",
+  "WRONG_ARTICLE_MATCH",
+  "CANONICAL_IDENTITY_INSUFFICIENT",
+  "DUPLICATE_OR_MIRROR",
+  "SUPPLEMENTARY_ONLY",
+  "FULL_TEXT_QUALIFIED",
+]);
+export type FullTextAcquisitionOutcome = z.infer<
+  typeof FullTextAcquisitionOutcomeSchema
+>;
+
+export const FullTextArtifactIdentitySchema = z.object({
+  schemaVersion: z.literal("researchforge-fulltext-artifact/v1"),
+  studyId: z.string().trim().min(1),
+  canonicalWorkId: z.string().trim().min(1),
+  identifiers: z.object({
+    doi: z.string().trim().min(1).optional(),
+    pmid: z.string().trim().min(1).optional(),
+    pmcid: z.string().trim().min(1).optional(),
+    arxivId: z.string().trim().min(1).optional(),
+  }),
+  sourceProvider: z.string().trim().min(1),
+  sourceUrl: z.string().trim().min(1),
+  resolvedUrl: z.string().trim().min(1),
+  acquisitionRoute: z.array(z.string().trim().min(1)),
+  httpStatus: z.number().int().min(0),
+  mimeType: z.string().trim().min(1),
+  declaredMime: z.string().trim().min(1).optional(),
+  detectedMime: z.string().trim().min(1).optional(),
+  formatDetector: z.array(z.string().trim().min(1)).optional(),
+  contentTypeMismatch: z.boolean().optional(),
+  magicBytes: z.string().trim().min(1).optional(),
+  redirectChain: z.array(z.string().trim().min(1)).optional(),
+  byteLength: z.number().int().min(0),
+  checksum: z.string().trim().min(1),
+  retrievedAt: z.string().trim().min(1),
+  publicationVersion: z.string().trim().min(1).optional(),
+  artifactVersionType: z.enum([
+    "VERSION_OF_RECORD",
+    "ACCEPTED_MANUSCRIPT",
+    "PREPRINT",
+    "REPOSITORY_COPY",
+    "UNKNOWN_VERSION",
+  ]).optional(),
+  license: z.string().trim().min(1).optional(),
+  rightsStatus: z.enum(["OPEN", "RESTRICTED", "UNKNOWN"]),
+  oaStatus: z.enum(["OPEN", "CLOSED", "UNKNOWN"]).optional(),
+  accessMethod: z.enum([
+    "OFFICIAL_OA_REPOSITORY",
+    "PROVIDER_DISCOVERED_OA",
+    "PUBLISHER_DECLARED_OA",
+    "PUBLIC_URL_VALIDATED",
+    "UNKNOWN",
+  ]).optional(),
+  landingUrl: z.string().trim().min(1).optional(),
+  parserUsed: z.string().trim().min(1),
+  parserVersion: z.string().trim().min(1),
+  pageCount: z.number().int().min(0).optional(),
+  textLength: z.number().int().min(0),
+  structureMarkers: z.array(z.string().trim().min(1)),
+  identityMatch: z.enum(["MATCH", "MISMATCH", "UNKNOWN"]),
+  identityStrength: z.enum(["STRONG", "MEDIUM", "WEAK", "NONE"]).optional(),
+  identityEvidence: z.array(z.string().trim().min(1)).optional(),
+  payloadIdentity: z.object({
+    decision: z.enum(["MATCH", "MISMATCH", "UNKNOWN", "POSSIBLE_MATCH"]),
+    confidence: z.number().min(0).max(1),
+    level: z.enum(["PERSISTENT_IDENTIFIER", "BIBLIOGRAPHIC", "INSUFFICIENT"]),
+    reason: z.enum(["CANONICAL_ARTICLE_IDENTITY_VERIFIED", "WRONG_ARTICLE_MATCH", "CANONICAL_IDENTITY_INSUFFICIENT"]),
+    evidence: z.array(z.object({ type: z.string(), canonicalValue: z.string().optional(), manifestationValue: z.string().optional(), matched: z.boolean(), detail: z.string() })),
+    comparisons: z.record(z.string(), z.enum(["MATCH", "MISMATCH", "NOT_COMPARABLE"])),
+  }).optional(),
+  qualificationResult: z.enum(["QUALIFIED", "REJECTED"]),
+  qualificationReason: FullTextAcquisitionOutcomeSchema,
+  routeFingerprint: z.string().trim().min(1).optional(),
+  artifactFingerprint: z.string().trim().min(1).optional(),
+});
+export type FullTextArtifactIdentity = z.infer<
+  typeof FullTextArtifactIdentitySchema
+>;
+
+export const CanonicalStudyAdmissionClassSchema = z.enum([
+  "FORMAL",
+  "LIMITED",
+  "BLOCKED",
+]);
+export type CanonicalStudyAdmissionClass = z.infer<typeof CanonicalStudyAdmissionClassSchema>;
+
+export const CanonicalStudyAdmissionReasonCodeSchema = z.enum([
+  "QUALIFYING_FULL_TEXT_PRESENT",
+  "ABSTRACT_ONLY",
+  "ACCESS_UNKNOWN",
+  "ACQUISITION_INCOMPLETE",
+  "FULL_TEXT_UNRESOLVED",
+  "FULL_TEXT_ACCESS_DENIED",
+  "FULL_TEXT_PAYWALLED",
+  "NO_USABLE_ARTIFACT",
+  "RATE_LIMITED",
+  "SERVER_ERROR",
+  "RESOLVER_ERROR",
+  "PARSER_INCOMPLETE",
+  "PARSER_FAILED",
+  "STUDY_FACTS_READY",
+  "INSUFFICIENT_STUDY_FACTS",
+  "MISSING_PROVENANCE",
+  "MISSING_NUMERICAL_PROVENANCE",
+  "CRITICAL_CONTRADICTION",
+  "FORMAL_REQUIREMENT_MISSING",
+  "STUDY_TYPE_UNCLASSIFIABLE",
+  "FORMAL_ADMITTED",
+  "LIMITED_ADMITTED",
+  "STALE_REVISION",
+  "MISSING_CANONICAL_ADMISSION",
+  "CONFLICTING_ADMISSION_VERSION",
+]);
+export type CanonicalStudyAdmissionReasonCode = z.infer<
+  typeof CanonicalStudyAdmissionReasonCodeSchema
+>;
+
+export const CanonicalStudyAdmissionResultSchema = z.object({
+  schemaVersion: z.literal("researchforge-canonical-study-admission/v1"),
+  admissionVersion: z.literal("canonical-evidence-admission.v1"),
+  decisionId: z.string().trim().min(1),
+  jobId: z.string().trim().min(1),
+  workflowId: z.string().trim().min(1),
+  studyId: z.string().trim().min(1),
+  sourceId: z.string().trim().min(1),
+  jobRevision: z.number().int().min(0),
+  checkpointRevision: z.number().int().min(0),
+  evidenceRevision: z.string().trim().min(1),
+  accessState: CanonicalStudyAccessStateSchema,
+  acquisitionTerminal: z.boolean(),
+  qualifyingArtifactRefs: z.array(z.string().trim().min(1)),
+  parserState: z.enum(["COMPLETE", "PARTIAL", "INCOMPLETE", "FAILED"]),
+  studyFactState: z.enum(["READY", "PARTIAL", "MISSING", "FAILED"]),
+  provenanceState: z.enum(["READY", "INCOMPLETE", "MISSING"]),
+  admissionClass: CanonicalStudyAdmissionClassSchema,
+  reasonCodes: z.array(CanonicalStudyAdmissionReasonCodeSchema),
+  missingRequirements: z.array(z.string().trim().min(1)),
+  upstreamReferences: z.object({
+    sourceId: z.string().trim().min(1),
+    canonicalSourceIdentity: z.string().trim().min(1).nullable(),
+    studyFactExtractionVersion: z.string().trim().min(1).nullable(),
+    resolverStates: z.array(z.string().trim().min(1)),
+    parserVersion: z.string().trim().min(1).nullable(),
+  }),
+  decidedAt: z.string().trim().min(1),
+});
+export type CanonicalStudyAdmissionResult = z.infer<
+  typeof CanonicalStudyAdmissionResultSchema
+>;
+
+export const FullTextResolverRequestAuditSchema = z.object({
+  provider: z.string().trim().min(1),
+  url: z.string().trim().min(1),
+  status: z.number().int(),
+  ok: z.boolean(),
+  attemptedAt: z.string().trim().min(1).optional(),
+  attempt: z.number().int().min(1).optional(),
+  result: z.enum([
+    "SUCCESS",
+    "NOT_FOUND",
+    "ACCESS_DENIED",
+    "RATE_LIMITED",
+    "SERVER_ERROR",
+    "TIMEOUT",
+    "NETWORK_ERROR",
+    "INVALID_RESPONSE",
+    "CIRCUIT_OPEN",
+    "NO_USABLE_ARTIFACT",
+  ]).optional(),
+  latencyMs: z.number().int().min(0).optional(),
+  retryEligibility: z.enum(["RETRYABLE", "NOT_RETRYABLE", "UNKNOWN"]).optional(),
+  artifactCreated: z.boolean().optional(),
+  legalAccess: z.boolean().nullable().optional(),
+  contentType: z.string().trim().min(1).optional(),
+  declaredContentType: z.string().trim().min(1).optional(),
+  detectedContentType: z.string().trim().min(1).optional(),
+  detectionMethod: z.array(z.string().trim().min(1)).optional(),
+  contentTypeMismatch: z.boolean().optional(),
+  magicBytes: z.string().trim().min(1).optional(),
+  redirectChain: z.array(z.string().trim().min(1)).optional(),
+  resolutionDepth: z.number().int().min(0).optional(),
+  resolutionSignal: z.string().trim().min(1).optional(),
+  resolvedUrl: z.string().trim().min(1).optional(),
+  failureClass: z.string().trim().min(1).optional(),
+  failureReason: z.string().trim().min(1).optional(),
+  phase: z.enum(["RESOLUTION", "ACQUISITION"]).optional(),
+  acquisitionOutcome: FullTextAcquisitionOutcomeSchema.optional(),
+  bytesDownloaded: z.number().int().min(0).optional(),
+  cacheHit: z.boolean().optional(),
+  retryAfterMs: z.number().int().min(0).optional(),
+  circuitState: z.enum(["CLOSED", "OPEN", "HALF_OPEN"]).optional(),
+});
+
+export const OaRouteCandidateSchema = z.object({
+  studyIdentity: z.object({
+    canonicalWorkId: z.string().trim().min(1),
+    doi: z.string().trim().min(1).optional(),
+    pmcid: z.string().trim().min(1).optional(),
+    arxivId: z.string().trim().min(1).optional(),
+  }),
+  provider: z.string().trim().min(1),
+  routeType: z.enum([
+    "STRUCTURED_FULL_TEXT",
+    "DIRECT_PDF",
+    "FULL_TEXT_HTML",
+    "LANDING_PAGE",
+    "DOI_RESOLVER",
+  ]),
+  url: z.string().trim().min(1),
+  landingUrl: z.string().trim().min(1).optional(),
+  declaredOaStatus: z.enum(["OPEN", "CLOSED", "UNKNOWN"]),
+  declaredLicense: z.string().trim().min(1).optional(),
+  formatHint: z.string().trim().min(1).optional(),
+  artifactVersionType: z.enum([
+    "VERSION_OF_RECORD",
+    "ACCEPTED_MANUSCRIPT",
+    "PREPRINT",
+    "REPOSITORY_COPY",
+    "UNKNOWN_VERSION",
+  ]),
+  repositoryIdentifier: z.string().trim().min(1).optional(),
+  hostType: z.enum(["repository", "publisher", "unknown"]).optional(),
+  sourceMetadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+  discoveredAt: z.string().trim().min(1),
+  confidence: z.enum(["HIGH", "MEDIUM", "LOW"]),
+  routeFingerprint: z.string().trim().min(1),
+});
+
+export const OaProviderAvailabilitySchema = z.object({
+  provider: z.string().trim().min(1),
+  status: z.enum(["AVAILABLE", "PROVIDER_NOT_CONFIGURED", "DISABLED_BY_BUDGET"]),
+  reasonCode: z.string().trim().min(1),
+});
+
+export const OaTelemetryEventSchema = z.object({
+  event: z.enum([
+    "OA_DISCOVERY_STARTED",
+    "OA_PROVIDER_QUERY_STARTED",
+    "OA_PROVIDER_QUERY_SUCCEEDED",
+    "OA_PROVIDER_QUERY_FAILED",
+    "OA_ROUTE_DISCOVERED",
+    "OA_ROUTE_DEDUPED",
+    "OA_ROUTE_RANKED",
+    "OA_ROUTE_VALIDATION_STARTED",
+    "OA_ROUTE_VALIDATION_FAILED",
+    "OA_ARTIFACT_ACQUIRED",
+    "OA_ARTIFACT_INVALID",
+    "OA_IDENTITY_MATCHED",
+    "OA_IDENTITY_MISMATCH",
+    "OA_ARTIFACT_QUALIFIED",
+    "OA_ARTIFACT_REJECTED",
+    "OA_ALL_ROUTES_EXHAUSTED",
+  ]),
+  runId: z.string().trim().min(1),
+  caseId: z.string().trim().min(1),
+  studyId: z.string().trim().min(1),
+  provider: z.string().trim().min(1),
+  routeType: z.string().trim().min(1),
+  reasonCode: z.string().trim().min(1),
+  elapsedMs: z.number().int().min(0),
+  retryCount: z.number().int().min(0),
+  at: z.string().trim().min(1),
+});
+
+export const FullTextEnrichmentProvenanceSchema = z.object({
+  provider: z.string().trim().min(1),
+  method: z.string().trim().min(1),
+  status: z.string().trim().min(1),
+  contentLevel: z.enum(["fulltext", "abstract", "metadata"]),
+  retrievedAt: z.string().trim().min(1),
+  url: z.string().trim().min(1).optional(),
+  failureReason: z.string().trim().min(1).optional(),
+  accessState: z.enum([
+    "FULL_TEXT_STRUCTURED",
+    "FULL_TEXT_HTML",
+    "FULL_TEXT_PDF",
+    "FULL_TEXT_OCR",
+    "FULL_TEXT_REPOSITORY_COPY",
+    "ABSTRACT_ONLY",
+    "METADATA_ONLY",
+    "PUBLISHER_SHELL",
+    "ACCESS_DENIED",
+    "PAYWALLED",
+    "LICENSE_RESTRICTED",
+    "NOT_FOUND",
+    "BROKEN_DOCUMENT",
+    "UNSUPPORTED_FORMAT",
+    "RESOLVER_ERROR",
+    "UNKNOWN_JOB_INCOMPLETE",
+    "BROKEN_LINK",
+    "UNRESOLVED",
+  ]).optional(),
+  contentType: z.string().trim().min(1).optional(),
+  declaredMime: z.string().trim().min(1).optional(),
+  detectedMime: z.string().trim().min(1).optional(),
+  detectionMethod: z.array(z.string().trim().min(1)).optional(),
+  contentTypeMismatch: z.boolean().optional(),
+  magicBytes: z.string().trim().min(1).optional(),
+  redirectChain: z.array(z.string().trim().min(1)).optional(),
+  landingResolutionTrace: z.array(z.object({
+    depth: z.number().int().min(0),
+    fromUrl: z.string().trim().min(1),
+    toUrl: z.string().trim().min(1).optional(),
+    signal: z.string().trim().min(1),
+    outcome: z.string().trim().min(1),
+  })).optional(),
+  contentLength: z.number().int().min(0).optional(),
+  textDensity: z.number().min(0).optional(),
+  sectionEvidence: z.array(z.string().trim().min(1)).optional(),
+  accessPath: z.array(z.string().trim().min(1)).optional(),
+  checksum: z.string().trim().min(1).optional(),
+  acquisitionOutcome: FullTextAcquisitionOutcomeSchema.optional(),
+  qualifyingFullText: z.boolean().optional(),
+  qualificationReason: z.string().trim().min(1).optional(),
+  artifactCreated: z.boolean().optional(),
+  legalAccess: z.boolean().nullable().optional(),
+  resolvedUrl: z.string().trim().min(1).optional(),
+  artifact: FullTextArtifactIdentitySchema.optional(),
+  resolverRequests: z.array(FullTextResolverRequestAuditSchema).optional(),
+  oaRouteCandidates: z.array(OaRouteCandidateSchema).optional(),
+  manifestations: z.array(z.unknown()).optional(),
+  providerAvailability: z.array(OaProviderAvailabilitySchema).optional(),
+  telemetryEvents: z.array(OaTelemetryEventSchema).optional(),
+});
 
 export const SourceCandidateSchema = z.object({
   sourceId: z.string().trim().min(1),
@@ -494,7 +993,18 @@ export const SourceCandidateSchema = z.object({
   extractionStatus: SourceContentExtractionStatusSchema.optional(),
   extractionMethod: SourceContentExtractionMethodSchema.optional(),
   extractionMode: z
-    .enum(["pdf_text", "grobid", "ocr", "html", "abstract", "metadata_only", "failed"])
+    .enum([
+      "pdf_text",
+      "grobid",
+      "ocr",
+      "html",
+      "docx",
+      "epub",
+      "xml",
+      "abstract",
+      "metadata_only",
+      "failed",
+    ])
     .optional(),
   pageCount: z.number().int().min(0).optional(),
   extractedPageCount: z.number().int().min(0).optional(),
@@ -549,6 +1059,8 @@ export const SourceCandidateSchema = z.object({
   retrievalMode: SourceRetrievalModeSchema,
   recommendationBucket: SourceRecommendationBucketSchema,
   sourceRole: SourceRoleSchema,
+  formalEvidenceRole: FormalEvidenceRoleSchema.optional(),
+  topicIntegrityAssessment: TopicIntegrityAssessmentSchema.optional(),
   sourceBucket: SourceResearchBucketSchema.optional(),
   bucketScore: z.number().min(0).max(1).optional(),
   bucketScores: z.record(z.string(), z.number().min(0).max(1)).optional(),
@@ -604,19 +1116,7 @@ export const SourceCandidateSchema = z.object({
     ])
     .optional(),
   enrichmentFailureReason: z.string().trim().min(1).optional(),
-  enrichmentProvenance: z
-    .array(
-      z.object({
-        provider: z.string().trim().min(1),
-        method: z.string().trim().min(1),
-        status: z.string().trim().min(1),
-        contentLevel: z.enum(["fulltext", "abstract", "metadata"]),
-        retrievedAt: z.string().trim().min(1),
-        url: z.string().trim().min(1).optional(),
-        failureReason: z.string().trim().min(1).optional(),
-      }),
-    )
-    .optional(),
+  enrichmentProvenance: z.array(FullTextEnrichmentProvenanceSchema).optional(),
   enrichedAt: z.string().trim().min(1).optional(),
 });
 export type SourceCandidate = z.infer<typeof SourceCandidateSchema>;
@@ -782,7 +1282,44 @@ export type ResearchGroundingDiagnosticTrace = z.infer<
   typeof ResearchGroundingDiagnosticTraceSchema
 >;
 
+const ExecutionBudgetDimensionsSchema = z.object({
+  query: z.number().int().min(0),
+  expandedQuery: z.number().int().min(0),
+  provider: z.number().int().min(0),
+  providerQueryPair: z.number().int().min(0),
+  requestAttempt: z.number().int().min(0),
+  retry: z.number().int().min(0),
+  redirect: z.number().int().min(0),
+  resolver: z.number().int().min(0),
+  materialization: z.number().int().min(0),
+  fallbackLayer: z.number().int().min(0),
+  elapsedTime: z.number().int().min(0),
+});
+
+export const AuthoritativeExecutionBudgetSnapshotSchema = z.object({
+  schemaVersion: z.literal("researchforge-authoritative-execution-budget/v5"),
+  ledgerId: z.string().trim().min(1),
+  startedAt: z.string().trim().min(1),
+  capturedAt: z.string().trim().min(1),
+  configured: ExecutionBudgetDimensionsSchema,
+  effective: ExecutionBudgetDimensionsSchema,
+  reserved: ExecutionBudgetDimensionsSchema,
+  executed: ExecutionBudgetDimensionsSchema,
+  succeeded: z.number().int().min(0),
+  failed: z.number().int().min(0),
+  retried: z.number().int().min(0),
+  deduplicated: z.number().int().min(0),
+  blockedByBudget: z.number().int().min(0),
+  blockedByDimension: z.record(z.string(), z.number().int().min(0)),
+  blocks: z.array(z.unknown()),
+  events: z.array(z.unknown()),
+});
+export type AuthoritativeExecutionBudgetSnapshot = z.infer<
+  typeof AuthoritativeExecutionBudgetSnapshotSchema
+>;
+
 export const GroundingPipelineDiagnosticsSchema = z.object({
+  budgetAuthority: AuthoritativeExecutionBudgetSnapshotSchema.optional(),
   rawTopic: z.string().trim().min(1),
   rawUserTopic: z.string().trim().min(1).optional(),
   normalizedTopic: z.string().trim().min(1).optional(),
@@ -837,6 +1374,21 @@ export const GroundingPipelineDiagnosticsSchema = z.object({
       llmEvidenceCardCount: z.number().int().min(0),
       ruleFallbackEvidenceCardCount: z.number().int().min(0),
       rejectedReasonCounts: z.record(z.string(), z.number().int().min(0)),
+    })
+    .optional(),
+  chunkRetrieval: z
+    .object({
+      backend: z.enum(["memory", "postgres_pgvector"]),
+      mode: z.enum(["lexical", "semantic", "hybrid"]),
+      queryHash: z.string().trim().min(1),
+      corpusChunkCount: z.number().int().min(0),
+      indexedChunkCount: z.number().int().min(0),
+      selectedChunkCount: z.number().int().min(0),
+      selectedSourceCount: z.number().int().min(0),
+      embeddingModel: z.string().trim().min(1).optional(),
+      persistenceEnabled: z.boolean(),
+      fallbackReason: z.string().trim().min(1).optional(),
+      perSourceSelected: z.record(z.string(), z.number().int().min(0)),
     })
     .optional(),
   canProceedToSourceReview: z.boolean().optional(),
@@ -944,6 +1496,28 @@ export const GroundingPipelineDiagnosticsSchema = z.object({
         provider: z.string().trim().min(1),
         rawCount: z.number().int().min(0),
         candidateCount: z.number().int().min(0),
+        directStudyCandidateCount: z.number().int().min(0).optional(),
+        admissionResult: z.enum(["FOUND_DIRECT_STUDY", "ZERO_DIRECT_STUDY"]).optional(),
+        queryReason: z.enum(["STRICT_TOPIC", "REDUCED_CONJUNCTION", "CONCEPTUAL_EXPANSION"]).optional(),
+        queryPurpose: z.string().trim().min(1).optional(),
+        targetGap: z.string().trim().min(1).optional(),
+        expectedEvidenceType: z.string().trim().min(1).optional(),
+        queryLanguage: z.enum(["zh", "en", "identifier"]).optional(),
+        plannedProvider: z.string().trim().min(1).optional(),
+        queryBudget: z.number().int().min(1).optional(),
+        providerBudget: z.number().int().min(1).optional(),
+        citationHopBudget: z.number().int().min(0).optional(),
+        budgetSemantics: z.string().trim().min(1).optional(),
+        authoritativeLedgerId: z.string().trim().min(1).optional(),
+        structuredDimensions: z.object({
+          populationOrEntity: z.string().nullable(),
+          exposureOrIntervention: z.string().nullable(),
+          comparator: z.string().nullable(),
+          outcome: z.string().nullable(),
+          context: z.string().nullable(),
+          time: z.string().nullable(),
+          relationship: z.enum(["effect", "association", "comparison", "descriptive"]),
+        }).optional(),
         rejectedCount: z.number().int().min(0),
         status: z.enum(["running", "completed", "failed"]).optional(),
       }),
@@ -1013,6 +1587,7 @@ export const GroundingEvidenceCardSchema = z.object({
   mainClaimZhTw: z.string().trim().min(1).optional(),
   paraphrase_zh: z.string().trim().min(1).optional(),
   supportingClaims: z.array(ClaimCandidateSchema).optional(),
+  structuredStudyFact: StructuredStudyFactSchema.optional(),
   supportedByText: z.string().trim().min(1),
   supportSpan: z.string().trim().min(1).optional(),
   supportStart: z.number().int().min(0).optional(),
@@ -1358,6 +1933,7 @@ export const NormalizedFactSchema = z.object({
     "negative",
     "null",
     "mixed",
+    "nonlinear",
     "not_applicable",
     "unclear",
   ]).nullable().default(null),
@@ -1385,6 +1961,7 @@ export const NormalizedFactSchema = z.object({
     "negative",
     "null",
     "mixed",
+    "nonlinear",
     "not_applicable",
     "unclear",
   ]),
@@ -1930,7 +2507,12 @@ export const GroundingJobStatusSchema = z.enum([
   "ready_for_review",
   "no_results_after_expansion",
   "scoring_sources",
+  "classifying_direct_studies",
   "llm_enhancing",
+  "resolving_full_text",
+  "parsing_full_text",
+  "extracting_study_facts",
+  "building_evidence",
   "generation_ready",
   "completed",
   "partial",
@@ -1938,7 +2520,150 @@ export const GroundingJobStatusSchema = z.enum([
 ]);
 export type GroundingJobStatus = z.infer<typeof GroundingJobStatusSchema>;
 
-export const GroundingJobSchema = z.object({
+export const AcquisitionStageNameSchema = z.enum([
+  "QUEUED",
+  "SEARCHING",
+  "NORMALIZING",
+  "DEDUPLICATING",
+  "CLASSIFYING_DIRECT_STUDIES",
+  "RESOLVING_FULL_TEXT",
+  "PARSING_FULL_TEXT",
+  "EXTRACTING_STUDY_FACTS",
+  "BUILDING_EVIDENCE",
+  "BUILDING_THEMES",
+  "BUILDING_SYNTHESIS_INPUTS",
+]);
+export type AcquisitionStageName = z.infer<typeof AcquisitionStageNameSchema>;
+
+export const AcquisitionStageStatusSchema = z.enum([
+  "PENDING",
+  "RUNNING",
+  "COMPLETE",
+  "PARTIAL",
+  "BLOCKED",
+  "FAILED",
+]);
+export type AcquisitionStageStatus = z.infer<typeof AcquisitionStageStatusSchema>;
+
+export const AcquisitionRetryEligibilitySchema = z.enum([
+  "RETRYABLE",
+  "NON_RETRYABLE",
+  "QUALITY_FALLBACK",
+  "NOT_APPLICABLE",
+]);
+export type AcquisitionRetryEligibility = z.infer<typeof AcquisitionRetryEligibilitySchema>;
+
+export const AcquisitionStageCheckpointSchema = z.object({
+  stage: AcquisitionStageNameSchema,
+  status: AcquisitionStageStatusSchema,
+  startedAt: z.string().trim().min(1).nullable(),
+  finishedAt: z.string().trim().min(1).nullable(),
+  attemptCount: z.number().int().min(0),
+  provider: z.string().trim().min(1).nullable(),
+  inputCount: z.number().int().min(0).nullable(),
+  outputCount: z.number().int().min(0).nullable(),
+  errorClass: z.string().trim().min(1).nullable(),
+  retryEligibility: AcquisitionRetryEligibilitySchema,
+  artifactLocation: z.string().trim().min(1).nullable(),
+});
+export type AcquisitionStageCheckpoint = z.infer<typeof AcquisitionStageCheckpointSchema>;
+
+export const AcquisitionTerminalStatusSchema = z.enum([
+  "COMPLETE",
+  "PARTIAL",
+  "BLOCKED",
+  "FAILED",
+]);
+export type AcquisitionTerminalStatus = z.infer<typeof AcquisitionTerminalStatusSchema>;
+
+const UnknownUntilCompleteCountSchema = z.number().int().min(0).nullable();
+
+export const AcquisitionTerminalManifestSchema = z.object({
+  jobId: z.string().trim().min(1),
+  caseId: z.string().trim().min(1).nullable(),
+  topic: z.string().trim().min(1),
+  createdAt: z.string().trim().min(1),
+  completedAt: z.string().trim().min(1),
+  terminalStatus: AcquisitionTerminalStatusSchema,
+  currentStage: AcquisitionStageNameSchema,
+  queryCount: UnknownUntilCompleteCountSchema,
+  providerAttempts: UnknownUntilCompleteCountSchema,
+  candidateCount: UnknownUntilCompleteCountSchema,
+  dedupedCount: UnknownUntilCompleteCountSchema,
+  directStudyCount: UnknownUntilCompleteCountSchema,
+  fullTextResolverAttempts: UnknownUntilCompleteCountSchema,
+  fullTextStructuredCount: UnknownUntilCompleteCountSchema,
+  fullTextPdfCount: UnknownUntilCompleteCountSchema,
+  fullTextOcrCount: UnknownUntilCompleteCountSchema,
+  abstractOnlyCount: UnknownUntilCompleteCountSchema,
+  accessDeniedCount: UnknownUntilCompleteCountSchema,
+  notFoundCount: UnknownUntilCompleteCountSchema,
+  resolverErrorCount: UnknownUntilCompleteCountSchema,
+  unknownIncompleteCount: UnknownUntilCompleteCountSchema,
+  structuredStudyFactCount: UnknownUntilCompleteCountSchema,
+  quantitativeFactCount: UnknownUntilCompleteCountSchema,
+  limitedStudyCount: UnknownUntilCompleteCountSchema,
+  formalStudyCount: UnknownUntilCompleteCountSchema,
+  blockedStudyCount: UnknownUntilCompleteCountSchema.optional(),
+  limitedOrBetterStudyCount: UnknownUntilCompleteCountSchema.optional(),
+  canonicalAdmissionVersion: z.string().trim().min(1).nullable().optional(),
+  canonicalAdmissionJobRevision: z.number().int().min(0).nullable().optional(),
+  canonicalProjectionId: z.string().trim().min(1).optional(),
+  canonicalProjectionVersion: z.string().trim().min(1).optional(),
+  canonicalBindingPass: z.boolean().optional(),
+  canonicalBindingMismatchCount: z.number().int().min(0).optional(),
+  canonicalBindingIssues: z.array(z.string().trim().min(1)).optional(),
+  qualifyingArtifactCount: UnknownUntilCompleteCountSchema.optional(),
+  budgetLedgerId: z.string().trim().min(1).optional(),
+  budgetAuthorityPass: z.boolean().optional(),
+  budgetOverrunCount: z.number().int().min(0).optional(),
+  hiddenAttemptCount: z.number().int().min(0).optional(),
+  budgetBlockedRequestCount: z.number().int().min(0).optional(),
+  budgetConfigured: ExecutionBudgetDimensionsSchema.optional(),
+  budgetEffective: ExecutionBudgetDimensionsSchema.optional(),
+  budgetReserved: ExecutionBudgetDimensionsSchema.optional(),
+  budgetExecuted: ExecutionBudgetDimensionsSchema.optional(),
+  canonicalAccessStateCounts: z
+    .record(z.string(), z.number().int().min(0))
+    .optional(),
+  errors: z.array(z.string().trim().min(1)),
+  warnings: z.array(z.string().trim().min(1)),
+  artifactPaths: z.array(z.string().trim().min(1)),
+});
+export type AcquisitionTerminalManifest = z.infer<typeof AcquisitionTerminalManifestSchema>;
+
+export const AcquisitionLifecycleSchema = z.object({
+  schemaVersion: z.literal("researchforge-acquisition-job/v4"),
+  currentStage: AcquisitionStageNameSchema,
+  terminalStatus: AcquisitionTerminalStatusSchema.nullable(),
+  stages: z.array(AcquisitionStageCheckpointSchema),
+  safeResumeStage: AcquisitionStageNameSchema,
+  searchCheckpointAvailable: z.boolean(),
+  resumedFromCheckpoint: z.boolean(),
+  runAttemptCount: z.number().int().min(0),
+  providerRequestCount: z.number().int().min(0),
+  resolverRequestCount: z.number().int().min(0),
+  writerCallCount: z.number().int().min(0),
+  modelSubcallCount: z.number().int().min(0),
+  totalJobBudgetMs: z.number().int().positive(),
+  lastErrorClass: z.string().trim().min(1).nullable(),
+  terminalManifest: AcquisitionTerminalManifestSchema.nullable(),
+});
+export type AcquisitionLifecycle = z.infer<typeof AcquisitionLifecycleSchema>;
+
+export const GroundingExecutionLeaseSchema = z.object({
+  ownerId: z.string().trim().min(1),
+  claimedAt: z.string().trim().min(1),
+  expiresAt: z.string().trim().min(1),
+});
+
+export const GroundingClientWaitSchema = z.object({
+  status: z.enum(["WAITING", "CLIENT_WAIT_EXPIRED", "JOB_TERMINAL"]),
+  waitCeilingMs: z.number().int().min(0),
+  observedAt: z.string().trim().min(1),
+});
+
+export const GroundingJobCoreSchema = z.object({
   jobId: z.string().trim().min(1),
   workflowId: z.string().trim().min(1),
   topicHash: z.string().trim().min(1),
@@ -1957,6 +2682,9 @@ export const GroundingJobSchema = z.object({
   lexicalSignals: z.array(LexicalSignalSchema).optional(),
   queryPlan: GroundingQueryPlanSchema.optional(),
   academicSafetyReview: AcademicSafetyReviewSchema.optional(),
+});
+
+export const GroundingJobSourcesSchema = z.object({
   sourceCandidates: z.array(SourceCandidateSchema).optional(),
   highConfidenceCandidateSources: z.array(SourceCandidateSchema).optional(),
   candidateSources: z.array(SourceCandidateSchema).optional(),
@@ -1969,20 +2697,38 @@ export const GroundingJobSchema = z.object({
   providerErrors: z.array(GroundingProviderErrorSchema).optional(),
   groundingDiagnostics: GroundingPipelineDiagnosticsSchema.optional(),
   diagnosticTrace: ResearchGroundingDiagnosticTraceSchema.optional(),
+});
+
+export const GroundingJobEvidenceSchema = z.object({
   claimCandidates: z.array(ClaimCandidateSchema).optional(),
   evidenceCards: z.array(GroundingEvidenceCardSchema).optional(),
+  canonicalStudyAdmissions: z
+    .array(CanonicalStudyAdmissionResultSchema)
+    .optional(),
   sectionEvidenceBundles: z.array(SectionEvidenceBundleSchema).optional(),
   reportPlan: ReportPlanSchema.optional(),
   reportSections: z.array(GroundingReportSectionSchema).optional(),
   reportSectionSufficiency: z.array(SectionSufficiencyGateSchema).optional(),
   reportDraft: z.string().trim().min(1).optional(),
   researchCandidates: z.array(z.string().trim().min(1)).optional(),
+  requestPayload: z.record(z.string(), z.unknown()).optional(),
+  searchCheckpoint: z.unknown().optional(),
+  acquisition: AcquisitionLifecycleSchema.optional(),
+  executionLease: GroundingExecutionLeaseSchema.optional(),
+  clientWait: GroundingClientWaitSchema.optional(),
   warnings: z.array(z.string().trim().min(1)),
   createdAt: z.string().trim().min(1),
   updatedAt: z.string().trim().min(1),
   expiresAt: z.string().trim().min(1),
 });
-export type GroundingJob = z.infer<typeof GroundingJobSchema>;
+export type GroundingJob = z.infer<typeof GroundingJobCoreSchema> &
+  z.infer<typeof GroundingJobSourcesSchema> &
+  z.infer<typeof GroundingJobEvidenceSchema>;
+export type GroundingJobInput = z.input<typeof GroundingJobCoreSchema> &
+  z.input<typeof GroundingJobSourcesSchema> &
+  z.input<typeof GroundingJobEvidenceSchema>;
+export const GroundingJobSchema: z.ZodType<GroundingJob, z.ZodTypeDef, GroundingJobInput> =
+  GroundingJobCoreSchema.merge(GroundingJobSourcesSchema).merge(GroundingJobEvidenceSchema);
 
 export const ResearchGroundingJobCreateRequestSchema = z.object({
   workflowId: z.string().trim().min(1),

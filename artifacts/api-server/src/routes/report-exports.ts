@@ -147,7 +147,11 @@ export function assertCanonicalExportGateProof(value: unknown): void {
     typeof proof.evidenceSetHash !== "string" ||
     !/^[a-f0-9]{64}$/u.test(proof.evidenceSetHash) ||
     proof.writerEvidenceSetHash !== proof.evidenceSetHash ||
-    proof.filteredAfterPlanCount !== 0
+    proof.filteredAfterPlanCount !== 0 ||
+    proof.formalResearchValidationPassed !== true ||
+    proof.contentIntegrityValidated !== true ||
+    proof.resumeFrom !== "export" ||
+    proof.safeToResume !== true
   ) {
     throw new Error("canonical_export_gate_not_satisfied");
   }
@@ -344,17 +348,23 @@ export const renderPdfWithPlaywright: PdfRenderer = async (
     if (!cjkFontReady) throw new CjkGlyphValidationError();
     if (signal.aborted) throw new PdfRenderTimeoutError();
 
-    return await page.pdf({
+    const cdp = await context.newCDPSession(page);
+    const printed = await cdp.send("Page.printToPDF", {
       displayHeaderFooter: true,
       headerTemplate:
         '<div style="width:100%;font-size:8px;color:#416b6c;padding:0 23mm;font-family:Arial,sans-serif;">ResearchForge Evidence Synthesis</div>',
       footerTemplate:
         '<div style="width:100%;font-size:8px;color:#6a7778;padding:0 23mm;text-align:center;font-family:Arial,sans-serif;"><span class="pageNumber"></span> / <span class="totalPages"></span></div>',
-      format: "A4",
-      margin: { top: "14mm", right: "0", bottom: "14mm", left: "0" },
+      marginTop: 14 / 25.4,
+      marginRight: 0,
+      marginBottom: 14 / 25.4,
+      marginLeft: 0,
       preferCSSPageSize: true,
       printBackground: true,
+      generateDocumentOutline: true,
+      generateTaggedPDF: true,
     });
+    return Uint8Array.from(Buffer.from(printed.data, "base64"));
   } finally {
     signal.removeEventListener("abort", abortBrowser);
     await closeQuietly(page);
@@ -427,7 +437,7 @@ export function createReportExportsRouter(
     } catch {
       res.status(422).json({
         code: "EXPORT_GATE_BLOCKED",
-        message: "canonical evidence、readiness 或 evidenceSetHash 尚未通過正式匯出 gate。",
+        message: "canonical evidence、formal validation、content integrity、readiness 或 evidenceSetHash 尚未通過正式匯出 gate。",
       });
       return;
     }

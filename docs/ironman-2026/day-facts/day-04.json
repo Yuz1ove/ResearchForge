@@ -1,0 +1,34 @@
+{
+  "schema_version": "researchforge-ironman-day-facts/v1",
+  "day": 4,
+  "title_seed": "搜尋開始成為一條流程",
+  "historical_period": {"start": "2026-06-14", "end": "2026-06-17", "confidence": "HIGH"},
+  "evidence_boundary": "COMMITTED_GIT",
+  "central_problem": "把題目送到 provider，和建立可診斷的搜尋流程，不是同一件事。",
+  "reader_takeaway": "查詢規劃、provider failure、normalization 與 review 必須有可定位的責任邊界。",
+  "known_at_the_time": [
+    {"fact": "16b0807 建立 resilient source search core、provider config、preflight、diagnostics 與 tests。", "source_refs": ["SRC-GIT-SEARCH-CORE"]},
+    {"fact": "6a2e5dd 將 search intent planner 與 reranking 加入流程。", "source_refs": ["SRC-GIT-SEARCH-CORE"]},
+    {"fact": "6/17 cluster 開始把 source relevance 與 generation readiness 變成 gate。", "source_refs": ["SRC-GIT-EVIDENCE-GATE"]}
+  ],
+  "implemented_at_the_time": [{"fact": "搜尋路徑已不是單次 text prompt，而是帶有規劃、診斷與排序的 source workflow。", "source_refs": ["SRC-GIT-SEARCH-CORE"]}],
+  "not_yet_available": [{"fact": "後來的 entity-aware topic fields、legal OA route 與 execution ledger 尚未在此期間可被當作既存。", "source_refs": ["SRC-GIT-TOPIC", "SRC-SOURCE-BUDGET", "SRC-SOURCE-FULLTEXT"]}],
+  "observed_failures": [
+    {"failure_id": "PROVIDER_FAILURE_BOUNDARY", "date_or_range": "2026-06-14/2026-06-17", "historical_stage": "search core", "symptom": "provider 失敗與可用來源品質需要分開表示。", "root_cause_if_known": "provider response and research eligibility were different contracts", "what_was_known_then": "搜尋可能失敗或回傳不理想結果。", "later_resolution": "後續保留 provider diagnostics、fallback states 與 evidence admission。", "source_refs": ["SRC-GIT-SEARCH-CORE", "SRC-GIT-EVIDENCE-GATE"]}
+  ],
+  "tests_and_metrics": [{"test_or_metric": "Three dated search steps are identifiable: resilient search core, intent planner/reranking, and the 6/17 quality-gate cluster.", "result": "historical sequence verified; not a provider success count", "source_refs": ["SRC-GIT-SEARCH-CORE", "SRC-GIT-SEARCH-INTENT", "SRC-GIT-EVIDENCE-GATE"]}],
+  "engineering_decisions": [{"decision": "讓 search planner 與 reranking 擁有測試與 diagnostics，而不是把所有問題歸因於模型。", "source_refs": ["SRC-GIT-SEARCH-CORE"]}],
+  "architecture_state": [{"state": "generator → search intent planner → provider retrieval → normalized/ranked source records → quality gate", "source_refs": ["SRC-GIT-SEARCH-CORE", "SRC-GIT-EVIDENCE-GATE"]}],
+  "terminology_available_at_the_time": ["search intent planner", "reranking", "provider configuration", "preflight", "source relevance"],
+  "terminology_forbidden_due_to_hindsight": ["canonical admission", "full-text materialization", "direct-study coverage", "budget authority"],
+  "safe_numbers": [{"value": "3 dated search commits/steps", "meaning": "16b0807, 6a2e5dd and 6/17 gate cluster; not a provider success count", "source_refs": ["SRC-GIT-SEARCH-CORE", "SRC-GIT-EVIDENCE-GATE"]}],
+  "safe_public_facts": [{"fact": "搜尋第一次成為可測、可診斷的流程，而不是一個孤立的 API call。", "source_refs": ["SRC-GIT-SEARCH-CORE"]}],
+  "sensitive_or_internal_facts": ["provider API keys", "private runtime URLs", "raw diagnostics"],
+  "retrospective_notes": [{"note": "後來的 full-text 與 canonical work 會把『搜尋到』再拆成更多狀態；這一日只處理 search core。", "source_refs": ["SRC-SOURCE-FULLTEXT"]}],
+  "source_refs": [
+    {"type": "commit", "ref": "SRC-GIT-SEARCH-CORE", "why_it_supports_this_fact": "resilient planner and retrieval core"},
+    {"type": "commit_group", "ref": "SRC-GIT-EVIDENCE-GATE", "why_it_supports_this_fact": "source quality boundary"}
+  ],
+  "publication_risks": ["不要以後來 provider count 回填早期搜尋結果。", "不要把 reranking 分數寫成研究正確性。"],
+  "confidence": "HIGH"
+}

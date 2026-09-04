@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Request, Response } from "express";
-import type { ReportPlan, SourceRecord, WriterEvidenceSet } from "@workspace/api-zod";
+import type {
+  CanonicalStudyAdmissionResult,
+  ReportPlan,
+  SourceRecord,
+  WriterEvidenceSet,
+} from "@workspace/api-zod";
+import { deriveCanonicalStudyAdmission } from "../services/research/canonical-study-admission";
 import {
   createReportDraftsRouter,
   verifyGroundedSection,
@@ -53,6 +59,9 @@ function evidence(overrides: Record<string, unknown> = {}) {
     recommendationBucket: "official_background",
     sectionFit: ["findings", "literature_review", "background"],
     extractionMethod: "llm_structured_extract",
+    needsManualReview: false,
+    needsReview: false,
+    governanceFlags: ["exact_support_span_verified"],
     groundingConfidence: 0.78,
     topicRelevance: 0.82,
     sourceQuality: 0.76,
@@ -169,7 +178,10 @@ function successfulWriterResult(
   };
 }
 
-async function invoke(router: ReturnType<typeof createReportDraftsRouter>, body: unknown) {
+async function invoke(
+  router: ReturnType<typeof createReportDraftsRouter>,
+  body: unknown,
+) {
   return invokePath(router, "/report-drafts", body);
 }
 
@@ -193,7 +205,11 @@ async function invokePath(
       return this;
     },
   };
-  await route.route.stack[0].handle(req as Request, res as unknown as Response, () => undefined);
+  await route.route.stack[0].handle(
+    req as Request,
+    res as unknown as Response,
+    () => undefined,
+  );
   return { statusCode, payload };
 }
 
@@ -204,15 +220,31 @@ function canonicalPlanFor(
   topicHash: string,
 ): ReportPlan {
   const evidenceIds = writerEvidenceSet.eligibleEvidenceCardIds;
-  const sourceKeys = Array.from(new Set(cards.map((card) =>
-    String(card.canonicalSourceKey ?? card.dedupeKey ?? card.sourceId)
-  ))).sort();
-  const citationKeys = Array.from(new Set(cards.map((card) =>
-    String(card.citationKey ?? card.canonicalSourceKey ?? card.dedupeKey ?? card.sourceId)
-  ))).sort();
+  const sourceKeys = Array.from(
+    new Set(
+      cards.map((card) =>
+        String(card.canonicalSourceKey ?? card.dedupeKey ?? card.sourceId),
+      ),
+    ),
+  ).sort();
+  const citationKeys = Array.from(
+    new Set(
+      cards.map((card) =>
+        String(
+          card.citationKey ??
+            card.canonicalSourceKey ??
+            card.dedupeKey ??
+            card.sourceId,
+        ),
+      ),
+    ),
+  ).sort();
   const claimId = "canonical-claim-1";
   const facts = evidenceIds.map((evidenceId, index) => {
-    const card = cards.find((item) => String(item.id) === evidenceId) ?? cards[index] ?? {};
+    const card =
+      cards.find((item) => String(item.id) === evidenceId) ??
+      cards[index] ??
+      {};
     const sourceId = String(card.sourceId ?? `source-${index + 1}`);
     return {
       factId: `canonical-fact-${index + 1}`,
@@ -225,7 +257,11 @@ function canonicalPlanFor(
       evidenceLevel: "near_direct" as const,
       sourceAccessLevel: "complete_abstract" as const,
       sectionType: "abstract" as const,
-      claimTextZhTw: String(card.claimTextZhTw ?? card.claim ?? "專業指引建議採取可核對且人道的教育方式。"),
+      claimTextZhTw: String(
+        card.claimTextZhTw ??
+          card.claim ??
+          "專業指引建議採取可核對且人道的教育方式。",
+      ),
       population: null,
       ageGroup: null,
       sampleSize: null,
@@ -269,7 +305,8 @@ function canonicalPlanFor(
       locator: "abstract",
       themeKey: "relationship:humane_training:resource_guarding",
       conceptAxes: ["exposure:humane_training", "outcome:resource_guarding"],
-      comparabilityKey: "population=dogs|exposure=humane_training|outcome=resource_guarding",
+      comparabilityKey:
+        "population=dogs|exposure=humane_training|outcome=resource_guarding",
       limitations: ["僅依摘要整理。"],
       supportingEvidenceIds: [evidenceId],
       supportingSourceIds: [sourceId],
@@ -340,22 +377,24 @@ function canonicalPlanFor(
     normalizedFacts: facts,
     claimGraph: {
       researchQuestion: "哪些教育方式有可核對來源支持？",
-      claims: [{
-        claimId: "canonical-graph-claim-1",
-        claimType: "cross_source_shared_direction",
-        readerFacingStatement: "專業指引建議以人道訓練處理護食行為。",
-        supportingFacts: factIds,
-        contradictingFacts: [],
-        backgroundFacts: [],
-        applicability: ["目前可核對來源涵蓋的犬隻行為教育情境。"],
-        confidence: 0.7,
-        citationIds: sourceIds,
-        statisticalInterpretationIds: [],
-        visualizable: false,
-        visualId: null,
-        evidenceDirectness: "B",
-        limitations: ["僅依摘要整理。"],
-      }],
+      claims: [
+        {
+          claimId: "canonical-graph-claim-1",
+          claimType: "cross_source_shared_direction",
+          readerFacingStatement: "專業指引建議以人道訓練處理護食行為。",
+          supportingFacts: factIds,
+          contradictingFacts: [],
+          backgroundFacts: [],
+          applicability: ["目前可核對來源涵蓋的犬隻行為教育情境。"],
+          confidence: 0.7,
+          citationIds: sourceIds,
+          statisticalInterpretationIds: [],
+          visualizable: false,
+          visualId: null,
+          evidenceDirectness: "B",
+          limitations: ["僅依摘要整理。"],
+        },
+      ],
       edges: [],
     },
     narrativePasses: [
@@ -381,7 +420,9 @@ function canonicalPlanFor(
 }
 
 test("canonical evidence endpoint filters server-ineligible cards before planning and records a reason code", async () => {
-  const router = createReportDraftsRouter({ reportWriter: async () => failedWriterResult() });
+  const router = createReportDraftsRouter({
+    reportWriter: async () => failedWriterResult(),
+  });
   const unrelatedSource = source({
     id: "source-quantum",
     title: "量子錯誤更正綜述",
@@ -389,42 +430,185 @@ test("canonical evidence endpoint filters server-ineligible cards before plannin
     url: "https://example.org/quantum",
     doi: "10.1000/quantum",
   });
-  const { statusCode, payload } = await invokePath(router, "/report-evidence-sets", {
-    workflowId: "wf-canonical-filter",
-    topicHash: "topic-canonical-filter",
-    topic: "狗的護食行為與教育方式",
-    acceptedSources: [source(), unrelatedSource],
-    evidenceCards: [
-      evidence(),
-      evidence({
-        id: "evidence:source-quantum:0",
-        sourceId: "source-quantum",
-        claim: "量子編碼可保護量子位元。",
-        claimText: "量子編碼可保護量子位元。",
-        claimTextZhTw: "量子編碼可保護量子位元。",
-        supportSpan: "量子錯誤更正使用穩定子編碼，以保護量子位元免於退相干。",
-        supportedByText: "量子錯誤更正使用穩定子編碼，以保護量子位元免於退相干。",
-        sourceTitle: "量子錯誤更正綜述",
-      }),
-    ],
-  });
+  const { statusCode, payload } = await invokePath(
+    router,
+    "/report-evidence-sets",
+    {
+      workflowId: "wf-canonical-filter",
+      topicHash: "topic-canonical-filter",
+      topic: "狗的護食行為與教育方式",
+      acceptedSources: [source(), unrelatedSource],
+      evidenceCards: [
+        evidence(),
+        evidence({
+          id: "evidence:source-quantum:0",
+          sourceId: "source-quantum",
+          claim: "量子編碼可保護量子位元。",
+          claimText: "量子編碼可保護量子位元。",
+          claimTextZhTw: "量子編碼可保護量子位元。",
+          supportSpan: "量子錯誤更正使用穩定子編碼，以保護量子位元免於退相干。",
+          supportedByText:
+            "量子錯誤更正使用穩定子編碼，以保護量子位元免於退相干。",
+          sourceTitle: "量子錯誤更正綜述",
+        }),
+      ],
+    },
+  );
   const result = payload as {
     writerEvidenceSet: WriterEvidenceSet;
-    evidenceCards: Array<{ id: string }>;
+    evidenceCards: Array<{
+      id: string;
+      needsManualReview?: boolean | null;
+      needsReview?: boolean | null;
+      governanceFlags?: string[];
+    }>;
   };
 
   assert.equal(statusCode, 200);
-  assert.equal(result.evidenceCards.some((card) => card.id === "evidence:source-quantum:0"), false);
+  assert.equal(
+    result.evidenceCards.some(
+      (card) => card.id === "evidence:source-quantum:0",
+    ),
+    false,
+  );
+  assert.equal(result.evidenceCards[0]?.needsManualReview, false);
+  assert.equal(result.evidenceCards[0]?.needsReview, false);
+  assert.equal(
+    result.evidenceCards[0]?.governanceFlags?.includes(
+      "exact_support_span_verified",
+    ),
+    true,
+  );
   assert.equal(
     result.writerEvidenceSet.rejectedEvidenceCards.some(
-      (item) => item.evidenceCardId === "evidence:source-quantum:0" && item.reasonCode === "low_topic_relevance",
+      (item) =>
+        item.evidenceCardId === "evidence:source-quantum:0" &&
+        item.reasonCode === "low_topic_relevance",
     ),
     true,
   );
 });
 
+test("formal evidence-set preflight reuses matching grounding topic-integrity lineage", async () => {
+  const router = createReportDraftsRouter({
+    reportWriter: async () => failedWriterResult(),
+  });
+  const workflowId = "wf-rag-lineage";
+  const topicHash = "topic-rag-lineage";
+  const topic = "檢索增強生成與純大型語言模型在知識密集型問答中的差異";
+  const supportSpan = "Retrieval-augmented generation improved factual accuracy in knowledge-intensive question answering.";
+  const reviewedSource = source({
+    id: "doi:10.1000/rag-lineage",
+    workflowId,
+    topicHash,
+    topic,
+    title: "Retrieval-augmented generation for knowledge-intensive question answering",
+    abstract: supportSpan,
+    sourceRole: "core_scholarly_evidence",
+    recommendationBucket: "scholarly_recommended",
+    topicIntegrityAssessment: {
+      topicIntegrityVersion: "topic-integrity-contract.v2",
+      relevancePolicyVersion: "peco-directness-reconciliation.v2",
+      sourceId: "doi:10.1000/rag-lineage",
+      metadataRelevance: {
+        passed: true,
+        matchedFields: ["title", "abstract"],
+        populationMatches: [],
+        interventionExposureMatches: ["retrieval-augmented generation"],
+        primaryOutcomeMatches: ["factual accuracy"],
+        primaryOutcomeProminent: true,
+      },
+      semanticRelevance: { score: 0.92, policy: "CANDIDATE_SIGNAL_ONLY" },
+      evidenceEntailment: {
+        supportedTopicFacet: ["intervention_or_exposure", "primary_outcome"],
+        populationMatch: "unspecified",
+        interventionExposureMatch: true,
+        outcomeMatch: true,
+        relationship: "direct",
+        acceptanceReason: "directly reports the requested relationship",
+        rejectionReason: null,
+      },
+      hardExclusion: { excluded: false, reasons: [] },
+      sourceRole: "DIRECT_FINDING",
+      acceptedForCanonicalEvidence: true,
+      allowedSections: ["findings", "discussion", "conclusion"],
+      topicIntegrityReason: "directly reports the requested relationship",
+    },
+  });
+  const { statusCode, payload } = await invokePath(router, "/report-evidence-sets", {
+    workflowId,
+    topicHash,
+    topic,
+    researchReportMode: "formal_research_report",
+    acceptedSources: [reviewedSource],
+    evidenceCards: [evidence({
+      id: "evidence:rag-lineage:0",
+      sourceId: reviewedSource.id,
+      claim: "RAG 在知識密集型問答中改善事實正確性。",
+      claimText: "RAG 在知識密集型問答中改善事實正確性。",
+      claimTextZhTw: "RAG 在知識密集型問答中改善事實正確性。",
+      supportSpan,
+      supportedByText: supportSpan,
+      sourceTitle: reviewedSource.title,
+    })],
+  });
+
+  assert.equal(statusCode, 200, JSON.stringify(payload));
+  assert.ok((payload as { evidenceCards: unknown[] }).evidenceCards.length > 0);
+});
+
+test("canonical evidence does not derive duplicate cards when an accepted source already has traceable evidence", async () => {
+  const router = createReportDraftsRouter({
+    reportWriter: async () => failedWriterResult(),
+  });
+  const supportSpan =
+    "Generative AI feedback improved high school students' argumentative-writing revision but showed stereotypical patterns.";
+  const reviewedSource = source({
+    title: "Generative AI feedback for high school students' argumentative writing",
+    abstract: `${supportSpan} Over-reliance on generative AI reduced high school students' critical engagement in writing.`,
+    sourceRole: "core_scholarly_evidence",
+    recommendationBucket: "scholarly_recommended",
+  });
+  const { statusCode, payload } = await invokePath(
+    router,
+    "/report-evidence-sets",
+    {
+      workflowId: "wf-no-duplicate-derivation",
+      topicHash: "topic-no-duplicate-derivation",
+      topic: "生成式人工智慧對高中生寫作學習的效益、限制與風險",
+      researchReportMode: "formal_research_report",
+      acceptedSources: [reviewedSource],
+      evidenceCards: [
+        evidence({
+          claim: "生成式人工智慧回饋可改善高中生的論證寫作修訂，但存在樣板化限制。",
+          claimText: "生成式人工智慧回饋可改善高中生的論證寫作修訂，但存在樣板化限制。",
+          claimTextZhTw: "生成式人工智慧回饋可改善高中生的論證寫作修訂，但存在樣板化限制。",
+          supportSpan,
+          supportedByText: supportSpan,
+          sourceTitle: reviewedSource.title,
+        }),
+      ],
+    },
+  );
+  const result = payload as {
+    writerEvidenceSet: WriterEvidenceSet;
+    evidenceCards: Array<{ id: string }>;
+  };
+
+  assert.equal(statusCode, 200, JSON.stringify(payload));
+  assert.deepEqual(
+    result.evidenceCards.map((card) => card.id),
+    ["evidence:source-1:0"],
+  );
+  assert.deepEqual(result.writerEvidenceSet.eligibleEvidenceCardIds, [
+    "evidence:source-1:0",
+  ]);
+});
+
 test("canonical evidence preserves standardized fact dimensions and hashes every dimension", async () => {
-  const router = createReportDraftsRouter({ reportWriter: async () => failedWriterResult() });
+  const router = createReportDraftsRouter({
+    reportWriter: async () => failedWriterResult(),
+  });
   const workflowId = "wf-standardized-fact-hash";
   const topicHash = "topic-standardized-fact-hash";
   const fields = {
@@ -434,23 +618,21 @@ test("canonical evidence preserves standardized fact dimensions and hashes every
     dataScope: "12 campus courtyards measured during summer afternoons",
     exposure: "tree-canopy cover",
     outcome: "near-surface air temperature",
-    exactResult: "Higher tree-canopy cover corresponded to 1.8 °C lower afternoon air temperature.",
+    exactResult:
+      "Higher tree-canopy cover corresponded to 1.8 °C lower afternoon air temperature.",
     numericResult: "-1.8 °C",
     applicability: "Applies to comparable humid subtropical school campuses.",
     locator: "Results, Table 2",
     directness: "B",
   } as const;
-  const request = (overrides: Record<string, unknown> = {}) => invokePath(
-    router,
-    "/report-evidence-sets",
-    {
+  const request = (overrides: Record<string, unknown> = {}) =>
+    invokePath(router, "/report-evidence-sets", {
       workflowId,
       topicHash,
       topic: "狗的護食行為與教育方式",
       acceptedSources: [source()],
       evidenceCards: [evidence({ ...fields, ...overrides })],
-    },
-  );
+    });
 
   const baselineResponse = await request();
   assert.equal(baselineResponse.statusCode, 200);
@@ -463,12 +645,17 @@ test("canonical evidence preserves standardized fact dimensions and hashes every
   );
   assert.ok(canonicalCard);
   for (const [field, value] of Object.entries(fields)) {
-    assert.equal(canonicalCard[field], value, `${field} must survive canonicalization`);
+    assert.equal(
+      canonicalCard[field],
+      value,
+      `${field} must survive canonicalization`,
+    );
   }
   assert.equal(canonicalCard.evidenceDirectnessTier, fields.directness);
 
   const evidenceId = "evidence:source-1:0";
-  const baselineFingerprint = baseline.writerEvidenceSet.eligibleEvidenceFingerprints[evidenceId];
+  const baselineFingerprint =
+    baseline.writerEvidenceSet.eligibleEvidenceFingerprints[evidenceId];
   assert.match(baselineFingerprint ?? "", /^[a-f0-9]{64}$/u);
 
   const alternateValues: Record<keyof typeof fields, string> = {
@@ -478,16 +665,20 @@ test("canonical evidence preserves standardized fact dimensions and hashes every
     dataScope: "24 urban blocks measured across two seasons",
     exposure: "normalized difference vegetation index",
     outcome: "land-surface temperature",
-    exactResult: "Vegetated blocks had a 2.1 °C lower median land-surface temperature.",
+    exactResult:
+      "Vegetated blocks had a 2.1 °C lower median land-surface temperature.",
     numericResult: "-2.1 °C",
-    applicability: "Applies only to remotely sensed daytime surface temperature.",
+    applicability:
+      "Applies only to remotely sensed daytime surface temperature.",
     locator: "Supplement, Figure S3",
     directness: "C",
   };
   for (const field of Object.keys(fields) as Array<keyof typeof fields>) {
     const changedResponse = await request({ [field]: alternateValues[field] });
     assert.equal(changedResponse.statusCode, 200, field);
-    const changed = changedResponse.payload as { writerEvidenceSet: WriterEvidenceSet };
+    const changed = changedResponse.payload as {
+      writerEvidenceSet: WriterEvidenceSet;
+    };
     assert.notEqual(
       changed.writerEvidenceSet.eligibleEvidenceFingerprints[evidenceId],
       baselineFingerprint,
@@ -535,6 +726,7 @@ test("canonical planner and writer share the same evidence hash and writer recei
     topic: "狗的護食行為與教育方式",
     acceptedSources: [source()],
     evidenceCards: [evidence()],
+    centralAnswerClaimIds: [" central-claim-1 ", "central-claim-1", "central-claim-2"],
     writerEvidenceSet: canonical.writerEvidenceSet,
     reportPlan,
   });
@@ -547,48 +739,68 @@ test("canonical planner and writer share the same evidence hash and writer recei
 
   assert.equal(statusCode, 200);
   assert.equal(result.reportPlanStatus, "plan_built");
-  assert.equal(result.evidenceSetHash, canonical.writerEvidenceSet.evidenceSetHash);
-  assert.equal(result.writerEvidenceSetHash, canonical.writerEvidenceSet.evidenceSetHash);
-  assert.equal(received?.evidenceSetHash, canonical.writerEvidenceSet.evidenceSetHash);
+  assert.equal(
+    result.evidenceSetHash,
+    canonical.writerEvidenceSet.evidenceSetHash,
+  );
+  assert.equal(
+    result.writerEvidenceSetHash,
+    canonical.writerEvidenceSet.evidenceSetHash,
+  );
+  assert.equal(
+    received?.evidenceSetHash,
+    canonical.writerEvidenceSet.evidenceSetHash,
+  );
   assert.deepEqual(
     received?.evidenceCards?.map((card) => card.id).sort(),
     canonical.evidenceCards.map((card) => String(card.id)).sort(),
   );
+  assert.deepEqual(received?.centralAnswerClaimIds, [
+    "central-claim-1",
+    "central-claim-2",
+  ]);
   assert.equal(result.filteredAfterPlanCount, 0);
 });
 
 test("structured conclusion closes one multi-source claim instead of emitting one sentence per source", async () => {
   const workflowId = "wf-thematic-conclusion";
   const topicHash = "topic-thematic-conclusion";
-  const acceptedSources = [1, 2, 3].map((index) => source({
-    id: `source-${index}`,
-    title: `人道訓練研究 ${index}`,
-    abstract: "專業指引建議以人道訓練處理護食行為。",
-    doi: `10.1000/humane-${index}`,
-    url: `https://doi.org/10.1000/humane-${index}`,
-  }));
-  const inputEvidence = acceptedSources.map((item, index) => evidence({
-    id: `evidence:${item.id}:0`,
-    evidenceId: `evidence:${item.id}:0`,
-    sourceId: item.id,
-    sourceTitle: item.title,
-    claim: "專業指引建議以人道訓練處理護食行為。",
-    claimText: "專業指引建議以人道訓練處理護食行為。",
-    claimTextZhTw: "專業指引建議以人道訓練處理護食行為。",
-    supportSpan: "專業指引建議以人道訓練處理護食行為。",
-    supportedByText: "專業指引建議以人道訓練處理護食行為。",
-    citationMarker: `[S${index + 1}]`,
-    sectionFit: ["findings", "discussion", "conclusion"],
-    usableSections: ["findings", "discussion", "conclusion"],
-  }));
+  const acceptedSources = [1, 2, 3].map((index) =>
+    source({
+      id: `source-${index}`,
+      title: `人道訓練研究 ${index}`,
+      abstract: "專業指引建議以人道訓練處理護食行為。",
+      doi: `10.1000/humane-${index}`,
+      url: `https://doi.org/10.1000/humane-${index}`,
+    }),
+  );
+  const inputEvidence = acceptedSources.map((item, index) =>
+    evidence({
+      id: `evidence:${item.id}:0`,
+      evidenceId: `evidence:${item.id}:0`,
+      sourceId: item.id,
+      sourceTitle: item.title,
+      claim: "專業指引建議以人道訓練處理護食行為。",
+      claimText: "專業指引建議以人道訓練處理護食行為。",
+      claimTextZhTw: "專業指引建議以人道訓練處理護食行為。",
+      supportSpan: "專業指引建議以人道訓練處理護食行為。",
+      supportedByText: "專業指引建議以人道訓練處理護食行為。",
+      citationMarker: `[S${index + 1}]`,
+      sectionFit: ["findings", "discussion", "conclusion"],
+      usableSections: ["findings", "discussion", "conclusion"],
+    }),
+  );
   const router = createReportDraftsRouter({
-    reportWriter: async () => successfulWriterResult([{
-      sectionId: "conclusion",
-      title: "結論",
-      prose: "專業指引建議以人道訓練處理護食行為[S1]。",
-      evidenceCardIds: ["evidence:source-1:0"],
-      citationIds: ["source-1"],
-    }]),
+    reportWriter: async () =>
+      successfulWriterResult([
+        {
+          sectionId: "conclusion",
+          title: "結論",
+          prose: "專業指引建議以人道訓練處理護食行為[S1]。",
+          evidenceCardIds: ["evidence:source-1:0"],
+          citationIds: ["source-1"],
+        },
+      ]),
   });
   const prepared = await invokePath(router, "/report-evidence-sets", {
     workflowId,
@@ -634,7 +846,9 @@ test("structured conclusion closes one multi-source claim instead of emitting on
       evidenceCardIds: string[];
     }>;
   };
-  const conclusion = result.reportSections.find((section) => section.sectionId === "conclusion");
+  const conclusion = result.reportSections.find(
+    (section) => section.sectionId === "conclusion",
+  );
 
   assert.equal(statusCode, 200);
   assert.equal(result.reportPlanStatus, "plan_built");
@@ -642,7 +856,11 @@ test("structured conclusion closes one multi-source claim instead of emitting on
   assert.equal(conclusion?.generationMethod, "planned_claim_synthesis_closure");
   assert.equal(conclusion?.groundingStatus, "grounded");
   assert.equal(conclusion?.evidenceCardIds.length, 3);
-  assert.equal((conclusion?.body.match(/專業指引建議以人道訓練處理護食行為/gu) ?? []).length, 1);
+  assert.equal(
+    (conclusion?.body.match(/專業指引建議以人道訓練處理護食行為/gu) ?? [])
+      .length,
+    1,
+  );
   assert.match(conclusion?.body ?? "", /\[S1\]\[S2\]\[S3\]/u);
   assert.equal(result.degradedMode, false);
 });
@@ -679,11 +897,17 @@ test("same-ID evidence content mutation invalidates the canonical set and forces
     topicHash,
     topic: "狗的護食行為與教育方式",
     acceptedSources: [source()],
-    evidenceCards: [evidence({ claim: "修改後的主張。", claimText: "修改後的主張。" })],
+    evidenceCards: [
+      evidence({ claim: "修改後的主張。", claimText: "修改後的主張。" }),
+    ],
     writerEvidenceSet: canonical.writerEvidenceSet,
     reportPlan,
   });
-  const result = payload as { code: string; planBuildStatus: string; readinessStatus: string };
+  const result = payload as {
+    code: string;
+    planBuildStatus: string;
+    readinessStatus: string;
+  };
 
   assert.equal(statusCode, 409);
   assert.equal(result.code, "EVIDENCE_SET_REPLAN_REQUIRED");
@@ -694,10 +918,12 @@ test("same-ID evidence content mutation invalidates the canonical set and forces
 
 test("needs-targeted-search is plan-built but blocks the writer until bounded retrieval runs", async () => {
   let writerCalls = 0;
-  const router = createReportDraftsRouter({ reportWriter: async () => {
-    writerCalls += 1;
-    return failedWriterResult();
-  } });
+  const router = createReportDraftsRouter({
+    reportWriter: async () => {
+      writerCalls += 1;
+      return failedWriterResult();
+    },
+  });
   const workflowId = "wf-targeted-search-gate";
   const topicHash = "topic-targeted-search-gate";
   const prepared = await invokePath(router, "/report-evidence-sets", {
@@ -711,7 +937,12 @@ test("needs-targeted-search is plan-built but blocks the writer until bounded re
     writerEvidenceSet: WriterEvidenceSet;
     evidenceCards: Array<Record<string, unknown>>;
   };
-  const reportPlan = canonicalPlanFor(canonical.writerEvidenceSet, canonical.evidenceCards, workflowId, topicHash);
+  const reportPlan = canonicalPlanFor(
+    canonical.writerEvidenceSet,
+    canonical.evidenceCards,
+    workflowId,
+    topicHash,
+  );
   reportPlan.readinessStatus = "needs_targeted_search";
   reportPlan.targetedRetrievalAttempted = false;
 
@@ -724,7 +955,11 @@ test("needs-targeted-search is plan-built but blocks the writer until bounded re
     writerEvidenceSet: canonical.writerEvidenceSet,
     reportPlan,
   });
-  const result = payload as { code: string; planBuildStatus: string; readinessStatus: string };
+  const result = payload as {
+    code: string;
+    planBuildStatus: string;
+    readinessStatus: string;
+  };
 
   assert.equal(statusCode, 409);
   assert.equal(result.code, "TARGETED_RETRIEVAL_REQUIRED");
@@ -735,10 +970,12 @@ test("needs-targeted-search is plan-built but blocks the writer until bounded re
 
 test("canonical writer rejects changed plan bindings instead of silently filtering after planning", async () => {
   let writerCalls = 0;
-  const router = createReportDraftsRouter({ reportWriter: async () => {
-    writerCalls += 1;
-    return failedWriterResult();
-  } });
+  const router = createReportDraftsRouter({
+    reportWriter: async () => {
+      writerCalls += 1;
+      return failedWriterResult();
+    },
+  });
   const workflowId = "wf-post-plan-filter-gate";
   const topicHash = "topic-post-plan-filter-gate";
   const prepared = await invokePath(router, "/report-evidence-sets", {
@@ -752,7 +989,12 @@ test("canonical writer rejects changed plan bindings instead of silently filteri
     writerEvidenceSet: WriterEvidenceSet;
     evidenceCards: Array<Record<string, unknown>>;
   };
-  const reportPlan = canonicalPlanFor(canonical.writerEvidenceSet, canonical.evidenceCards, workflowId, topicHash);
+  const reportPlan = canonicalPlanFor(
+    canonical.writerEvidenceSet,
+    canonical.evidenceCards,
+    workflowId,
+    topicHash,
+  );
   reportPlan.sections[0]?.evidenceCardIds.push("evidence:ghost:0");
 
   const { statusCode, payload } = await invoke(router, {
@@ -768,16 +1010,23 @@ test("canonical writer rejects changed plan bindings instead of silently filteri
 
   assert.equal(statusCode, 409);
   assert.equal(result.code, "REPORT_PLAN_REBUILD_REQUIRED");
-  assert.equal(result.reportPlanDiagnostics.some((item) => item.includes("post_plan_mutation")), true);
+  assert.equal(
+    result.reportPlanDiagnostics.some((item) =>
+      item.includes("post_plan_mutation"),
+    ),
+    true,
+  );
   assert.equal(writerCalls, 0);
 });
 
 test("canonical writer rejects a plan that omits atomic facts, claim graph, or exact narrative passes", async () => {
   let writerCalls = 0;
-  const router = createReportDraftsRouter({ reportWriter: async () => {
-    writerCalls += 1;
-    return failedWriterResult();
-  } });
+  const router = createReportDraftsRouter({
+    reportWriter: async () => {
+      writerCalls += 1;
+      return failedWriterResult();
+    },
+  });
   const workflowId = "wf-canonical-narrative-contract";
   const topicHash = "topic-canonical-narrative-contract";
   const prepared = await invokePath(router, "/report-evidence-sets", {
@@ -815,7 +1064,9 @@ test("canonical writer rejects a plan that omits atomic facts, claim graph, or e
   assert.equal(statusCode, 409);
   assert.equal(result.code, "REPORT_PLAN_REBUILD_REQUIRED");
   assert.deepEqual(
-    result.reportPlanDiagnostics.filter((item) => item.startsWith("canonical_")),
+    result.reportPlanDiagnostics.filter((item) =>
+      item.startsWith("canonical_"),
+    ),
     [
       "canonical_atomic_facts_missing",
       "canonical_claim_graph_missing",
@@ -863,14 +1114,25 @@ test("report-drafts returns conservative fallback draft with evidence bindings w
   assert.equal(result.generationMode, "fallback_conservative_draft");
   assert.equal(result.degradedMode, true);
   assert.equal(result.reportPlanStatus, "degraded_legacy");
-  assert.equal(result.fallbackReasons.includes("legacy_report_plan_missing"), true);
-  assert.equal(result.sections[0]?.evidenceCardIds.includes("evidence:source-1:0"), true);
+  assert.equal(
+    result.fallbackReasons.includes("legacy_report_plan_missing"),
+    true,
+  );
+  assert.equal(
+    result.sections[0]?.evidenceCardIds.includes("evidence:source-1:0"),
+    true,
+  );
   assert.doesNotMatch(result.sections[0]?.prose ?? "", /目前可先|建議補充/);
   assert.match(result.sections[0]?.prose ?? "", /就目前摘錄而言/u);
-  const paragraphs = (result.sections[0]?.prose ?? "").split(/\n{2,}/u).filter(Boolean);
+  const paragraphs = (result.sections[0]?.prose ?? "")
+    .split(/\n{2,}/u)
+    .filter(Boolean);
   assert.equal(paragraphs.length >= 2 && paragraphs.length <= 4, true);
   assert.equal(result.sections[0]?.paragraphClaims?.length, paragraphs.length);
-  assert.doesNotMatch(result.sections[0]?.prose ?? "", /(?:主旨|摘要重點|限制)\s*[：:]/u);
+  assert.doesNotMatch(
+    result.sections[0]?.prose ?? "",
+    /(?:主旨|摘要重點|限制)\s*[：:]/u,
+  );
 });
 
 test("report-drafts strips ghost plan bindings and prevents a writer from widening section evidence", async () => {
@@ -943,16 +1205,26 @@ test("report-drafts strips ghost plan bindings and prevents a writer from wideni
   assert.equal(statusCode, 200);
   assert.ok(writerInput);
   assert.equal(writerInput.reportPlanStatus, "filtered");
-  assert.deepEqual(writerInput.reportPlan?.plannedClaims[0]?.supportingEvidenceIds, [
-    "evidence:source-1:0",
-  ]);
+  assert.deepEqual(
+    writerInput.reportPlan?.plannedClaims[0]?.supportingEvidenceIds,
+    ["evidence:source-1:0"],
+  );
   assert.equal(result.reportPlanStatus, "filtered");
   assert.deepEqual(result.reportPlan.plannedClaims[0]?.allowedCitationKeys, [
     "doi:10.1000/allowed",
   ]);
-  assert.deepEqual(result.evidenceCards.map((card) => card.sourceId), ["source-1"]);
-  assert.deepEqual(result.citations.map((citation) => citation.sourceId), ["source-1"]);
-  assert.equal(result.sections[0]?.evidenceCardIds.includes("evidence:source-2:0"), false);
+  assert.deepEqual(
+    result.evidenceCards.map((card) => card.sourceId),
+    ["source-1"],
+  );
+  assert.deepEqual(
+    result.citations.map((citation) => citation.sourceId),
+    ["source-1"],
+  );
+  assert.equal(
+    result.sections[0]?.evidenceCardIds.includes("evidence:source-2:0"),
+    false,
+  );
   assert.equal(result.sections[0]?.citationIds.includes("source-2"), false);
 });
 
@@ -978,7 +1250,10 @@ test("report-drafts hard-fails a report plan from another workflow before invoki
   });
 
   assert.equal(statusCode, 400);
-  assert.equal((payload as { code?: string }).code, "REPORT_PLAN_CONTEXT_MISMATCH");
+  assert.equal(
+    (payload as { code?: string }).code,
+    "REPORT_PLAN_CONTEXT_MISMATCH",
+  );
   assert.equal(invoked, false);
 });
 
@@ -1016,7 +1291,11 @@ test("report-drafts marks findings missingEvidence when only background encyclop
 
   assert.equal(statusCode, 200);
   assert.equal(
-    result.missingEvidence.some((item) => item.sectionId === "findings" && /百科|主要發現|academic|professional|official/.test(item.reason)),
+    result.missingEvidence.some(
+      (item) =>
+        item.sectionId === "findings" &&
+        /百科|主要發現|academic|professional|official/.test(item.reason),
+    ),
     true,
   );
   assert.equal(result.sections[0]?.warnings?.includes("missingEvidence"), true);
@@ -1046,10 +1325,14 @@ test("report-drafts returns canonical evidence cards, bundles, and insufficient 
         id: "evidence:lithium-app:application",
         sourceId: "lithium-app",
         sourceTitle: "Lithium-ion battery applications and principle",
-        claimText: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
-        claimTextZhTw: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
-        supportSpan: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
-        supportedByText: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        claimText:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        claimTextZhTw:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        supportSpan:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        supportedByText:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
         sectionFit: ["background", "findings", "literature_review"],
         recommendationBucket: "scholarly_recommended",
         sourceRole: "core_scholarly_evidence",
@@ -1078,16 +1361,41 @@ test("report-drafts returns canonical evidence cards, bundles, and insufficient 
   });
   const result = payload as {
     evidenceCards: Array<{ supportSpan?: string; claimText?: string }>;
-    sectionEvidenceBundles: Array<{ sectionId: string; coverageStatus: string; canGenerate: boolean }>;
-    reportSections: Array<{ sectionId: string; body: string; coverageStatus: string }>;
+    sectionEvidenceBundles: Array<{
+      sectionId: string;
+      coverageStatus: string;
+      canGenerate: boolean;
+    }>;
+    reportSections: Array<{
+      sectionId: string;
+      body: string;
+      coverageStatus: string;
+    }>;
   };
 
   assert.equal(statusCode, 200);
   assert.equal(result.evidenceCards.length, 2);
-  assert.equal(result.evidenceCards.every((card) => card.supportSpan && card.claimText), true);
-  assert.equal(result.sectionEvidenceBundles.find((bundle) => bundle.sectionId === "findings")?.coverageStatus, "weak");
-  assert.equal(result.sectionEvidenceBundles.find((bundle) => bundle.sectionId === "methodology")?.canGenerate, false);
-  assert.match(result.reportSections.find((section) => section.sectionId === "methodology")?.body ?? "", /證據不足|建議補查/u);
+  assert.equal(
+    result.evidenceCards.every((card) => card.supportSpan && card.claimText),
+    true,
+  );
+  assert.equal(
+    result.sectionEvidenceBundles.find(
+      (bundle) => bundle.sectionId === "findings",
+    )?.coverageStatus,
+    "weak",
+  );
+  assert.equal(
+    result.sectionEvidenceBundles.find(
+      (bundle) => bundle.sectionId === "methodology",
+    )?.canGenerate,
+    false,
+  );
+  assert.match(
+    result.reportSections.find((section) => section.sectionId === "methodology")
+      ?.body ?? "",
+    /證據不足|建議補查/u,
+  );
 });
 
 test("verifyGroundedSection flags cited sentences unsupported by the cited card", () => {
@@ -1098,13 +1406,19 @@ test("verifyGroundedSection flags cited sentences unsupported by the cited card"
         id: "evidence:lithium:1",
         citationMarker: "[S1]",
         claimText: "锂离子电池广泛应用于手机和电动车。",
-        supportSpan: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        supportSpan:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
       }),
     ] as never,
   });
 
   assert.equal(diagnostics.groundingStatus !== "grounded", true);
-  assert.equal(diagnostics.unsupportedSentences.some((sentence) => /治療疾病/u.test(sentence)), true);
+  assert.equal(
+    diagnostics.unsupportedSentences.some((sentence) =>
+      /治療疾病/u.test(sentence),
+    ),
+    true,
+  );
 });
 
 test("verifyGroundedSection does not let an unreviewed fallback claim support itself", () => {
@@ -1144,7 +1458,8 @@ test("report-drafts rejects legacy frontend evidence without explicit supportSpa
           claimTextZhTw: "咖啡因攝取與注意力表現有關。",
         }),
         supportSpan: undefined,
-        supportedByText: "此段是舊前端卡的 supportedByText，不得替代 exact supportSpan。",
+        supportedByText:
+          "此段是舊前端卡的 supportedByText，不得替代 exact supportSpan。",
         quotedText: "此段是舊前端卡的 quotedText，不得替代 exact supportSpan。",
       },
     ],
@@ -1157,7 +1472,12 @@ test("report-drafts rejects legacy frontend evidence without explicit supportSpa
 
   assert.equal(statusCode, 200);
   assert.equal(result.evidenceCards.length, 0);
-  assert.equal(result.rejectedChunks.some((item) => item.reason === "missing_claim_or_support_span"), true);
+  assert.equal(
+    result.rejectedChunks.some(
+      (item) => item.reason === "missing_claim_or_support_span",
+    ),
+    true,
+  );
 });
 
 test("report-drafts never promotes an explicitly rejected source from acceptedSources input", async () => {
@@ -1166,7 +1486,9 @@ test("report-drafts never promotes an explicitly rejected source from acceptedSo
   const router = createReportDraftsRouter({
     reportWriter: async (input) => {
       writerSourceIds = input.acceptedSources.map((item) => item.id);
-      writerEvidenceSourceIds = (input.evidenceCards ?? []).map((item) => item.sourceId);
+      writerEvidenceSourceIds = (input.evidenceCards ?? []).map(
+        (item) => item.sourceId,
+      );
       return failedWriterResult();
     },
   });
@@ -1199,11 +1521,18 @@ test("report-drafts never promotes an explicitly rejected source from acceptedSo
   assert.equal(result.sourceCountSummary.accepted, 1);
   assert.deepEqual(writerSourceIds, ["source-1"]);
   assert.equal(writerEvidenceSourceIds.includes(rejectedId), false);
-  assert.equal(result.evidenceCards.some((card) => card.sourceId === rejectedId), false);
-  assert.equal(result.citations.some((citation) => citation.sourceId === rejectedId), false);
+  assert.equal(
+    result.evidenceCards.some((card) => card.sourceId === rejectedId),
+    false,
+  );
+  assert.equal(
+    result.citations.some((citation) => citation.sourceId === rejectedId),
+    false,
+  );
   assert.equal(
     result.rejectedChunks.some(
-      (item) => item.sourceId === rejectedId && item.reason === "source_not_accepted",
+      (item) =>
+        item.sourceId === rejectedId && item.reason === "source_not_accepted",
     ),
     true,
   );
@@ -1275,21 +1604,30 @@ test("report-drafts dedupes an exact preprint and published version before writi
   assert.equal(writerSources.length, 1);
   assert.equal(writerSources[0]?.id, "rag-preprint");
   assert.equal(writerSources[0]?.doi, "10.5555/rag-published");
-  assert.equal(writerSources[0]?.canonicalSourceIdentity, "doi:10.5555/rag-published");
+  assert.equal(
+    writerSources[0]?.canonicalSourceIdentity,
+    "doi:10.5555/rag-published",
+  );
   assert.equal(result.sourceCountSummary.accepted, 1);
   assert.equal(result.details.acceptedSourcesCount, 1);
   assert.equal(result.citations.length, 1);
   assert.equal(result.citations[0]?.marker, "[S1]");
-  assert.equal(result.citations[0]?.canonicalSourceKey, "doi:10.5555/rag-published");
+  assert.equal(
+    result.citations[0]?.canonicalSourceKey,
+    "doi:10.5555/rag-published",
+  );
   assert.equal(result.citations[0]?.citationKey, "doi:10.5555/rag-published");
   assert.equal(
-    new Set(result.citations.map((citation) => citation.canonicalSourceKey)).size,
+    new Set(result.citations.map((citation) => citation.canonicalSourceKey))
+      .size,
     result.citations.length,
   );
 });
 
 test("report-drafts rejects a client supportSpan absent from accepted source text", async () => {
-  const router = createReportDraftsRouter({ reportWriter: async () => failedWriterResult() });
+  const router = createReportDraftsRouter({
+    reportWriter: async () => failedWriterResult(),
+  });
   const maliciousCardId = "evidence:source-1:invented";
   const { statusCode, payload } = await invoke(router, {
     topic: "狗的護食行為與人道教育方式",
@@ -1300,8 +1638,10 @@ test("report-drafts rejects a client supportSpan absent from accepted source tex
         claim: "這段主張並未出現在合法來源內容中。",
         claimText: "這段主張並未出現在合法來源內容中。",
         claimTextZhTw: "這段主張並未出現在合法來源內容中。",
-        supportSpan: "這是一段完全由客戶端捏造、且不存在於來源摘要或全文的證據文字。",
-        supportedByText: "這是一段完全由客戶端捏造、且不存在於來源摘要或全文的證據文字。",
+        supportSpan:
+          "這是一段完全由客戶端捏造、且不存在於來源摘要或全文的證據文字。",
+        supportedByText:
+          "這是一段完全由客戶端捏造、且不存在於來源摘要或全文的證據文字。",
       }),
     ],
     outline: [{ sectionId: "findings", title: "主要發現" }],
@@ -1312,10 +1652,15 @@ test("report-drafts rejects a client supportSpan absent from accepted source tex
   };
 
   assert.equal(statusCode, 200);
-  assert.equal(result.evidenceCards.some((card) => card.id === maliciousCardId), false);
+  assert.equal(
+    result.evidenceCards.some((card) => card.id === maliciousCardId),
+    false,
+  );
   assert.equal(
     result.rejectedChunks.some(
-      (item) => item.id === maliciousCardId && item.reason === "support_span_not_found_in_source",
+      (item) =>
+        item.id === maliciousCardId &&
+        item.reason === "support_span_not_found_in_source",
     ),
     true,
   );
@@ -1346,7 +1691,13 @@ test("report-drafts derives reviewed supportSpan cards server-side from accepted
     outline: [{ sectionId: "findings", title: "主要發現" }],
   });
   const result = payload as {
-    evidenceCards: Array<{ sourceId: string; supportSpan: string; claimText: string; needsReview?: boolean; extractionMethod?: string }>;
+    evidenceCards: Array<{
+      sourceId: string;
+      supportSpan: string;
+      claimText: string;
+      needsReview?: boolean;
+      extractionMethod?: string;
+    }>;
     serverDerivedEvidenceCardCount: number;
   };
 
@@ -1356,7 +1707,10 @@ test("report-drafts derives reviewed supportSpan cards server-side from accepted
   assert.equal(result.evidenceCards[0]?.supportSpan, abstract);
   assert.equal(result.evidenceCards[0]?.claimText, abstract);
   assert.equal(result.evidenceCards[0]?.needsReview, true);
-  assert.equal(result.evidenceCards[0]?.extractionMethod, "rule_fallback_claim_extraction");
+  assert.equal(
+    result.evidenceCards[0]?.extractionMethod,
+    "rule_fallback_claim_extraction",
+  );
 });
 
 test("report-drafts skips a standalone Abstract label and derives multiple substantive support spans", async () => {
@@ -1371,7 +1725,12 @@ test("report-drafts skips a standalone Abstract label and derives multiple subst
   const { statusCode, payload } = await invoke(router, {
     topic: "雨水的終端速度",
     aliases: ["raindrop", "terminal velocity"],
-    matchedConcepts: ["raindrop", "terminal velocity", "drop diameter", "fall speed"],
+    matchedConcepts: [
+      "raindrop",
+      "terminal velocity",
+      "drop diameter",
+      "fall speed",
+    ],
     acceptedSources: [
       source({
         id: "rain-abstract-label",
@@ -1396,8 +1755,16 @@ test("report-drafts skips a standalone Abstract label and derives multiple subst
 
   assert.equal(statusCode, 200);
   assert.equal(result.serverDerivedEvidenceCardCount, 2);
-  assert.equal(result.evidenceCards.every((card) => !/^Abstract\.?$/i.test(card.supportSpan)), true);
-  assert.equal(result.evidenceCards.every((card) => card.sectionFit.includes("findings")), true);
+  assert.equal(
+    result.evidenceCards.every(
+      (card) => !/^Abstract\.?$/i.test(card.supportSpan),
+    ),
+    true,
+  );
+  assert.equal(
+    result.evidenceCards.every((card) => card.sectionFit.includes("findings")),
+    true,
+  );
 });
 
 test("verifyGroundedSection allows multi-card paraphrase but keeps numeric claims strict", () => {
@@ -1406,8 +1773,10 @@ test("verifyGroundedSection allows multi-card paraphrase but keeps numeric claim
     evidenceCards: [
       evidence({
         citationMarker: "[S1]",
-        claimText: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
-        supportSpan: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        claimText:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        supportSpan:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
       }),
       evidence({
         id: "evidence:lithium:2",
@@ -1422,8 +1791,10 @@ test("verifyGroundedSection allows multi-card paraphrase but keeps numeric claim
     evidenceCards: [
       evidence({
         citationMarker: "[S1]",
-        claimText: "The survey reported that 60% of high school students had insufficient sleep.",
-        supportSpan: "The survey reported that 60% of high school students had insufficient sleep.",
+        claimText:
+          "The survey reported that 60% of high school students had insufficient sleep.",
+        supportSpan:
+          "The survey reported that 60% of high school students had insufficient sleep.",
       }),
     ] as never,
   });
@@ -1452,7 +1823,8 @@ test("report-drafts marks degraded mode when LLM sections are blocked by groundi
       source({
         id: "lithium-app",
         title: "Lithium-ion battery applications and principle",
-        abstract: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        abstract:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
         doi: "10.1000/lithium",
         sourceRole: "core_scholarly_evidence",
         recommendationBucket: "scholarly_recommended",
@@ -1463,10 +1835,14 @@ test("report-drafts marks degraded mode when LLM sections are blocked by groundi
         id: "evidence:lithium-app:application",
         sourceId: "lithium-app",
         sourceTitle: "Lithium-ion battery applications and principle",
-        claimText: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
-        claimTextZhTw: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
-        supportSpan: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
-        supportedByText: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        claimText:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        claimTextZhTw:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        supportSpan:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        supportedByText:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
         sectionFit: ["findings"],
         recommendationBucket: "scholarly_recommended",
         sourceRole: "core_scholarly_evidence",
@@ -1481,7 +1857,11 @@ test("report-drafts marks degraded mode when LLM sections are blocked by groundi
     fallbackUsed: boolean;
     degradedMode: boolean;
     fallbackReasons: string[];
-    reportSections: Array<{ sectionId: string; groundingStatus: string; generationMethod: string }>;
+    reportSections: Array<{
+      sectionId: string;
+      groundingStatus: string;
+      generationMethod: string;
+    }>;
     groundingDiagnostics: Array<{
       sectionId: string;
       evidenceCardIds: string[];
@@ -1496,14 +1876,27 @@ test("report-drafts marks degraded mode when LLM sections are blocked by groundi
   assert.equal(result.generationMode, "llm_evidence_grounded");
   assert.equal(result.fallbackUsed, false);
   assert.equal(result.degradedMode, true);
-  assert.equal(result.fallbackReasons.includes("findings:grounding_verifier_blocked"), true);
+  assert.equal(
+    result.fallbackReasons.includes("findings:grounding_verifier_blocked"),
+    true,
+  );
   assert.notEqual(result.reportSections[0]?.groundingStatus, "grounded");
-  assert.equal(result.reportSections[0]?.generationMethod, "grounding_verifier_blocked");
-  assert.deepEqual(result.groundingDiagnostics[0]?.evidenceCardIds, ["evidence:lithium-app:application"]);
+  assert.equal(
+    result.reportSections[0]?.generationMethod,
+    "grounding_verifier_blocked",
+  );
+  assert.deepEqual(result.groundingDiagnostics[0]?.evidenceCardIds, [
+    "evidence:lithium-app:application",
+  ]);
   assert.deepEqual(result.groundingDiagnostics[0]?.citationMarkers, ["[S1]"]);
   assert.equal(result.groundingDiagnostics[0]?.evidenceCount, 1);
   assert.equal(result.groundingDiagnostics[0]?.needsReviewCount, 0);
-  assert.equal(result.groundingDiagnostics[0]?.diagnostics.some((item) => /low_overlap/u.test(item)), true);
+  assert.equal(
+    result.groundingDiagnostics[0]?.diagnostics.some((item) =>
+      /low_overlap/u.test(item),
+    ),
+    true,
+  );
 });
 
 test("report-drafts exposes section fallback as a hybrid degraded result", async () => {
@@ -1577,7 +1970,10 @@ test("report-drafts exposes section fallback as a hybrid degraded result", async
   assert.equal(result.fallback_used, true);
   assert.equal(result.fallbackUsed, true);
   assert.equal(result.degradedMode, true);
-  assert.equal(result.fallbackReasons.includes("writer_section_fallback:1"), true);
+  assert.equal(
+    result.fallbackReasons.includes("writer_section_fallback:1"),
+    true,
+  );
 });
 
 test("report-drafts mocked lithium pipeline rejects boilerplate and unrelated evidence", async () => {
@@ -1601,7 +1997,8 @@ test("report-drafts mocked lithium pipeline rejects boilerplate and unrelated ev
       }),
       source({
         id: "healthcare-big-data",
-        title: "Big data in healthcare: management, analysis and future prospects",
+        title:
+          "Big data in healthcare: management, analysis and future prospects",
         abstract: "Healthcare analytics and management platforms.",
         sourceRole: "core_scholarly_evidence",
         recommendationBucket: "scholarly_recommended",
@@ -1619,10 +2016,14 @@ test("report-drafts mocked lithium pipeline rejects boilerplate and unrelated ev
         id: "evidence:lithium-1:applications",
         sourceId: "lithium-1",
         sourceTitle: "Lithium-ion battery applications, safety, and recycling",
-        claimText: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
-        claimTextZhTw: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
-        supportSpan: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
-        supportedByText: "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        claimText:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        claimTextZhTw:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        supportSpan:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
+        supportedByText:
+          "锂离子电池因能量密度高，广泛应用于手机、笔记本电脑和电动车。",
         sectionFit: ["background", "findings", "literature_review"],
         recommendationBucket: "scholarly_recommended",
         sourceRole: "core_scholarly_evidence",
@@ -1660,7 +2061,8 @@ test("report-drafts mocked lithium pipeline rejects boilerplate and unrelated ev
       evidence({
         id: "evidence:healthcare-big-data:1",
         sourceId: "healthcare-big-data",
-        sourceTitle: "Big data in healthcare: management, analysis and future prospects",
+        sourceTitle:
+          "Big data in healthcare: management, analysis and future prospects",
         claimText: "Big data in healthcare supports hospital management.",
         supportSpan: "Big data in healthcare supports hospital management.",
         sectionFit: ["findings"],
@@ -1678,7 +2080,8 @@ test("report-drafts mocked lithium pipeline rejects boilerplate and unrelated ev
         sourceId: "lithium-1",
         sourceTitle: "Lithium-ion battery applications, safety, and recycling",
         claimText: "Skip to main content",
-        supportSpan: "SpringerOpen journals have moved to Springer Nature Link Browse Subject Areas",
+        supportSpan:
+          "SpringerOpen journals have moved to Springer Nature Link Browse Subject Areas",
         sectionFit: ["background"],
       }),
     ],
@@ -1692,20 +2095,39 @@ test("report-drafts mocked lithium pipeline rejects boilerplate and unrelated ev
     rejectedChunks: Array<{ id: string; reason: string }>;
     reportSections: Array<{ body: string; evidenceCardIds: string[] }>;
   };
-  const draftText = result.reportSections.map((section) => section.body).join("\n");
+  const draftText = result.reportSections
+    .map((section) => section.body)
+    .join("\n");
 
   assert.equal(statusCode, 200);
   assert.equal(result.evidenceCards.length, 3);
-  assert.equal(result.rejectedChunks.some((item) => /healthcare|low topic|boilerplate|deep sea/i.test(item.reason)), true);
-  assert.doesNotMatch(draftText, /Skip to main content|SpringerOpen journals have moved|healthcare big data|deep sea wilderness/i);
-  assert.equal(result.reportSections.every((section) => section.evidenceCardIds.every((id) => result.evidenceCards.some((card) => card.id === id))), true);
+  assert.equal(
+    result.rejectedChunks.some((item) =>
+      /healthcare|low topic|boilerplate|deep sea/i.test(item.reason),
+    ),
+    true,
+  );
+  assert.doesNotMatch(
+    draftText,
+    /Skip to main content|SpringerOpen journals have moved|healthcare big data|deep sea wilderness/i,
+  );
+  assert.equal(
+    result.reportSections.every((section) =>
+      section.evidenceCardIds.every((id) =>
+        result.evidenceCards.some((card) => card.id === id),
+      ),
+    ),
+    true,
+  );
   assert.match(draftText, /\[S\d+\]/u);
 });
 
 test("report-drafts returns a complete evidence-bound fallback when the writer throws", async () => {
   const router = createReportDraftsRouter({
     reportWriter: async () => {
-      throw new Error("provider configuration failed before a structured result");
+      throw new Error(
+        "provider configuration failed before a structured result",
+      );
     },
   });
 
@@ -1730,26 +2152,34 @@ test("report-drafts returns a complete evidence-bound fallback when the writer t
   assert.equal(result.ok, true);
   assert.equal(result.generationMode, "fallback_conservative_draft");
   assert.equal(result.fallbackUsed, true);
-  assert.equal(result.reportSections[0]?.evidenceCardIds.includes("evidence:source-1:0"), true);
+  assert.equal(
+    result.reportSections[0]?.evidenceCardIds.includes("evidence:source-1:0"),
+    true,
+  );
   assert.equal((result.reportSections[0]?.body.length ?? 0) >= 60, true);
   assert.match(result.reportSections[0]?.body ?? "", /護食行為/u);
   assert.match(result.reportSections[0]?.body ?? "", /本節整理/u);
   assert.match(result.reportSections[0]?.body ?? "", /未引用的資料不納入結論/u);
   assert.match(result.reportSections[0]?.body ?? "", /\[S1\]/u);
-  assert.notEqual(result.reportSections[0]?.generationMethod, "grounding_verifier_blocked");
+  assert.notEqual(
+    result.reportSections[0]?.generationMethod,
+    "grounding_verifier_blocked",
+  );
 });
 
 test("report-drafts ignores writer fallback sections after a provider timeout", async () => {
   const router = createReportDraftsRouter({
     reportWriter: async () => ({
       ...failedWriterResult(),
-      sections: [{
-        sectionId: "findings",
-        title: "主要發現",
-        prose: "這是逾時後未通過證據檢查的服務層替代內容。",
-        evidenceCardIds: ["evidence:source-1:0"],
-        citationIds: ["source-1"],
-      }],
+      sections: [
+        {
+          sectionId: "findings",
+          title: "主要發現",
+          prose: "這是逾時後未通過證據檢查的服務層替代內容。",
+          evidenceCardIds: ["evidence:source-1:0"],
+          citationIds: ["source-1"],
+        },
+      ],
     }),
   });
 
@@ -1768,7 +2198,10 @@ test("report-drafts ignores writer fallback sections after a provider timeout", 
   assert.equal(result.generationMode, "fallback_conservative_draft");
   assert.doesNotMatch(result.reportSections[0]?.body ?? "", /服務層替代內容/u);
   assert.match(result.reportSections[0]?.body ?? "", /護食行為/u);
-  assert.notEqual(result.reportSections[0]?.generationMethod, "grounding_verifier_blocked");
+  assert.notEqual(
+    result.reportSections[0]?.generationMethod,
+    "grounding_verifier_blocked",
+  );
 });
 
 test("verifyGroundedSection canonicalizes bare and fullwidth citation markers", () => {
@@ -1858,7 +2291,11 @@ test("report-drafts renumbers a retained fullwidth source marker after accepted-
   const result = payload as {
     evidenceCards: Array<{ citationMarker?: string }>;
     citations: Array<{ marker: string; sourceId: string }>;
-    reportSections: Array<{ body: string; groundingStatus: string; generationMethod: string }>;
+    reportSections: Array<{
+      body: string;
+      groundingStatus: string;
+      generationMethod: string;
+    }>;
   };
 
   assert.equal(statusCode, 200);
@@ -1867,9 +2304,15 @@ test("report-drafts renumbers a retained fullwidth source marker after accepted-
   assert.equal(result.citations[0]?.marker, "[S1]");
   assert.equal(result.citations[0]?.sourceId, retainedSourceId);
   assert.equal(result.reportSections[0]?.groundingStatus, "grounded");
-  assert.notEqual(result.reportSections[0]?.generationMethod, "grounding_verifier_blocked");
+  assert.notEqual(
+    result.reportSections[0]?.generationMethod,
+    "grounding_verifier_blocked",
+  );
   assert.match(result.reportSections[0]?.body ?? "", /\[S1\]/u);
-  assert.doesNotMatch(result.reportSections[0]?.body ?? "", /(?:^|\s)s１|［Ｓ2］/iu);
+  assert.doesNotMatch(
+    result.reportSections[0]?.body ?? "",
+    /(?:^|\s)s１|［Ｓ2］/iu,
+  );
 });
 
 test("report-drafts assigns one citation marker to multiple cards from the same source", async () => {
@@ -1878,12 +2321,14 @@ test("report-drafts assigns one citation marker to multiple cards from the same 
   });
   const { statusCode, payload } = await invoke(router, {
     topic: "狗的護食行為與人道訓練原則",
-    acceptedSources: [source({
-      abstract: [
-        "此來源說明狗的護食行為、獸醫行為學與人道訓練原則。",
-        "此來源說明護食行為應以人道原則處理，並應避免懲罰式訓練。",
-      ].join(" "),
-    })],
+    acceptedSources: [
+      source({
+        abstract: [
+          "此來源說明狗的護食行為、獸醫行為學與人道訓練原則。",
+          "此來源說明護食行為應以人道原則處理，並應避免懲罰式訓練。",
+        ].join(" "),
+      }),
+    ],
     evidenceCards: [
       evidence({ citationMarker: "［S4］" }),
       evidence({
@@ -1892,7 +2337,8 @@ test("report-drafts assigns one citation marker to multiple cards from the same 
         claimText: "獸醫行為學資料強調應避免懲罰式訓練。",
         claimTextZhTw: "獸醫行為學資料強調應避免懲罰式訓練。",
         supportSpan: "此來源說明護食行為應以人道原則處理，並應避免懲罰式訓練。",
-        supportedByText: "此來源說明護食行為應以人道原則處理，並應避免懲罰式訓練。",
+        supportedByText:
+          "此來源說明護食行為應以人道原則處理，並應避免懲罰式訓練。",
         citationMarker: "[S9]",
       }),
     ],
@@ -1906,12 +2352,164 @@ test("report-drafts assigns one citation marker to multiple cards from the same 
 
   assert.equal(statusCode, 200);
   assert.equal(result.evidenceCards.length, 2);
-  assert.deepEqual(result.evidenceCards.map((card) => card.citationMarker), ["[S1]", "[S1]"]);
+  assert.deepEqual(
+    result.evidenceCards.map((card) => card.citationMarker),
+    ["[S1]", "[S1]"],
+  );
   assert.equal(result.citations.length, 1);
   assert.equal(result.citations[0]?.marker, "[S1]");
   assert.equal(result.citations[0]?.sourceId, "source-1");
   assert.match(result.reportSections[0]?.body ?? "", /綜合以上摘錄/u);
-  assert.notEqual(result.reportSections[0]?.generationMethod, "grounding_verifier_blocked");
+  assert.notEqual(
+    result.reportSections[0]?.generationMethod,
+    "grounding_verifier_blocked",
+  );
+});
+
+test("formal Writer fails closed when legacy evidence has no canonical study admission", async () => {
+  let writerCalls = 0;
+  const router = createReportDraftsRouter({
+    reportWriter: async () => {
+      writerCalls += 1;
+      return failedWriterResult();
+    },
+  });
+  const acceptedSources = [1, 2, 3].map((index) => source({
+    id: `formal-source-${index}`,
+    doi: `10.1000/formal-${index}`,
+    title: `Formal evidence ${index}`,
+    abstract: `研究 ${index} 提供護食行為、人道訓練與行為管理的直接證據，並說明適用限制。`,
+    provider: "OpenAlex",
+    queryUsed: "humane resource guarding training evidence",
+    retrievedAt: "2026-08-24T00:15:00.000Z",
+    accessLevel: "full_text",
+    fullTextUrl: `https://example.org/formal-${index}/full-text`,
+    extractionMethod: "html_readability",
+    sourceQualityScore: 0.82,
+  }));
+  const evidenceCards = acceptedSources.map((item, index) => evidence({
+    id: `formal-evidence-${index + 1}`,
+    sourceId: item.id,
+    sourceTitle: item.title,
+    citationMarker: `[S${index + 1}]`,
+    claim: `研究證據 ${index + 1} 指出護食行為應以人道訓練與風險管理處理。`,
+    claimText: `研究證據 ${index + 1} 指出護食行為應以人道訓練與風險管理處理。`,
+    claimTextZhTw: `研究證據 ${index + 1} 指出護食行為應以人道訓練與風險管理處理。`,
+    supportSpan: item.abstract ?? "",
+    supportedByText: item.abstract ?? "",
+    sectionFit: ["abstract", "introduction", "methodology", "literature_review", "findings", "discussion", "limitations", "conclusion"],
+    usableSections: ["abstract", "introduction", "methodology", "literature_review", "findings", "discussion", "limitations", "conclusion"],
+    outcome: "行為管理",
+    studyDesign: "structured review",
+  }));
+  const { statusCode, payload } = await invoke(router, {
+    topic: "狗的護食行為與人道教育方式",
+    researchReportMode: "formal_research_report",
+    reportMode: "formal_research_report",
+    acceptedSources,
+    evidenceCards,
+  });
+  const result = payload as {
+    code: string;
+    formalResearchArchitecture: {
+      canonicalAdmissionValidation: {
+        pass: boolean;
+        compatibilityAdapterUsed: boolean;
+      };
+      writerAdmissionProjection: Array<{ admissionClass: string }>;
+    };
+  };
+  assert.equal(statusCode, 422);
+  assert.equal(result.code, "NO_CANONICAL_WRITER_ADMISSION");
+  assert.equal(writerCalls, 0);
+  assert.equal(
+    result.formalResearchArchitecture.canonicalAdmissionValidation
+      .compatibilityAdapterUsed,
+    true,
+  );
+  assert.ok(
+    result.formalResearchArchitecture.writerAdmissionProjection.every(
+      (item) => item.admissionClass === "BLOCKED",
+    ),
+  );
+});
+
+test("formal Writer requires replan for mixed admitted and blocked studies", async () => {
+  let writerCalls = 0;
+  const router = createReportDraftsRouter({
+    reportWriter: async () => {
+      writerCalls += 1;
+      return failedWriterResult();
+    },
+  });
+  const acceptedSources = [1, 2].map((index) => source({
+    id: `mixed-source-${index}`,
+    doi: `10.1000/mixed-${index}`,
+    title: `Humane resource guarding evidence ${index}`,
+    abstract: `研究 ${index} 提供狗護食行為、人道訓練與風險管理的直接證據。`,
+    provider: "OpenAlex",
+    queryUsed: "humane resource guarding training evidence",
+    retrievedAt: "2026-08-28T00:00:00.000Z",
+    accessLevel: "abstract_only",
+  }));
+  const evidenceCards = acceptedSources.map((item, index) => evidence({
+    id: `mixed-evidence-${index + 1}`,
+    sourceId: item.id,
+    sourceTitle: item.title,
+    claim: item.abstract,
+    claimText: item.abstract,
+    claimTextZhTw: item.abstract,
+    supportSpan: item.abstract,
+    supportedByText: item.abstract,
+    sourceRole: "core_scholarly_evidence",
+    recommendationBucket: "scholarly_recommended",
+    sectionFit: ["findings"],
+    usableSections: ["findings"],
+  }));
+  const decisionContext = {
+    jobId: "mixed-job",
+    workflowId: "mixed-workflow",
+    jobRevision: 9,
+    checkpointRevision: 8,
+    acquisitionTerminal: true,
+    decidedAt: "2026-08-28T00:00:00.000Z",
+  };
+  const baseDecisions = acceptedSources.map((item) =>
+    deriveCanonicalStudyAdmission({
+      source: item,
+      context: decisionContext,
+    })
+  );
+  const canonicalStudyAdmissions: CanonicalStudyAdmissionResult[] = [
+    {
+      ...baseDecisions[0]!,
+      accessState: "ABSTRACT_ONLY",
+      parserState: "PARTIAL",
+      studyFactState: "READY",
+      provenanceState: "READY",
+      admissionClass: "LIMITED",
+      reasonCodes: ["ABSTRACT_ONLY", "STUDY_FACTS_READY", "LIMITED_ADMITTED"],
+      missingRequirements: ["QUALIFYING_FULL_TEXT_REQUIRED_FOR_FORMAL"],
+    },
+    baseDecisions[1]!,
+  ];
+  const { statusCode, payload } = await invoke(router, {
+    workflowId: "mixed-workflow",
+    jobId: "mixed-job",
+    jobRevision: 9,
+    canonicalCheckpointRevision: 8,
+    topic: "狗的護食行為與人道教育方式",
+    researchReportMode: "formal_research_report",
+    reportMode: "formal_research_report",
+    acceptedSources,
+    evidenceCards,
+    canonicalStudyAdmissions,
+  });
+  const result = payload as { code: string; writerInvoked: boolean };
+  assert.equal(statusCode, 409);
+  assert.equal(result.code, "CANONICAL_ADMISSION_REPLAN_REQUIRED");
+  assert.equal(result.writerInvoked, false);
+  assert.equal(writerCalls, 0);
 });
 
 test("report-drafts keeps writer citations through S8 inside route bundles", async () => {
@@ -1950,25 +2548,26 @@ test("report-drafts keeps writer citations through S8 inside route bundles", asy
   });
   const allEvidenceIds = evidenceCards.map((card) => card.id as string);
   const router = createReportDraftsRouter({
-    reportWriter: async () => successfulWriterResult([
-      {
-        sectionId: "introduction",
-        title: "研究背景",
-        prose: "狗的護食行為研究第 1 項指出人道訓練可降低衝突[S1]。",
-        evidenceCardIds: allEvidenceIds,
-        citationIds: acceptedSources.map((item) => item.id),
-      },
-      {
-        sectionId: "literature_review",
-        title: "文獻探討",
-        prose: [
-          "狗的護食行為研究第 5 項指出人道訓練可降低衝突[S5]。",
-          "狗的護食行為研究第 8 項指出人道訓練可降低衝突[S8]。",
-        ].join("\n\n"),
-        evidenceCardIds: allEvidenceIds,
-        citationIds: acceptedSources.map((item) => item.id),
-      },
-    ]),
+    reportWriter: async () =>
+      successfulWriterResult([
+        {
+          sectionId: "introduction",
+          title: "研究背景",
+          prose: "狗的護食行為研究第 1 項指出人道訓練可降低衝突[S1]。",
+          evidenceCardIds: allEvidenceIds,
+          citationIds: acceptedSources.map((item) => item.id),
+        },
+        {
+          sectionId: "literature_review",
+          title: "文獻探討",
+          prose: [
+            "狗的護食行為研究第 5 項指出人道訓練可降低衝突[S5]。",
+            "狗的護食行為研究第 8 項指出人道訓練可降低衝突[S8]。",
+          ].join("\n\n"),
+          evidenceCardIds: allEvidenceIds,
+          citationIds: acceptedSources.map((item) => item.id),
+        },
+      ]),
   });
 
   const { statusCode, payload } = await invoke(router, {
@@ -1997,24 +2596,38 @@ test("report-drafts keeps writer citations through S8 inside route bundles", asy
   };
 
   assert.equal(statusCode, 200);
-  const introBundle = result.sectionEvidenceBundles.find((bundle) => bundle.sectionId === "introduction");
-  const literatureBundle = result.sectionEvidenceBundles.find((bundle) => bundle.sectionId === "literature_review");
+  const introBundle = result.sectionEvidenceBundles.find(
+    (bundle) => bundle.sectionId === "introduction",
+  );
+  const literatureBundle = result.sectionEvidenceBundles.find(
+    (bundle) => bundle.sectionId === "literature_review",
+  );
   assert.equal(introBundle?.canGenerate, true);
   assert.equal(introBundle?.evidenceCards.length, 8);
   assert.equal(literatureBundle?.evidenceCards.length, 8);
 
-  const literature = result.reportSections.find((section) => section.sectionId === "literature_review");
+  const literature = result.reportSections.find(
+    (section) => section.sectionId === "literature_review",
+  );
   assert.match(literature?.body ?? "", /\[S5\]/u);
   assert.match(literature?.body ?? "", /\[S8\]/u);
-  assert.equal(literature?.evidenceCardIds.includes("evidence:dog-study-5:0"), true);
-  assert.equal(literature?.evidenceCardIds.includes("evidence:dog-study-8:0"), true);
+  assert.equal(
+    literature?.evidenceCardIds.includes("evidence:dog-study-5:0"),
+    true,
+  );
+  assert.equal(
+    literature?.evidenceCardIds.includes("evidence:dog-study-8:0"),
+    true,
+  );
   assert.equal(literature?.citations.includes("dog-study-5"), true);
   assert.equal(literature?.citations.includes("dog-study-8"), true);
   assert.notEqual(literature?.generationMethod, "grounding_verifier_blocked");
   assert.equal(
     result.groundingDiagnostics
       .find((diagnostic) => diagnostic.sectionId === "literature_review")
-      ?.diagnostics.some((diagnostic) => /unknown_citation:S5|unknown_citation:S8/u.test(diagnostic)),
+      ?.diagnostics.some((diagnostic) =>
+        /unknown_citation:S5|unknown_citation:S8/u.test(diagnostic),
+      ),
     false,
   );
 });
@@ -2043,7 +2656,8 @@ test("report-drafts prunes one unsupported sentence without erasing grounded pro
       source({
         id: "lithium-app",
         title: "Lithium-ion battery applications",
-        abstract: "研究指出鋰離子電池因能量密度高而廣泛應用於手機、筆記型電腦、電動車等日常交通與消費性電子設備。",
+        abstract:
+          "研究指出鋰離子電池因能量密度高而廣泛應用於手機、筆記型電腦、電動車等日常交通與消費性電子設備。",
         doi: "10.1000/lithium-applications",
         sourceRole: "core_scholarly_evidence",
         recommendationBucket: "scholarly_recommended",
@@ -2054,10 +2668,14 @@ test("report-drafts prunes one unsupported sentence without erasing grounded pro
         id: evidenceId,
         sourceId: "lithium-app",
         sourceTitle: "Lithium-ion battery applications",
-        claimText: "研究指出鋰離子電池因能量密度高而廣泛應用於手機、筆記型電腦、電動車等日常交通與消費性電子設備。",
-        claimTextZhTw: "研究指出鋰離子電池因能量密度高而廣泛應用於手機、筆記型電腦、電動車等日常交通與消費性電子設備。",
-        supportSpan: "研究指出鋰離子電池因能量密度高而廣泛應用於手機、筆記型電腦、電動車等日常交通與消費性電子設備。",
-        supportedByText: "研究指出鋰離子電池因能量密度高而廣泛應用於手機、筆記型電腦、電動車等日常交通與消費性電子設備。",
+        claimText:
+          "研究指出鋰離子電池因能量密度高而廣泛應用於手機、筆記型電腦、電動車等日常交通與消費性電子設備。",
+        claimTextZhTw:
+          "研究指出鋰離子電池因能量密度高而廣泛應用於手機、筆記型電腦、電動車等日常交通與消費性電子設備。",
+        supportSpan:
+          "研究指出鋰離子電池因能量密度高而廣泛應用於手機、筆記型電腦、電動車等日常交通與消費性電子設備。",
+        supportedByText:
+          "研究指出鋰離子電池因能量密度高而廣泛應用於手機、筆記型電腦、電動車等日常交通與消費性電子設備。",
         sectionFit: ["findings"],
         sourceRole: "core_scholarly_evidence",
         recommendationBucket: "scholarly_recommended",
@@ -2081,14 +2699,119 @@ test("report-drafts prunes one unsupported sentence without erasing grounded pro
 
   assert.equal(statusCode, 200);
   assert.match(result.reportSections[0]?.body ?? "", /能量密度高/u);
-  assert.doesNotMatch(result.reportSections[0]?.body ?? "", /治療疾病|醫院管理/u);
+  assert.doesNotMatch(
+    result.reportSections[0]?.body ?? "",
+    /治療疾病|醫院管理/u,
+  );
   assert.equal(result.reportSections[0]?.groundingStatus, "grounded");
   assert.deepEqual(result.reportSections[0]?.unsupportedSentences, []);
-  assert.equal(result.reportSections[0]?.generationMethod, "grounding_verifier_pruned");
+  assert.equal(
+    result.reportSections[0]?.generationMethod,
+    "grounding_verifier_pruned",
+  );
   assert.equal(result.groundingDiagnostics[0]?.groundingStatus, "grounded");
   assert.deepEqual(result.groundingDiagnostics[0]?.unsupportedSentences, []);
   assert.equal(
-    result.groundingDiagnostics[0]?.diagnostics.includes("unsupported_sentences_removed"),
+    result.groundingDiagnostics[0]?.diagnostics.includes(
+      "unsupported_sentences_removed",
+    ),
+    true,
+  );
+});
+
+test("report-drafts preserves exact-span model prose only after the writer claim-entailment gate passes", async () => {
+  const evidenceId = "evidence:sleep:exact";
+  const claimTextZhTw = "青少年短影音使用與較差的睡眠品質呈具條件性關聯";
+  const supportSpan =
+    "Short-form video use was conditionally associated with poorer sleep quality among adolescents.";
+  const prose = `${claimTextZhTw}[S1]。因此，這項證據只能支持特定條件下的關聯，不能證明因果[S1]。`;
+  const writerResult = successfulWriterResult([
+    {
+      sectionId: "findings",
+      title: "主要發現",
+      prose,
+      evidenceCardIds: [evidenceId],
+      citationIds: ["sleep-source"],
+      generationMethod: "llm_section_group",
+      paragraphClaims: [
+        {
+          paragraphId: "findings-p1",
+          sectionId: "findings",
+          claimIds: [],
+          evidenceCardIds: [evidenceId],
+          citationMarkers: ["[S1]"],
+          generatedTextZhTw: prose,
+          unsupportedSentences: [],
+        },
+      ],
+    },
+  ]);
+  writerResult.writerDiagnostics = {
+    requestedSections: 1,
+    completedSections: 1,
+    modelCompletedSections: 1,
+    repairedSections: 0,
+    fallbackSections: 0,
+    completedSectionIds: ["findings"],
+    repairedSectionIds: [],
+    fallbackSectionIds: [],
+    failureReasons: {},
+    postEditValidation: { status: "pass", issues: [] },
+  };
+  const router = createReportDraftsRouter({
+    reportWriter: async () => writerResult,
+  });
+
+  const { statusCode, payload } = await invoke(router, {
+    topic: "青少年短影音使用與睡眠品質",
+    acceptedSources: [
+      source({
+        id: "sleep-source",
+        title: "Short-form video use and adolescent sleep",
+        abstract: supportSpan,
+        doi: "10.1000/sleep-exact",
+        sourceRole: "core_scholarly_evidence",
+        recommendationBucket: "scholarly_recommended",
+      }),
+    ],
+    evidenceCards: [
+      evidence({
+        id: evidenceId,
+        sourceId: "sleep-source",
+        sourceTitle: "Short-form video use and adolescent sleep",
+        claim: claimTextZhTw,
+        claimText: claimTextZhTw,
+        claimTextZhTw,
+        supportSpan,
+        supportedByText: supportSpan,
+        sectionFit: ["findings"],
+        sourceRole: "core_scholarly_evidence",
+        recommendationBucket: "scholarly_recommended",
+        extractionMethod: "llm_structured_extract",
+        needsReview: false,
+        needsManualReview: false,
+        governanceFlags: ["exact_support_span_verified"],
+      }),
+    ],
+    outline: [{ sectionId: "findings", title: "主要發現" }],
+  });
+  const result = payload as {
+    reportSections: Array<{
+      body: string;
+      generationMethod: string;
+      groundingStatus: string;
+    }>;
+    groundingDiagnostics: Array<{ diagnostics: string[] }>;
+  };
+
+  assert.equal(statusCode, 200);
+  assert.match(result.reportSections[0]?.body ?? "", /不能證明因果/u);
+  assert.equal(result.reportSections[0]?.generationMethod, "llm_section_group");
+  assert.equal(result.reportSections[0]?.groundingStatus, "grounded");
+  assert.equal(
+    result.groundingDiagnostics[0]?.diagnostics.includes(
+      "writer_claim_entailment_preserved",
+    ),
     true,
   );
 });
@@ -2097,44 +2820,52 @@ test("report-drafts accepts a traceable raindrop bridge and normalizes all nine 
   const evidenceId = "evidence:rain-terminal:0";
   const supportSpan =
     "The terminal velocity of raindrops depends on drop diameter, drag coefficient, air density, and shape deformation.";
-  const claimTextZhTw = "雨滴的終端速度取決於液滴直徑、阻力係數、空氣密度與形狀變化";
+  const claimTextZhTw =
+    "雨滴的終端速度取決於液滴直徑、阻力係數、空氣密度與形狀變化";
   const router = createReportDraftsRouter({
-    reportWriter: async () => successfulWriterResult([{
-      sectionId: "findings",
-      title: "主要發現",
-      prose: `研究指出，${claimTextZhTw}[S1]。`,
-      evidenceCardIds: [evidenceId],
-      citationIds: ["rain-terminal"],
-    }]),
+    reportWriter: async () =>
+      successfulWriterResult([
+        {
+          sectionId: "findings",
+          title: "主要發現",
+          prose: `研究指出，${claimTextZhTw}[S1]。`,
+          evidenceCardIds: [evidenceId],
+          citationIds: ["rain-terminal"],
+        },
+      ]),
   });
 
   const { statusCode, payload } = await invoke(router, {
     topic: "雨水的終端速度",
-    acceptedSources: [source({
-      id: "rain-terminal",
-      title: "Terminal velocity of raindrops",
-      abstract: supportSpan,
-      queryUsed: "raindrop terminal velocity",
-      doi: "10.1000/rain-terminal",
-      isPeerReviewed: true,
-      sourceRole: "core_scholarly_evidence",
-      recommendationBucket: "scholarly_recommended",
-    })],
-    evidenceCards: [evidence({
-      id: evidenceId,
-      sourceId: "rain-terminal",
-      sourceTitle: "Terminal velocity of raindrops",
-      claim: supportSpan,
-      claimText: supportSpan,
-      claimTextZhTw,
-      supportSpan,
-      supportedByText: supportSpan,
-      sectionFit: ["研究背景", "文獻探討", "研究方法", "數據分析", "結論"],
-      sourceRole: "core_scholarly_evidence",
-      recommendationBucket: "scholarly_recommended",
-      extractionMethod: "llm_structured_extract",
-      needsReview: false,
-    })],
+    acceptedSources: [
+      source({
+        id: "rain-terminal",
+        title: "Terminal velocity of raindrops",
+        abstract: supportSpan,
+        queryUsed: "raindrop terminal velocity",
+        doi: "10.1000/rain-terminal",
+        isPeerReviewed: true,
+        sourceRole: "core_scholarly_evidence",
+        recommendationBucket: "scholarly_recommended",
+      }),
+    ],
+    evidenceCards: [
+      evidence({
+        id: evidenceId,
+        sourceId: "rain-terminal",
+        sourceTitle: "Terminal velocity of raindrops",
+        claim: supportSpan,
+        claimText: supportSpan,
+        claimTextZhTw,
+        supportSpan,
+        supportedByText: supportSpan,
+        sectionFit: ["研究背景", "文獻探討", "研究方法", "數據分析", "結論"],
+        sourceRole: "core_scholarly_evidence",
+        recommendationBucket: "scholarly_recommended",
+        extractionMethod: "llm_structured_extract",
+        needsReview: false,
+      }),
+    ],
     outline: [{ sectionId: "findings", title: "主要發現" }],
   });
   const result = payload as {
@@ -2146,7 +2877,10 @@ test("report-drafts accepts a traceable raindrop bridge and normalizes all nine 
       dedupeKey?: string;
       citationKey?: string;
     }>;
-    reportSections: Array<{ groundingStatus: string; generationMethod: string }>;
+    reportSections: Array<{
+      groundingStatus: string;
+      generationMethod: string;
+    }>;
   };
 
   assert.equal(statusCode, 200);
@@ -2162,12 +2896,26 @@ test("report-drafts accepts a traceable raindrop bridge and normalizes all nine 
     "limitations",
     "conclusion",
   ]);
-  assert.equal(result.evidenceCards[0]?.governanceFlags?.includes("exact_support_span_verified"), true);
-  assert.equal(result.evidenceCards[0]?.canonicalSourceKey, "doi:10.1000/rain-terminal");
+  assert.equal(
+    result.evidenceCards[0]?.governanceFlags?.includes(
+      "exact_support_span_verified",
+    ),
+    true,
+  );
+  assert.equal(
+    result.evidenceCards[0]?.canonicalSourceKey,
+    "doi:10.1000/rain-terminal",
+  );
   assert.equal(result.evidenceCards[0]?.dedupeKey, "doi:10.1000/rain-terminal");
-  assert.equal(result.evidenceCards[0]?.citationKey, "doi:10.1000/rain-terminal");
+  assert.equal(
+    result.evidenceCards[0]?.citationKey,
+    "doi:10.1000/rain-terminal",
+  );
   assert.equal(result.reportSections[0]?.groundingStatus, "grounded");
-  assert.notEqual(result.reportSections[0]?.generationMethod, "grounding_verifier_blocked");
+  assert.notEqual(
+    result.reportSections[0]?.generationMethod,
+    "grounding_verifier_blocked",
+  );
 });
 
 test("report-drafts keeps reviewed English gut evidence for a Chinese topic but rejects an unrelated accepted source", async () => {
@@ -2218,7 +2966,8 @@ test("report-drafts keeps reviewed English gut evidence for a Chinese topic but 
         sourceTitle: "The Microbiota-Gut-Brain Axis",
         claim: gutSupport,
         claimText: gutSupport,
-        claimTextZhTw: "腸道菌相可透過神經、內分泌、免疫與代謝路徑與大腦雙向溝通。",
+        claimTextZhTw:
+          "腸道菌相可透過神經、內分泌、免疫與代謝路徑與大腦雙向溝通。",
         supportSpan: gutSupport,
         supportedByText: gutSupport,
         extractionMethod: "manual_review",
@@ -2258,7 +3007,8 @@ test("report-drafts keeps reviewed English gut evidence for a Chinese topic but 
     true,
   );
   assert.equal(
-    result.evidenceCards.find((card) => card.sourceId === gutSourceId)
+    result.evidenceCards
+      .find((card) => card.sourceId === gutSourceId)
       ?.governanceFlags.includes("exact_support_span_verified"),
     true,
   );
@@ -2302,20 +3052,24 @@ test("verifyGroundedSection keeps bilingual numeric claims exact", () => {
 });
 
 test("report-drafts exposes traceable cross-language evidence as indeterminate instead of definitive empty", async () => {
-  const router = createReportDraftsRouter({ reportWriter: async () => failedWriterResult() });
+  const router = createReportDraftsRouter({
+    reportWriter: async () => failedWriterResult(),
+  });
   const { statusCode, payload } = await invoke(router, {
     topic: "雨水的終端速度",
-    acceptedSources: [source({
-      id: "rain-without-bridge",
-      title: "Terminal velocity of raindrops",
-      abstract:
-        "The terminal velocity of raindrops depends on drop diameter, drag coefficient, air density, and shape deformation.",
-      queryUsed: null,
-      doi: "10.1000/rain-without-bridge",
-      isPeerReviewed: true,
-      sourceRole: "core_scholarly_evidence",
-      recommendationBucket: "scholarly_recommended",
-    })],
+    acceptedSources: [
+      source({
+        id: "rain-without-bridge",
+        title: "Terminal velocity of raindrops",
+        abstract:
+          "The terminal velocity of raindrops depends on drop diameter, drag coefficient, air density, and shape deformation.",
+        queryUsed: null,
+        doi: "10.1000/rain-without-bridge",
+        isPeerReviewed: true,
+        sourceRole: "core_scholarly_evidence",
+        recommendationBucket: "scholarly_recommended",
+      }),
+    ],
     evidenceCards: [],
     outline: [{ sectionId: "findings", title: "主要發現" }],
   });
@@ -2323,7 +3077,10 @@ test("report-drafts exposes traceable cross-language evidence as indeterminate i
     canonicalEvidenceStatus: string;
     rejectedChunkCount: number;
     indeterminateEvidence: Array<{ sourceId: string; decision: string }>;
-    canonicalEvidenceDiagnostics: { indeterminateCardCount: number; traceableIndeterminateSourceIds: string[] };
+    canonicalEvidenceDiagnostics: {
+      indeterminateCardCount: number;
+      traceableIndeterminateSourceIds: string[];
+    };
   };
 
   assert.equal(statusCode, 200);
@@ -2331,7 +3088,10 @@ test("report-drafts exposes traceable cross-language evidence as indeterminate i
   assert.equal(result.rejectedChunkCount, 0);
   assert.equal(result.indeterminateEvidence[0]?.decision, "indeterminate");
   assert.equal(result.canonicalEvidenceDiagnostics.indeterminateCardCount, 1);
-  assert.deepEqual(result.canonicalEvidenceDiagnostics.traceableIndeterminateSourceIds, ["rain-without-bridge"]);
+  assert.deepEqual(
+    result.canonicalEvidenceDiagnostics.traceableIndeterminateSourceIds,
+    ["rain-without-bridge"],
+  );
 });
 
 test("report-drafts uses source matchedCoreConcepts as a verified cross-language bridge", async () => {

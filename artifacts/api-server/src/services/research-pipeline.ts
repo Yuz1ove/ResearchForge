@@ -115,7 +115,7 @@ export function classifyTopicSemantically(topic: string): TopicSemanticClassific
     };
   }
 
-  if (/微塑膠|污染|plastic pollution|microplastic|環境|氣候|廢棄|永續|綠屋頂|屋頂綠化|green roof/u.test(text)) {
+  if (/微塑膠|塑膠微粒|污染|plastic pollution|microplastic|環境|氣候|廢棄|永續|綠屋頂|屋頂綠化|green roof/u.test(text)) {
     const isMicroplastic = /微塑膠|塑膠微粒|microplastic/i.test(text);
     const isUrbanHeat = /都市熱島|熱島|urban heat|heat island|校園.*熱|微氣候/u.test(text);
     const isGreenRoof = /綠屋頂|屋頂綠化|green roof/i.test(text);

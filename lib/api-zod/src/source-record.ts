@@ -9,6 +9,10 @@ import type {
   EvidenceRecommendationBucket,
   EvidenceUserDecision,
 } from "./evidence-governance";
+import type {
+  FormalEvidenceRole,
+  TopicIntegrityAssessment,
+} from "./topic-integrity";
 
 export const SOURCE_PROVIDERS = [
   "OpenAlex",
@@ -117,6 +121,11 @@ export const SOURCE_CONTENT_EXTRACTION_METHODS = [
   "pdf_text",
   "ocr",
   "html",
+  "docx_native",
+  "epub_native",
+  "jats_xml",
+  "tei_xml",
+  "xml",
   "abstract",
   "failed",
 ] as const;
@@ -366,6 +375,8 @@ export interface SourceRecord {
   recommendation?: string | null;
   recommendationBucket?: SourceRecommendationBucket | null;
   sourceRole?: SourceRole | null;
+  formalEvidenceRole?: FormalEvidenceRole | null;
+  topicIntegrityAssessment?: TopicIntegrityAssessment | null;
   retrievalMode?: SourceRetrievalMode | null;
   institutionType?: string | null;
   evidencePoints?: string[] | null;
@@ -1296,6 +1307,8 @@ function metadataFields(source: Partial<Pick<
   | "recommendation"
   | "recommendationBucket"
   | "sourceRole"
+  | "formalEvidenceRole"
+  | "topicIntegrityAssessment"
   | "retrievalMode"
   | "institutionType"
   | "evidencePoints"
@@ -1497,6 +1510,12 @@ function metadataFields(source: Partial<Pick<
       ? { recommendationBucket: source.recommendationBucket }
       : {}),
     ...(source.sourceRole != null ? { sourceRole: source.sourceRole } : {}),
+    ...(source.formalEvidenceRole != null
+      ? { formalEvidenceRole: source.formalEvidenceRole }
+      : {}),
+    ...(source.topicIntegrityAssessment != null
+      ? { topicIntegrityAssessment: source.topicIntegrityAssessment }
+      : {}),
     ...(source.retrievalMode != null ? { retrievalMode: source.retrievalMode } : {}),
     ...(source.institutionType != null ? { institutionType: source.institutionType } : {}),
     ...(source.evidencePoints != null ? { evidencePoints: source.evidencePoints } : {}),
@@ -1661,6 +1680,10 @@ function mergeSourceRecords(existing: SourceRecord, incoming: SourceRecord): Sou
     recommendationBucket:
       existing.recommendationBucket ?? incoming.recommendationBucket ?? null,
     sourceRole: existing.sourceRole ?? incoming.sourceRole ?? null,
+    formalEvidenceRole:
+      existing.formalEvidenceRole ?? incoming.formalEvidenceRole ?? null,
+    topicIntegrityAssessment:
+      existing.topicIntegrityAssessment ?? incoming.topicIntegrityAssessment ?? null,
     retrievalMode: existing.retrievalMode ?? incoming.retrievalMode ?? null,
     institutionType: existing.institutionType ?? incoming.institutionType ?? null,
     evidencePoints: mergeOptionalStringLists(existing.evidencePoints, incoming.evidencePoints),
@@ -2053,6 +2076,8 @@ export function normalizeSourceRecord(source: SourceRecordInput): SourceRecord {
     recommendation: cleanText(source.recommendation),
     recommendationBucket: normalizeRecommendationBucket(source.recommendationBucket),
     sourceRole: normalizeSourceRole(source.sourceRole),
+    formalEvidenceRole: source.formalEvidenceRole ?? null,
+    topicIntegrityAssessment: source.topicIntegrityAssessment ?? null,
     retrievalMode: normalizeRetrievalMode(source.retrievalMode),
     institutionType: cleanText(source.institutionType),
     evidencePoints: cleanStringList(source.evidencePoints),

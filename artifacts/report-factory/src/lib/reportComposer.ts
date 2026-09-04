@@ -201,6 +201,7 @@ function normalizedDimension(
 }
 
 function factLocation(card: EvidenceCard): string | null {
+  if (card.structuredStudyFact?.populationLocation) return card.structuredStudyFact.populationLocation;
   return normalizedDimension(card.location, atomicSourceText(card), [
     ["臺灣", /(?:臺灣|台灣|Taiwan)/iu],
     ["臺北", /(?:臺北|台北|Taipei)/iu],
@@ -213,6 +214,7 @@ function factLocation(card: EvidenceCard): string | null {
 }
 
 function factPopulation(card: EvidenceCard): string | null {
+  if (card.structuredStudyFact?.population) return card.structuredStudyFact.population;
   const sourceText = atomicSourceText(card);
   if (isScopingReviewCorpus(sourceText)) return null;
   const text = sourceText
@@ -237,6 +239,12 @@ function factPopulation(card: EvidenceCard): string | null {
 }
 
 function factAgeGroup(card: EvidenceCard): string | null {
+  const structured = card.structuredStudyFact;
+  if (structured?.populationAgeMin != null || structured?.populationAgeMax != null) {
+    return [structured.populationAgeMin, structured.populationAgeMax]
+      .filter((value) => value != null).join("–");
+  }
+  if (structured?.populationAgeMean != null) return `mean ${structured.populationAgeMean}`;
   const text = atomicSourceText(card);
   const explicitRange = text.match(
     /(?:年齡(?:介於|為|範圍)?\s*)?(\d{1,2}\s*(?:至|到|[-–—])\s*\d{1,2}\s*歲)|(?:aged?|ages?)\s*(\d{1,2}\s*(?:to|[-–—])\s*\d{1,2})/iu,
@@ -246,6 +254,9 @@ function factAgeGroup(card: EvidenceCard): string | null {
 }
 
 function factSampleSize(card: EvidenceCard): number | null {
+  if (card.structuredStudyFact?.populationSampleSize != null) {
+    return card.structuredStudyFact.populationSampleSize;
+  }
   const sourceText = atomicSourceText(card);
   if (isScopingReviewCorpus(sourceText)) return null;
   const text = sourceText.replace(
@@ -261,6 +272,7 @@ function factSampleSize(card: EvidenceCard): number | null {
 }
 
 function factSetting(card: EvidenceCard): string | null {
+  if (card.structuredStudyFact?.populationSetting) return card.structuredStudyFact.populationSetting;
   return normalizedDimension(card.researchSetting, cardSemanticText(card), [
     ["校園", /(?:校園|學校|大學|campus|school|university)/iu],
     ["都市", /(?:都市|城市|urban|city)/iu],
@@ -268,6 +280,7 @@ function factSetting(card: EvidenceCard): string | null {
 }
 
 function factExposure(card: EvidenceCard): string | null {
+  if (card.structuredStudyFact?.exposure) return card.structuredStudyFact.exposure;
   return normalizedDimension(card.exposure, cardSemanticText(card), [
     ["短影音成癮", /(?:短影音|短視頻|short[- ]?form video).{0,12}(?:成癮|問題性使用|addiction|problematic use)/iu],
     ["短影音使用時數", /(?:短影音|短視頻|short[- ]?form video).{0,16}(?:使用時數|使用時間|每日時數|duration|screen time|hours?)/iu],
@@ -283,6 +296,7 @@ function factExposure(card: EvidenceCard): string | null {
 }
 
 function factOutcome(card: EvidenceCard): string | null {
+  if (card.structuredStudyFact?.outcome) return card.structuredStudyFact.outcome;
   return normalizedDimension(card.outcome, cardSemanticText(card), [
     ["睡眠品質分數", /(?:睡眠品質(?:分數|得分|量表)|sleep quality score|\bPSQI\b)/iu],
     ["睡眠不佳比例", /(?:睡眠不佳(?:比例|盛行率)?|睡眠品質不佳|poor sleep(?: quality)?|sleep disturbance prevalence)/iu],
@@ -300,6 +314,9 @@ function factOutcome(card: EvidenceCard): string | null {
 }
 
 function factMethod(card: EvidenceCard): string | null {
+  if (card.structuredStudyFact?.studyDesign && card.structuredStudyFact.studyDesign !== "unknown") {
+    return card.structuredStudyFact.studyDesign;
+  }
   return normalizedDimension(card.studyDesign, cardSemanticText(card), [
     ["橫斷式研究", /(?:橫斷(?:式)?|cross[- ]sectional)/iu],
     ["縱貫研究", /(?:縱貫|追蹤研究|longitudinal|cohort)/iu],
@@ -326,6 +343,7 @@ function factMeasure(
 }
 
 function factExposureMeasure(card: EvidenceCard): string | null {
+  if (card.structuredStudyFact?.exposureMeasurement) return card.structuredStudyFact.exposureMeasurement;
   const text = atomicSourceText(card);
   return firstSemanticMatch(text, [
     ["大學生短影音成癮量表", /College Student Short[-‐‑–— ]Form Video Addiction Scale|大學生短影音成癮量表/iu],
@@ -340,6 +358,7 @@ function factExposureMeasure(card: EvidenceCard): string | null {
 }
 
 function factOutcomeMeasure(card: EvidenceCard): string | null {
+  if (card.structuredStudyFact?.outcomeMeasurement) return card.structuredStudyFact.outcomeMeasurement;
   const text = atomicSourceText(card);
   return firstSemanticMatch(text, [
     ["匹茲堡睡眠品質指數（PSQI）", /Pittsburgh Sleep Quality Index|\bPSQI\b/iu],
@@ -359,6 +378,8 @@ function factSourceSpan(card: EvidenceCard): string | null {
 }
 
 function factMediator(card: EvidenceCard): string | null {
+  const explicitMediator = card.structuredStudyFact?.mediators[0];
+  if (explicitMediator) return explicitMediator.factor;
   const text = clean(`${normalizedClaim(card)} ${card.exactResult ?? ""}`);
   const clauses = text.split(/(?<=[。！？.!?；;])\s*/u).map(clean).filter(Boolean);
   const mediatorTerms: ReadonlyArray<readonly [string, string]> = [
@@ -448,6 +469,8 @@ function atomicFactStatement(input: {
 }
 
 function factAdjustmentStatus(card: EvidenceCard): string | null {
+  const explicitAdjustment = card.structuredStudyFact?.adjustedOrUnadjusted;
+  if (explicitAdjustment && explicitAdjustment !== "unknown") return explicitAdjustment;
   const text = clean(`${card.exactResult ?? ""} ${normalizedClaim(card)}`);
   if (/(?:未校正|未調整|unadjusted|crude estimate)/iu.test(text)) return "unadjusted";
   if (/(?:校正後|調整後|多變項調整|adjusted|multivariable)/iu.test(text)) return "adjusted";
@@ -601,6 +624,8 @@ function associationDirection(
   card: EvidenceCard,
   fn: NormalizedEvidenceFunction,
 ): NormalizedFact["associationDirection"] {
+  const structuredDirection = card.structuredStudyFact?.effectDirection;
+  if (structuredDirection && structuredDirection !== "unclear") return structuredDirection;
   const text = `${normalizedClaim(card)} ${card.relevance ?? ""}`.toLocaleLowerCase();
   if (/不一致|方向不同|混合結果|mixed|heterogeneous|conflict/u.test(text)) return "mixed";
   if (/無顯著|未發現.{0,8}關聯|沒有.{0,8}關聯|no association|not significant|null result/u.test(text)) {
@@ -619,6 +644,24 @@ function associationDirection(
 }
 
 function numericalResultsForCard(card: EvidenceCard): NormalizedFact["numericalResults"] {
+  const structured = card.structuredStudyFact?.quantitativeFacts ?? [];
+  if (structured.length > 0) {
+    return structured.map((fact) => ({
+      rawText: fact.rawValue,
+      measure: fact.metric,
+      resultRole: fact.metric === "sample_size" ? "baseline" : "outcome",
+      value: fact.value,
+      unit: fact.unit,
+      statisticType: fact.metric,
+      comparisonBasis: fact.comparison,
+      lowerCI: fact.ciLower,
+      upperCI: fact.ciUpper,
+      pValue: fact.pValue ? Number(fact.pValue.replace(/[^\d.]+/gu, "")) || null : null,
+      uncertainty: fact.ciLower != null && fact.ciUpper != null
+        ? `${fact.ciLower}–${fact.ciUpper}`
+        : null,
+    }));
+  }
   return parseAtomicNumericalResults(card);
 }
 
@@ -1013,8 +1056,10 @@ export function normalizeFactsForWriter(
         unit: result?.unit ?? null,
         direction: atomicDirection === "unclear" ? null : atomicDirection,
         mediator,
-        moderator: null,
-        confounders: null,
+        moderator: card.structuredStudyFact?.moderators[0]?.factor ?? null,
+        confounders: card.structuredStudyFact?.confounders.length
+          ? card.structuredStudyFact.confounders
+          : null,
         adjustmentStatus: factAdjustmentStatus(card),
         evidenceDirectness: card.evidenceDirectnessTier ?? null,
         sourceSpan,
@@ -1026,7 +1071,9 @@ export function normalizeFactsForWriter(
         // The current evidence-card contract does not distinguish author-stated
         // limitations from ResearchForge governance notes. Keep this null until
         // the extractor supplies an explicitly author-attributed field.
-        authorLimitations: null,
+        authorLimitations: card.structuredStudyFact?.authorCautions.length
+          ? card.structuredStudyFact.authorCautions
+          : null,
         extractionConfidence,
         verificationStatus: normalized?.writerEligible === false
           ? "rejected"

@@ -4,6 +4,10 @@
  * /AI_ASSISTANCE.md.
  */
 import type { SourceRecord as ApiSourceRecord, SourceReviewState } from "@workspace/api-client-react";
+import type {
+  FormalEvidenceRole,
+  TopicIntegrityAssessment,
+} from "@workspace/api-zod/topic-integrity";
 
 export type { SourceReviewState };
 
@@ -79,6 +83,11 @@ export type SourceContentExtractionMethod =
   | "pdf_text"
   | "ocr"
   | "html"
+  | "docx_native"
+  | "epub_native"
+  | "jats_xml"
+  | "tei_xml"
+  | "xml"
   | "abstract"
   | "failed";
 export type SourceExtractionMode =
@@ -86,6 +95,9 @@ export type SourceExtractionMode =
   | "grobid"
   | "ocr"
   | "html"
+  | "docx"
+  | "epub"
+  | "xml"
   | "abstract"
   | "metadata_only"
   | "failed";
@@ -244,6 +256,8 @@ export const SOURCE_CATEGORY_LABELS: Record<SourceCategory, string> = {
 };
 
 export interface SourceRecordMetadata {
+  topicIntegrityAssessment?: TopicIntegrityAssessment | null;
+  formalEvidenceRole?: FormalEvidenceRole | null;
   provider?: string | null;
   queryUsed?: string | null;
   retrievedAt?: string | null;
@@ -502,6 +516,32 @@ function cleanPublicationVenue(
 
 function cleanUnknownText(value: unknown): string | null {
   return cleanText(typeof value === "string" ? value : null);
+}
+
+const AFFILIATION_LOCATION_TERMS =
+  /\b(?:department|faculty|school|college|university|institute|hospital|pathum wan|bangkok|thailand|taiwan|china|japan|korea|united states|united kingdom|canada|australia|romania|turkey)\b/iu;
+const CORPORATE_AUTHOR_TERMS =
+  /\b(?:organization|organisation|association|society|consortium|collaboration|committee|agency|ministry|department|institute|university|college|school|bank|fund|office|administration|commission|centre|center)\b/iu;
+
+function probableAffiliation(value: string): boolean {
+  const parts = value.split(",").map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 3) return false;
+  const locationLikeParts = parts.filter((part) => AFFILIATION_LOCATION_TERMS.test(part)).length;
+  return locationLikeParts >= 2 || /\b(?:affiliation|address)\b/iu.test(value);
+}
+
+function normalizeSourceAuthors(authors: readonly string[]): string[] {
+  const cleaned = authors
+    .map((author) => sanitizeReviewText(author))
+    .filter((author): author is string => Boolean(author));
+  const withoutAffiliations = cleaned.filter((author) => !probableAffiliation(author));
+  // Fail closed only when at least one plausible person or corporate author
+  // remains. This avoids erasing an unfamiliar one-item organization author.
+  return withoutAffiliations.length > 0
+    ? Array.from(new Set(withoutAffiliations))
+    : Array.from(new Set(cleaned.filter((author) =>
+        CORPORATE_AUTHOR_TERMS.test(author) || !author.includes(",")
+      )));
 }
 
 export function normalizeUsableSections(value: unknown): WorkflowReportSection[] {
@@ -843,6 +883,11 @@ function normalizeExtractionMethod(value: unknown): SourceContentExtractionMetho
     value === "pdf_text" ||
     value === "ocr" ||
     value === "html" ||
+    value === "docx_native" ||
+    value === "epub_native" ||
+    value === "jats_xml" ||
+    value === "tei_xml" ||
+    value === "xml" ||
     value === "abstract" ||
     value === "failed"
   ) {
@@ -857,6 +902,9 @@ function normalizeExtractionMode(value: unknown): SourceExtractionMode | null {
     value === "grobid" ||
     value === "ocr" ||
     value === "html" ||
+    value === "docx" ||
+    value === "epub" ||
+    value === "xml" ||
     value === "abstract" ||
     value === "metadata_only" ||
     value === "failed"
@@ -1255,7 +1303,7 @@ export function normalizeSourceForReview(source: SourceRecord): SourceRecord {
     ...source,
     id: cleanText(source.id) ?? "",
     title: sanitizeReviewText(source.title) ?? "",
-    authors: (source.authors ?? []).map((author) => sanitizeReviewText(author)).filter((author): author is string => Boolean(author)),
+    authors: normalizeSourceAuthors(source.authors ?? []),
     year: typeof source.year === "number" && Number.isFinite(source.year) ? Math.trunc(source.year) : null,
     // Provider payloads and restored snapshots have historically used several
     // aliases for the exact provider abstract. Collapse them before persistence.
@@ -1798,6 +1846,9 @@ export function formatSourceAuthors(authors: string[]): string {
 }
 
 function formatApaAuthor(author: string): string {
+  if (CORPORATE_AUTHOR_TERMS.test(author) && !author.includes(",")) {
+    return author.trim();
+  }
   const parts = author.trim().split(/\s+/).filter(Boolean);
   if (parts.length <= 1) return author.trim();
 

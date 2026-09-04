@@ -1,0 +1,25 @@
+{
+  "topic": "塑膠微粒對海洋生物的影響",
+  "mode": "LIVE",
+  "status": "COMPLETED",
+  "providers": [
+    "Crossref",
+    "Semantic Scholar",
+    "OpenAlex"
+  ],
+  "rawSourceCount": 26,
+  "admittedSourceCount": 26,
+  "evidenceCardCount": 26,
+  "acceptedEvidenceCount": 15,
+  "sectionCount": 6,
+  "claimCount": 15,
+  "supportedClaimCount": 15,
+  "verificationCoverage": 1,
+  "files": {
+    "markdown": "report.md",
+    "docx": "report.docx",
+    "pdf": "report.pdf",
+    "jsonBundle": "bundle.json",
+    "topic": "topic.json"
+  }
+}

@@ -16,7 +16,9 @@ import {
   type PaperSummariesResponse,
 } from "./paper-search";
 
-function expansion(englishQuery = "generative AI learning outcomes"): KeywordExpansionResult {
+function expansion(
+  englishQuery = "generative AI learning outcomes",
+): KeywordExpansionResult {
   return {
     normalized_topic: "生成式 AI 與學習成效",
     domains: ["artificial_intelligence", "education"],
@@ -37,7 +39,8 @@ function source(overrides: Partial<SourceRecord> = {}): SourceRecord {
     title: "Generative AI and student learning outcomes",
     authors: ["Ada Author"],
     year: 2024,
-    abstract: "This study evaluates how generative AI affects student learning outcomes.",
+    abstract:
+      "This study evaluates how generative AI affects student learning outcomes.",
     doi: "10.1000/generative-ai",
     url: "https://doi.org/10.1000/generative-ai",
     sourceType: "OpenAlex",
@@ -76,6 +79,9 @@ async function invoke(
   let payload: unknown;
   const req = { body };
   const res = {
+    setHeader() {
+      return this;
+    },
     status(code: number) {
       statusCode = code;
       return this;
@@ -98,9 +104,18 @@ test("paper search rejects blank or invalid requests with 400", async () => {
   assert.equal(normalizePaperSearchRequest({ query: "   " }), null);
   assert.equal(normalizePaperSearchRequest({ query: "a" }), null);
   assert.equal(normalizePaperSearchRequest({ query: "valid", limit: 2 }), null);
-  assert.equal(normalizePaperSearchRequest({ query: "valid", limit: 21 }), null);
-  assert.equal(normalizePaperSearchRequest({ query: "valid", searchMode: "turbo" }), null);
-  assert.equal(normalizePaperSearchRequest({ query: "valid", includeSummaries: "no" }), null);
+  assert.equal(
+    normalizePaperSearchRequest({ query: "valid", limit: 21 }),
+    null,
+  );
+  assert.equal(
+    normalizePaperSearchRequest({ query: "valid", searchMode: "turbo" }),
+    null,
+  );
+  assert.equal(
+    normalizePaperSearchRequest({ query: "valid", includeSummaries: "no" }),
+    null,
+  );
   assert.deepEqual(normalizePaperSearchRequest({ query: "  valid topic  " }), {
     query: "valid topic",
     limit: 10,
@@ -126,13 +141,19 @@ test("paper search rejects blank or invalid requests with 400", async () => {
     query: "   ",
   });
   assert.equal(statusCode, 400);
-  assert.deepEqual(Object.keys(payload as object).sort(), ["message", "ok"]);
+  assert.equal(
+    (payload as { errorCode?: string }).errorCode,
+    "REQUEST_SCHEMA_FAILURE",
+  );
 });
 
 test("paper search fast mode skips expansion and uses bounded single-page providers", async () => {
   const originalQuery = "adolescent sleep";
   let expansionCallCount = 0;
-  const searchCalls: Array<{ query: string; options: SourceSearchOptions | undefined }> = [];
+  const searchCalls: Array<{
+    query: string;
+    options: SourceSearchOptions | undefined;
+  }> = [];
   const papersFor = (provider: "openalex" | "crossref") =>
     Array.from({ length: 2 }, (_, index) =>
       source({
@@ -170,13 +191,31 @@ test("paper search fast mode skips expansion and uses bounded single-page provid
   assert.equal(expansionCallCount, 0);
   assert.equal(searchCalls.length, 1);
   assert.equal(searchCalls[0]?.query, originalQuery);
-  assert.deepEqual(searchCalls[0]?.options?.providers, ["OpenAlex", "Crossref"]);
+  assert.deepEqual(searchCalls[0]?.options?.providers, [
+    "OpenAlex",
+    "Crossref",
+  ]);
   assert.equal(searchCalls[0]?.options?.allowShortQueryRetry, false);
-  assert.equal(searchCalls[0]?.options?.providerConfigs?.OpenAlex?.pageLimit, 1);
-  assert.equal(searchCalls[0]?.options?.providerConfigs?.Crossref?.pageLimit, 1);
-  assert.ok((searchCalls[0]?.options?.providerConfigs?.OpenAlex?.queryLimit ?? 26) <= 25);
-  assert.ok((searchCalls[0]?.options?.providerConfigs?.Crossref?.queryLimit ?? 26) <= 25);
-  assert.equal(searchCalls[0]?.options?.providerConfigs?.["Semantic Scholar"], undefined);
+  assert.equal(
+    searchCalls[0]?.options?.providerConfigs?.OpenAlex?.pageLimit,
+    1,
+  );
+  assert.equal(
+    searchCalls[0]?.options?.providerConfigs?.Crossref?.pageLimit,
+    1,
+  );
+  assert.ok(
+    (searchCalls[0]?.options?.providerConfigs?.OpenAlex?.queryLimit ?? 26) <=
+      25,
+  );
+  assert.ok(
+    (searchCalls[0]?.options?.providerConfigs?.Crossref?.queryLimit ?? 26) <=
+      25,
+  );
+  assert.equal(
+    searchCalls[0]?.options?.providerConfigs?.["Semantic Scholar"],
+    undefined,
+  );
   assert.deepEqual(response.queries, [originalQuery]);
   assert.deepEqual(
     response.papers.map((paper) => paper.id),
@@ -218,14 +257,21 @@ test("paper search can defer summaries and return evidence excerpts immediately"
   assert.equal(statusCode, 200);
   assert.equal(summarizeCallCount, 0);
   assert.equal(response.summaryMode, "deferred");
-  assert.equal(response.papers[0]?.summary, "Evidence from the original abstract.");
+  assert.equal(
+    response.papers[0]?.summary,
+    "Evidence from the original abstract.",
+  );
   assert.equal(response.papers[0]?.summaryStatus, "pending");
   assert.equal(response.papers[0]?.summarySourceType, "abstract");
-  const metadataOnly = response.papers.find((paper) => paper.id === "metadata-only");
+  const metadataOnly = response.papers.find(
+    (paper) => paper.id === "metadata-only",
+  );
   assert.match(metadataOnly?.summary ?? "", /書目資訊.*尚無原文摘要/);
   assert.equal(metadataOnly?.summaryStatus, "pending");
   assert.equal(metadataOnly?.summarySourceType, "metadataFallback");
-  assert.ok(response.warnings.every((warning) => !warning.includes("最多 4 篇")));
+  assert.ok(
+    response.warnings.every((warning) => !warning.includes("最多 4 篇")),
+  );
 });
 
 test("paper search removes provider records without a query or translated academic anchor", async () => {
@@ -242,7 +288,8 @@ test("paper search removes provider records without a query or translated academ
         source({
           id: "unrelated-nudge",
           title: "精準輕推：以客戶為導向的商業應用",
-          abstract: "This paper discusses business applications of nudge theory.",
+          abstract:
+            "This paper discusses business applications of nudge theory.",
           doi: "10.1000/unrelated-nudge",
         }),
       ]),
@@ -257,8 +304,13 @@ test("paper search removes provider records without a query or translated academ
   const response = payload as PaperSearchResponse;
 
   assert.equal(statusCode, 200);
-  assert.deepEqual(response.papers.map((paper) => paper.id), ["lutein-paper"]);
-  assert.ok(response.warnings.some((warning) => warning.includes("已略過 1 筆")));
+  assert.deepEqual(
+    response.papers.map((paper) => paper.id),
+    ["lutein-paper"],
+  );
+  assert.ok(
+    response.warnings.some((warning) => warning.includes("已略過 1 筆")),
+  );
 });
 
 test("compound canine guarding queries require the dog entity plus guarding or reinforcement intervention", async () => {
@@ -277,34 +329,42 @@ test("compound canine guarding queries require the dog entity plus guarding or r
     id: "canine-guarding",
     doi: "10.1000/canine-guarding",
     title: "Canine resource guarding in adoptive homes",
-    abstract: "This study evaluates food guarding and resource guarding in companion dogs.",
+    abstract:
+      "This study evaluates food guarding and resource guarding in companion dogs.",
   });
   const rewardTraining = source({
     id: "canine-reward",
     doi: "10.1000/canine-reward",
     title: "Reward-based training for domestic dog behavior",
-    abstract: "Domestic dogs received reward-based training for behavioral problems.",
+    abstract:
+      "Domestic dogs received reward-based training for behavioral problems.",
   });
   const genericWorkingDogs = source({
     id: "working-dogs",
     doi: "10.1000/working-dogs",
     title: "Working Dogs",
-    abstract: "This overview describes the health and communication of working dogs.",
+    abstract:
+      "This overview describes the health and communication of working dogs.",
   });
   const humanTherapy = source({
     id: "human-therapy",
     doi: "10.1000/human-therapy",
     title: "Canine-assisted resource-oriented Positive Psychotherapy after war",
-    abstract: "Canine-assisted therapy supports human participants affected by war.",
+    abstract:
+      "Canine-assisted therapy supports human participants affected by war.",
   });
   const autismTraining = source({
     id: "autism-training",
     doi: "10.1000/autism-training",
     title: "Functional communication training and chained reinforcement",
-    abstract: "The intervention reduces challenging classroom behavior in autistic students.",
+    abstract:
+      "The intervention reduces challenging classroom behavior in autistic students.",
   });
 
-  assert.ok(sourceCoreTopicScore(exactGuarding, anchors) > sourceCoreTopicScore(rewardTraining, anchors));
+  assert.ok(
+    sourceCoreTopicScore(exactGuarding, anchors) >
+      sourceCoreTopicScore(rewardTraining, anchors),
+  );
   assert.equal(sourceCoreTopicScore(genericWorkingDogs, anchors), 0);
   assert.equal(sourceCoreTopicScore(humanTherapy, anchors), 0);
   assert.equal(sourceCoreTopicScore(autismTraining, anchors), 0);
@@ -314,13 +374,15 @@ test("compound canine guarding queries require the dog entity plus guarding or r
     expandKeywords: async () => expansion(englishQuery),
     searchProviders: async (query) => {
       searchQueries.push(query);
-      return [providerResult("OpenAlex", [
-        genericWorkingDogs,
-        humanTherapy,
-        exactGuarding,
-        autismTraining,
-        rewardTraining,
-      ])];
+      return [
+        providerResult("OpenAlex", [
+          genericWorkingDogs,
+          humanTherapy,
+          exactGuarding,
+          autismTraining,
+          rewardTraining,
+        ]),
+      ];
     },
     summarizeSources: async (_topic, sources) => sources,
   });
@@ -330,10 +392,10 @@ test("compound canine guarding queries require the dog entity plus guarding or r
   });
   const response = payload as PaperSearchResponse;
 
-  assert.deepEqual(response.papers.map((paper) => paper.id), [
-    "canine-guarding",
-    "canine-reward",
-  ]);
+  assert.deepEqual(
+    response.papers.map((paper) => paper.id),
+    ["canine-guarding", "canine-reward"],
+  );
   assert.deepEqual(searchQueries, [
     "犬隻資源防衛行為的成因與正向訓練介入成效",
     "dog resource guarding",
@@ -359,7 +421,10 @@ test("paper search dedupes results, marks primary sources, and maps summaries by
     provider: "Crossref",
     abstract: "Evidence about AI tutoring and higher education.",
   });
-  const calls: Array<{ query: string; options: SourceSearchOptions | undefined }> = [];
+  const calls: Array<{
+    query: string;
+    options: SourceSearchOptions | undefined;
+  }> = [];
   let summarizedInput: SourceRecord[] = [];
 
   const router = createPaperSearchRouter({
@@ -379,26 +444,24 @@ test("paper search dedupes results, marks primary sources, and maps summaries by
     },
     summarizeSources: async (_topic, sources) => {
       summarizedInput = sources;
-      return [...sources]
-        .reverse()
-        .map((paper) =>
-          paper.id === "paper-a"
-            ? {
-                ...paper,
-                readableSummaryZhTW: "第一篇的繁中重點。",
-                llmSummaryZhTw: "不應優先選到這段。",
-                summaryStatus: "success" as const,
-                summarySourceType: "abstract" as const,
-                summaryConfidence: "high" as const,
-              }
-            : {
-                ...paper,
-                llmSummaryZhTw: "第二篇的繁中重點。",
-                summaryStatus: "success" as const,
-                summarySourceType: "abstract" as const,
-                summaryConfidence: "medium" as const,
-              },
-        );
+      return [...sources].reverse().map((paper) =>
+        paper.id === "paper-a"
+          ? {
+              ...paper,
+              readableSummaryZhTW: "第一篇的繁中重點。",
+              llmSummaryZhTw: "不應優先選到這段。",
+              summaryStatus: "success" as const,
+              summarySourceType: "abstract" as const,
+              summaryConfidence: "high" as const,
+            }
+          : {
+              ...paper,
+              llmSummaryZhTw: "第二篇的繁中重點。",
+              summaryStatus: "success" as const,
+              summarySourceType: "abstract" as const,
+              summaryConfidence: "medium" as const,
+            },
+      );
     },
   });
 
@@ -410,6 +473,7 @@ test("paper search dedupes results, marks primary sources, and maps summaries by
 
   assert.equal(statusCode, 200);
   assert.equal(response.ok, true);
+  assert.equal(response.status, "SEARCH_SUCCESS");
   assert.equal(response.query, originalQuery);
   assert.deepEqual(response.queries, [originalQuery, englishQuery]);
   assert.equal(response.count, 2);
@@ -424,8 +488,13 @@ test("paper search dedupes results, marks primary sources, and maps summaries by
     "第二篇的繁中重點。",
   );
   assert.equal(response.summaryMode, "llm");
-  assert.ok(summarizedInput.every((paper) => paper.relevanceLevel === "primary"));
-  assert.deepEqual(calls.map((call) => call.query), [originalQuery, englishQuery]);
+  assert.ok(
+    summarizedInput.every((paper) => paper.relevanceLevel === "primary"),
+  );
+  assert.deepEqual(
+    calls.map((call) => call.query),
+    [originalQuery, englishQuery],
+  );
   assert.ok(
     calls.every(
       (call) =>
@@ -492,10 +561,12 @@ test("paper search keeps partial provider results and falls back safely when sum
     searchProviders: async (query) => {
       if (query !== originalQuery) throw new Error("one query failed");
       return [
-        providerResult("OpenAlex", [source({
-          title: "Adolescent sleep evidence",
-          abstract: "Evidence about adolescent sleep duration.",
-        })]),
+        providerResult("OpenAlex", [
+          source({
+            title: "Adolescent sleep evidence",
+            abstract: "Evidence about adolescent sleep duration.",
+          }),
+        ]),
         providerResult("Crossref", [partialPaper], false),
       ];
     },
@@ -504,20 +575,34 @@ test("paper search keeps partial provider results and falls back safely when sum
     },
   });
 
-  const { statusCode, payload } = await invoke(router, { query: originalQuery });
+  const { statusCode, payload } = await invoke(router, {
+    query: originalQuery,
+  });
   const response = payload as PaperSearchResponse;
 
   assert.equal(statusCode, 200);
   assert.equal(response.ok, true);
+  assert.equal(response.status, "SEARCH_PARTIAL_SUCCESS");
+  assert.ok(
+    response.providerFailures.some(
+      (failure) => failure.provider === "Crossref",
+    ),
+  );
   assert.equal(response.count, 2);
   assert.equal(response.summaryMode, "fallback");
   assert.equal(
     response.papers.find((paper) => paper.id === "paper-partial")?.summary,
     partialPaper.snippet,
   );
-  assert.ok(response.papers.every((paper) => paper.summaryStatus === "fallback"));
-  assert.ok(response.warnings.some((warning) => warning.includes("其餘可用結果")));
-  assert.ok(response.warnings.some((warning) => warning.includes("原文摘要或片段節錄")));
+  assert.ok(
+    response.papers.every((paper) => paper.summaryStatus === "fallback"),
+  );
+  assert.ok(
+    response.warnings.some((warning) => warning.includes("其餘可用結果")),
+  );
+  assert.ok(
+    response.warnings.some((warning) => warning.includes("原文摘要或片段節錄")),
+  );
 });
 
 test("paper search returns a stable 200 response when no titled papers are found", async () => {
@@ -537,6 +622,13 @@ test("paper search returns a stable 200 response when no titled papers are found
   assert.equal(statusCode, 200);
   assert.deepEqual(Object.keys(response), [
     "ok",
+    "status",
+    "requestId",
+    "providersAttempted",
+    "providersSucceeded",
+    "providerFailures",
+    "resultsBeforeDedupe",
+    "resultsAfterDedupe",
     "query",
     "count",
     "queries",
@@ -551,8 +643,210 @@ test("paper search returns a stable 200 response when no titled papers are found
   assert.equal(summarizeCallCount, 0);
 });
 
+for (const [scenario, query] of [
+  ["S1 Chinese query", "褪黑激素對海洋生態的影響"],
+  ["S2 English control", "effects of melatonin on marine ecosystems"],
+  ["S3 common Chinese academic query", "睡眠不足與青少年注意力"],
+  [
+    "S7 Unicode and punctuation",
+    "褪黑激素（Melatonin）對海洋生物、珊瑚與魚類行為的影響？",
+  ],
+] as const) {
+  test(`${scenario} returns a schema-valid search response without an internal exception`, async () => {
+    const router = createPaperSearchRouter({
+      expandKeywords: async () => expansion("melatonin marine ecosystem"),
+      searchProviders: async (providerQuery) => [
+        providerResult("OpenAlex", [
+          source({
+            id: `paper-${scenario}`,
+            title: "Melatonin effects in marine fish ecosystems",
+            abstract: `Evidence matching ${providerQuery} and melatonin marine ecosystems.`,
+          }),
+        ]),
+      ],
+      summarizeSources: async (_topic, sources) => sources,
+    });
+
+    const { statusCode, payload } = await invoke(router, {
+      query,
+      includeSummaries: false,
+    });
+    const response = payload as PaperSearchResponse;
+
+    assert.equal(statusCode, 200);
+    assert.equal(response.ok, true);
+    assert.equal(response.status, "SEARCH_SUCCESS");
+    assert.ok(Array.isArray(response.papers));
+    assert.ok(Array.isArray(response.providerFailures));
+    assert.ok(response.papers.length > 0);
+  });
+}
+
+test("S4 single transient provider failure returns partial results and records provenance", async () => {
+  const router = createPaperSearchRouter({
+    searchProviders: async () => [
+      providerResult("OpenAlex", [], false),
+      providerResult("Crossref", [
+        source({
+          id: "crossref-melatonin",
+          sourceType: "Crossref",
+          provider: "Crossref",
+          title: "Melatonin effects in marine ecosystems",
+        }),
+      ]),
+    ],
+  });
+
+  const { statusCode, payload } = await invoke(router, {
+    query: "melatonin marine ecosystems",
+    searchMode: "fast",
+    includeSummaries: false,
+  });
+  const response = payload as PaperSearchResponse;
+
+  assert.equal(statusCode, 200);
+  assert.equal(response.status, "SEARCH_PARTIAL_SUCCESS");
+  assert.deepEqual(
+    response.papers.map((paper) => paper.id),
+    ["crossref-melatonin"],
+  );
+  assert.ok(
+    response.providerFailures.some(
+      (failure) => failure.provider === "OpenAlex",
+    ),
+  );
+});
+
+test("S5 all providers unavailable fails closed with a typed 503 and no papers", async () => {
+  const router = createPaperSearchRouter({
+    searchProviders: async () => [
+      providerResult("OpenAlex", [], false),
+      providerResult("Crossref", [], false),
+    ],
+  });
+
+  const { statusCode, payload } = await invoke(router, {
+    query: "melatonin marine ecosystems",
+    searchMode: "fast",
+  });
+  const failure = payload as Record<string, unknown>;
+
+  assert.equal(statusCode, 503);
+  assert.equal(failure.ok, false);
+  assert.equal(failure.errorCode, "SEARCH_ALL_PROVIDERS_UNAVAILABLE");
+  assert.equal("papers" in failure, false);
+  assert.equal(Array.isArray(failure.providerFailures), true);
+});
+
+test("S6 malformed provider records are normalized or omitted without an unexplained 500", async () => {
+  const router = createPaperSearchRouter({
+    searchProviders: async () => [
+      providerResult("OpenAlex", [
+        source({ id: "missing-title", title: "" }),
+        source({
+          id: "invalid-authors",
+          title: "Melatonin in marine fish",
+          authors: null as unknown as string[],
+        }),
+      ]),
+    ],
+  });
+
+  const { statusCode, payload } = await invoke(router, {
+    query: "melatonin marine fish",
+    searchMode: "fast",
+    includeSummaries: false,
+  });
+  const response = payload as PaperSearchResponse;
+
+  assert.equal(statusCode, 200);
+  assert.deepEqual(
+    response.papers.map((paper) => paper.id),
+    ["invalid-authors"],
+  );
+  assert.deepEqual(response.papers[0]?.authors, []);
+  assert.ok(
+    response.warnings.some((warning) => warning.includes("格式不完整")),
+  );
+});
+
+test("S6 malformed provider envelope fails closed with a typed provider schema failure", async () => {
+  const router = createPaperSearchRouter({
+    searchProviders: async () =>
+      [
+        {
+          ok: true,
+          provider: "OpenAlex",
+          query: "melatonin marine",
+          results: null,
+          error_type: null,
+          error_message: null,
+        },
+      ] as unknown as SourceProviderSearchResult[],
+  });
+
+  const { statusCode, payload } = await invoke(router, {
+    query: "melatonin marine",
+    searchMode: "fast",
+  });
+  const failure = payload as Record<string, unknown>;
+
+  assert.equal(statusCode, 503);
+  assert.equal(failure.errorCode, "SEARCH_ALL_PROVIDERS_UNAVAILABLE");
+  assert.equal("papers" in failure, false);
+});
+
+test("L1 precision gate requires both melatonin and marine context for the narrow compound topic", async () => {
+  const router = createPaperSearchRouter({
+    expandKeywords: async () =>
+      expansion("melatonin effects on marine ecosystems"),
+    searchProviders: async () => [
+      providerResult("OpenAlex", [
+        source({
+          id: "relevant-marine-melatonin",
+          doi: "10.1000/relevant-marine-melatonin",
+          title: "Melatonin signaling in marine fish",
+          abstract:
+            "Melatonin regulates circadian behavior in marine teleost ecosystems.",
+        }),
+        source({
+          id: "human-sleep-melatonin",
+          doi: "10.1000/human-sleep-melatonin",
+          title: "Melatonin for human sleep",
+          abstract: "A clinical review of insomnia and sleep onset.",
+        }),
+        source({
+          id: "generic-marine-ecosystems",
+          doi: "10.1000/generic-marine-ecosystems",
+          title: "Climate effects on marine ecosystems",
+          abstract: "A broad review of ocean warming and fish populations.",
+        }),
+      ]),
+    ],
+  });
+
+  const { statusCode, payload } = await invoke(router, {
+    query: "褪黑激素對海洋生態的影響",
+    includeSummaries: false,
+  });
+  const response = payload as PaperSearchResponse;
+
+  assert.equal(statusCode, 200);
+  assert.ok(response.queries.includes("melatonin marine organisms"));
+  assert.deepEqual(
+    response.papers.map((paper) => paper.id),
+    ["relevant-marine-melatonin"],
+  );
+  assert.ok(
+    response.warnings.some((warning) => warning.includes("已略過 2 筆")),
+  );
+});
+
 test("paper summaries endpoint validates a batch of one to four paper-shaped objects", async () => {
-  assert.equal(normalizePaperSummariesRequest({ query: "valid", papers: [] }), null);
+  assert.equal(
+    normalizePaperSummariesRequest({ query: "valid", papers: [] }),
+    null,
+  );
   assert.equal(
     normalizePaperSummariesRequest({
       query: "valid",
@@ -628,7 +922,10 @@ test("paper summaries endpoint safely maps papers and prefers a long cleaned raw
           citationCount: 12,
           isOpenAccess: true,
           abstract: "Original evidence supplied by the paper provider.",
-          extractedText: "Full-text evidence excerpt retained for deferred summarization.".repeat(8),
+          extractedText:
+            "Full-text evidence excerpt retained for deferred summarization.".repeat(
+              8,
+            ),
           summary: "untrusted client summary",
           readableSummaryZhTW: "must not be accepted from the client",
           relevanceLevel: "off_topic",
@@ -651,5 +948,8 @@ test("paper summaries endpoint safely maps papers and prefers a long cleaned raw
   assert.equal(capturedSources[0]?.relevanceLevel, "primary");
   assert.equal(capturedSources[0]?.readableSummaryZhTW, undefined);
   assert.equal(capturedSources[0]?.containerTitle, "Sleep Journal");
-  assert.match(capturedSources[0]?.extractedText ?? "", /Full-text evidence excerpt/u);
+  assert.match(
+    capturedSources[0]?.extractedText ?? "",
+    /Full-text evidence excerpt/u,
+  );
 });

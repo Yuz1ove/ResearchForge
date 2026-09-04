@@ -1,4 +1,11 @@
 import { Pool } from "pg";
+import { randomUUID } from "node:crypto";
+import { readFile, writeFile, link, unlink } from "node:fs/promises";
+import {
+  identityHash,
+  type CanonicalIdentitySnapshot, type IndependentCanonicalIdentity,
+} from "./canonicalIdentityRestoration";
+import { verifyCanonicalIdentityForPersistence } from "./acceptedSourceEnrichment";
 import {
   GroundingJobSchema,
   type GroundingJob,
@@ -6,6 +13,45 @@ import {
 import { logger } from "../../../lib/logger";
 
 const DEFAULT_TTL_SECONDS = 24 * 60 * 60;
+
+/**
+ * Explicit local canonical-identity snapshot persistence for archived/expired jobs.
+ * Does not resurrect the job, patch its admission, or persist any full-text fields.
+ * Publish an immutable complete file atomically; a conflicting destination is never overwritten.
+ */
+export async function persistCanonicalIdentitySnapshot(
+  destination: string, baseline: CanonicalIdentitySnapshot, value: IndependentCanonicalIdentity,
+): Promise<{value: IndependentCanonicalIdentity; reused: boolean}> {
+  if (!verifyCanonicalIdentityForPersistence(baseline,value)) throw new Error("CANONICAL_IDENTITY_PERSISTENCE_FAILED:invalid_evidence");
+  const readExisting = async () => {
+    try {
+      const existing = JSON.parse(await readFile(destination,"utf8")) as IndependentCanonicalIdentity;
+      if (identityHash(existing) !== identityHash(value)) throw new Error("CANONICAL_IDENTITY_PERSISTENCE_FAILED:snapshot_conflict");
+      return {value:existing,reused:true};
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  const existing = await readExisting();
+  if (existing) return existing;
+  const temporary = destination + "." + randomUUID() + ".tmp";
+  let created = false;
+  try {
+    await writeFile(temporary,JSON.stringify(value,null,2)+"\n",{flag:"wx",mode:0o600});
+    created = true;
+    try { await link(temporary,destination); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const raced = await readExisting();
+      if (!raced) throw new Error("CANONICAL_IDENTITY_PERSISTENCE_FAILED:concurrent_removal");
+      return raced;
+    }
+    return {value:structuredClone(value),reused:false};
+  } finally {
+    if (created) await unlink(temporary);
+  }
+}
 const MIN_TTL_SECONDS = 5 * 60;
 const MAX_TTL_SECONDS = 7 * 24 * 60 * 60;
 
@@ -25,6 +71,11 @@ const TERMINAL_JOB_STATUSES = new Set<GroundingJob["status"]>([
 export interface GroundingJobRepository {
   create(job: GroundingJob): Promise<GroundingJob>;
   get(jobId: string): Promise<GroundingJob | null>;
+  /**
+   * Lightweight change token used by long-polling. Implementations should not
+   * materialize or clone the full job payload for this read.
+   */
+  getRevision?(jobId: string): Promise<number | null>;
   patch(
     jobId: string,
     patch: Partial<GroundingJob>,
@@ -63,6 +114,10 @@ function isTerminal(status: GroundingJob["status"]): boolean {
   return TERMINAL_JOB_STATUSES.has(status);
 }
 
+export function isGroundingJobTerminal(job: GroundingJob): boolean {
+  return Boolean(job.acquisition?.terminalStatus) || isTerminal(job.status);
+}
+
 function normalizedTtlSeconds(env: NodeJS.ProcessEnv): number {
   const configured = Number(env.GROUNDING_JOB_TTL_SECONDS);
   if (!Number.isFinite(configured)) return DEFAULT_TTL_SECONDS;
@@ -73,10 +128,7 @@ function mergeJob(
   current: GroundingJob,
   patch: Partial<GroundingJob>,
 ): GroundingJob {
-  const nextStatus = patch.status ?? current.status;
-  if (isTerminal(current.status) && !isTerminal(nextStatus)) {
-    return current;
-  }
+  if (isGroundingJobTerminal(current)) return current;
 
   return GroundingJobSchema.parse({
     ...current,
@@ -105,6 +157,12 @@ export class InMemoryGroundingJobRepository implements GroundingJobRepository {
     const job = this.jobs.get(jobId);
     if (!job || Date.parse(job.expiresAt) <= Date.now()) return null;
     return cloneJob(job);
+  }
+
+  async getRevision(jobId: string): Promise<number | null> {
+    const job = this.jobs.get(jobId);
+    if (!job || Date.parse(job.expiresAt) <= Date.now()) return null;
+    return job.revision;
   }
 
   async patch(
@@ -203,6 +261,17 @@ export class PostgresGroundingJobRepository implements GroundingJobRepository {
     return row ? GroundingJobSchema.parse(row.job_payload) : null;
   }
 
+  async getRevision(jobId: string): Promise<number | null> {
+    await this.ensureSchema();
+    const result = await this.pool.query<{ revision: number }>(
+      `SELECT revision
+       FROM research_grounding_jobs
+       WHERE job_id = $1 AND expires_at > NOW()`,
+      [jobId],
+    );
+    return result.rows[0]?.revision ?? null;
+  }
+
   async patch(
     jobId: string,
     patch: Partial<GroundingJob>,
@@ -280,11 +349,13 @@ export function defaultGroundingJobRepository(): GroundingJobRepository {
     process.env.VERCEL !== "true" &&
     process.env.NODE_ENV !== "production";
   if (isExplicitLocalRuntime) {
-    localDevelopmentRepository ??= new InMemoryGroundingJobRepository();
-    logger.warn(
-      { event: "research_grounding.local_memory_store" },
-      "Research grounding uses in-memory storage only in local development.",
-    );
+    if (!localDevelopmentRepository) {
+      localDevelopmentRepository = new InMemoryGroundingJobRepository();
+      logger.warn(
+        { event: "research_grounding.local_memory_store" },
+        "Research grounding uses in-memory storage only in local development.",
+      );
+    }
     return localDevelopmentRepository;
   }
   throw new GroundingStoreNotConfiguredError();
@@ -325,4 +396,69 @@ export async function patchGroundingJobWithRetry(
   throw lastError instanceof Error
     ? lastError
     : new GroundingJobRevisionConflictError(jobId);
+}
+
+export async function claimGroundingJobExecution(
+  repository: GroundingJobRepository,
+  jobId: string,
+  input: {
+    ownerId: string;
+    leaseMs?: number;
+    now?: Date;
+  },
+): Promise<GroundingJob | null> {
+  const now = input.now ?? new Date();
+  const current = await repository.get(jobId);
+  if (!current || isGroundingJobTerminal(current)) return null;
+  if (
+    current.executionLease &&
+    current.executionLease.ownerId !== input.ownerId &&
+    Date.parse(current.executionLease.expiresAt) > now.getTime()
+  ) return null;
+  const leaseMs = Math.max(
+    1_000,
+    Math.min(10 * 60 * 1_000, input.leaseMs ?? 60_000),
+  );
+  try {
+    return await repository.patch(
+      jobId,
+      {
+        executionLease: {
+          ownerId: input.ownerId,
+          claimedAt: now.toISOString(),
+          expiresAt: new Date(now.getTime() + leaseMs).toISOString(),
+        },
+      },
+      { expectedRevision: current.revision },
+    );
+  } catch (error) {
+    if (error instanceof GroundingJobRevisionConflictError) return null;
+    throw error;
+  }
+}
+
+export async function releaseGroundingJobExecution(
+  repository: GroundingJobRepository,
+  jobId: string,
+  ownerId: string,
+): Promise<GroundingJob | null> {
+  const current = await repository.get(jobId);
+  if (!current) return null;
+  if (
+    !current.executionLease ||
+    current.executionLease.ownerId !== ownerId ||
+    isGroundingJobTerminal(current)
+  ) return current;
+  try {
+    return await repository.patch(
+      jobId,
+      { executionLease: undefined },
+      { expectedRevision: current.revision },
+    );
+  } catch (error) {
+    if (error instanceof GroundingJobRevisionConflictError) {
+      return repository.get(jobId);
+    }
+    throw error;
+  }
 }

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SourceRecord } from "@workspace/api-zod";
-import { summarizeSourcesWithLlm } from "./source-summarizer";
+import {
+  stripLeadingSourceTitle,
+  summarizeSourcesWithLlm,
+} from "./source-summarizer";
 
 function source(overrides: Partial<SourceRecord> = {}): SourceRecord {
   return {
@@ -157,7 +160,7 @@ test("source summarizer preserves sources and marks failed fallback on empty mod
 
   assert.equal(result[0]?.title, "French fries nutrition and sodium content");
   assert.equal(result[0]?.llmSummaryStatus, "failed");
-  assert.equal(result[0]?.summaryStructuredStatus, "error");
+  assert.equal(result[0]?.summaryStructuredStatus, "unavailable");
   assert.match(result[0]?.llmSummaryZhTw ?? "", /French fries|nutrition|薯條/);
   assert.equal(result[0]?.summaryFallbackUsed, true);
 });
@@ -314,4 +317,19 @@ test("source summarizer writes deterministic fallback summaries for metadata-onl
   assert.equal(result[0]?.summarySourceType, "metadataFallback");
   assert.equal(result[0]?.summaryConfidence, "low");
   assert.match(result[0]?.readableSummaryZhTW ?? "", /目前|標題|來源資訊|不足以支持深入引用/);
+});
+
+test("fallback title removal never compiles provider-controlled titles as regular expressions", () => {
+  assert.equal(
+    stripLeadingSourceTitle(
+      "Special Issue No. (June) [2020]? Body evidence begins here.",
+      "Special Issue No. (June) [2020]?",
+    ),
+    "Body evidence begins here.",
+  );
+  const oversizedProviderTitle = `Special Issue ${"(".repeat(2_000_000)}`;
+  assert.equal(
+    stripLeadingSourceTitle("Short visible body", oversizedProviderTitle),
+    "Short visible body",
+  );
 });

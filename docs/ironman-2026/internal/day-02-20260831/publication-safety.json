@@ -1,0 +1,102 @@
+{
+  "schema_version": "researchforge-ironman-publication-safety/day02-v1",
+  "date": "2026-08-31",
+  "scope": "20260831 Day 02 candidate public article and its two diagram files ONLY",
+  "PUBLICATION_SAFE": true,
+  "checks": [
+    {
+      "id": "secrets",
+      "result": "PASS",
+      "method": "automated_scan_and_editorial_semantic_review",
+      "evidence": "Reused secret-pattern scan and manual reread; no secret values."
+    },
+    {
+      "id": "credentials",
+      "result": "PASS",
+      "method": "automated_scan_and_editorial_semantic_review",
+      "evidence": "No credential, bearer token, password, cookie or account material in public files."
+    },
+    {
+      "id": "personal_data",
+      "result": "PASS",
+      "method": "automated_scan_and_editorial_semantic_review",
+      "evidence": "No personal name, local username, school information or private contact details."
+    },
+    {
+      "id": "local_absolute_paths",
+      "result": "PASS",
+      "method": "automated_scan_and_editorial_semantic_review",
+      "evidence": "Public Markdown/SVG/Mermaid contain no home, absolute filesystem or private endpoint references."
+    },
+    {
+      "id": "unsupported_performance_claims",
+      "result": "PASS",
+      "method": "automated_scan_and_editorial_semantic_review",
+      "evidence": "No speed comparison or measured overhead claim; inspection cost explicitly unquantified."
+    },
+    {
+      "id": "unsupported_reliability_claims",
+      "result": "PASS",
+      "method": "automated_scan_and_editorial_semantic_review",
+      "evidence": "No hallucination elimination, universal reliability or all-topic readiness claim."
+    },
+    {
+      "id": "fabricated_test_counts",
+      "result": "PASS",
+      "method": "automated_scan_and_editorial_semantic_review",
+      "evidence": "No public suite totals; historical PASS statements map to saved TEST-RESULTS and final report."
+    },
+    {
+      "id": "fabricated_implementation",
+      "result": "PASS",
+      "method": "automated_scan_and_editorial_semantic_review",
+      "evidence": "Current entrypoint and rejection branches inspected; pseudo-code and diagram expressly conceptual."
+    },
+    {
+      "id": "private_urls",
+      "result": "PASS",
+      "method": "automated_scan_and_editorial_semantic_review",
+      "evidence": "Only a relative SVG image link; no private or external URL in article content."
+    },
+    {
+      "id": "accidental_model_provider_secrets",
+      "result": "PASS",
+      "method": "automated_scan_and_editorial_semantic_review",
+      "evidence": "No provider settings, model prompts, keys or raw response data."
+    },
+    {
+      "id": "misleading_ready_claims",
+      "result": "PASS",
+      "method": "automated_scan_and_editorial_semantic_review",
+      "evidence": "Stage-scoped READY explained; main historical case remains BLOCKED; Writer NOT_RUN; no generalization claim."
+    },
+    {
+      "id": "misleading_research_scientific_claims",
+      "result": "PASS",
+      "method": "automated_scan_and_editorial_semantic_review",
+      "evidence": "No scientific result or causal effect from the retrieved study is asserted; body qualification is not scientific truth verification."
+    }
+  ],
+  "public_file_sha256": {
+    "articles/day-02-20260831/article-public.md": "977a55cd5ad9916cede956f1e2b2d4e503743f0d8cb92a2b421b3917ae89ebde",
+    "assets/day-02/20260831/stop-condition-flow.svg": "5d81e45ae1107b4f27ec3803242750e7b1b4f1ec95ae1c5f71fdbaf49d8f0b60",
+    "assets/day-02/20260831/stop-condition-flow.mmd": "d14dee7ca67ba633a46b842d80449b40088b0c7a032314c33180df9119a3ee51"
+  },
+  "technical_validation": "validation-results.json",
+  "evidence": "evidence-map.md; claims.json",
+  "publication_status": "READY_FOR_HUMAN_REVIEW",
+  "human_review_status": "PENDING",
+  "canonical_replacement_performed": false,
+  "platform_preview": "NOT_RUN",
+  "published": false,
+  "legacy_series_validation": {
+    "verdict": "FAIL",
+    "pre_existing_issue": "old articles/day-02.md narrative contains 待補, matched by placeholder regex",
+    "candidate_validation": "PASS",
+    "original_validator_modified": false
+  },
+  "limits": [
+    "Local publication safety does not establish iThome rendering, authenticated publication or engineering readiness.",
+    "Internal audit/evidence/QA files are not public article content."
+  ]
+}

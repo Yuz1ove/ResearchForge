@@ -11,11 +11,14 @@ import { logger } from "../lib/logger";
 import {
   createGroundingJob,
   readGroundingJob,
-  runGroundingJob,
+  readGroundingJobRevision,
+  resumeGroundingJobInBackground,
+  startGroundingJobInBackground,
   type GroundingJobRunDependencies,
 } from "../services/research/grounding/researchGroundingJobStore";
 import {
   GroundingStoreNotConfiguredError,
+  isGroundingJobTerminal,
   type GroundingJobRepository,
 } from "../services/research/grounding/groundingJobRepository";
 
@@ -117,18 +120,18 @@ export function createResearchGroundingJobsRouter(
         requestId,
         attemptId,
       });
-      const completedJob = await runGroundingJob(parsed.data, job, {
+      startGroundingJobInBackground(parsed.data, job, {
         repository: options.repository,
         dependencies: options.runDependencies,
       });
-      res.status(200).json(
+      res.status(202).json(
         ResearchGroundingJobCreateResponseSchema.parse({
-          jobId: completedJob.jobId,
-          workflowId: completedJob.workflowId,
-          topicHash: completedJob.topicHash,
-          requestId: completedJob.requestId,
-          attemptId: completedJob.attemptId,
-          status: completedJob.status,
+          jobId: job.jobId,
+          workflowId: job.workflowId,
+          topicHash: job.topicHash,
+          requestId: job.requestId,
+          attemptId: job.attemptId,
+          status: job.status,
         }),
       );
     } catch (error) {
@@ -177,7 +180,51 @@ export function createResearchGroundingJobsRouter(
         });
         return;
       }
-      res.json(GroundingJobSchema.parse(normalizeGroundingJobForResponse(job)));
+      if (!isGroundingJobTerminal(job)) {
+        await resumeGroundingJobInBackground(job.jobId, {
+          repository: options.repository,
+          dependencies: options.runDependencies,
+        });
+      }
+      const requestedWaitMs = Number(req.query.waitMs ?? 0);
+      const waitCeilingMs = Number.isFinite(requestedWaitMs)
+        ? Math.max(0, Math.min(30_000, Math.floor(requestedWaitMs)))
+        : 0;
+      let current = job;
+      if (waitCeilingMs > 0 && !isGroundingJobTerminal(current)) {
+        const deadline = Date.now() + waitCeilingMs;
+        while (Date.now() < deadline && !isGroundingJobTerminal(current)) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, Math.min(250, deadline - Date.now()));
+            timer.unref?.();
+          });
+          const revision = await readGroundingJobRevision(
+            job.jobId,
+            options.repository,
+          );
+          if (revision === null) break;
+          if (revision !== current.revision) {
+            current =
+              (await readGroundingJob(job.jobId, options.repository)) ?? current;
+          }
+        }
+      }
+      const terminal = isGroundingJobTerminal(current);
+      const responseJob = {
+        ...current,
+        clientWait: {
+          status: terminal
+            ? "JOB_TERMINAL" as const
+            : waitCeilingMs > 0
+              ? "CLIENT_WAIT_EXPIRED" as const
+              : "WAITING" as const,
+          waitCeilingMs,
+          observedAt: new Date().toISOString(),
+        },
+      };
+      res.status(!terminal && waitCeilingMs > 0 ? 202 : 200).json(
+        GroundingJobSchema.parse(normalizeGroundingJobForResponse(responseJob)),
+      );
     } catch (error) {
       const code =
         error instanceof GroundingStoreNotConfiguredError

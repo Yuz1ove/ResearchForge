@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">ResearchForge 從生成器演化到證據控制面的責任鏈</title><desc id="desc">研究題目依序經過搜尋、身分與存取、事實狀態、證據准入與 Writer；Writer 位於最後，無法跳過上游邊界。</desc>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L9 3z" fill="#5eead4"/></marker><style>text{font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif}.t{fill:#f8fafc;font-size:34px;font-weight:700}.s{fill:#94a3b8;font-size:20px}.b{fill:#13233d;stroke:#5eead4;stroke-width:2}.h{fill:#e2e8f0;font-size:21px;font-weight:650}.d{fill:#94a3b8;font-size:17px}.l{stroke:#5eead4;stroke-width:3;marker-end:url(#a)}</style></defs>
+  <style>.l,path[stroke="#fbbf24"]{fill:none}</style><rect width="1200" height="675" rx="28" fill="#08111f"/><text x="72" y="78" class="t">從 Generator 到 Evidence Control Plane</text><text x="72" y="112" class="s">答案是最後一層；可信度來自前面每一道不能跳過的責任邊界。</text>
+  <g transform="translate(45 230)"><rect class="b" width="185" height="135" rx="20"/><text class="h" x="92" y="45" text-anchor="middle">研究題目</text><text class="d" x="92" y="80" text-anchor="middle">意圖與範圍</text></g>
+  <g transform="translate(275 230)"><rect class="b" width="185" height="135" rx="20"/><text class="h" x="92" y="45" text-anchor="middle">搜尋與身分</text><text class="d" x="92" y="80" text-anchor="middle">候選 · 去重</text></g>
+  <g transform="translate(505 230)"><rect class="b" width="185" height="135" rx="20"/><text class="h" x="92" y="45" text-anchor="middle">存取與事實</text><text class="d" x="92" y="80" text-anchor="middle">全文 · 狀態</text></g>
+  <g transform="translate(735 230)"><rect width="185" height="135" rx="20" fill="#143127" stroke="#fbbf24" stroke-width="2"/><text class="h" x="92" y="45" text-anchor="middle">證據准入</text><text class="d" x="92" y="80" text-anchor="middle">owner · revision</text></g>
+  <g transform="translate(965 230)"><rect class="b" width="185" height="135" rx="20"/><text class="h" x="92" y="45" text-anchor="middle">Writer</text><text class="d" x="92" y="80" text-anchor="middle">受控解釋與寫作</text></g>
+  <path class="l" d="M230 298h37M460 298h37M690 298h37M920 298h37"/>
+  <path d="M827 365v110H597" stroke="#fbbf24" stroke-width="3" marker-end="url(#a)"/><g transform="translate(300 440)"><rect width="300" height="100" rx="20" fill="#341d2a" stroke="#f87171" stroke-width="2"/><text class="h" x="150" y="42" text-anchor="middle">BLOCKED / UNKNOWN</text><text class="d" x="150" y="72" text-anchor="middle">保留原因與下一個 evidence gap</text></g>
+  <text x="72" y="610" class="s">控制正確可以與材料不足同時成立。</text>
+</svg>

@@ -6,6 +6,7 @@ import {
   auditStandardizedEvidenceFacts,
   buildStandardizedEvidenceFacts,
   buildStandardizedEvidenceFactsFromNormalizedPlan,
+  prioritizeStandardizedEvidenceFacts,
 } from "./standardizedEvidenceFacts.ts";
 import type { SourceRecord } from "./sourceRecords.ts";
 
@@ -325,4 +326,122 @@ test("OR estimates remain one effect datum with CI and never become percentages"
     result.metric === "media_use_prevalence" && result.value === 80
   ));
   assert.deepEqual(auditStandardizedEvidenceFacts([fact!]), []);
+});
+
+test("numeric facts retain naked OR beta correlation predictor outcome and denominator semantics", () => {
+  const exactResult = [
+    "In Table 3, 58% (n = 205) of respondents reported poor sleep quality.",
+    "Higher YIAT-SF scores (OR = 1.067, p = 0.010) and screen exposure in the last hour before sleep (OR = 5.487, p < 0.001) were associated with poor sleep quality.",
+    "Weekend screen time negatively predicted sleep quality (beta = -0.27, p = 0.016), while total screen time correlated with sleep quality (r = -0.18, p < 0.01).",
+  ].join(" ");
+  const semanticSource = source({
+    id: "source-semantic-numbers",
+    title: "Screen exposure and poor sleep quality among high school students",
+    abstract: exactResult,
+  });
+  const fact = buildStandardizedEvidenceFacts([
+    card(exactResult, {
+      id: "evidence:source-semantic-numbers:1",
+      evidenceId: "evidence:source-semantic-numbers:1",
+      sourceId: semanticSource.id,
+      sourceTitle: semanticSource.title,
+      population: "high school students",
+      exposure: "pre-sleep screen exposure",
+      outcome: "poor sleep quality",
+    }),
+  ], [semanticSource])[0];
+  const results = fact?.numericalResults ?? [];
+
+  assert.equal(fact?.sampleSize, 205);
+  assert.deepEqual(
+    results.filter((result) => result.statisticType === "odds_ratio")
+      .map((result) => [result.value, result.comparisonBasis]),
+    [
+      [1.067, "YIAT-SF score"],
+      [5.487, "screen exposure in the last hour before sleep"],
+    ],
+  );
+  assert.ok(results.some((result) =>
+    result.statisticType === "regression_coefficient" &&
+    result.value === -0.27 &&
+    /weekend screen time/iu.test(result.comparisonBasis ?? "")
+  ));
+  assert.ok(results.some((result) =>
+    result.statisticType === "correlation_coefficient" &&
+    result.value === -0.18 &&
+    /total screen time/iu.test(result.comparisonBasis ?? "")
+  ));
+  assert.ok(results.some((result) =>
+    result.statisticType === "prevalence" &&
+    result.value === 58 &&
+    result.comparisonBasis === "睡眠不佳比例"
+  ));
+});
+
+test("reported study design follows methods abstract metadata title priority and keeps inference separate", () => {
+  const designSource = source({
+    id: "source-design-priority",
+    title: "A cross-sectional study of learning outcomes",
+    abstract: "This longitudinal study followed students across two years.",
+    extractedSections: [{
+      heading: "Methods",
+      text: "We conducted a randomized controlled trial with concealed allocation.",
+      page: 3,
+      confidence: 0.99,
+    }],
+  });
+  const fact = buildStandardizedEvidenceFacts([
+    card("The study reports learning outcomes after the intervention.", {
+      id: "evidence:source-design-priority:1",
+      evidenceId: "evidence:source-design-priority:1",
+      sourceId: designSource.id,
+      sourceTitle: designSource.title,
+      studyDesign: "cohort study",
+    }),
+  ], [designSource])[0];
+
+  assert.equal(fact?.studyDesign, "randomized controlled trial");
+  assert.equal(fact?.reportedDesign?.extractionLevel, "full_text_methods");
+  assert.match(fact?.reportedDesign?.sourceSpan ?? "", /randomized controlled trial/iu);
+  assert.equal(fact?.inferredDesign, null);
+
+  const inferredSource = source({
+    id: "source-design-inferred",
+    title: "Student sleep and grades",
+    abstract: "Students completed one questionnaire about sleep and grades.",
+  });
+  const inferred = buildStandardizedEvidenceFacts([
+    card("Students completed one questionnaire about sleep and grades.", {
+      id: "evidence:source-design-inferred:1",
+      evidenceId: "evidence:source-design-inferred:1",
+      sourceId: inferredSource.id,
+      sourceTitle: inferredSource.title,
+      studyDesign: null,
+    }),
+  ], [inferredSource])[0];
+  assert.equal(inferred?.reportedDesign, null);
+  assert.equal(inferred?.studyDesign, null);
+  assert.equal(inferred?.inferredDesign?.value, "cross-sectional");
+  assert.equal(inferred?.inferredDesign?.extractionLevel, "inference");
+});
+
+test("quantitative prioritization ranks the RQ-direct exposure outcome result ahead of secondary statistics", () => {
+  const exactResult = "Higher YIAT-SF scores (OR = 1.067, p = 0.010) and screen exposure in the last hour before sleep (OR = 5.487, p < 0.001) were associated with poor sleep quality.";
+  const rqSource = source({ id: "source-rq-priority", title: "Screen exposure and sleep quality", abstract: exactResult });
+  const facts = buildStandardizedEvidenceFacts([
+    card(exactResult, {
+      id: "evidence:source-rq-priority:1",
+      evidenceId: "evidence:source-rq-priority:1",
+      sourceId: rqSource.id,
+      sourceTitle: rqSource.title,
+    }),
+  ], [rqSource]);
+  const prioritized = prioritizeStandardizedEvidenceFacts(
+    facts,
+    "睡前螢幕暴露與睡眠品質之間的關聯",
+  );
+
+  assert.equal(prioritized[0]?.numericalResults[0]?.value, 5.487);
+  assert.match(prioritized[0]?.numericalResults[0]?.comparison ?? "", /screen exposure/iu);
+  assert.notEqual(prioritized[0]?.numericalResults[0]?.metricType, "p_value");
 });

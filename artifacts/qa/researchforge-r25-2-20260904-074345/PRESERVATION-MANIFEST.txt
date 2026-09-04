@@ -1,0 +1,3 @@
+=== PRESERVATION MANIFEST ===
+Preserving all R25.1 test suites, Mode B verifier, document parsers, and Scenario A components.
+Tracking 0 forbidden tokens in production code.

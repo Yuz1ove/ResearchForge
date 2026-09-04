@@ -347,7 +347,9 @@ function topicSpecificRejectionReason(topic: string, text: string): string | nul
   if (/咖啡因|caffeine/i.test(topic) && /注意力|attention|vigilance|alertness|cognitive|reaction time/i.test(topic)) {
     const hasCaffeine = /咖啡因|caffeine/i.test(text);
     const hasAttention = /注意力|attention|vigilance|alertness|cognitive performance|reaction time/i.test(text);
-    if (!hasCaffeine || !hasAttention) return "missing_caffeine_attention_overlap";
+    const topicAlsoRequestsSleep = /睡眠|sleep/i.test(topic);
+    const hasSleep = /睡眠|sleep quality|sleep duration|sleep behavior|sleep onset|wake after sleep onset/i.test(text);
+    if (!hasCaffeine || (!hasAttention && !(topicAlsoRequestsSleep && hasSleep))) return "missing_caffeine_requested_outcome_overlap";
   }
   if (/生成式\s*AI|生成式人工智慧|generative ai|large language model|llm/i.test(topic) && /寫作|写作|學習|学习|writing|learning|student|高中|education/i.test(topic)) {
     const hasGenerativeAi = /生成式\s*AI|生成式人工智慧|generative ai|large language model|llm|chatgpt|artificial intelligence/i.test(text);

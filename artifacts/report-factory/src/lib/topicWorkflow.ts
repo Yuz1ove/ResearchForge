@@ -698,9 +698,9 @@ function isSpecificResearchTopic(value: string): boolean {
   return (
     hasResearchableSubjectAndAngle(value) ||
     /對.+的影響/u.test(value) ||
-    /與.+的關係/u.test(value) ||
+    /與.+的(?:關係|關聯)/u.test(value) ||
     /在.+中的/u.test(value) ||
-    (/比較|成效|因素|機制|風險|政策|影響|關係|差異|評估|分析|探討/u.test(value) &&
+    (/比較|成效|因素|機制|風險|政策|影響|關係|關聯|差異|評估|分析|探討/u.test(value) &&
       Array.from(value).length >= 10) ||
     /effect|impact|relationship|comparison|risk|policy|analysis|evaluation|mechanism/i.test(value)
   );

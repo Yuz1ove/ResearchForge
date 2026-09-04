@@ -16,6 +16,7 @@ import {
   type SourceProviderName,
 } from "./source-provider-config";
 import { logger } from "../lib/logger";
+import type { AuthoritativeExecutionBudgetLedger } from "./research/authoritative-execution-budget";
 
 const MAX_RESULTS = 120;
 const PROVIDER_RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
@@ -41,7 +42,8 @@ export type SourceSearchErrorCode =
   | "rate_limited"
   | "server_error"
   | "schema_error"
-  | "low_results";
+  | "low_results"
+  | "budget_exhausted";
 
 export type SourceFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -62,6 +64,11 @@ export interface SourceSearchOptions {
    * silently retry with a shortened query that can discard the topic anchor.
    */
   allowShortQueryRetry?: boolean;
+  executionBudget?: AuthoritativeExecutionBudgetLedger;
+  budgetContext?: {
+    expandedQuery?: boolean;
+    fallbackLayer?: number | null;
+  };
 }
 
 export interface SourceProviderSearchResult {
@@ -828,7 +835,7 @@ async function searchOpenAlex(query: string, config: SourceProviderConfig, optio
     url.searchParams.set("select", "id,doi,title,display_name,publication_year,abstract_inverted_index,authorships,primary_location,locations,concepts,topics,cited_by_count,type,open_access");
     if (config.mailto) url.searchParams.set("mailto", config.mailto);
 
-    const data = await fetchJson<OpenAlexResponse>("OpenAlex", url, config, options?.fetchImpl);
+    const data = await fetchJson<OpenAlexResponse>("OpenAlex", url, config, options, query);
     const rawItems = data.results ?? [];
     rawCount += rawItems.length;
     const pageResults = rawItems
@@ -838,6 +845,7 @@ async function searchOpenAlex(query: string, config: SourceProviderConfig, optio
       );
     results.push(...pageResults);
     if (exactDoi || rawItems.length < config.queryLimit) break;
+    await sleep(250);
   }
 
   return { results, rawCount };
@@ -847,8 +855,10 @@ async function fetchJson<T>(
   provider: SourceProvider,
   url: URL,
   config: SourceProviderConfig,
-  fetchImpl: SourceFetch = fetch,
+  options: SourceSearchOptions | undefined,
+  query: string,
 ): Promise<T> {
+  const fetchImpl = options?.fetchImpl ?? fetch;
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= MAX_PROVIDER_RETRIES; attempt += 1) {
@@ -860,10 +870,40 @@ async function fetchJson<T>(
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetchImpl(url, {
-        signal: controller.signal,
-        headers: config.headers,
-      });
+      const executeFetch = () => fetchImpl(url, {
+          signal: controller.signal,
+          headers: config.headers,
+        });
+      const budgetResult = options?.executionBudget
+        ? await options.executionBudget.execute({
+            operation: "provider_request",
+            query,
+            provider,
+            requestIdentity: url.toString(),
+            attemptType: attempt > 0 ? "retry" : "initial",
+            expandedQuery: options.budgetContext?.expandedQuery,
+            fallbackLayer: options.budgetContext?.fallbackLayer,
+          }, executeFetch)
+        : null;
+      if (budgetResult?.status === "BLOCKED_BY_BUDGET") {
+        throw new SourceSearchError(
+          "budget_exhausted",
+          provider,
+          `${budgetResult.block.reasonCode}: ${budgetResult.block.dimension} ${budgetResult.block.usedCount}/${budgetResult.block.effectiveLimit}`,
+          budgetResult.block,
+        );
+      }
+      if (budgetResult?.status === "DEDUPLICATED") {
+        throw new SourceSearchError(
+          "budget_exhausted",
+          provider,
+          "REQUEST_DEDUPLICATED: the authoritative ledger blocked a duplicate network side effect",
+        );
+      }
+      if (budgetResult?.status === "FAILED") throw budgetResult.error;
+      const response = budgetResult?.status === "EXECUTED"
+        ? budgetResult.value
+        : await executeFetch();
 
       if (!response.ok) {
         if (
@@ -894,6 +934,17 @@ async function fetchJson<T>(
       try {
         return (await response.json()) as T;
       } catch (error) {
+        if (
+          controller.signal.aborted ||
+          (error instanceof Error && error.name === "AbortError")
+        ) {
+          throw new SourceSearchError(
+            "timeout",
+            provider,
+            `${provider} request timed out`,
+            error,
+          );
+        }
         throw new SourceSearchError(
           "schema_error",
           provider,
@@ -967,7 +1018,7 @@ async function searchCrossrefQuery(
     url.searchParams.set("select", "title,author,issued,published,published-print,published-online,abstract,DOI,URL,resource,link,license,publisher,container-title,volume,issue,page,article-number,event,type,is-referenced-by-count");
     if (config.mailto) url.searchParams.set("mailto", config.mailto);
 
-    const data = await fetchJson<CrossrefResponse>("Crossref", url, config, options?.fetchImpl);
+    const data = await fetchJson<CrossrefResponse>("Crossref", url, config, options, query);
     const rawItems = data.message?.items ?? [];
     rawCount += rawItems.length;
     const pageResults = rawItems
@@ -975,6 +1026,7 @@ async function searchCrossrefQuery(
       .filter((source): source is SourceRecord => Boolean(source));
     results.push(...pageResults);
     if (rawItems.length < config.queryLimit) break;
+    await sleep(350);
   }
 
   return { results, rawCount };
@@ -994,7 +1046,8 @@ async function lookupCrossrefDoi(
     "Crossref",
     url,
     config,
-    options?.fetchImpl,
+    options,
+    query,
   );
   const source = data.message ? normalizeCrossrefWork(data.message, query) : null;
   return {
@@ -1070,7 +1123,8 @@ async function searchSemanticScholar(query: string, config: SourceProviderConfig
       "Semantic Scholar",
       url,
       config,
-      options?.fetchImpl,
+      options,
+      query,
     );
     const source = normalizeSemanticScholarPaper(paper, query);
     return {
@@ -1089,7 +1143,7 @@ async function searchSemanticScholar(query: string, config: SourceProviderConfig
     url.searchParams.set("offset", String(nextOffset));
     url.searchParams.set("fields", "title,authors,year,abstract,tldr,externalIds,url,venue,fieldsOfStudy,citationCount,publicationTypes,isOpenAccess");
 
-    const data = await fetchJson<SemanticScholarResponse>("Semantic Scholar", url, config, options?.fetchImpl);
+    const data = await fetchJson<SemanticScholarResponse>("Semantic Scholar", url, config, options, query);
     const rawItems = data.data ?? [];
     rawCount += rawItems.length;
     const pageResults = rawItems

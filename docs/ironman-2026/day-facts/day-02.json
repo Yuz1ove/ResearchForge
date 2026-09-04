@@ -1,0 +1,35 @@
+{
+  "schema_version": "researchforge-ironman-day-facts/v1",
+  "day": 2,
+  "title_seed": "模板、模式與匯出，還不是研究",
+  "historical_period": {"start": "2026-06-10", "end": "2026-06-10", "confidence": "HIGH"},
+  "evidence_boundary": "COMMITTED_GIT",
+  "central_problem": "能產生一份看起來完整的報告，是否等於完成研究？",
+  "reader_takeaway": "presentation completeness 與 evidence completeness 是兩個不同問題。",
+  "known_at_the_time": [
+    {"fact": "早期 commit 增加多種 report mode/style 與 topic structure。", "source_refs": ["SRC-GIT-MODES"]},
+    {"fact": "多種 document export option 很早就存在。", "source_refs": ["SRC-GIT-EXPORT"]}
+  ],
+  "implemented_at_the_time": [
+    {"fact": "generator 具備報告樣式、模式、領域結構與輸出路徑。", "source_refs": ["SRC-GIT-MODES", "SRC-GIT-EXPORT"]}
+  ],
+  "not_yet_available": [{"fact": "這些 commits 沒有建立成熟的 source admission 或 claim provenance contract。", "source_refs": ["SRC-GIT-MODES", "SRC-GIT-EXPORT"]}],
+  "observed_failures": [
+    {"failure_id": "OUTPUT_WITHOUT_EVIDENCE_PROOF", "date_or_range": "2026-06-10", "historical_stage": "early generator", "symptom": "可以完成格式與輸出，但 commit evidence 不足以證明內容有研究依據。", "root_cause_if_known": "source-grounding contract had not yet been introduced", "what_was_known_then": "輸出是可見的產品成果。", "later_resolution": "後續加入 source review、accepted sources 與 evidence gates。", "source_refs": ["SRC-GIT-EXPORT", "SRC-GIT-EVIDENCE-GATE"]}
+  ],
+  "tests_and_metrics": [{"test_or_metric": "The commit records multiple export options; exact successful-format count is not asserted.", "result": "feature existence only", "source_refs": ["SRC-GIT-EXPORT"]}],
+  "engineering_decisions": [{"decision": "把早期 mode/style/export 視為真實功能，但不把它們升格為研究品質證據。", "source_refs": ["SRC-GIT-MODES", "SRC-GIT-EXPORT"]}],
+  "architecture_state": [{"state": "presentation and generation controls precede source-first evidence controls", "source_refs": ["SRC-GIT-MODES", "SRC-GIT-EXPORT"]}],
+  "terminology_available_at_the_time": ["report mode", "style", "topic category", "document export"],
+  "terminology_forbidden_due_to_hindsight": ["canonical evidence", "qualifying full text", "Writer admission", "generalization cohort"],
+  "safe_numbers": [{"value": "多個 export options", "meaning": "commit explicitly records multiple export options; exact successful format count is not asserted", "source_refs": ["SRC-GIT-EXPORT"]}],
+  "safe_public_facts": [{"fact": "早期功能解決了報告如何生成與呈現，尚未解決主張如何被證明。", "source_refs": ["SRC-GIT-MODES", "SRC-GIT-EXPORT"]}],
+  "sensitive_or_internal_facts": ["exact internal export payloads", "local artifact paths"],
+  "retrospective_notes": [{"note": "後來的 admission、Study Facts 與 legal acquisition 都是對這個早期缺口的回應，不是當天已存在的設計。", "source_refs": ["SRC-SOURCE-CANONICAL", "SRC-SOURCE-FULLTEXT"]}],
+  "source_refs": [
+    {"type": "commit", "ref": "SRC-GIT-MODES", "why_it_supports_this_fact": "modes, styles and generator expansion"},
+    {"type": "commit", "ref": "SRC-GIT-EXPORT", "why_it_supports_this_fact": "early document export"}
+  ],
+  "publication_risks": ["不可把 export pass 寫成 content acceptance。", "不可捏造早期使用者反應。"],
+  "confidence": "HIGH"
+}

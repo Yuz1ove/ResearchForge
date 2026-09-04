@@ -18,6 +18,7 @@ import {
 import type { SourceRecord } from "./sourceRecords.ts";
 import type { EvidenceCard } from "./evidenceCards.ts";
 import {
+  compactEvidenceCardsForWriterTransport,
   mergeLlmReportDraft,
   requestLlmReportDraft,
 } from "./llmReportWriter.ts";
@@ -28,6 +29,25 @@ const TEST_TOPIC = "水餃";
 const TEST_WORKFLOW_ID = "wf-llm-report-test";
 const TEST_TOPIC_HASH = "topic-dumpling-test";
 const TEST_QUERY_PLAN_HASH = "qp-llm-report-test";
+
+test("writer transport keeps one Study Fact V2 envelope per study", () => {
+  const envelope = { extractionVersion: "v2", provenance: [{ exactEvidence: "exact span" }] };
+  const cards = [1, 2, 3].map((index) => evidenceCard(index, {
+    sourceId: "source-shared",
+    supportingClaims: [{ id: `pipeline-claim-${index}`, repeatedEnvelope: "x".repeat(2048) }],
+    structuredStudyFact: {
+      ...(evidenceCard(index).structuredStudyFact ?? {}),
+      studyId: "10.1000/shared-study",
+      sourceId: "source-shared",
+      studyFactV2: envelope,
+    } as EvidenceCard["structuredStudyFact"],
+  }));
+  const compact = compactEvidenceCardsForWriterTransport(cards);
+  assert.equal(compact.filter((card) => card.structuredStudyFact?.studyFactV2).length, 1);
+  assert.equal(compact.length, cards.length);
+  assert.ok(compact.every((card) => !("supportingClaims" in card)));
+  assert.ok(compact.every((card) => card.supportSpan === cards.find((item) => item.id === card.id)?.supportSpan));
+});
 
 function reportInput(overrides: Partial<ReportInput> = {}): ReportInput {
   return {
@@ -137,7 +157,9 @@ function evidenceCard(index: number, overrides: Partial<EvidenceCard> = {}): Evi
     sourceExcerptOriginal: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
     sourceSummaryZhTw: `水餃來源 ${index} 提供可直接支撐的營養與飲食文化資訊。`,
     extractionMethod: "llm_structured_extract",
+    needsManualReview: false,
     needsReview: false,
+    governanceFlags: ["exact_support_span_verified"],
     ...overrides,
   };
 }
@@ -218,6 +240,7 @@ function workspaceWithEvidence(id: string, mode: Parameters<typeof createReportW
 test("requestLlmReportDraft freezes server-eligible evidence before building and submitting the canonical plan", async () => {
   const originalFetch = globalThis.fetch;
   let capturedBody: Record<string, unknown> | null = null;
+  let evidenceSetBody: Record<string, unknown> | null = null;
   let capturedUrl = "";
   let requestCount = 0;
   globalThis.fetch = (async (input, init) => {
@@ -225,6 +248,7 @@ test("requestLlmReportDraft freezes server-eligible evidence before building and
     const url = String(input);
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     if (url.endsWith("/api/report-evidence-sets")) {
+      evidenceSetBody = body;
       const cards = body.evidenceCards as EvidenceCard[];
       const eligibleEvidenceCardIds = cards.map((card) => card.evidenceId ?? card.id).sort();
       return new Response(JSON.stringify({
@@ -262,8 +286,71 @@ test("requestLlmReportDraft freezes server-eligible evidence before building and
         evidenceSetHash: "a".repeat(64),
         writerEvidenceSetHash: "a".repeat(64),
         writerEvidenceSet: body.writerEvidenceSet,
+        formalResearchValidation: { pass: true },
+        formalResearchCheckpoint: {
+          schemaVersion: "formal-research-checkpoint.v2",
+          workflowId: TEST_WORKFLOW_ID,
+          topicHash: TEST_TOPIC_HASH,
+          topicIntegrityVersion: "topic-integrity.v1",
+          topicIntegrityHash: "b".repeat(64),
+          relevancePolicyVersion: "formal-relevance.v1",
+          evidenceSetHash: "a".repeat(64),
+          acceptedSourceIds: ["source-1", "source-2", "source-3"],
+          acceptedSourceCount: 3,
+          rejectedSourceCount: 2,
+          directFindingSourceCount: 3,
+          contentIntegrityValidated: true,
+          topicIntegrityValidatedAt: "2026-08-23T00:00:00.000Z",
+          evidenceIds: (body.evidenceCards as EvidenceCard[]).map((card) => card.evidenceId ?? card.id),
+          completedStages: ["source_normalization", "section_claim_allocation"],
+          resumeFrom: "export",
+          safeToResume: true,
+          providerFailureCategories: [],
+          invalidatedBy: ["topic_hash_change"],
+        },
         filteredAfterPlanCount: 0,
         evidenceCards: body.evidenceCards,
+        writerDiagnostics: {
+          requestedSections: 7,
+          completedSections: 7,
+          modelCompletedSections: 7,
+          repairedSections: 3,
+          fallbackSections: 0,
+          completedSectionIds: ["introduction", "conclusion"],
+          repairedSectionIds: ["introduction"],
+          fallbackSectionIds: [],
+          failureReasons: {},
+          writerAttempts: [{
+            attemptId: "attempt-primary-1",
+            phase: "primary",
+            sectionIds: ["abstract"],
+            status: "repaired",
+            originalRawOutput: "{\"sections\":[",
+            repair: {
+              method: "partial_json_object_recovery",
+              repairedFields: ["sections"],
+              confidence: "medium",
+              validationResult: "pass",
+            },
+          }],
+          writerVNext: {
+            status: "active",
+            atomicClaimCount: 42,
+            validatedSynthesisClaimCount: 6,
+            rejectedSynthesisClaimCount: 0,
+            sectionClaimPlanCount: 7,
+            paragraphContractCount: 7,
+            sentenceTraceCount: 31,
+            locallyRepairedSentenceCount: 3,
+            deletedSentenceCount: 1,
+            conclusionMode: "SAFE_CONCLUSION_FALLBACK",
+            validationIssueCount: 0,
+            centralAnswerContract: { requiredClaims: [{ centralClaimId: "central-claim-1" }] },
+            bodyRealizationAudit: [{ claimId: "central-claim-1", realizationStatus: "fully_realized" }],
+            conclusionEligibilityGate: { status: "pass", candidates: [] },
+            conclusionClosureAudit: { passed: true, conclusion_claim_novelty: 0 },
+          },
+        },
         sections: [
           {
             sectionId: "abstract",
@@ -278,6 +365,14 @@ test("requestLlmReportDraft freezes server-eligible evidence before building and
               citationMarkers: ["[S1]"],
               generatedTextZhTw: "這是根據已接受來源生成的水餃初步報告摘要。",
               unsupportedSentences: [],
+            }],
+            sentenceClaimTraces: [{
+              sentenceId: "abstract-s1",
+              text: "這是根據已接受來源生成的水餃初步報告摘要。",
+              realizedClaimIds: [canonicalPlan.plannedClaims[0]?.claimId],
+              citationSourceIds: ["source-1"],
+              factual: true,
+              validation: "pass",
             }],
           },
         ],
@@ -302,12 +397,15 @@ test("requestLlmReportDraft freezes server-eligible evidence before building and
       displayTitle: TEST_TOPIC,
       acceptedSources: [bridgedSource, source(2), source(3)],
       evidenceCards: workspace.evidenceCards,
+      centralAnswerClaimIds: ["central-claim-1", "central-claim-2"],
       reportPlan: structuredReportPlan(),
       generationMode: "initial_brief",
       timeoutMs: 5,
     });
 
     assert.equal(requestCount, 2);
+    assert.equal(evidenceSetBody?.researchReportMode, "evidence_brief");
+    assert.equal(evidenceSetBody?.citationDisplayMode, "compact");
     assert.match(capturedUrl, /\/api\/report-drafts$/);
     assert.equal(capturedBody?.workflowId, TEST_WORKFLOW_ID);
     assert.equal(capturedBody?.jobId, "grounding-job-1");
@@ -326,6 +424,10 @@ test("requestLlmReportDraft freezes server-eligible evidence before building and
       ["dumpling", "nutrition", "sodium"],
     );
     assert.equal((capturedBody?.evidenceCards as unknown[]).length > 0, true);
+    assert.deepEqual(capturedBody?.centralAnswerClaimIds, [
+      "central-claim-1",
+      "central-claim-2",
+    ]);
     const submittedPlan = capturedBody?.reportPlan as ReportPlan;
     assert.equal(submittedPlan.evidenceSetHash, "a".repeat(64));
     assert.equal(submittedPlan.planBuildStatus, "plan_built");
@@ -345,10 +447,38 @@ test("requestLlmReportDraft freezes server-eligible evidence before building and
     assert.equal(result.reportPlanStatus, "plan_built");
     assert.equal(result.evidenceSetHash, "a".repeat(64));
     assert.equal(result.writerEvidenceSetHash, "a".repeat(64));
+    assert.deepEqual(result.formalResearchValidation, { pass: true });
+    assert.equal(result.formalResearchCheckpoint?.resumeFrom, "export");
+    assert.equal(result.formalResearchCheckpoint?.safeToResume, true);
+    assert.equal(result.formalResearchCheckpoint?.schemaVersion, "formal-research-checkpoint.v2");
+    assert.equal(result.formalResearchCheckpoint?.topicIntegrityHash, "b".repeat(64));
+    assert.equal(result.formalResearchCheckpoint?.acceptedSourceCount, 3);
+    assert.equal(result.formalResearchCheckpoint?.contentIntegrityValidated, true);
+    assert.equal(result.writerDiagnostics?.writerAttempts?.[0]?.originalRawOutput, "{\"sections\":[");
+    assert.equal(result.writerDiagnostics?.writerAttempts?.[0]?.repair?.validationResult, "pass");
     assert.equal(result.sections[0]?.sectionId, "abstract");
+    assert.equal(result.evidenceCards?.[0]?.needsManualReview, false);
+    const writerVNext = result.writerDiagnostics?.writerVNext;
+    assert.equal(writerVNext?.status, "active");
+    assert.equal(writerVNext?.atomicClaimCount, 42);
+    assert.deepEqual(writerVNext?.centralAnswerContract, {
+      requiredClaims: [{ centralClaimId: "central-claim-1" }],
+    });
+    assert.deepEqual(writerVNext?.bodyRealizationAudit, [
+      { claimId: "central-claim-1", realizationStatus: "fully_realized" },
+    ]);
+    assert.deepEqual(writerVNext?.conclusionEligibilityGate, {
+      status: "pass",
+      candidates: [],
+    });
+    assert.deepEqual(writerVNext?.conclusionClosureAudit, {
+      passed: true,
+      conclusion_claim_novelty: 0,
+    });
     assert.deepEqual(result.sections[0]?.paragraphClaims?.[0]?.claimIds, [
       submittedPlan.plannedClaims[0]?.claimId,
     ]);
+    assert.equal(result.sections[0]?.sentenceClaimTraces?.[0]?.validation, "pass");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -401,12 +531,42 @@ test("requestLlmReportDraft falls back when the LLM request times out", async ()
       timeoutMs: 5,
     });
 
-    assert.equal(result.ok, true);
-    assert.equal(result.status, "success");
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "error");
     assert.equal(result.llm_status, "timeout");
     assert.equal(result.fallbackUsed, true);
     assert.equal(result.degradedMode, true);
     assert.match(result.message ?? "", /逾時|保留/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("requestLlmReportDraft reports a transport failure as failed instead of success", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new TypeError("fetch failed");
+  }) as typeof fetch;
+
+  try {
+    const workspace = workspaceWithEvidence("rf-request-transport-failure", "initial_brief");
+    const result = await requestLlmReportDraft({
+      reportInput: reportInput(),
+      workflowId: TEST_WORKFLOW_ID,
+      topicHash: TEST_TOPIC_HASH,
+      originalTopic: TEST_TOPIC,
+      displayTitle: TEST_TOPIC,
+      acceptedSources: [source(1), source(2), source(3)],
+      evidenceCards: workspace.evidenceCards,
+      generationMode: "initial_brief",
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "error");
+    assert.equal(result.llm_status, "failed");
+    assert.equal(result.reportGenerationStatus, "failed");
+    assert.equal(result.fallbackUsed, true);
+    assert.match(result.warning ?? "", /fetch failed/u);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -523,7 +683,7 @@ test("mergeLlmReportDraft replaces matching draft section prose for preview", ()
   );
 });
 
-test("mergeLlmReportDraft preserves writer-native paragraph claim identity", () => {
+test("mergeLlmReportDraft preserves writer-native paragraph and sentence lineage", () => {
   const reportPlan = structuredReportPlan();
   const acceptedSources = [source(1), source(2), source(3)];
   const cards = acceptedSources.map((_, index) => evidenceCard(index + 1));
@@ -558,20 +718,57 @@ test("mergeLlmReportDraft preserves writer-native paragraph claim identity", () 
       paragraphClaims: [{
         paragraphId: "discussion-p1",
         sectionId: "discussion",
-        claimIds: [reportPlan.plannedClaims[0]!.claimId],
+        claimIds: ["atomic-evidence-card-1"],
         evidenceCardIds: [cards[0]!.id],
         citationMarkers: ["[S1]"],
         generatedTextZhTw: prose,
         unsupportedSentences: [],
+      }],
+      sentenceClaimTraces: [{
+        sentenceId: "discussion-p1-s1",
+        text: "水餃來源提供可核對的營養與飲食文化資訊。",
+        realizedClaimIds: ["atomic-evidence-card-1"],
+        citationSourceIds: [acceptedSources[0]!.id],
+        evidenceIds: [cards[0]!.id],
+        factual: true,
+        validation: "pass",
+        action: "CITATION_RESTORED",
+        repairStage: "A_PRESERVE",
+      }, {
+        sentenceId: "discussion-p1-s2",
+        text: "這項比較僅限於來源實際揭露的範圍。",
+        realizedClaimIds: [],
+        citationSourceIds: [],
+        evidenceIds: [],
+        factual: false,
+        validation: "pass",
+        action: "UNCHANGED",
+        repairStage: "A_PRESERVE",
       }],
     }],
   });
 
   const discussion = merged.draft.sections.find((section) => section.sectionId === "discussion");
   assert.deepEqual(discussion?.paragraphClaims?.[0]?.claimIds, [
-    reportPlan.plannedClaims[0]!.claimId,
+    "atomic-evidence-card-1",
   ]);
   assert.deepEqual(discussion?.paragraphClaims?.[0]?.evidenceCardIds, [cards[0]!.id]);
+  assert.deepEqual(discussion?.sentenceClaimTraces?.[0]?.realizedClaimIds, [
+    "atomic-evidence-card-1",
+  ]);
+  assert.deepEqual(discussion?.sentenceClaimTraces?.[0]?.originalClaimIds, [
+    "atomic-evidence-card-1",
+  ]);
+  assert.deepEqual(discussion?.sentenceClaimTraces?.[0]?.finalClaimIds, [
+    "atomic-evidence-card-1",
+  ]);
+  assert.deepEqual(discussion?.sentenceClaimTraces?.[0]?.citationSourceIds, [
+    acceptedSources[0]!.id,
+  ]);
+  assert.deepEqual(discussion?.sentenceClaimTraces?.[0]?.evidenceIds, [cards[0]!.id]);
+  assert.equal(discussion?.sentenceClaimTraces?.[0]?.action, "CITATION_RESTORED");
+  assert.equal(discussion?.sentenceClaimTraces?.[0]?.deleted, false);
+  assert.match(discussion?.body ?? "", /這項比較僅限於來源實際揭露的範圍/u);
 });
 
 test("mergeLlmReportDraft preserves the evidence-card citation registry when source sorting differs", () => {
@@ -780,7 +977,7 @@ test("real-shaped API merge preserves formal chapter, ordered-content, and appen
     previewableMainSections.map((section) => ({ id: section.id, title: section.title })),
   );
   assert.equal(
-    mainSections.some((section) => /主要發現/u.test(section.title)),
+    mainSections.some((section) => /主要研究發現/u.test(section.title)),
     true,
     JSON.stringify(mainSections.map((section) => section.title)),
   );
@@ -789,8 +986,8 @@ test("real-shaped API merge preserves formal chapter, ordered-content, and appen
     [
       "摘要與關鍵詞",
       ...mainSections.map((section, index) => `${index + 1}. ${section.title}`),
-      "參考文獻",
       ...formalDocument.appendix.map((section) => section.title),
+      "資料來源",
     ],
   );
   assert.doesNotMatch(
@@ -850,7 +1047,7 @@ test("real-shaped API merge preserves formal chapter, ordered-content, and appen
   }
 
   const sourceGovernanceTableTitles = [
-    "納入來源的使用狀態",
+    "來源角色與使用狀態",
     "納入來源的證據用途與限制比較",
   ];
   assert.deepEqual(
@@ -869,11 +1066,11 @@ test("real-shaped API merge preserves formal chapter, ordered-content, and appen
     formalDocument.appendix[0]?.tables.map((table) => table.title),
     sourceGovernanceTableTitles,
   );
-  const referenceIndex = exported.sections.findIndex((section) => section.heading === "參考文獻");
-  assert.equal(referenceIndex >= 0, true);
+  const sourceIndex = exported.sections.findIndex((section) => section.heading === "資料來源");
+  assert.equal(sourceIndex >= 0, true);
   assert.equal(
     formalDocument.appendix.every((appendixSection) =>
-      exported.sections.findIndex((section) => section.heading === appendixSection.title) > referenceIndex
+      exported.sections.findIndex((section) => section.heading === appendixSection.title) < sourceIndex
     ),
     true,
   );

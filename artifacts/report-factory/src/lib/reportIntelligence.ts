@@ -323,6 +323,11 @@ type StatisticFamily =
   | "odds_ratio"
   | "risk_ratio"
   | "hazard_ratio"
+  | "survival_probability"
+  | "multilevel_coefficient"
+  | "bayesian_posterior"
+  | "bayes_factor"
+  | "network_meta_analysis"
   | "confidence_interval"
   | "p_value"
   | "regression_coefficient"
@@ -338,9 +343,14 @@ type StatisticFamily =
 function statisticFamily(value: string | null | undefined, raw = ""): StatisticFamily {
   const text = clean(`${value ?? ""} ${raw}`).toLocaleLowerCase();
   if (/non[- ]?significant|not significant|無顯著|未達顯著/iu.test(text)) return "non_significant";
+  if (/network meta[- ]?analysis|network meta analysis|sucra|league table|網絡統合分析|網路統合分析/iu.test(text)) return "network_meta_analysis";
   if (/odds[_ -]?ratio|\bor\b/iu.test(text)) return "odds_ratio";
   if (/risk[_ -]?ratio|relative risk|\brr\b/iu.test(text)) return "risk_ratio";
   if (/hazard[_ -]?ratio|\bhr\b/iu.test(text)) return "hazard_ratio";
+  if (/bayes factor|\bbf(?:10|01)?\b|貝氏因子|貝葉斯因子/iu.test(text)) return "bayes_factor";
+  if (/posterior|credible interval|bayesian|貝氏後驗|貝葉斯後驗|可信區間/iu.test(text)) return "bayesian_posterior";
+  if (/kaplan[- ]?meier|survival probability|survival rate|event[- ]?free survival|存活(?:率|機率|曲線)|無事件存活/iu.test(text)) return "survival_probability";
+  if (/multilevel|mixed[- ]?effects?|hierarchical (?:linear|generalized|model)|random (?:intercept|slope)|多層次|混合效果|階層模型|隨機截距|隨機斜率/iu.test(text)) return "multilevel_coefficient";
   if (/correlation|pearson|spearman|相關|\br\b/iu.test(text)) return "correlation";
   if (/standardized.*(?:coefficient|beta)|標準化.*(?:係數|迴歸)|\bβ\b|\bbeta\b/iu.test(text)) return "standardized_coefficient";
   if (/regression|coefficient|迴歸係數|\bb\b/iu.test(text)) return "regression_coefficient";
@@ -366,7 +376,7 @@ function studyAllowsCausalInterpretation(fact: NormalizedFact): boolean {
 }
 
 function nullValueFor(family: StatisticFamily): number | null {
-  if (["odds_ratio", "risk_ratio", "hazard_ratio"].includes(family)) return 1;
+  if (["odds_ratio", "risk_ratio", "hazard_ratio", "bayes_factor"].includes(family)) return 1;
   if ([
     "correlation",
     "regression_coefficient",
@@ -375,6 +385,7 @@ function nullValueFor(family: StatisticFamily): number | null {
     "standardized_effect",
     "mediation",
     "interaction",
+    "multilevel_coefficient",
   ].includes(family)) return 0;
   return null;
 }
@@ -382,6 +393,10 @@ function nullValueFor(family: StatisticFamily): number | null {
 function recommendedVisualFor(family: StatisticFamily): StatisticalInterpretation["recommendedVisual"] {
   if (family === "prevalence") return "proportion_bar";
   if (["odds_ratio", "risk_ratio", "hazard_ratio"].includes(family)) return "forest_plot";
+  if (family === "survival_probability") return "line_chart";
+  if (family === "bayesian_posterior") return "distribution_plot";
+  if (family === "bayes_factor") return "key_finding_box";
+  if (["multilevel_coefficient", "network_meta_analysis"].includes(family)) return "comparison_matrix";
   if (family === "correlation") return "correlation_matrix";
   if (["mediation", "interaction"].includes(family)) return "path_diagram";
   if (["mean", "median", "mean_difference", "standardized_effect"].includes(family)) return "distribution_plot";
@@ -417,6 +432,11 @@ function technicalExplanation(input: {
     case "odds_ratio": return `勝算比為 ${value}${ci}；它比較兩組勝算，不等同風險差或風險增加百分比。`;
     case "risk_ratio": return `風險比為 ${value}${ci}；1 為無差異的虛無值。`;
     case "hazard_ratio": return `危險比為 ${value}${ci}；它描述追蹤期間的相對瞬時發生率。`;
+    case "survival_probability": return `指定時間點的存活或無事件機率為 ${value}${ci}；必須同時保留時間點、起算事件、截尾規則與風險人數。`;
+    case "multilevel_coefficient": return `多層次或混合效果模型係數為 ${value}${ci}；它是在群聚結構、固定效果、隨機效果與連結函數條件下的估計。`;
+    case "bayesian_posterior": return `貝氏後驗估計為 ${value}${input.lower != null && input.upper != null ? `，可信區間為 ${input.lower} 至 ${input.upper}` : "，未提供完整可信區間"}；解讀取決於先驗、似然與模型設定。`;
+    case "bayes_factor": return `貝氏因子為 ${value}；它比較兩個明確模型對資料的相對支持度，不是效果大小或某假設為真的機率。`;
+    case "network_meta_analysis": return `網絡統合分析估計為 ${value}${ci}；只有在共同比較架構、可傳遞性、一致性與異質性可接受時，才可進行跨治療比較。`;
     case "correlation": return `相關係數為 ${value}${ci}；符號表示方向，絕對值表示線性或排序關聯強度。`;
     case "prevalence": return `此比例或盛行率為 ${value}，描述該研究樣本中符合定義者的占比。`;
     case "mean": return `平均數為 ${value}；必須連同量表、單位與分布資訊解讀。`;
@@ -442,6 +462,11 @@ function readerExplanationFor(family: StatisticFamily, value: number | null): st
   if (family === "odds_ratio") return `${display} 表示兩組事件勝算的相對差異，不能直接說成風險增加了多少百分比。`;
   if (family === "risk_ratio") return `${display} 表示兩組觀察到的相對風險，但仍需看信賴區間與研究設計。`;
   if (family === "hazard_ratio") return `${display} 比較追蹤期間事件發生速度，而不是最後有多少人發生事件。`;
+  if (family === "survival_probability") return `${display} 是指定追蹤時間點仍未發生事件的估計比例；沒有時間軸與風險人數時不能畫成完整存活曲線。`;
+  if (family === "multilevel_coefficient") return `${display} 是把個人與群組層次一起建模後的條件估計，不能忽略學校、醫院或地區等群聚差異。`;
+  if (family === "bayesian_posterior") return `${display} 是資料與先驗共同形成的後驗估計；必須連同可信區間與先驗敏感度理解。`;
+  if (family === "bayes_factor") return `${display} 比較兩個指定模型受資料支持的相對程度，不能當成效果有多大。`;
+  if (family === "network_meta_analysis") return `${display} 來自治療比較網絡；排名本身不代表臨床差異重要，也不能跳過一致性與證據確定性。`;
   if (family === "correlation") return `${display} 顯示兩個量測值同向或反向變動的程度，不能證明其中一個造成另一個。`;
   if (family === "prevalence") return `${display} 描述這個研究樣本中符合條件的人所占比例，不必然代表其他地區或族群。`;
   if (["mean", "median"].includes(family)) return `${display} 是樣本的集中位置；不同量表或計分方向不能直接比高低。`;
@@ -468,6 +493,21 @@ function interpretationWarnings(input: {
       ? "不同量表或計分方向的集中量與離散量不得直接比較。"
       : null,
     input.family === "mediation" ? "中介模型不得自動寫成已證明的生理機制。" : null,
+    input.family === "survival_probability"
+      ? "存活曲線必須保留時間軸、截尾資訊與各時間點風險人數；單一比例不得偽裝成完整曲線。"
+      : null,
+    input.family === "multilevel_coefficient"
+      ? "多層次模型須交代群聚單位、固定／隨機效果、ICC 或變異成分與模型收斂。"
+      : null,
+    input.family === "bayesian_posterior"
+      ? "後驗結果須交代先驗、可信區間、收斂診斷與先驗敏感度；可信區間不得改稱信賴區間。"
+      : null,
+    input.family === "bayes_factor"
+      ? "貝氏因子依賴比較模型與先驗設定，不得寫成效果大小或假設為真的機率。"
+      : null,
+    input.family === "network_meta_analysis"
+      ? "治療排名須與效果量、可信／信賴區間、可傳遞性、一致性、異質性及證據確定性共同呈現。"
+      : null,
     /cross[- ]?sectional|橫斷/iu.test(clean(input.fact.studyDesign ?? input.fact.method))
       ? "橫斷研究不能確認時間先後。"
       : null,
@@ -477,6 +517,7 @@ function interpretationWarnings(input: {
       "odds_ratio",
       "risk_ratio",
       "hazard_ratio",
+      "multilevel_coefficient",
     ].includes(input.family)
       ? "未確認混雜因素調整狀態，不得使用「獨立影響」。"
       : null,

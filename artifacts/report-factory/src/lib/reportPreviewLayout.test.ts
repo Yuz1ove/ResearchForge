@@ -179,6 +179,31 @@ test("post_edit_validation_blocks_formal_output", () => {
   assert.match(reasons.join(" "), /post-edit.*阻擋/u);
 });
 
+test("formal validation failure blocks formal output even when canonical plan diagnostics are green", () => {
+  const reasons = formalExportBlockReasons({
+    citationExportBlocked: false,
+    sectionRequiresReview: false,
+    diagnostics: {
+      reportGenerationStatus: "success",
+      fallbackUsed: false,
+      degradedMode: false,
+      reportPlanStatus: "plan_built",
+      readinessStatus: "ready_limited_report",
+      evidenceSetHash: "v".repeat(64),
+      writerEvidenceSetHash: "v".repeat(64),
+      filteredAfterPlanCount: 0,
+      formalResearchValidation: { pass: false },
+      formalResearchCheckpoint: {
+        contentIntegrityValidated: true,
+        resumeFrom: "export",
+        safeToResume: true,
+      },
+    },
+  });
+
+  assert.match(reasons.join(" "), /formal.*validation|正式研究.*驗證/iu);
+});
+
 test("formal export ignores unused full-report fallback sections for a canonical Limited Brief", () => {
   const reasons = formalExportBlockReasons({
     citationExportBlocked: false,
@@ -192,6 +217,12 @@ test("formal export ignores unused full-report fallback sections for a canonical
       evidenceSetHash: "l".repeat(64),
       writerEvidenceSetHash: "l".repeat(64),
       filteredAfterPlanCount: 0,
+      formalResearchValidation: { pass: true },
+      formalResearchCheckpoint: {
+        contentIntegrityValidated: true,
+        resumeFrom: "export",
+        safeToResume: true,
+      },
       writerDiagnostics: {
         requestedSections: 8,
         completedSections: 8,
@@ -219,6 +250,12 @@ test("formal export remains available only for a complete plan with no section r
       evidenceSetHash: "b".repeat(64),
       writerEvidenceSetHash: "b".repeat(64),
       filteredAfterPlanCount: 0,
+      formalResearchValidation: { pass: true },
+      formalResearchCheckpoint: {
+        contentIntegrityValidated: true,
+        resumeFrom: "export",
+        safeToResume: true,
+      },
       writerDiagnostics: {
         requestedSections: 8,
         completedSections: 8,
@@ -297,6 +334,12 @@ test("formal export audit ignores English bibliography under the product's 參�
       evidenceSetHash: "f".repeat(64),
       writerEvidenceSetHash: "f".repeat(64),
       filteredAfterPlanCount: 0,
+      formalResearchValidation: { pass: true },
+      formalResearchCheckpoint: {
+        contentIntegrityValidated: true,
+        resumeFrom: "export",
+        safeToResume: true,
+      },
     },
     sections: [
       { sectionId: "findings", title: "主要發現", body: "模型研究可作為綜述研究的候選線索[S1]。" },

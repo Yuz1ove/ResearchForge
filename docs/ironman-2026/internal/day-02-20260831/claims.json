@@ -1,0 +1,420 @@
+{
+  "schema_version": "researchforge-ironman-day02-candidate-evidence/v1",
+  "date": "2026-08-31",
+  "article_path": "docs/ironman-2026/articles/day-02-20260831/article-public.md",
+  "article_sha256": "977a55cd5ad9916cede956f1e2b2d4e503743f0d8cb92a2b421b3917ae89ebde",
+  "claims": [
+    {
+      "id": "C01",
+      "public_claim": "Day 01 的完成提示可能只是計時器",
+      "article_anchor": "觸發它的卻可能只是計時器",
+      "article_line": 3,
+      "evidence": [
+        {
+          "path": "docs/ironman-2026/articles/day-01.md",
+          "start_line": 1,
+          "end_line": 32
+        }
+      ],
+      "kind": "COMMITTED_HISTORY_AND_EXISTING_ARTICLE",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C02",
+      "public_claim": "目前稿件轉看 2026-08-31 可核对的近期證據，不回填早期能力",
+      "article_anchor": "不是最初版本就有的能力",
+      "article_line": 5,
+      "evidence": [
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/FINAL-REPORT.md",
+          "start_line": 69,
+          "end_line": 77
+        },
+        {
+          "path": "docs/ironman-2026/EDITORIAL-MAP.md",
+          "start_line": 88,
+          "end_line": 90
+        }
+      ],
+      "kind": "EDITORIAL_SCOPE",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C03",
+      "public_claim": "缺身分與明確衝突不同，UNKNOWN 不等於 MISMATCH",
+      "article_anchor": "兩種情況都不應放行",
+      "article_line": 15,
+      "evidence": [
+        {
+          "path": "artifacts/api-server/src/services/research/grounding/studyManifestation.ts",
+          "start_line": 175,
+          "end_line": 188
+        }
+      ],
+      "kind": "CURRENT_DIRTY_SOURCE",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C04",
+      "public_claim": "V6B 有 HTTP 200 與內容，原目標只有截短標題及 URL，身分不足未准入",
+      "article_anchor": "CANONICAL_IDENTITY_INSUFFICIENT",
+      "article_line": 17,
+      "evidence": [
+        {
+          "path": "artifacts/qa/researchforge-live-identity-fulltext-v6b-20260830T180154+0800/FINAL-REPORT.md",
+          "start_line": 47,
+          "end_line": 57
+        },
+        {
+          "path": "artifacts/api-server/src/services/research/grounding/livePayloadIdentityV6b.test.ts",
+          "start_line": 65,
+          "end_line": 72
+        }
+      ],
+      "kind": "SAVED_LIVE_EVIDENCE_AND_CONTROLLED_TEST_SOURCE",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C05",
+      "public_claim": "不把被拒絕文件的資訊抄回 canonical 作為自我證明",
+      "article_anchor": "只是在拿它證明自己",
+      "article_line": 19,
+      "evidence": [
+        {
+          "path": "artifacts/qa/researchforge-live-identity-fulltext-v6b-20260830T180154+0800/FINAL-REPORT.md",
+          "start_line": 51,
+          "end_line": 53
+        },
+        {
+          "path": "artifacts/qa/researchforge-canonical-identity-restoration-v6c-20260830T184250+0800/FINAL-REPORT.md",
+          "start_line": 25,
+          "end_line": 41
+        }
+      ],
+      "kind": "ENGINEERING_INTERPRETATION_OF_PROVENANCE",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C06",
+      "public_claim": "全文入口預設 BLOCKED；檢查路徑、身分、正文與原始檔雜湊後才合格",
+      "article_anchor": "結果先從 `BLOCKED` 開始",
+      "article_line": 25,
+      "evidence": [
+        {
+          "path": "artifacts/api-server/src/services/research/grounding/admittedManifestationMaterializer.ts",
+          "start_line": 486,
+          "end_line": 531
+        },
+        {
+          "path": "artifacts/api-server/src/services/research/grounding/admittedManifestationMaterializer.ts",
+          "start_line": 549,
+          "end_line": 557
+        }
+      ],
+      "kind": "CURRENT_DIRTY_SOURCE",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C07",
+      "public_claim": "拒絕時清空文字/chunks並關閉下游主張與報告標記",
+      "article_anchor": "清空供下游使用的文字與片段",
+      "article_line": 25,
+      "evidence": [
+        {
+          "path": "artifacts/api-server/src/services/research/grounding/admittedManifestationMaterializer.ts",
+          "start_line": 550,
+          "end_line": 553
+        }
+      ],
+      "kind": "CURRENT_DIRTY_SOURCE",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C08",
+      "public_claim": "圖與偽碼合併資料與驗收模型；全庫保全是驗收脚本，不是線上通用攔截器",
+      "article_anchor": "不是 repository 中一個包辦所有階段",
+      "article_line": 29,
+      "evidence": [
+        {
+          "path": "artifacts/api-server/src/services/research/grounding/admittedManifestationMaterializer.ts",
+          "start_line": 516,
+          "end_line": 555
+        },
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/seal.py",
+          "start_line": 26,
+          "end_line": 45
+        }
+      ],
+      "kind": "CONCEPTUAL_MODEL_WITH_EXPLICIT_LIMIT",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C09",
+      "public_claim": "V6D 保存 HTML 209155 bytes，正文合格，依既有規則身分 MATCH",
+      "article_anchor": "209,155 bytes",
+      "article_line": 55,
+      "evidence": [
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/FINAL-REPORT.md",
+          "start_line": 55,
+          "end_line": 57
+        },
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/FINAL-REPORT.md",
+          "start_line": 73,
+          "end_line": 77
+        },
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/ARTIFACT-VALIDATION.json",
+          "start_line": 1,
+          "end_line": 28
+        }
+      ],
+      "kind": "SAVED_LIVE_RECEIPT_REHASHED_THIS_TASK",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C10",
+      "public_claim": "受控、focused、API、Report Factory、typecheck與build曾通過，並非本輪重跑",
+      "article_anchor": "相關回歸測試、型別檢查與建置也都通過",
+      "article_line": 55,
+      "evidence": [
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/FINAL-REPORT.md",
+          "start_line": 93,
+          "end_line": 109
+        },
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/TEST-RESULTS.json",
+          "start_line": 1,
+          "end_line": 16
+        }
+      ],
+      "kind": "HISTORICAL_TEST_RECEIPTS_NOT_RERUN",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C11",
+      "public_claim": "V6D 封存發現範圍外文章檔案變動而 BLOCKED；保全 gate FAIL",
+      "article_anchor": "BLOCKED_CONCURRENT_MODIFICATION",
+      "article_line": 57,
+      "evidence": [
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/FINAL-REPORT.md",
+          "start_line": 5,
+          "end_line": 9
+        },
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/FINAL-REPORT.md",
+          "start_line": 113,
+          "end_line": 127
+        },
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/MANDATORY-STOP.json",
+          "start_line": 1,
+          "end_line": 37
+        },
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/seal.py",
+          "start_line": 26,
+          "end_line": 45
+        }
+      ],
+      "kind": "SAVED_ACCEPTANCE_STOP_AND_SCRIPT",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C12",
+      "public_claim": "已保存原始證據與通過測試的程式仍匹配；變動作者未知，不回滾未知檔案",
+      "article_anchor": "不能據此推論是誰改的",
+      "article_line": 61,
+      "evidence": [
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/FINAL-REPORT.md",
+          "start_line": 25,
+          "end_line": 27
+        },
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/FINAL-REPORT.md",
+          "start_line": 109,
+          "end_line": 129
+        },
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/STOP-EVIDENCE.json",
+          "start_line": 33,
+          "end_line": 43
+        }
+      ],
+      "kind": "SAVED_PRESERVATION_AND_STOP_RECEIPTS",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C13",
+      "public_claim": "READY 只對指定範圍；identity-only READY 與 full-text NOT_RUN 可並存",
+      "article_anchor": "獨立書目身分的恢復可以在它自己的範圍內 READY",
+      "article_line": 75,
+      "evidence": [
+        {
+          "path": "artifacts/qa/researchforge-canonical-identity-restoration-v6c-20260830T184250+0800/FINAL-REPORT.md",
+          "start_line": 1,
+          "end_line": 7
+        },
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/FINAL-REPORT.md",
+          "start_line": 5,
+          "end_line": 9
+        }
+      ],
+      "kind": "SCOPED_PHASE_VERDICTS_NOT_SHARED_ENUM",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C14",
+      "public_claim": "V6D live Writer=0；模擬 Writer 測試不等於 live 生成；無 PDF/泛化結論",
+      "article_anchor": "那次 live 全文工作沒有呼叫 Writer",
+      "article_line": 77,
+      "evidence": [
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/WRITER-CALL-RECEIPT.json",
+          "start_line": 1,
+          "end_line": 10
+        },
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/FINAL-REPORT.md",
+          "start_line": 107,
+          "end_line": 109
+        },
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/FINAL-REPORT.md",
+          "start_line": 129,
+          "end_line": 133
+        }
+      ],
+      "kind": "SAVED_RECEIPTS_WITH_UNRUN_STAGES",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C15",
+      "public_claim": "重試不必然補身分或變動來源；成本未量測",
+      "article_anchor": "沒有足以量化延遲的比較實驗",
+      "article_line": 85,
+      "evidence": [
+        {
+          "path": "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/STOP-EVIDENCE.json",
+          "start_line": 37,
+          "end_line": 43
+        },
+        {
+          "path": "artifacts/qa/researchforge-live-identity-fulltext-v6b-20260830T180154+0800/FINAL-REPORT.md",
+          "start_line": 79,
+          "end_line": 85
+        }
+      ],
+      "kind": "AUTHOR_DESIGN_REFLECTION_NO_EMPIRICAL_PERFORMANCE_CLAIM",
+      "confidence": "HIGH"
+    },
+    {
+      "id": "C16",
+      "public_claim": "Day 03 繼續來源、引用、識別与保存；沒有預告完成成果",
+      "article_anchor": "既有 Day 03 的來源與引用基礎",
+      "article_line": 89,
+      "evidence": [
+        {
+          "path": "docs/ironman-2026/EDITORIAL-MAP.md",
+          "start_line": 90,
+          "end_line": 90
+        },
+        {
+          "path": "docs/ironman-2026/articles/day-03.md",
+          "start_line": 1,
+          "end_line": 20
+        }
+      ],
+      "kind": "EXISTING_ROADMAP",
+      "confidence": "HIGH"
+    }
+  ],
+  "sources": {
+    "docs/ironman-2026/articles/day-01.md": {
+      "sha256": "4ce77761ab869aeedafc7d0abae7bdd156effd59743ff6dd87654d0543b59d57",
+      "line_count": 74
+    },
+    "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/FINAL-REPORT.md": {
+      "sha256": "d0c8f5daaecff509e896f47579e46d7f34eb62a6619d7fe522720b3b9853c32c",
+      "line_count": 145
+    },
+    "docs/ironman-2026/EDITORIAL-MAP.md": {
+      "sha256": "b9e2628075447a8c5c64ec3329021d83370ffccee1049cc8ca6a55f8997906d3",
+      "line_count": 121
+    },
+    "artifacts/api-server/src/services/research/grounding/studyManifestation.ts": {
+      "sha256": "542d14084390c7327ca4a4979e9f4e85a3d1cd2988f5797e56b36daaa7c39f18",
+      "line_count": 705
+    },
+    "artifacts/qa/researchforge-live-identity-fulltext-v6b-20260830T180154+0800/FINAL-REPORT.md": {
+      "sha256": "aa85feb64550bdb93bd7799c0a40a4e8fbd3c17144be0b8ca31a13e9e3bf5b84",
+      "line_count": 88
+    },
+    "artifacts/api-server/src/services/research/grounding/livePayloadIdentityV6b.test.ts": {
+      "sha256": "27bf38ee44edae26c4eca3cb4d73b460d0e60648b865fca93f90806652d4c04f",
+      "line_count": 232
+    },
+    "artifacts/qa/researchforge-canonical-identity-restoration-v6c-20260830T184250+0800/FINAL-REPORT.md": {
+      "sha256": "df0f825e72b19c1869313593d62e31b5ac96d75988a1b99674bda791904f70d3",
+      "line_count": 120
+    },
+    "artifacts/api-server/src/services/research/grounding/admittedManifestationMaterializer.ts": {
+      "sha256": "4b3512c5f8f516d0cfb9ed08579fefb3cefb05d183f863e0d8884d298be64ee0",
+      "line_count": 559
+    },
+    "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/seal.py": {
+      "sha256": "579bfa43347bbf98eb2472b4d930fffb79fd5edcffe3c45852fae30b29d46d21",
+      "line_count": 208
+    },
+    "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/ARTIFACT-VALIDATION.json": {
+      "sha256": "bddc0d429a9026cc715b3a7a3698aa60896aa5b1817113a643bf2448756c39a0",
+      "line_count": 136
+    },
+    "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/TEST-RESULTS.json": {
+      "sha256": "0ccccec92291af1aad523e3f96c5f181b57cb3acb5457364f370ece2429419be",
+      "line_count": 263
+    },
+    "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/MANDATORY-STOP.json": {
+      "sha256": "cb013761535854b5ca1eb3df4454136bcae62c8918a2d30c41b3397da1951d6f",
+      "line_count": 48
+    },
+    "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/STOP-EVIDENCE.json": {
+      "sha256": "c6ae30180f9a3c41dbbf35d40aa7e166b40a7d08d2505a4046d60b61daf712d8",
+      "line_count": 43
+    },
+    "artifacts/qa/researchforge-canonical-fulltext-materialization-v6d-20260830T214703+0800/WRITER-CALL-RECEIPT.json": {
+      "sha256": "cc1533086c9e04e408063ea5ba589e036e72959ca27c79165d0ca5c720dd839a",
+      "line_count": 10
+    },
+    "docs/ironman-2026/articles/day-03.md": {
+      "sha256": "3ca21b9d387a9e28f18cf3ca01f3d6e2c109c0d5c748d29e180a8b99bd43367e",
+      "line_count": 62
+    }
+  },
+  "historical_source": {
+    "commit": "a20f64acd4ce1b22f887db28a1b73038f4ea2e89",
+    "path": "artifacts/report-factory/src/pages/generator.tsx",
+    "lines": [
+      69,
+      76
+    ],
+    "verified_via": "git show"
+  },
+  "raw_artifact_recheck": {
+    "bytes": 209155,
+    "sha256_matches_saved_receipt": true,
+    "network_requests": 0
+  },
+  "source_notes": [
+    "Current source is uncommitted worktree evidence, not deployed or commit-attributed implementation.",
+    "V6B and V6D bytes share a size but have different hashes; no substitution.",
+    "V6D journal spelling mismatch is retained; article says existing-rule identity acceptance, not all fields exact.",
+    "V6E was not located in the bounded repository search; omitted, not declared nonexistent."
+  ]
+}

@@ -12,6 +12,7 @@ import {
   ReportPlanSchema,
   WriterEvidenceSetSchema,
   type AcademicSafetyReview,
+  type CanonicalStudyAdmissionResult,
   type ReportPlan,
   type ReportReadinessStatus,
   type WriterEvidenceSet,
@@ -31,6 +32,7 @@ import {
 import { applyBoundedCoherencePass } from "./reportComposer.ts";
 import { buildStructuredReportPlan } from "./structuredReportPlan.ts";
 import { canonicalizeInternalCitationTokens } from "./formalReportDocument.ts";
+import { applyUserOutlineToReportPlan } from "./generationUx.ts";
 
 export interface LlmReportSection {
   sectionId: string;
@@ -43,7 +45,34 @@ export interface LlmReportSection {
   unsupportedSentences?: string[];
   generationMethod?: string;
   paragraphClaims?: LlmReportParagraphClaim[];
+  sentenceClaimTraces?: LlmSentenceClaimTrace[];
   warnings?: string[];
+}
+
+export interface LlmSentenceClaimTrace {
+  sentenceId: string;
+  text: string;
+  realizedClaimIds: string[];
+  citationSourceIds: string[];
+  factual?: boolean;
+  validation?: "pass" | "blocked";
+  sectionId?: string;
+  paragraphId?: string;
+  originalText?: string;
+  finalText?: string;
+  originalClaimIds?: string[];
+  finalClaimIds?: string[];
+  evidenceIds?: string[];
+  citationIds?: string[];
+  action?: import("./reportDraft.ts").ReportSentenceRepairAction;
+  actionReason?: string;
+  repairStage?: "A_PRESERVE" | "B_DETERMINISTIC" | "C_MODEL" | "D_DELETE";
+  repairAttempts?: number;
+  providerUsed?: string | null;
+  validationBefore?: "pass" | "blocked";
+  validationAfter?: "pass" | "blocked";
+  deleted?: boolean;
+  deletionTimestamp?: string;
 }
 
 export interface LlmReportParagraphClaim {
@@ -100,6 +129,11 @@ export interface LlmReportWriterResult {
   };
   generationTraceId?: string;
   reportMode?: "short" | "standard";
+  researchReportMode?: "evidence_brief" | "formal_research_report";
+  citationDisplayMode?: "compact" | "academic";
+  formalResearchArchitecture?: unknown;
+  formalResearchValidation?: unknown;
+  formalResearchCheckpoint?: FormalResearchCheckpoint;
   reportPlan?: ReportPlan;
   reportPlanStatus?: "plan_built" | "complete" | "filtered" | "degraded_legacy";
   reportPlanDiagnostics?: string[];
@@ -141,6 +175,21 @@ export interface LlmReportWriterResult {
     repairedSectionIds: string[];
     fallbackSectionIds: string[];
     failureReasons: Record<string, string>;
+    contextBudgetCalls?: Array<{
+      callId: string;
+      model: string;
+      contextLimit: number;
+      usableContextBudget: number;
+      maximumInputTokens: number;
+      estimatedInputTokens: number;
+      actualInputTokens?: number;
+      outputTokens?: number;
+      assignedSection: string;
+      evidenceIdsUsed: string[];
+      withinBudget: boolean;
+    }>;
+    contextBudgetExceededCalls?: number;
+    formalResearch?: Record<string, unknown>;
     editorialPass?: {
       status: "applied" | "rejected" | "failed" | "skipped";
       provider: string | null;
@@ -151,7 +200,62 @@ export interface LlmReportWriterResult {
       status: "pass" | "blocked";
       issues: string[];
     };
+    writerAttempts?: Array<{
+      attemptId: string;
+      phase: "primary" | "repair" | "editorial";
+      sectionIds: string[];
+      status: "valid" | "repaired" | "failed";
+      failureCategory?: string;
+      originalRawOutput?: string;
+      repair?: {
+        method: "partial_json_object_recovery" | "freeform_section_recovery";
+        repairedFields: string[];
+        confidence: "high" | "medium" | "low";
+        validationResult: "pass" | "failed";
+      };
+    }>;
+    writerVNext?: {
+      status: "active" | "inactive";
+      atomicClaimCount: number;
+      validatedSynthesisClaimCount: number;
+      rejectedSynthesisClaimCount: number;
+      sectionClaimPlanCount: number;
+      paragraphContractCount: number;
+      sentenceTraceCount: number;
+      locallyRepairedSentenceCount: number;
+      deletedSentenceCount: number;
+      conclusionMode: string | null;
+      validationIssueCount: number;
+      centralAnswerContract?: Record<string, unknown>;
+      bodyRealizationAudit?: Array<Record<string, unknown>>;
+      conclusionEligibilityGate?: Record<string, unknown>;
+      conclusionClosureAudit?: Record<string, unknown>;
+      evidenceDensityAudit?: Record<string, unknown>;
+      longReportFeasibility?: Record<string, unknown>;
+    };
   };
+}
+
+export interface FormalResearchCheckpoint {
+  schemaVersion: "formal-research-checkpoint.v1" | "formal-research-checkpoint.v2";
+  workflowId: string;
+  topicHash: string;
+  topicIntegrityVersion?: string;
+  topicIntegrityHash?: string;
+  relevancePolicyVersion?: string;
+  evidenceSetHash: string | null;
+  acceptedSourceIds: string[];
+  acceptedSourceCount?: number;
+  rejectedSourceCount?: number;
+  directFindingSourceCount?: number;
+  contentIntegrityValidated?: boolean;
+  topicIntegrityValidatedAt?: string;
+  evidenceIds: string[];
+  completedStages: string[];
+  resumeFrom: "source_relevance_review" | "writer_generation" | "validation" | "export";
+  safeToResume: boolean;
+  providerFailureCategories: string[];
+  invalidatedBy: string[];
 }
 
 // The paired Vercel API has a 60-second function budget. The API runs section
@@ -169,8 +273,8 @@ function reportWriterApiUrl(path: string): string {
 
 function timeoutFallbackResult(reason: string): LlmReportWriterResult {
   return {
-    ok: true,
-    status: "success",
+    ok: false,
+    status: "error",
     llm_status: "timeout",
     fallback_used: true,
     message: "AI 段落強化逾時，已保留 evidence-grounded 完整草稿。",
@@ -245,6 +349,84 @@ function sanitizeSection(value: unknown): LlmReportSection | null {
         }];
       })
     : [];
+  const sentenceClaimTraces = Array.isArray(data.sentenceClaimTraces)
+    ? data.sentenceClaimTraces.flatMap((item): LlmSentenceClaimTrace[] => {
+        if (!item || typeof item !== "object") return [];
+        const trace = item as Record<string, unknown>;
+        const sentenceId =
+          typeof trace.sentenceId === "string" ? trace.sentenceId.trim() : "";
+        const text =
+          typeof trace.text === "string"
+            ? sanitizeZhTwReportProse(trace.text.trim())
+            : "";
+        if (!sentenceId || !text) return [];
+        const strings = (key: string) =>
+          Array.isArray(trace[key])
+            ? (trace[key] as unknown[])
+                .map((value) =>
+                  typeof value === "string" ? value.trim() : "",
+                )
+                .filter(Boolean)
+            : [];
+        return [
+          {
+            sentenceId,
+            text,
+            realizedClaimIds: strings("realizedClaimIds"),
+            citationSourceIds: strings("citationSourceIds"),
+            factual:
+              typeof trace.factual === "boolean" ? trace.factual : undefined,
+            validation:
+              trace.validation === "pass" || trace.validation === "blocked"
+                ? trace.validation
+                : undefined,
+            sectionId:
+              typeof trace.sectionId === "string" ? trace.sectionId.trim() : undefined,
+            paragraphId:
+              typeof trace.paragraphId === "string" ? trace.paragraphId.trim() : undefined,
+            originalText:
+              typeof trace.originalText === "string"
+                ? sanitizeZhTwReportProse(trace.originalText.trim())
+                : undefined,
+            finalText:
+              typeof trace.finalText === "string"
+                ? sanitizeZhTwReportProse(trace.finalText.trim())
+                : undefined,
+            originalClaimIds: strings("originalClaimIds"),
+            finalClaimIds: strings("finalClaimIds"),
+            evidenceIds: strings("evidenceIds"),
+            citationIds: strings("citationIds"),
+            action:
+              typeof trace.action === "string"
+                ? trace.action as LlmSentenceClaimTrace["action"]
+                : undefined,
+            actionReason:
+              typeof trace.actionReason === "string" ? trace.actionReason.trim() : undefined,
+            repairStage:
+              typeof trace.repairStage === "string"
+                ? trace.repairStage as LlmSentenceClaimTrace["repairStage"]
+                : undefined,
+            repairAttempts:
+              typeof trace.repairAttempts === "number" ? trace.repairAttempts : undefined,
+            providerUsed:
+              typeof trace.providerUsed === "string" ? trace.providerUsed.trim() : null,
+            validationBefore:
+              trace.validationBefore === "pass" || trace.validationBefore === "blocked"
+                ? trace.validationBefore
+                : undefined,
+            validationAfter:
+              trace.validationAfter === "pass" || trace.validationAfter === "blocked"
+                ? trace.validationAfter
+                : undefined,
+            deleted: trace.deleted === true,
+            deletionTimestamp:
+              typeof trace.deletionTimestamp === "string"
+                ? trace.deletionTimestamp.trim()
+                : undefined,
+          },
+        ];
+      })
+    : [];
   if (!sectionId || !title || !prose) return null;
   return {
     sectionId,
@@ -268,6 +450,7 @@ function sanitizeSection(value: unknown): LlmReportSection | null {
     generationMethod:
       typeof data.generationMethod === "string" ? data.generationMethod : undefined,
     ...(paragraphClaims.length ? { paragraphClaims } : {}),
+    ...(sentenceClaimTraces.length ? { sentenceClaimTraces } : {}),
     ...(warnings.length ? { warnings } : {}),
   };
 }
@@ -366,6 +549,73 @@ function sanitizeWriterDiagnostics(
     ? data.postEditValidation as Record<string, unknown>
     : null;
   const validationStatus = validationRecord?.status;
+  const writerVNextRecord =
+    data.writerVNext && typeof data.writerVNext === "object"
+      ? (data.writerVNext as Record<string, unknown>)
+      : null;
+  const writerVNextStatus = writerVNextRecord?.status;
+  const writerAttempts = Array.isArray(data.writerAttempts)
+    ? data.writerAttempts
+        .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+        .filter((item) =>
+          typeof item.attemptId === "string" &&
+          (item.phase === "primary" || item.phase === "repair" || item.phase === "editorial") &&
+          (item.status === "valid" || item.status === "repaired" || item.status === "failed"),
+        )
+        .map((item) => ({
+          attemptId: item.attemptId as string,
+          phase: item.phase as "primary" | "repair" | "editorial",
+          sectionIds: Array.isArray(item.sectionIds)
+            ? item.sectionIds.filter((id): id is string => typeof id === "string")
+            : [],
+          status: item.status as "valid" | "repaired" | "failed",
+          ...(typeof item.failureCategory === "string"
+            ? { failureCategory: item.failureCategory }
+            : {}),
+          ...(typeof item.originalRawOutput === "string"
+            ? { originalRawOutput: item.originalRawOutput }
+            : {}),
+          ...(item.repair && typeof item.repair === "object"
+            ? { repair: item.repair as {
+                method: "partial_json_object_recovery" | "freeform_section_recovery";
+                repairedFields: string[];
+                confidence: "high" | "medium" | "low";
+                validationResult: "pass" | "failed";
+              } }
+            : {}),
+        }))
+    : [];
+  const contextBudgetCalls = Array.isArray(data.contextBudgetCalls)
+    ? data.contextBudgetCalls
+        .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+        .map((item) => ({
+          callId: typeof item.callId === "string" ? item.callId : "unknown",
+          model: typeof item.model === "string" ? item.model : "unknown",
+          contextLimit: typeof item.contextLimit === "number" ? item.contextLimit : 0,
+          usableContextBudget:
+            typeof item.usableContextBudget === "number" ? item.usableContextBudget : 0,
+          maximumInputTokens:
+            typeof item.maximumInputTokens === "number" ? item.maximumInputTokens : 0,
+          estimatedInputTokens:
+            typeof item.estimatedInputTokens === "number" ? item.estimatedInputTokens : 0,
+          ...(typeof item.actualInputTokens === "number"
+            ? { actualInputTokens: item.actualInputTokens }
+            : {}),
+          ...(typeof item.outputTokens === "number" ? { outputTokens: item.outputTokens } : {}),
+          assignedSection:
+            typeof item.assignedSection === "string" ? item.assignedSection : "unknown",
+          evidenceIdsUsed: Array.isArray(item.evidenceIdsUsed)
+            ? item.evidenceIdsUsed.filter((id): id is string => typeof id === "string")
+            : [],
+          withinBudget: item.withinBudget === true,
+        }))
+    : [];
+  const writerVNextNumber = (key: string) =>
+    writerVNextRecord &&
+    typeof writerVNextRecord[key] === "number" &&
+    Number.isFinite(writerVNextRecord[key])
+      ? Math.max(0, Math.trunc(writerVNextRecord[key] as number))
+      : 0;
   return {
     requestedSections: number("requestedSections"),
     completedSections: number("completedSections"),
@@ -376,6 +626,12 @@ function sanitizeWriterDiagnostics(
     repairedSectionIds: strings("repairedSectionIds"),
     fallbackSectionIds: strings("fallbackSectionIds"),
     failureReasons,
+    contextBudgetCalls,
+    contextBudgetExceededCalls: number("contextBudgetExceededCalls"),
+    writerAttempts,
+    ...(data.formalResearch && typeof data.formalResearch === "object"
+      ? { formalResearch: data.formalResearch as Record<string, unknown> }
+      : {}),
     ...(editorialRecord && (
       editorialStatus === "applied" || editorialStatus === "rejected" ||
       editorialStatus === "failed" || editorialStatus === "skipped"
@@ -397,6 +653,118 @@ function sanitizeWriterDiagnostics(
           : [],
       },
     } : {}),
+    ...(writerVNextRecord &&
+    (writerVNextStatus === "active" || writerVNextStatus === "inactive")
+      ? {
+          writerVNext: {
+            status: writerVNextStatus,
+            atomicClaimCount: writerVNextNumber("atomicClaimCount"),
+            validatedSynthesisClaimCount: writerVNextNumber(
+              "validatedSynthesisClaimCount",
+            ),
+            rejectedSynthesisClaimCount: writerVNextNumber(
+              "rejectedSynthesisClaimCount",
+            ),
+            sectionClaimPlanCount: writerVNextNumber(
+              "sectionClaimPlanCount",
+            ),
+            paragraphContractCount: writerVNextNumber(
+              "paragraphContractCount",
+            ),
+            sentenceTraceCount: writerVNextNumber("sentenceTraceCount"),
+            locallyRepairedSentenceCount: writerVNextNumber(
+              "locallyRepairedSentenceCount",
+            ),
+            deletedSentenceCount: writerVNextNumber("deletedSentenceCount"),
+            conclusionMode:
+              typeof writerVNextRecord.conclusionMode === "string"
+                ? writerVNextRecord.conclusionMode
+                : null,
+            validationIssueCount: writerVNextNumber("validationIssueCount"),
+            ...(writerVNextRecord.centralAnswerContract &&
+            typeof writerVNextRecord.centralAnswerContract === "object"
+              ? {
+                  centralAnswerContract:
+                    writerVNextRecord.centralAnswerContract as Record<string, unknown>,
+                }
+              : {}),
+            ...(Array.isArray(writerVNextRecord.bodyRealizationAudit)
+              ? {
+                  bodyRealizationAudit: writerVNextRecord.bodyRealizationAudit.filter(
+                    (item): item is Record<string, unknown> =>
+                      Boolean(item && typeof item === "object"),
+                  ),
+                }
+              : {}),
+            ...(["conclusionEligibilityGate", "conclusionClosureAudit", "evidenceDensityAudit", "longReportFeasibility"] as const)
+              .reduce<Record<string, Record<string, unknown>>>((result, key) => {
+                const item = writerVNextRecord[key];
+                if (item && typeof item === "object" && !Array.isArray(item)) {
+                  result[key] = item as Record<string, unknown>;
+                }
+                return result;
+              }, {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function sanitizeFormalResearchCheckpoint(
+  value: unknown,
+): FormalResearchCheckpoint | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const data = value as Record<string, unknown>;
+  if (
+    (data.schemaVersion !== "formal-research-checkpoint.v1" &&
+      data.schemaVersion !== "formal-research-checkpoint.v2") ||
+    typeof data.workflowId !== "string" ||
+    typeof data.topicHash !== "string" ||
+    (data.evidenceSetHash !== null && typeof data.evidenceSetHash !== "string") ||
+    (data.resumeFrom !== "source_relevance_review" &&
+      data.resumeFrom !== "writer_generation" &&
+      data.resumeFrom !== "validation" &&
+      data.resumeFrom !== "export")
+  ) {
+    return undefined;
+  }
+  const strings = (key: string): string[] =>
+    Array.isArray(data[key])
+      ? (data[key] as unknown[]).filter((item): item is string => typeof item === "string")
+      : [];
+  const optionalString = (key: string): string | undefined =>
+    typeof data[key] === "string" ? data[key] : undefined;
+  const optionalCount = (key: string): number | undefined =>
+    typeof data[key] === "number" && Number.isInteger(data[key]) && data[key] >= 0
+      ? data[key]
+      : undefined;
+  const topicIntegrityVersion = optionalString("topicIntegrityVersion");
+  const topicIntegrityHash = optionalString("topicIntegrityHash");
+  const relevancePolicyVersion = optionalString("relevancePolicyVersion");
+  const acceptedSourceCount = optionalCount("acceptedSourceCount");
+  const rejectedSourceCount = optionalCount("rejectedSourceCount");
+  const directFindingSourceCount = optionalCount("directFindingSourceCount");
+  const topicIntegrityValidatedAt = optionalString("topicIntegrityValidatedAt");
+  return {
+    schemaVersion: data.schemaVersion,
+    workflowId: data.workflowId,
+    topicHash: data.topicHash,
+    ...(topicIntegrityVersion ? { topicIntegrityVersion } : {}),
+    ...(topicIntegrityHash ? { topicIntegrityHash } : {}),
+    ...(relevancePolicyVersion ? { relevancePolicyVersion } : {}),
+    evidenceSetHash: data.evidenceSetHash as string | null,
+    acceptedSourceIds: strings("acceptedSourceIds"),
+    ...(acceptedSourceCount !== undefined ? { acceptedSourceCount } : {}),
+    ...(rejectedSourceCount !== undefined ? { rejectedSourceCount } : {}),
+    ...(directFindingSourceCount !== undefined ? { directFindingSourceCount } : {}),
+    ...(typeof data.contentIntegrityValidated === "boolean" ? { contentIntegrityValidated: data.contentIntegrityValidated } : {}),
+    ...(topicIntegrityValidatedAt ? { topicIntegrityValidatedAt } : {}),
+    evidenceIds: strings("evidenceIds"),
+    completedStages: strings("completedStages"),
+    resumeFrom: data.resumeFrom,
+    safeToResume: data.safeToResume === true,
+    providerFailureCategories: strings("providerFailureCategories"),
+    invalidatedBy: strings("invalidatedBy"),
   };
 }
 
@@ -488,6 +856,28 @@ function normalizeResult(value: unknown): LlmReportWriterResult {
       data.reportMode === "short" || data.reportMode === "standard"
         ? data.reportMode
         : undefined,
+    researchReportMode:
+      data.researchReportMode === "formal_research_report" ||
+      data.researchReportMode === "evidence_brief"
+        ? data.researchReportMode
+        : undefined,
+    citationDisplayMode:
+      data.citationDisplayMode === "academic" ||
+      data.citationDisplayMode === "compact"
+        ? data.citationDisplayMode
+        : undefined,
+    formalResearchArchitecture:
+      data.formalResearchArchitecture &&
+      typeof data.formalResearchArchitecture === "object"
+        ? data.formalResearchArchitecture
+        : undefined,
+    formalResearchValidation:
+      data.formalResearchValidation &&
+      typeof data.formalResearchValidation === "object"
+        ? data.formalResearchValidation
+        : undefined,
+    formalResearchCheckpoint:
+      sanitizeFormalResearchCheckpoint(data.formalResearchCheckpoint),
     reportPlan: parsedReportPlan.success ? parsedReportPlan.data : undefined,
     reportPlanStatus:
       data.reportPlanStatus === "plan_built" ||
@@ -632,6 +1022,33 @@ function sourceMixProfileForReportInput(input: ReportInput): string {
   return "school_report_balanced";
 }
 
+/**
+ * Study Fact V2 envelopes are study-level records, while evidence cards are
+ * span-level records. Keep the envelope on exactly one card per study/source
+ * so canonical admission remains reproducible without multiplying the same
+ * full document envelope across every span in the transport payload.
+ */
+export function compactEvidenceCardsForWriterTransport(cards: EvidenceCard[]): EvidenceCard[] {
+  const envelopeSeen = new Set<string>();
+  return cards.map((card) => {
+    // `supportingClaims` is a pipeline-level collection repeated on every
+    // span card. The report-drafts route never reads it: each transport card
+    // already carries its canonical claim text, exact support span, claim ids,
+    // and provenance. Omitting the repeated collection is therefore lossless
+    // for Writer admission while avoiding quadratic request growth.
+    const { supportingClaims: _repeatedSupportingClaims, ...transportCard } = card;
+    const fact = transportCard.structuredStudyFact;
+    if (!fact?.studyFactV2) return transportCard;
+    const key = fact.studyId?.trim() || card.sourceId;
+    if (!envelopeSeen.has(key)) {
+      envelopeSeen.add(key);
+      return transportCard;
+    }
+    const { studyFactV2: _duplicatedEnvelope, ...compactFact } = fact;
+    return { ...transportCard, structuredStudyFact: compactFact };
+  });
+}
+
 async function resultFromErrorResponse(
   response: Response,
 ): Promise<LlmReportWriterResult> {
@@ -688,11 +1105,15 @@ export async function requestLlmReportDraft(input: {
   reportInput: ReportInput;
   workflowId: string | null;
   jobId?: string | null;
+  jobRevision?: number | null;
+  canonicalCheckpointRevision?: number | null;
   topicHash: string | null;
   originalTopic: string;
   displayTitle: string;
   acceptedSources: SourceRecord[];
   evidenceCards: EvidenceCard[];
+  canonicalStudyAdmissions?: CanonicalStudyAdmissionResult[];
+  centralAnswerClaimIds?: string[];
   academicSafetyReview?: AcademicSafetyReview | null;
   reportPlan?: ReportPlan | null;
   generationMode: Exclude<ReportGenerationMode, "blocked">;
@@ -707,6 +1128,7 @@ export async function requestLlmReportDraft(input: {
       : "academic_claim_mode";
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const transportEvidenceCards = compactEvidenceCardsForWriterTransport(input.evidenceCards);
   let response: Response;
   try {
     const evidenceSetResponse = await fetch(
@@ -718,8 +1140,12 @@ export async function requestLlmReportDraft(input: {
           workflowId: input.workflowId,
           topicHash: input.topicHash,
           topic: input.reportInput.topic,
+          researchReportMode:
+            input.reportInput.researchReportMode ?? "evidence_brief",
+          citationDisplayMode:
+            input.reportInput.citationDisplayMode ?? "compact",
           acceptedSources: input.acceptedSources,
-          evidenceCards: input.evidenceCards,
+          evidenceCards: transportEvidenceCards,
           aliases: [input.reportInput.topic],
           matchedConcepts: [input.reportInput.topic],
         }),
@@ -766,7 +1192,7 @@ export async function requestLlmReportDraft(input: {
         readinessStatus: "invalid_evidence_set",
       };
     }
-    const reportPlan = buildStructuredReportPlan({
+    const canonicalReportPlan = buildStructuredReportPlan({
       workflowId: canonicalWorkflowId,
       topicHash: canonicalTopicHash,
       title: input.displayTitle || input.reportInput.topic,
@@ -782,7 +1208,7 @@ export async function requestLlmReportDraft(input: {
         source.exactSearchCompleted != null || source.gapFillSearchAttempted != null,
       ),
     });
-    if (!reportPlan) {
+    if (!canonicalReportPlan) {
       return {
         ...timeoutFallbackResult("canonical_report_plan_not_built"),
         ok: false,
@@ -792,6 +1218,10 @@ export async function requestLlmReportDraft(input: {
         readinessStatus: "invalid_evidence_set",
       };
     }
+    const reportPlan = applyUserOutlineToReportPlan(
+      canonicalReportPlan,
+      input.outline,
+    );
     const outline = reportPlan.sections
       .filter((section) => section.canonicalSectionRole !== "references")
       .map((section) => ({ sectionId: section.sectionId, title: section.title }));
@@ -801,11 +1231,18 @@ export async function requestLlmReportDraft(input: {
       body: JSON.stringify({
         workflowId: canonicalWorkflowId,
         jobId: input.jobId ?? input.workflowId,
+        jobRevision: input.jobRevision ?? undefined,
+        canonicalCheckpointRevision:
+          input.canonicalCheckpointRevision ?? undefined,
         topicHash: canonicalTopicHash,
         topic: input.reportInput.topic,
         originalTopic: input.originalTopic,
         displayTitle: input.displayTitle,
         reportMode,
+        researchReportMode:
+          input.reportInput.researchReportMode ?? "evidence_brief",
+        citationDisplayMode:
+          input.reportInput.citationDisplayMode ?? "compact",
         reportType: input.reportInput.reportType,
         audience: input.reportInput.targetAudience || input.reportInput.academicLevel,
         language: input.reportInput.outputLanguage || "繁體中文",
@@ -820,8 +1257,10 @@ export async function requestLlmReportDraft(input: {
         outline,
         acceptedSources: input.acceptedSources,
         acceptedSourceIds: input.acceptedSources.map((source) => source.id).filter(Boolean),
-        evidenceCards: input.evidenceCards,
-        evidenceCardIds: input.evidenceCards.map((card) => card.id).filter(Boolean),
+        evidenceCards: transportEvidenceCards,
+        canonicalStudyAdmissions: input.canonicalStudyAdmissions,
+        evidenceCardIds: transportEvidenceCards.map((card) => card.id).filter(Boolean),
+        centralAnswerClaimIds: input.centralAnswerClaimIds,
         academicSafetyReview: input.academicSafetyReview ?? null,
         reportPlan,
         writerEvidenceSet,
@@ -834,10 +1273,24 @@ export async function requestLlmReportDraft(input: {
         `LLM report writer timed out after ${timeoutMs}ms`,
       );
     }
-    const reason = error instanceof Error ? error.message : "LLM report writer request failed";
+    const cause =
+      error instanceof Error &&
+      error.cause &&
+      typeof error.cause === "object"
+        ? (error.cause as { code?: unknown; message?: unknown })
+        : null;
+    const reason = [
+      error instanceof Error
+        ? error.message
+        : "LLM report writer request failed",
+      typeof cause?.code === "string" ? cause.code : null,
+      typeof cause?.message === "string" ? cause.message : null,
+    ]
+      .filter((item): item is string => Boolean(item))
+      .join(":");
     return {
-      ok: true,
-      status: "success",
+      ok: false,
+      status: "error",
       llm_status: "failed",
       fallback_used: true,
       message: "AI 服務目前無法連線，已保留 evidence-grounded 完整草稿。",
@@ -961,6 +1414,8 @@ export function mergeLlmReportDraft(
     filteredEvidence: llmResult.filteredEvidence,
     filteredAfterPlanCount: llmResult.filteredAfterPlanCount,
     writerDiagnostics: llmResult.writerDiagnostics,
+    formalResearchValidation: llmResult.formalResearchValidation,
+    formalResearchCheckpoint: llmResult.formalResearchCheckpoint,
   };
   const withDraft = (
     draft: typeof baselineDraft,
@@ -975,6 +1430,8 @@ export function mergeLlmReportDraft(
       reportPlan: llmResult.reportPlan ?? workspace.generationPayload.reportPlan,
       writerEvidenceSet:
         llmResult.writerEvidenceSet ?? workspace.generationPayload.writerEvidenceSet,
+      formalResearchCheckpoint:
+        llmResult.formalResearchCheckpoint ?? workspace.generationPayload.formalResearchCheckpoint,
     },
     draft,
     report: {
@@ -1015,6 +1472,58 @@ export function mergeLlmReportDraft(
   const sectionsById = new Map(
     eligibleSections.map((section) => [section.sectionId, section]),
   );
+  const formalComposerMode = workspace.input.researchReportMode === "formal_research_report" &&
+    (llmResult.sectionPlan?.length ?? 0) > 0;
+  const baselineSectionById = new Map(
+    baselineDraft.sections.map((section) => [section.sectionId, section] as const),
+  );
+  const formalSectionTemplateIds: Record<string, string> = {
+    background: "introduction",
+    methods: "methodology",
+    evidence_overview: "literature_review",
+    findings: "findings",
+    cross_study_synthesis: "discussion",
+    discussion: "discussion",
+    limitations_gaps: "limitations",
+    conclusion: "conclusion",
+  };
+  const formalPlannedSectionIds = Array.from(new Set(
+    ((llmResult.sectionPlan?.length ?? 0) > 0
+      ? llmResult.sectionPlan!.map((section) => section.sectionId)
+      : eligibleSections.map((section) => section.sectionId))
+      .filter((sectionId) => sectionId !== "executive_summary" && sectionsById.has(sectionId)),
+  ));
+  const mergeCandidateSections = formalComposerMode
+    ? [
+        ...baselineDraft.sections.filter((section) =>
+          section.sectionId === "title" || section.sectionId === "abstract"
+        ),
+        ...formalPlannedSectionIds.flatMap((sectionId) => {
+          const llmSection = sectionsById.get(sectionId);
+          const templateId = formalSectionTemplateIds[sectionId] ?? sectionId;
+          const template = baselineSectionById.get(templateId);
+          if (!llmSection || !template) return [];
+          return [{
+            ...template,
+            sectionId,
+            title: llmSection.title,
+            body: "",
+            synthesizedProseZhTw: "",
+            sectionGoal: llmSection.title,
+            supportingSourceIds: Array.from(new Set(llmSection.citationIds)),
+            citationMarkers: [],
+            evidenceSummary: "",
+            evidenceGaps: [],
+            evidenceCardIds: Array.from(new Set(llmSection.evidenceCardIds)),
+            citationIds: Array.from(new Set(llmSection.citationIds)),
+            citationCount: 0,
+            evidenceCardCount: llmSection.evidenceCardIds.length,
+            warnings: [],
+          }];
+        }),
+        ...baselineDraft.sections.filter((section) => section.sectionId === "references"),
+      ]
+    : baselineDraft.sections;
   const allowedEvidenceIds = new Set(mergedEvidenceCards.map((card) => card.id));
   const allowedSourceIds = acceptedSourceIds;
   const evidenceToSource = new Map(
@@ -1061,7 +1570,10 @@ export function mergeLlmReportDraft(
   const acceptedMarkers = new Set(sourceMarkerMap.values());
   const nextDraft = {
     ...baselineDraft,
-    sections: baselineDraft.sections.map((section) => {
+    // Formal Composer sections are created from the Blueprint order and use
+    // legacy draft sections only as structural shells. Their IDs, titles,
+    // evidence ownership and sentence lineage remain authoritative.
+    sections: mergeCandidateSections.map((section) => {
       const llmSection = sectionsById.get(section.sectionId);
       if (!llmSection) return section;
       const isSafeFallbackSection =
@@ -1115,11 +1627,60 @@ export function mergeLlmReportDraft(
       const guardMarkers = availableMarkers.length > 0
         ? availableMarkers
         : fallbackSectionMarkers;
-      const guarded = guardUnsupportedSectionClaims({
-        sectionKey: section.sectionId as ResearchSectionKey,
-        text: llmSection.prose,
-        availableCitationMarkers: guardMarkers,
-      });
+      const hasCompleteWriterSentenceLineage =
+        (llmSection.sentenceClaimTraces?.length ?? 0) > 0 &&
+        llmSection.sentenceClaimTraces!.every((trace) =>
+          trace.deleted === true ||
+          trace.factual === false ||
+          (
+            (trace.validationAfter ?? trace.validation) === "pass" &&
+            trace.realizedClaimIds.length > 0 &&
+            trace.citationSourceIds.length > 0
+          )
+        );
+      const lineageProse = hasCompleteWriterSentenceLineage
+        ? Array.from(
+            llmSection.sentenceClaimTraces!.reduce<Map<string, LlmSentenceClaimTrace[]>>(
+              (groups, trace) => {
+                if (trace.deleted) return groups;
+                const paragraphId = trace.paragraphId ||
+                  trace.sentenceId.match(/^(.*?-p\d+)-s\d+(?:-\d+)?$/u)?.[1] ||
+                  `${section.sectionId}-p1`;
+                const traces = groups.get(paragraphId) ?? [];
+                traces.push(trace);
+                groups.set(paragraphId, traces);
+                return groups;
+              },
+              new Map(),
+            ),
+          )
+            .map(([, traces]) => traces.map((trace) => {
+              const rawText = (trace.finalText || trace.text).trim();
+              if (!rawText || trace.factual === false) return rawText;
+              const markers = Array.from(new Set(
+                trace.citationSourceIds
+                  .map((sourceId) => sourceMarkerMap.get(sourceId))
+                  .filter((marker): marker is string => Boolean(marker)),
+              ));
+              if (markers.length === 0) return rawText;
+              const punctuation = rawText.match(/([。！？!?；;])$/u)?.[1] ?? "。";
+              const body = rawText.replace(/[。！？!?；;]+$/u, "").trim();
+              return `${body}${markers.join("")}${punctuation}`;
+            }).filter(Boolean).join(" "))
+            .filter(Boolean)
+            .join("\n\n")
+        : llmSection.prose;
+      // Server-side Writer vNext has already validated these exact sentences
+      // against immutable claim/source lineage. Running the legacy text-only
+      // guard again would fuzzy-match and delete content that has stronger
+      // structured proof than the guard can observe.
+      const guarded = hasCompleteWriterSentenceLineage
+        ? { text: lineageProse, warnings: [] as string[] }
+        : guardUnsupportedSectionClaims({
+            sectionKey: section.sectionId as ResearchSectionKey,
+            text: lineageProse,
+            availableCitationMarkers: guardMarkers,
+          });
       const actualMarkers = extractCitationMarkers(guarded.text)
         .filter((marker) => acceptedMarkers.has(marker) && guardMarkers.includes(marker));
       const actualCitationIds = sourceIdsFromCitationMarkers(actualMarkers, sourceMarkerMap);
@@ -1140,7 +1701,9 @@ export function mergeLlmReportDraft(
       });
       return {
         ...section,
-        title: llmSection.title || section.title,
+        title: /^第\s*\d+\s*章$/u.test(llmSection.title.trim())
+          ? section.title
+          : llmSection.title || section.title,
         prose: guarded.text,
         body: guarded.text,
         synthesizedProseZhTw: guarded.text,
@@ -1154,13 +1717,66 @@ export function mergeLlmReportDraft(
         generationMethod: llmSection.generationMethod,
         paragraphClaims: llmSection.paragraphClaims?.map((paragraphClaim) => ({
           ...paragraphClaim,
-          claimIds: paragraphClaim.claimIds.filter((claimId) =>
-            (activeReportPlan?.plannedClaims ?? []).some((claim) => claim.claimId === claimId),
-          ),
+          // Writer vNext atomic/synthesis identities intentionally live in a
+          // different namespace from legacy ReportPlan planned claims. They
+          // are immutable provenance and must survive this boundary verbatim.
+          claimIds: Array.from(new Set(paragraphClaim.claimIds)),
           evidenceCardIds: paragraphClaim.evidenceCardIds.filter((id) =>
             allowedEvidenceIds.has(id) && sectionAllowedEvidenceIds.has(id),
           ),
         })),
+        sentenceClaimTraces: llmSection.sentenceClaimTraces?.map((trace) => {
+          const paragraphMatch = trace.sentenceId.match(/^(.*?)-p(\d+)-s\d+(?:-\d+)?$/u);
+          const paragraphId = trace.paragraphId || (paragraphMatch
+            ? `${section.sectionId}-p${paragraphMatch[2]}`
+            : `${section.sectionId}-p1`);
+          const paragraphEvidenceIds = llmSection.paragraphClaims
+            ?.find((claim) => claim.paragraphId === paragraphId)
+            ?.evidenceCardIds.filter((id) =>
+              allowedEvidenceIds.has(id) && sectionAllowedEvidenceIds.has(id),
+            ) ?? [];
+          const finalText = trace.finalText || trace.text;
+          const validation = trace.validationAfter ?? trace.validation ?? "pass";
+          return {
+            sentenceId: trace.sentenceId,
+            sectionId: trace.sectionId || section.sectionId,
+            paragraphId,
+            originalText: trace.originalText || trace.text,
+            finalText,
+            originalClaimIds: Array.from(new Set(
+              trace.originalClaimIds?.length
+                ? trace.originalClaimIds
+                : trace.realizedClaimIds,
+            )),
+            finalClaimIds: Array.from(new Set(
+              trace.finalClaimIds?.length
+                ? trace.finalClaimIds
+                : trace.realizedClaimIds,
+            )),
+            realizedClaimIds: Array.from(new Set(trace.realizedClaimIds)),
+            evidenceIds: Array.from(new Set(
+              (trace.evidenceIds?.length ? trace.evidenceIds : paragraphEvidenceIds)
+                .filter((id) => allowedEvidenceIds.has(id)),
+            )),
+            citationSourceIds: Array.from(new Set(
+              trace.citationSourceIds.filter((id) => allowedSourceIds.has(id)),
+            )),
+            citationIds: Array.from(new Set(trace.citationIds ?? [])),
+            factual: trace.factual !== false,
+            validation,
+            action: trace.action ?? "UNCHANGED",
+            actionReason: trace.actionReason ?? "writer_validated_sentence",
+            repairStage: trace.repairStage ?? "A_PRESERVE",
+            repairAttempts: trace.repairAttempts ?? 0,
+            providerUsed: trace.providerUsed ?? null,
+            validationBefore: trace.validationBefore ?? validation,
+            validationAfter: validation,
+            deleted: trace.deleted === true,
+            ...(trace.deletionTimestamp
+              ? { deletionTimestamp: trace.deletionTimestamp }
+              : {}),
+          };
+        }),
         citationCount: coverage.citationCount,
         evidenceCardCount: coverage.evidenceCardCount,
         writerNote: "LLM 只在本節既有的主張與引用綁定內編輯文字。",

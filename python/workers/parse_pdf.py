@@ -10,8 +10,13 @@ DOWNLOAD_TIMEOUT_SECONDS = int(os.environ.get("RESEARCH_PDF_TIMEOUT_SECONDS", "2
 
 
 def read_input():
-    raw = os.environ.get("RESEARCH_WORKER_INPUT", "{}")
-    return json.loads(raw)
+    raw = os.environ.get("RESEARCH_WORKER_INPUT")
+    if not raw and not sys.stdin.isatty():
+        try:
+            raw = sys.stdin.read()
+        except Exception:
+            raw = "{}"
+    return json.loads(raw or "{}")
 
 
 def download_file(url: str) -> str:
@@ -36,41 +41,81 @@ def download_file(url: str) -> str:
     return path
 
 
-def parse_with_pypdf(path: str) -> str:
+import base64
+
+
+def parse_with_pypdf(path: str) -> tuple[str, list[dict]]:
     from pypdf import PdfReader
 
     reader = PdfReader(path)
+    pages = []
     texts = []
-    for page in reader.pages[:20]:
-      texts.append(page.extract_text() or "")
-    return "\n".join(texts).strip()
+    for i, page in enumerate(reader.pages[:50]):
+        page_text = (page.extract_text() or "").strip()
+        pages.append({"page": i + 1, "text": page_text})
+        if page_text:
+            texts.append(page_text)
+    full_text = "\n\n".join(texts).strip()
+    return full_text, pages
 
 
 def main():
     payload = read_input()
     pdf_url = payload.get("pdfUrl")
-    if not pdf_url:
+    pdf_path = payload.get("pdfPath")
+    pdf_base64 = payload.get("pdfBase64")
+
+    if not (pdf_url or pdf_path or pdf_base64):
         print("null")
         return
 
-    path = download_file(pdf_url)
+    temp_created = False
+    if pdf_path and os.path.exists(pdf_path):
+        path = pdf_path
+    elif pdf_base64:
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.write(fd, base64.b64decode(pdf_base64))
+        os.close(fd)
+        temp_created = True
+    elif pdf_url:
+        path = download_file(pdf_url)
+        temp_created = True
+    else:
+        print("null")
+        return
+
     full_text = ""
+    pages = []
     warnings = []
     method = payload.get("preferred") or "pypdf"
 
     try:
-        full_text = parse_with_pypdf(path)
+        full_text, pages = parse_with_pypdf(path)
         method = "pymupdf" if payload.get("preferred") == "pymupdf" else method
     except Exception as exc:
         warnings.append(f"parse_failed:{exc}")
+    finally:
+        if temp_created and os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    has_text = len(full_text.strip()) > 0
+    requires_ocr = not has_text
+    status = "SUCCESS" if has_text else "OCR_REQUIRED"
+    if requires_ocr:
+        warnings.append("NO_EXTRACTABLE_TEXT_OCR_REQUIRED")
 
     response = {
         "sourceId": payload.get("sourceId"),
         "workflowId": payload.get("workflowId"),
-        "extractionMethod": method if full_text else "api-abstract",
+        "extractionMethod": method if has_text else "api-abstract",
         "fullText": full_text or None,
-        "confidence": "medium" if full_text else "low",
-        "requiresOcr": False if full_text else True,
+        "pages": pages,
+        "confidence": "high" if has_text else "low",
+        "requiresOcr": requires_ocr,
+        "status": status,
         "warnings": warnings,
     }
     print(json.dumps(response, ensure_ascii=False))
@@ -78,3 +123,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

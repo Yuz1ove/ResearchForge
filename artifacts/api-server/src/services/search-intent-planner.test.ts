@@ -1600,8 +1600,69 @@ test("rule fallback turns marine microplastics into ecological search queries", 
   assert.match(queryText, /microplastics marine organisms ingestion toxicity/i);
   assert.match(queryText, /plastic pollution marine food web bioaccumulation/i);
   assert.match(queryText, /微塑膠 海洋生態 影響/);
+  assert.equal(plan.detectedDomain, "environment");
+  assert.match(
+    plan.canonicalEnglishTopic ?? "",
+    /microplastic pollution.*marine organisms.*ecosystems/i,
+  );
+  assert.doesNotMatch(queryText, /microplastics human health|drinking water/i);
+  assert.doesNotMatch(queryText, /biological mechanism|physiology behavior health effect/i);
+  assert.doesNotMatch(
+    queryText,
+    /cohort trial experiment observational study benchmark evaluation|effect impact influence/i,
+  );
   assert.ok(plan.penaltyTerms.includes("熱環境"));
   assert.ok(!/塑膠微粒對海洋生態的影響 peer reviewed research/i.test(queryText));
+});
+
+test("bounded marine provider planning can explicitly skip planner LLM calls", async () => {
+  let fetchCalls = 0;
+  const plan = await planSearchIntent(
+    {
+      topic: marineMicroplasticsTopic,
+      reportType: "研究報告",
+      audience: "高中",
+      language: "zh-TW",
+    },
+    {
+      disableLlm: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error("planner fetch must not run");
+      },
+    },
+  );
+  assert.equal(fetchCalls, 0);
+  assert.equal(plan.plannerStatus, "skipped");
+  assert.equal(plan.fallbackUsed, true);
+  assert.match(plan.canonicalEnglishTopic ?? "", /microplastic pollution.*marine/i);
+});
+
+test("marine microplastics source-mix planning never injects dog-behavior fallback queries", () => {
+  const plan = buildRuleBasedSearchIntent({
+    topic: "塑膠微粒對海洋生物的影響",
+    reportType: "研究報告",
+    audience: "一般讀者",
+    language: "zh-TW",
+  });
+  const querySet = buildSearchIntentQueries(plan);
+  const buckets = buildSourceMixQueryBuckets(
+    plan,
+    querySet,
+    "school_report_balanced",
+  );
+  const queryText = Object.values(buckets).flat().join(" ");
+
+  assert.doesNotMatch(
+    queryText,
+    /dog resource guarding|狗 護食|犬 資源防衛|food aggression|public health guidance|medical association guidance/i,
+  );
+  assert.match(
+    queryText,
+    /environmental agency assessment|marine science organization review|海洋研究 機構 報告/i,
+  );
+  assert.match(queryText, /microplastics|microplastic pollution|微塑膠/i);
+  assert.match(queryText, /marine|ocean|海洋/i);
 });
 
 test("rule fallback turns dumpling into a research-ready query planner without climate drift", () => {
@@ -3168,8 +3229,12 @@ function assertTopThirtyReviewable(result: { ok: boolean; sources: SourceRecord[
 test("source intent search caps planner and summarizer LLM waits in retrieval flow", async () => {
   const originalPlannerTimeout = process.env.SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS;
   const originalSummaryTimeout = process.env.SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS;
+  const originalLlmProvider = process.env.LLM_PROVIDER;
+  const originalOllamaModel = process.env.OLLAMA_MODEL;
   process.env.SOURCE_SEARCH_PLANNER_LLM_TIMEOUT_MS = "20";
   process.env.SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS = "20";
+  process.env.LLM_PROVIDER = "ollama";
+  process.env.OLLAMA_MODEL = "test-model";
   let academicFetchCount = 0;
   let fallbackFetchCount = 0;
   let llmFetchCount = 0;
@@ -3299,6 +3364,16 @@ test("source intent search caps planner and summarizer LLM waits in retrieval fl
       delete process.env.SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS;
     } else {
       process.env.SOURCE_SEARCH_SUMMARY_LLM_TIMEOUT_MS = originalSummaryTimeout;
+    }
+    if (originalLlmProvider === undefined) {
+      delete process.env.LLM_PROVIDER;
+    } else {
+      process.env.LLM_PROVIDER = originalLlmProvider;
+    }
+    if (originalOllamaModel === undefined) {
+      delete process.env.OLLAMA_MODEL;
+    } else {
+      process.env.OLLAMA_MODEL = originalOllamaModel;
     }
   }
 });

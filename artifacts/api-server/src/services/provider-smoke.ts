@@ -98,15 +98,19 @@ export function classifyProviderSmokeHttpError(
   endpoint: string,
 ): ProviderSmokeFailureCode {
   const text = body.toLowerCase();
+  const quotaSignal = /quota|billing|insufficient|monthly[_ -]?limit|daily[_ -]?limit|usage[_ -]?limit/.test(text);
   if (status === 401) {
     return /invalid|key|token|credential/.test(text) ? "invalid_key" : "unauthorized";
   }
-  if (status === 403) return "forbidden";
+  // Some OpenAI-compatible gateways report an exhausted allocation as 403
+  // rather than 429. Preserve the provider's explicit classification instead
+  // of collapsing every 403 into a generic authorization failure.
+  if (status === 403) return quotaSignal ? "quota_exceeded" : "forbidden";
   if (status === 404) {
     return endpoint === "/models" ? "wrong_base_url" : "endpoint_not_supported";
   }
   if (status === 429) {
-    return /quota|billing|insufficient/.test(text) ? "quota_exceeded" : "rate_limited";
+    return quotaSignal ? "quota_exceeded" : "rate_limited";
   }
   if (status >= 500) return "provider_server_error";
   if (/model.*not.*found|unknown model|does not exist/.test(text)) return "model_not_found";
@@ -267,17 +271,18 @@ async function checkGeneration(input: {
   timeoutMs: number;
   env: NodeJS.ProcessEnv;
 }): Promise<{ generation: ProviderSmokeGenerationResult; failure?: ReturnType<typeof failure> }> {
+  const expectedOutput = "PING_OK";
   const body =
     input.endpoint === "/chat/completions"
       ? {
           model: input.model,
-          messages: [{ role: "user", content: "Reply with exactly: ok" }],
+          messages: [{ role: "user", content: `Reply with exactly: ${expectedOutput}` }],
           max_tokens: 8,
           temperature: 0,
         }
       : {
           model: input.model,
-          input: "Reply with exactly: ok",
+          input: `Reply with exactly: ${expectedOutput}`,
           max_output_tokens: 8,
           store: false,
         };
@@ -332,15 +337,23 @@ async function checkGeneration(input: {
       };
     }
 
+    const outputMatches = output === expectedOutput;
     return {
       generation: {
         skipped: false,
-        ok: Boolean(output),
+        ok: outputMatches,
         endpoint: input.endpoint,
         httpStatus: response.status,
         latencyMs,
         outputPreview: output.slice(0, 80),
-        ...(output ? {} : { errorCode: "unknown_error" as const, errorMessage: "Empty generation output." }),
+        ...(outputMatches
+          ? {}
+          : {
+              errorCode: "unknown_error" as const,
+              errorMessage: output
+                ? `Provider output did not match ${expectedOutput}.`
+                : "Empty generation output.",
+            }),
       },
     };
   } catch (error) {

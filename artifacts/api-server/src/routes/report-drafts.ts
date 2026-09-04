@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { createHash, randomUUID } from "node:crypto";
 import {
   dedupeSourceRecords,
+  CanonicalStudyAdmissionResultSchema,
   normalizeSourceRecord,
   ReportPlanSchema,
   WriterEvidenceSetSchema,
@@ -11,9 +12,21 @@ import {
   type ReportReadinessStatus,
   type ReportMode,
   type SourceRecord,
+  type StructuredStudyFact,
+  type CanonicalStudyAdmissionResult,
   type WriterEvidenceSet,
 } from "@workspace/api-zod";
 import { resolveSourceMixProfile } from "@workspace/api-zod/source-mix-profile";
+import {
+  RELEVANCE_POLICY_VERSION,
+  TOPIC_INTEGRITY_VERSION,
+  TopicIntegrityContractSchema,
+  assessSourceTopicIntegrity,
+  buildTopicIntegrityContract,
+  evidenceRoleForText,
+  type TopicIntegrityAssessment,
+  type TopicIntegrityContract,
+} from "@workspace/api-zod/topic-integrity";
 import {
   writeReportWithLlm,
   type ReportWriterEvidenceCard,
@@ -47,6 +60,27 @@ import {
   buildWriterEvidenceSet,
   writerEvidenceSetsEqual,
 } from "../services/canonical-writer-evidence-set";
+import {
+  FORMAL_RESEARCH_REPORT_SCHEMA,
+  buildFormalResearchArchitecture,
+  repairFormalSectionsDeterministically,
+  validateAnalyticalSynthesis,
+  validateChartProvenance,
+  validateCrossSectionDuplicates,
+  validateFigureNarrativeBinding,
+  validatePipelineLeakage,
+  validateQuantitativeFindingIntegration,
+  validateQuantitativeProvenance,
+  validateResearchBlueprint,
+  validateResearchQuestionClosure,
+  validateSemanticDensity,
+  validateSourceDominance,
+  type CitationDisplayMode,
+  type FormalResearchArchitecture,
+  type ResearchMethod,
+  type ResearchReportMode,
+  type SectionDegradationReason,
+} from "../services/formal-research-architecture";
 
 type ReportDraftGenerationMode =
   | "llm_evidence_grounded"
@@ -184,10 +218,48 @@ function cleanString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+function cleanStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const normalized = Array.from(
+    new Set(value.map(cleanString).filter((item): item is string => Boolean(item))),
+  );
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function formalSectionDegradationReason(
+  detail: string,
+): SectionDegradationReason {
+  if (/PROVIDER_VISIBLE_OUTPUT_STARVATION/iu.test(detail)) {
+    return "PROVIDER_VISIBLE_OUTPUT_STARVATION";
+  }
+  if (/provider-empty-output|empty[_ -]?output|missing_or_invalid_section_output/iu.test(detail)) {
+    return "WRITER_EMPTY_OUTPUT";
+  }
+  if (/citation|entailment/iu.test(detail)) {
+    return "CITATION_ENTAILMENT_FAILURE";
+  }
+  if (/quantitative|numeric|number/iu.test(detail)) {
+    return "QUANTITATIVE_GROUNDING_FAILURE";
+  }
+  if (/duplicate|collision/iu.test(detail)) {
+    return "DUPLICATE_CLAIM_COLLISION";
+  }
+  if (/canonical|post[_ -]?edit|transformation/iu.test(detail)) {
+    return "CANONICAL_TRANSFORMATION_LOSS";
+  }
+  if (/json|schema|invalid/iu.test(detail)) return "SCHEMA_INVALID";
+  if (/insufficient|unsupported|grounding_verifier_blocked/iu.test(detail)) {
+    return "INSUFFICIENT_EVIDENCE";
+  }
+  return "OTHER";
+}
+
 const UNTRANSLATED_EVIDENCE_NOTICE =
   "此來源已保留可追溯的摘要片段，但尚未完成可驗證的繁中重點整理";
 
-function containsRawEnglishEvidenceText(value: string | null | undefined): boolean {
+function containsRawEnglishEvidenceText(
+  value: string | null | undefined,
+): boolean {
   const text = value?.trim() ?? "";
   if (!text) return false;
   if (/[\u3040-\u30ff]{2,}/u.test(text)) return true;
@@ -199,9 +271,12 @@ function containsRawEnglishEvidenceText(value: string | null | undefined): boole
   return latinWords >= 18 && latinWords > hanCharacters * 1.5;
 }
 
-function verifiedZhTwText(...values: Array<string | null | undefined>): string | undefined {
+function verifiedZhTwText(
+  ...values: Array<string | null | undefined>
+): string | undefined {
   for (const value of values) {
-    const cleaned = value?.replace(/`+/gu, "").replace(/\s+/gu, " ").trim() ?? "";
+    const cleaned =
+      value?.replace(/`+/gu, "").replace(/\s+/gu, " ").trim() ?? "";
     if (!cleaned || !/[\u3400-\u9fff]/u.test(cleaned)) continue;
     if (containsRawEnglishEvidenceText(cleaned)) continue;
     return cleaned;
@@ -229,26 +304,46 @@ function normalizeReportMode(value: unknown, sourceCount: number): ReportMode {
   return sourceCount >= 5 ? "standard" : "short";
 }
 
+const RESEARCH_METHODS: readonly ResearchMethod[] = [
+  "STRUCTURED_LITERATURE_REVIEW",
+  "THEMATIC_SYNTHESIS",
+  "COMPARATIVE_LITERATURE_ANALYSIS",
+  "SCOPING_REVIEW",
+  "DOCUMENT_ANALYSIS",
+  "BIBLIOMETRIC_TREND_ANALYSIS",
+  "SYSTEMATIC_REVIEW",
+  "META_ANALYSIS",
+];
+
+function normalizeResearchMethod(value: unknown): ResearchMethod | undefined {
+  return typeof value === "string" &&
+    RESEARCH_METHODS.includes(value as ResearchMethod)
+    ? (value as ResearchMethod)
+    : undefined;
+}
+
 function sourceHasExplicitRejection(source: Record<string, unknown>): boolean {
   const rejectedState = (value: unknown) =>
     value === "rejected" || value === "dismissed";
   return Boolean(
     rejectedState(source.reviewState) ||
-      rejectedState(source.status) ||
-      rejectedState(source.reviewStatus) ||
-      source.userDecision === "rejected" ||
-      source.recommendationBucket === "rejected" ||
-      source.sourceRole === "rejected" ||
-      source.sourceUseLevel === "rejected" ||
-      source.usageRecommendation === "exclude" ||
-      source.shouldRejectImmediately === true,
+    rejectedState(source.status) ||
+    rejectedState(source.reviewStatus) ||
+    source.userDecision === "rejected" ||
+    source.recommendationBucket === "rejected" ||
+    source.sourceRole === "rejected" ||
+    source.sourceUseLevel === "rejected" ||
+    source.usageRecommendation === "exclude" ||
+    source.shouldRejectImmediately === true,
   );
 }
 
 function canonicalKeyForSource(source: SourceRecord): string {
-  return cleanString(source.canonicalSourceIdentity) ??
+  return (
+    cleanString(source.canonicalSourceIdentity) ??
     cleanString(source.dedupeKey) ??
-    sourceRecordKey(source);
+    sourceRecordKey(source)
+  );
 }
 
 function evidenceIdentityForPlan(card: ReportWriterEvidenceCard): string {
@@ -256,9 +351,11 @@ function evidenceIdentityForPlan(card: ReportWriterEvidenceCard): string {
 }
 
 function canonicalKeyForPlanCard(card: ReportWriterEvidenceCard): string {
-  return cleanString(card.canonicalSourceKey) ??
+  return (
+    cleanString(card.canonicalSourceKey) ??
     cleanString(card.dedupeKey) ??
-    card.sourceId;
+    card.sourceId
+  );
 }
 
 function citationKeyForPlanCard(card: ReportWriterEvidenceCard): string {
@@ -283,24 +380,25 @@ function sanitizeReportPlanForAcceptedEvidence(input: {
       diagnostics.push(`derived_section_claim_removed:${claim.claimId}`);
       continue;
     }
-    const matchedCards = input.evidenceCards.filter((card) =>
-      claim.supportingEvidenceIds.includes(evidenceIdentityForPlan(card)) &&
-      claim.supportingSourceKeys.includes(canonicalKeyForPlanCard(card)) &&
-      claim.allowedCitationKeys.includes(citationKeyForPlanCard(card))
+    const matchedCards = input.evidenceCards.filter(
+      (card) =>
+        claim.supportingEvidenceIds.includes(evidenceIdentityForPlan(card)) &&
+        claim.supportingSourceKeys.includes(canonicalKeyForPlanCard(card)) &&
+        claim.allowedCitationKeys.includes(citationKeyForPlanCard(card)),
     );
     if (matchedCards.length === 0) {
       diagnostics.push(`unresolved_claim_binding_removed:${claim.claimId}`);
       continue;
     }
-    const supportingEvidenceIds = Array.from(new Set(
-      matchedCards.map(evidenceIdentityForPlan),
-    )).sort();
-    const supportingSourceKeys = Array.from(new Set(
-      matchedCards.map(canonicalKeyForPlanCard),
-    )).sort();
-    const allowedCitationKeys = Array.from(new Set(
-      matchedCards.map(citationKeyForPlanCard),
-    )).sort();
+    const supportingEvidenceIds = Array.from(
+      new Set(matchedCards.map(evidenceIdentityForPlan)),
+    ).sort();
+    const supportingSourceKeys = Array.from(
+      new Set(matchedCards.map(canonicalKeyForPlanCard)),
+    ).sort();
+    const allowedCitationKeys = Array.from(
+      new Set(matchedCards.map(citationKeyForPlanCard)),
+    ).sort();
     if (
       supportingEvidenceIds.length !== claim.supportingEvidenceIds.length ||
       supportingSourceKeys.length !== claim.supportingSourceKeys.length ||
@@ -316,31 +414,39 @@ function sanitizeReportPlanForAcceptedEvidence(input: {
     });
   }
 
-  const claimById = new Map(retainedClaims.map((claim) => [claim.claimId, claim]));
+  const claimById = new Map(
+    retainedClaims.map((claim) => [claim.claimId, claim]),
+  );
   const sections = input.plan.sections.map((section) => {
     const legalEvidenceIds = new Set(
       section.evidenceCardIds.filter((evidenceId) =>
-        input.evidenceCards.some((card) => evidenceIdentityForPlan(card) === evidenceId)
+        input.evidenceCards.some(
+          (card) => evidenceIdentityForPlan(card) === evidenceId,
+        ),
       ),
     );
     const declaredClaimIds = section.plannedClaimIds.filter((claimId) =>
-      claimById.has(claimId)
+      claimById.has(claimId),
     );
     const inferredClaimIds = retainedClaims
       .filter((claim) =>
-        claim.supportingEvidenceIds.some((evidenceId) => legalEvidenceIds.has(evidenceId))
+        claim.supportingEvidenceIds.some((evidenceId) =>
+          legalEvidenceIds.has(evidenceId),
+        ),
       )
       .map((claim) => claim.claimId);
-    const plannedClaimIds = Array.from(new Set(
-      declaredClaimIds.length > 0 ? declaredClaimIds : inferredClaimIds,
-    ));
+    const plannedClaimIds = Array.from(
+      new Set(
+        declaredClaimIds.length > 0 ? declaredClaimIds : inferredClaimIds,
+      ),
+    );
     const claimEvidenceIds = new Set(
-      plannedClaimIds.flatMap((claimId) =>
-        claimById.get(claimId)?.supportingEvidenceIds ?? []
+      plannedClaimIds.flatMap(
+        (claimId) => claimById.get(claimId)?.supportingEvidenceIds ?? [],
       ),
     );
     const evidenceCardIds = Array.from(legalEvidenceIds).filter((evidenceId) =>
-      claimEvidenceIds.has(evidenceId)
+      claimEvidenceIds.has(evidenceId),
     );
     if (
       evidenceCardIds.length !== section.evidenceCardIds.length ||
@@ -394,18 +500,22 @@ function canonicalReadinessForPlan(input: {
     return "needs_targeted_search";
   }
   const cardsById = new Map(
-    input.evidenceCards.map((card) => [evidenceIdentityForPlan(card), card] as const),
+    input.evidenceCards.map(
+      (card) => [evidenceIdentityForPlan(card), card] as const,
+    ),
   );
   const everyCoreHasFullText = coreSections.every((section) =>
     section.evidenceCardIds.some((id) => {
       const card = cardsById.get(id);
-      return card?.sourceAccessLevel === "full_text" ||
+      return (
+        card?.sourceAccessLevel === "full_text" ||
         card?.source_access_level === "full_text" ||
-        card?.derivation === "fulltext-derived";
+        card?.derivation === "fulltext-derived"
+      );
     }),
   );
   return input.plan.compositionKind === "complete_research_report" &&
-      everyCoreHasFullText
+    everyCoreHasFullText
     ? "ready_complete_report"
     : "ready_limited_report";
 }
@@ -433,29 +543,35 @@ function canonicalPlanDiagnostics(input: {
     diagnostics.push("canonical_two_stage_narrative_contract_missing");
   }
   const factIds = new Set(normalizedFacts.map((fact) => fact.factId));
-  const graphFactIds = new Set(graphClaims.flatMap((claim) => [
-    ...claim.supportingFacts,
-    ...claim.contradictingFacts,
-    ...claim.backgroundFacts,
-  ]));
+  const graphFactIds = new Set(
+    graphClaims.flatMap((claim) => [
+      ...claim.supportingFacts,
+      ...claim.contradictingFacts,
+      ...claim.backgroundFacts,
+    ]),
+  );
   if ([...graphFactIds].some((factId) => !factIds.has(factId))) {
     diagnostics.push("canonical_claim_graph_fact_binding_invalid");
   }
   if (
     narrativePasses.length === 2 &&
-    narrativePasses.some((pass) => pass.inputFactIds.some((factId) => !factIds.has(factId)))
+    narrativePasses.some((pass) =>
+      pass.inputFactIds.some((factId) => !factIds.has(factId)),
+    )
   ) {
     diagnostics.push("canonical_narrative_pass_fact_binding_invalid");
   }
   if (input.plan.evidenceSetHash !== input.writerEvidenceSet.evidenceSetHash) {
     diagnostics.push("plan_evidence_set_hash_mismatch");
   }
-  if (input.plan.evidenceSetVersion !== input.writerEvidenceSet.evidenceSetVersion) {
+  if (
+    input.plan.evidenceSetVersion !== input.writerEvidenceSet.evidenceSetVersion
+  ) {
     diagnostics.push("plan_evidence_set_version_mismatch");
   }
   if (
     input.plan.citationRegistryVersion !==
-      input.writerEvidenceSet.citationRegistryVersion
+    input.writerEvidenceSet.citationRegistryVersion
   ) {
     diagnostics.push("plan_citation_registry_version_mismatch");
   }
@@ -464,7 +580,9 @@ function canonicalPlanDiagnostics(input: {
     evidenceCards: input.evidenceCards,
   });
   if (sanitized.status !== "complete") {
-    diagnostics.push(...sanitized.diagnostics.map((item) => `post_plan_mutation:${item}`));
+    diagnostics.push(
+      ...sanitized.diagnostics.map((item) => `post_plan_mutation:${item}`),
+    );
   }
   const evaluatedReadiness = canonicalReadinessForPlan(input);
   if (
@@ -478,20 +596,107 @@ function canonicalPlanDiagnostics(input: {
   return Array.from(new Set(diagnostics));
 }
 
+interface TopicIntegritySourceRejection {
+  sourceId: string;
+  title: string;
+  reason: string;
+  assessment: TopicIntegrityAssessment;
+}
+
+interface AcceptedSourceTopicReview {
+  sources: SourceRecord[];
+  rejectedSources: TopicIntegritySourceRejection[];
+  contract: TopicIntegrityContract;
+  validatedAt: string;
+}
+
 function normalizeAcceptedSources(
   value: unknown,
   workflowId: string,
   hash: string,
   topic: string,
-): SourceRecord[] {
-  if (!Array.isArray(value)) return [];
+  contractValue?: unknown,
+  enforceTopicIntegrity = false,
+): AcceptedSourceTopicReview {
+  const parsedContract = TopicIntegrityContractSchema.safeParse(contractValue);
+  const contract = parsedContract.success
+    ? parsedContract.data
+    : buildTopicIntegrityContract({
+        canonicalTopic: topic,
+        researchQuestion: topic,
+        domain: "unknown",
+      });
+  const validatedAt = new Date().toISOString();
+  if (!Array.isArray(value)) {
+    return { sources: [], rejectedSources: [], contract, validatedAt };
+  }
   const records: SourceRecord[] = [];
+  const rejectedSources: TopicIntegritySourceRejection[] = [];
   value.forEach((source, index) => {
     if (!source || typeof source !== "object") return;
     const rawSource = source as Record<string, unknown>;
     if (sourceHasExplicitRejection(rawSource)) return;
     try {
       const normalized = normalizeSourceRecord(source as SourceRecord);
+      if (!enforceTopicIntegrity) {
+        records.push({
+          ...normalized,
+          id: normalized.id || `source-${index + 1}`,
+          workflowId: normalized.workflowId || workflowId,
+          topicHash: normalized.topicHash || hash,
+          topic: normalized.topic || topic,
+          reviewState: "accepted" as const,
+          acceptedByUser: true,
+          userDecision:
+            typeof normalized.userDecision === "string" &&
+            normalized.userDecision.startsWith("accepted")
+              ? normalized.userDecision
+              : "accepted",
+        });
+        return;
+      }
+      const prior = rawSource.topicIntegrityAssessment;
+      const priorAssessment = prior && typeof prior === "object" && !Array.isArray(prior)
+        ? prior as Record<string, unknown>
+        : null;
+      const priorLineageMatches =
+        cleanString(rawSource.workflowId) === workflowId &&
+        cleanString(rawSource.topicHash) === hash &&
+        cleanString(rawSource.topic) === topic &&
+        priorAssessment?.topicIntegrityVersion === TOPIC_INTEGRITY_VERSION &&
+        priorAssessment?.relevancePolicyVersion === RELEVANCE_POLICY_VERSION &&
+        priorAssessment?.acceptedForCanonicalEvidence === true &&
+        priorAssessment?.sourceRole !== "REJECTED_OFF_TOPIC";
+      // Grounding already evaluated the exact source under the same workflow,
+      // topic hash and canonical topic. Reusing that signed lineage prevents a
+      // second, lossy assessment from rejecting English evidence merely because
+      // the reader-facing research question is in Traditional Chinese.
+      const assessment = priorLineageMatches
+        ? priorAssessment as unknown as TopicIntegrityAssessment
+        : assessSourceTopicIntegrity(
+            {
+              id: normalized.id,
+              title: normalized.title,
+              abstract: normalized.abstract,
+              abstractOriginal: normalized.abstractOriginal,
+              extractedAbstract: normalized.extractedAbstract,
+              snippet: normalized.snippet,
+              venue: normalized.containerTitle,
+              sourceType: normalized.sourceType,
+              relevanceScore: normalized.relevanceScore,
+              finalScore: normalized.finalScore,
+            },
+            contract,
+          );
+      if (!assessment.acceptedForCanonicalEvidence) {
+        rejectedSources.push({
+          sourceId: normalized.id || `source-${index + 1}`,
+          title: normalized.title,
+          reason: assessment.topicIntegrityReason,
+          assessment,
+        });
+        return;
+      }
       records.push({
         ...normalized,
         id: normalized.id || `source-${index + 1}`,
@@ -500,6 +705,10 @@ function normalizeAcceptedSources(
         topic: normalized.topic || topic,
         reviewState: "accepted" as const,
         acceptedByUser: true,
+        formalEvidenceRole: assessment.sourceRole,
+        topicIntegrityAssessment: assessment,
+        usableSections: assessment.allowedSections,
+        isPrimaryEvidence: assessment.sourceRole === "DIRECT_FINDING",
         userDecision:
           typeof normalized.userDecision === "string" &&
           normalized.userDecision.startsWith("accepted")
@@ -510,7 +719,12 @@ function normalizeAcceptedSources(
       // Ignore malformed source entries; validation below checks that at least one remains.
     }
   });
-  return dedupeSourceRecords(records);
+  return {
+    sources: dedupeSourceRecords(records),
+    rejectedSources,
+    contract,
+    validatedAt,
+  };
 }
 
 function normalizeEvidenceCards(
@@ -536,7 +750,11 @@ function normalizeEvidenceCards(
     .map((card, index): ReportWriterEvidenceCard | null => {
       if (!card || typeof card !== "object") return null;
       const data = card as Record<string, unknown>;
-      const sourceId = cleanString(data.sourceId) ?? cleanString(data.source_id);
+      const structuredStudyFact = data.structuredStudyFact && typeof data.structuredStudyFact === "object"
+        ? data.structuredStudyFact as StructuredStudyFact
+        : undefined;
+      const sourceId =
+        cleanString(data.sourceId) ?? cleanString(data.source_id);
       const id =
         cleanString(data.id) ??
         cleanString(data.evidenceId) ??
@@ -552,7 +770,9 @@ function normalizeEvidenceCards(
         return null;
       }
       const source = sources.find((item) => item.id === sourceId);
-      const sourceRecord = source as (SourceRecord & Record<string, unknown>) | undefined;
+      const sourceRecord = source as
+        | (SourceRecord & Record<string, unknown>)
+        | undefined;
       const supportSpan =
         cleanString(data.supportSpan) ??
         (Array.isArray(data.supportSpans)
@@ -572,11 +792,10 @@ function normalizeEvidenceCards(
         cleanString(data.mainClaimZhTw);
       const cleanedSupport = removeBoilerplateLines(supportSpan ?? "");
       const cleanedClaim = removeBoilerplateLines(claim ?? "");
-      const boilerplateRatio =
-        Math.max(
-          cleanedSupport.removedLineCount / cleanedSupport.originalLineCount,
-          cleanedClaim.removedLineCount / cleanedClaim.originalLineCount,
-        );
+      const boilerplateRatio = Math.max(
+        cleanedSupport.removedLineCount / cleanedSupport.originalLineCount,
+        cleanedClaim.removedLineCount / cleanedClaim.originalLineCount,
+      );
       if (!claim || !supportSpan) {
         rejected.push({
           id,
@@ -586,7 +805,11 @@ function normalizeEvidenceCards(
         });
         return null;
       }
-      if (!cleanedSupport.text || !cleanedClaim.text || boilerplateRatio >= 0.45) {
+      if (
+        !cleanedSupport.text ||
+        !cleanedClaim.text ||
+        boilerplateRatio >= 0.45
+      ) {
         rejected.push({
           id,
           sourceId,
@@ -624,7 +847,11 @@ function normalizeEvidenceCards(
         source: {
           title: source?.title ?? cleanString(data.sourceTitle) ?? "",
           doi: source?.doi ?? cleanString(data.doi),
-          isPeerReviewed: source?.isPeerReviewed ?? (typeof data.isPeerReviewed === "boolean" ? data.isPeerReviewed : undefined),
+          isPeerReviewed:
+            source?.isPeerReviewed ??
+            (typeof data.isPeerReviewed === "boolean"
+              ? data.isPeerReviewed
+              : undefined),
           sourceQualityScore:
             typeof data.sourceQuality === "number"
               ? data.sourceQuality
@@ -634,20 +861,20 @@ function normalizeEvidenceCards(
           recommendationBucket:
             source?.recommendationBucket ??
             (typeof data.recommendationBucket === "string"
-              ? data.recommendationBucket as never
+              ? (data.recommendationBucket as never)
               : undefined),
           accessLevel: source?.accessLevel ?? undefined,
           extractionMode:
             typeof sourceRecord?.extractionMode === "string"
-              ? sourceRecord.extractionMode as never
+              ? (sourceRecord.extractionMode as never)
               : undefined,
           sourceUseLevel:
             typeof sourceRecord?.sourceUseLevel === "string"
-              ? sourceRecord.sourceUseLevel as never
+              ? (sourceRecord.sourceUseLevel as never)
               : undefined,
           evidenceGrounding:
             typeof sourceRecord?.evidenceGrounding === "string"
-              ? sourceRecord.evidenceGrounding as never
+              ? (sourceRecord.evidenceGrounding as never)
               : undefined,
           canUseForClaims:
             typeof sourceRecord?.canUseForClaims === "boolean"
@@ -684,7 +911,10 @@ function normalizeEvidenceCards(
           sourceId,
           reason: relevance.reason,
           diagnostics: relevance.diagnostics,
-          decision: relevance.decision === "indeterminate" ? "indeterminate" : "rejected",
+          decision:
+            relevance.decision === "indeterminate"
+              ? "indeterminate"
+              : "rejected",
           traceable: relevance.decision === "indeterminate",
         });
         return null;
@@ -693,15 +923,18 @@ function normalizeEvidenceCards(
       const extractionMethod =
         data.extractionMethod === "llm_structured_extract" ||
         data.extractionMethod === "manual_review" ||
+        data.extractionMethod === "deterministic_exact_span" ||
         data.extractionMethod === "rule_fallback_claim_extraction"
           ? data.extractionMethod
           : data.extractedBy === "llm"
             ? "llm_structured_extract"
             : "rule_fallback_claim_extraction";
-      const needsReview =
-        data.needsReview === true ||
+      const needsManualReview =
         data.needsManualReview === true ||
         extractionMethod === "rule_fallback_claim_extraction";
+      const needsReview =
+        data.needsReview === true ||
+        needsManualReview;
       const groundingConfidence =
         typeof data.groundingConfidence === "number"
           ? data.groundingConfidence
@@ -710,11 +943,27 @@ function normalizeEvidenceCards(
             : extractionMethod === "llm_structured_extract"
               ? 0.65
               : 0.52;
+      const evidenceTopicRole = source?.topicIntegrityAssessment
+        ? evidenceRoleForText({
+            text: `${cleanedClaim.text} ${cleanedSupport.text}`,
+            sourceAssessment: source.topicIntegrityAssessment,
+            contract: buildTopicIntegrityContract({
+              canonicalTopic: topic,
+              researchQuestion: topic,
+              domain: "unknown",
+            }),
+          })
+        : null;
       const normalizedSectionFits = normalizeEvidenceSectionFits([
         ...stringList(data.usableSections),
         ...stringList(data.sectionFit),
         ...stringList(data.sectionTargets),
-      ]);
+        ...(evidenceTopicRole?.allowedSections ?? []),
+      ]).filter((section) =>
+        !evidenceTopicRole || evidenceTopicRole.allowedSections.some((allowed) =>
+          evidenceFitsReportSection(section, [allowed]),
+        ),
+      );
       const directness =
         data.directness === "A" ||
         data.directness === "B" ||
@@ -726,7 +975,7 @@ function normalizeEvidenceCards(
               data.evidenceDirectnessTier === "C" ||
               data.evidenceDirectnessTier === "D"
             ? data.evidenceDirectnessTier
-            : source?.researchDirectnessTier ?? null;
+            : (source?.researchDirectnessTier ?? null);
       const exactSupportSpanVerified = true;
       const canonicalSourceKey = canonicalKeyForSource(source);
       return {
@@ -735,57 +984,80 @@ function normalizeEvidenceCards(
         sourceId,
         workflowId: cleanString(data.workflowId) ?? workflowId,
         topicHash: cleanString(data.topicHash) ?? hash,
-        title: cleanString(data.title) ?? cleanString(data.sourceTitle) ?? source?.title ?? "",
+        title:
+          cleanString(data.title) ??
+          cleanString(data.sourceTitle) ??
+          source?.title ??
+          "",
         canonicalSourceKey,
         dedupeKey: canonicalSourceKey,
         citationKey: canonicalSourceKey,
         claim: cleanedClaim.text,
         claimText: cleanedClaim.text,
-        claimTextZhTw: verifiedZhTwText(
-          cleanString(data.claimTextZhTw),
-          cleanString(data.mainClaimZhTw),
-          cleanString(data.evidencePointZhTw),
-          cleanString(data.sourceSummaryZhTw),
-          source?.mainEvidencePointZhTw,
-          cleanString(sourceRecord?.evidenceSummaryZhTw),
-          source?.readableSummaryZhTw,
-          source?.readableSummaryZhTW,
-          source?.abstractZhTw,
-        ) ?? UNTRANSLATED_EVIDENCE_NOTICE,
+        claimTextZhTw:
+          verifiedZhTwText(
+            cleanString(data.claimTextZhTw),
+            cleanString(data.mainClaimZhTw),
+            cleanString(data.evidencePointZhTw),
+            cleanString(data.sourceSummaryZhTw),
+            source?.mainEvidencePointZhTw,
+            cleanString(sourceRecord?.evidenceSummaryZhTw),
+            source?.readableSummaryZhTw,
+            source?.readableSummaryZhTW,
+            source?.abstractZhTw,
+          ) ?? UNTRANSLATED_EVIDENCE_NOTICE,
         claimTextZh: cleanString(data.claimTextZh) ?? cleanedClaim.text,
         supportSpan: cleanedSupport.text,
-        supportStart: typeof data.supportStart === "number" ? data.supportStart : undefined,
-        supportEnd: typeof data.supportEnd === "number" ? data.supportEnd : undefined,
+        supportStart:
+          typeof data.supportStart === "number" ? data.supportStart : undefined,
+        supportEnd:
+          typeof data.supportEnd === "number" ? data.supportEnd : undefined,
         supportedByText: cleanedSupport.text,
         evidence: cleanString(data.evidence) ?? cleanedSupport.text,
         summary: cleanString(data.summary) ?? cleanedClaim.text,
-        sourceSummaryZhTw: verifiedZhTwText(
-          cleanString(data.sourceSummaryZhTw),
-          source?.readableSummaryZhTw,
-          source?.readableSummaryZhTW,
-          source?.mainEvidencePointZhTw,
-          cleanString(sourceRecord?.evidenceSummaryZhTw),
-          source?.abstractZhTw,
-        ) ?? UNTRANSLATED_EVIDENCE_NOTICE,
+        sourceSummaryZhTw:
+          verifiedZhTwText(
+            cleanString(data.sourceSummaryZhTw),
+            source?.readableSummaryZhTw,
+            source?.readableSummaryZhTW,
+            source?.mainEvidencePointZhTw,
+            cleanString(sourceRecord?.evidenceSummaryZhTw),
+            source?.abstractZhTw,
+          ) ?? UNTRANSLATED_EVIDENCE_NOTICE,
         relevance: cleanString(data.relevance) ?? "accepted_source",
         sourceTitle: cleanString(data.sourceTitle) ?? source?.title ?? "",
-        sourceProvider: cleanString(data.sourceProvider) ?? source?.provider ?? source?.sourceType ?? "",
+        sourceProvider:
+          cleanString(data.sourceProvider) ??
+          source?.provider ??
+          source?.sourceType ??
+          "",
         recommendationBucket:
           data.recommendationBucket === "scholarly_recommended" ||
           data.recommendationBucket === "official_background" ||
           data.recommendationBucket === "manual_review" ||
           data.recommendationBucket === "rejected"
             ? data.recommendationBucket
-            : source?.recommendationBucket ?? null,
+            : (source?.recommendationBucket ?? null),
         sourceRole: cleanString(data.sourceRole) ?? source?.sourceRole ?? null,
-        retrievalMode: cleanString(data.retrievalMode) ?? source?.retrievalMode ?? null,
+        formalEvidenceRole: evidenceTopicRole?.role ?? source?.formalEvidenceRole ?? null,
+        topicIntegrityReason:
+          evidenceTopicRole?.reason ?? source?.topicIntegrityAssessment?.topicIntegrityReason ?? null,
+        retrievalMode:
+          cleanString(data.retrievalMode) ?? source?.retrievalMode ?? null,
         isPeerReviewed:
-          typeof data.isPeerReviewed === "boolean" ? data.isPeerReviewed : source?.isPeerReviewed ?? null,
+          typeof data.isPeerReviewed === "boolean"
+            ? data.isPeerReviewed
+            : (source?.isPeerReviewed ?? null),
         venue: cleanString(data.venue) ?? source?.containerTitle ?? null,
         doi: cleanString(data.doi) ?? source?.doi ?? null,
         abstract: cleanString(data.abstract) ?? source?.abstract ?? null,
-        provider: cleanString(data.provider) ?? source?.provider ?? source?.sourceType ?? null,
-        year: typeof data.year === "number" ? data.year : source?.year ?? null,
+        provider:
+          cleanString(data.provider) ??
+          source?.provider ??
+          source?.sourceType ??
+          null,
+        year:
+          typeof data.year === "number" ? data.year : (source?.year ?? null),
         usableSections: normalizedSectionFits,
         sectionFit: normalizedSectionFits,
         citationText: cleanString(data.citationText) ?? source?.title ?? "",
@@ -794,12 +1066,23 @@ function normalizeEvidenceCards(
         limitations: stringList(data.limitations),
         limitationsZhTw: stringList(data.limitationsZhTw),
         sectionTargets: normalizedSectionFits,
-        sourceAccessLevel: cleanString(data.sourceAccessLevel) ?? source?.accessLevel ?? null,
-        source_access_level: cleanString(data.source_access_level) ?? source?.accessLevel ?? null,
+        sourceAccessLevel:
+          cleanString(data.sourceAccessLevel) ?? source?.accessLevel ?? null,
+        source_access_level:
+          cleanString(data.source_access_level) ?? source?.accessLevel ?? null,
         derivation: cleanString(data.derivation) ?? null,
-        evidenceGrounding: cleanString(data.evidenceGrounding) ?? source?.evidenceGrounding ?? null,
-        summaryStructuredStatus: cleanString(data.summaryStructuredStatus) ?? source?.summaryStructuredStatus ?? null,
-        llmSummaryStatus: cleanString(data.llmSummaryStatus) ?? source?.llmSummaryStatus ?? null,
+        evidenceGrounding:
+          cleanString(data.evidenceGrounding) ??
+          source?.evidenceGrounding ??
+          null,
+        summaryStructuredStatus:
+          cleanString(data.summaryStructuredStatus) ??
+          source?.summaryStructuredStatus ??
+          null,
+        llmSummaryStatus:
+          cleanString(data.llmSummaryStatus) ??
+          source?.llmSummaryStatus ??
+          null,
         topicRelevance:
           typeof data.topicRelevance === "number"
             ? data.topicRelevance
@@ -813,16 +1096,23 @@ function normalizeEvidenceCards(
             ? Math.min(0.55, groundingConfidence)
             : groundingConfidence,
         extractionMethod,
+        needsManualReview,
         needsReview,
         rejectionReason: cleanString(data.rejectionReason),
-        extractedAt: cleanString(data.extractedAt) ?? cleanString(data.createdAt),
-        governanceFlags: exactSupportSpanVerified ? ["exact_support_span_verified"] : [],
+        extractedAt:
+          cleanString(data.extractedAt) ?? cleanString(data.createdAt),
+        governanceFlags: exactSupportSpanVerified
+          ? ["exact_support_span_verified"]
+          : [],
         location: cleanString(data.location) ?? null,
         researchSetting: cleanString(data.researchSetting) ?? null,
-        studyDesign: cleanString(data.studyDesign) ?? null,
-        dataScope: cleanString(data.dataScope) ?? null,
-        exposure: cleanString(data.exposure) ?? null,
-        outcome: cleanString(data.outcome) ?? null,
+        structuredStudyFact,
+        studyDesign: cleanString(data.studyDesign) ??
+          (structuredStudyFact?.studyDesign !== "unknown" ? structuredStudyFact?.studyDesign : undefined) ?? null,
+        dataScope: cleanString(data.dataScope) ?? structuredStudyFact?.populationDescription ?? structuredStudyFact?.population ?? null,
+        exposure: cleanString(data.exposure) ?? structuredStudyFact?.exposure ?? null,
+        comparator: cleanString(data.comparator) ?? structuredStudyFact?.comparator ?? null,
+        outcome: cleanString(data.outcome) ?? structuredStudyFact?.outcome ?? null,
         exactResult: cleanString(data.exactResult) ?? cleanedSupport.text,
         numericResult: cleanString(data.numericResult) ?? null,
         applicability: cleanString(data.applicability) ?? null,
@@ -840,15 +1130,35 @@ function normalizeEvidenceCards(
   return { cards: normalized, rejected, diagnostics };
 }
 
-function supportSentences(value: string, limit = 420, maxSentences = 3): string[] {
+function supportSentences(
+  value: string,
+  limit = 420,
+  maxSentences = 3,
+  prioritizeResults = false,
+): string[] {
   const text = value.replace(/\s+/g, " ").trim();
   if (!text) return [];
   const sentences = text
     .split(/(?<=[。！？.!?])\s+/u)
-    .map((sentence) => sentence.replace(/^(?:abstract|摘要)\s*[.:：]?\s*/iu, "").trim())
+    .map((sentence) =>
+      sentence.replace(/^(?:abstract|摘要)\s*[.:：]?\s*/iu, "").trim(),
+    )
     .filter((sentence) => sentence.length >= 40)
     .map((sentence) => sentence.slice(0, limit).trim());
-  if (sentences.length > 0) return sentences.slice(0, maxSentences);
+  if (sentences.length > 0) {
+    if (!prioritizeResults) return sentences.slice(0, maxSentences);
+    return sentences
+      .map((sentence, index) => ({
+        sentence,
+        index,
+        score:
+          (/(?:\d+(?:\.\d+)?\s*(?:%|mmhg|hours?|minutes?|participants?)|\bp\s*[=<>≤≥]|\bCI\b|confidence interval|effect size|mean difference|standardized mean difference)/iu.test(sentence) ? 4 : 0) +
+          (/^(?:results?|findings?|conclusions?)\s*[:：]|結果|結論|顯著|associated|reduced|increased/iu.test(sentence) ? 2 : 0),
+      }))
+      .sort((left, right) => right.score - left.score || left.index - right.index)
+      .slice(0, maxSentences)
+      .map((item) => item.sentence);
+  }
   const fallback = text
     .replace(/^(?:abstract|摘要)\s*[.:：]?\s*/iu, "")
     .trim()
@@ -857,9 +1167,13 @@ function supportSentences(value: string, limit = 420, maxSentences = 3): string[
   return fallback.length >= 40 ? [fallback] : [];
 }
 
-function sourceChunksForServerEvidence(source: SourceRecord): ServerEvidenceChunk[] {
+function sourceChunksForServerEvidence(
+  source: SourceRecord,
+): ServerEvidenceChunk[] {
   const record = source as SourceRecord & Record<string, unknown>;
-  const extractedChunks = Array.isArray(record.extractedChunks) ? record.extractedChunks : [];
+  const extractedChunks = Array.isArray(record.extractedChunks)
+    ? record.extractedChunks
+    : [];
   const chunks = extractedChunks
     .map((item): ServerEvidenceChunk | null => {
       if (!item || typeof item !== "object") return null;
@@ -874,18 +1188,31 @@ function sourceChunksForServerEvidence(source: SourceRecord): ServerEvidenceChun
           cleanString(chunk.location) ??
           "extracted_chunk",
       };
-      const sectionHeading = cleanString(chunk.section_heading) ?? cleanString(chunk.sectionHeading);
+      const sectionHeading =
+        cleanString(chunk.section_heading) ?? cleanString(chunk.sectionHeading);
       if (sectionHeading) result.sectionHeading = sectionHeading;
       return result;
     })
     .filter((item): item is ServerEvidenceChunk => Boolean(item));
-  if (chunks.length > 0) return chunks.slice(0, 2);
   const abstract =
     cleanString(record.extractedAbstract) ??
     cleanString(record.abstractOriginal) ??
     cleanString(record.originalAbstract) ??
     cleanString(record.abstract);
-  return abstract ? [{ text: abstract, sourceLocation: "abstract", sectionHeading: "Abstract" }] : [];
+  const combined = [...chunks];
+  if (
+    abstract &&
+    !combined.some((chunk) =>
+      chunk.text.replace(/\s+/gu, " ").trim().includes(abstract.replace(/\s+/gu, " ").trim()),
+    )
+  ) {
+    combined.push({
+      text: abstract,
+      sourceLocation: "abstract",
+      sectionHeading: "Abstract",
+    });
+  }
+  return combined.slice(0, 3);
 }
 
 function sourceSupportTexts(source: SourceRecord): string[] {
@@ -903,7 +1230,9 @@ function sourceSupportTexts(source: SourceRecord): string[] {
   const scalarTexts = scalarKeys
     .map((key) => cleanString(record[key]))
     .filter((value): value is string => Boolean(value));
-  const chunkTexts = (Array.isArray(record.extractedChunks) ? record.extractedChunks : [])
+  const chunkTexts = (
+    Array.isArray(record.extractedChunks) ? record.extractedChunks : []
+  )
     .map((item) => {
       if (!item || typeof item !== "object") return undefined;
       const chunk = item as unknown as Record<string, unknown>;
@@ -913,7 +1242,10 @@ function sourceSupportTexts(source: SourceRecord): string[] {
   return Array.from(new Set([...scalarTexts, ...chunkTexts]));
 }
 
-function supportSpanExistsInSource(source: SourceRecord, supportSpan: string): boolean {
+function supportSpanExistsInSource(
+  source: SourceRecord,
+  supportSpan: string,
+): boolean {
   const normalizedSupport = supportSpan.replace(/\s+/gu, " ").trim();
   if (!normalizedSupport) return false;
   return sourceSupportTexts(source).some((text) =>
@@ -922,7 +1254,11 @@ function supportSpanExistsInSource(source: SourceRecord, supportSpan: string): b
 }
 
 function normalizedSourceQuality(source: SourceRecord): number | null {
-  const raw = source.sourceQualityScore ?? source.relevanceScore ?? source.finalScore ?? null;
+  const raw =
+    source.sourceQualityScore ??
+    source.relevanceScore ??
+    source.finalScore ??
+    null;
   if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
   return raw > 1 ? raw / 100 : raw;
 }
@@ -970,202 +1306,257 @@ function deriveEvidenceCardsFromAcceptedSources(input: {
   topic: string;
   relevanceBridge: EvidenceRelevanceBridge;
 }): { cards: ReportWriterEvidenceCard[]; rejected: EvidenceCardRejection[] } {
-  const existingSourceIds = new Set(input.existingCards.map((card) => card.sourceId));
+  const existingSourceIds = new Set(
+    input.existingCards.map((card) => card.sourceId),
+  );
+  const existingSupportBySource = new Map<string, Set<string>>();
+  for (const card of input.existingCards) {
+    const supports = existingSupportBySource.get(card.sourceId) ?? new Set<string>();
+    supports.add((card.supportSpan ?? card.supportedByText ?? "").replace(/\s+/gu, " ").trim());
+    existingSupportBySource.set(card.sourceId, supports);
+  }
   const cards: ReportWriterEvidenceCard[] = [];
   const rejected: EvidenceCardRejection[] = [];
   input.sources.forEach((source, sourceIndex) => {
-    const sourceRecord = source as SourceRecord & Record<string, unknown> & {
-      usageRecommendation?: string | null;
-      qualityWarnings?: string[] | null;
-    };
-    if (!source.id || existingSourceIds.has(source.id)) return;
+    const sourceRecord = source as SourceRecord &
+      Record<string, unknown> & {
+        usageRecommendation?: string | null;
+        qualityWarnings?: string[] | null;
+      };
+    if (!source.id) return;
+    const formalTopicReviewed = Boolean(source.topicIntegrityAssessment);
+    // Canonical client evidence already carries an exact, verified support span.
+    // Do not silently widen that source after the evidence set was selected: a
+    // server-derived sibling would change the WriterEvidenceSet hash and can
+    // contain prose that the structured ReportPlan correctly rejects.
+    if (existingSourceIds.has(source.id)) return;
     if (sourceHasExplicitRejection(sourceRecord)) return;
-    if (source.recommendationBucket === "rejected" || sourceRecord.usageRecommendation === "exclude") return;
+    if (
+      source.recommendationBucket === "rejected" ||
+      sourceRecord.usageRecommendation === "exclude"
+    )
+      return;
     const canonicalSourceKey = canonicalKeyForSource(source);
     const chunks = sourceChunksForServerEvidence(source);
     chunks.forEach((chunk, chunkIndex) => {
       const cleaned = removeBoilerplateLines(chunk.text);
-      supportSentences(cleaned.text).forEach((supportSpan, sentenceIndex) => {
-      if (source.title && supportSpan.toLowerCase() === source.title.trim().toLowerCase()) return;
-      const id = sentenceIndex === 0
-        ? `evidence:${source.id}:server-derived:${chunkIndex + 1}`
-        : `evidence:${source.id}:server-derived:${chunkIndex + 1}-${sentenceIndex + 1}`;
-      const relevance = scoreEvidenceRelevance({
-        topic: input.topic,
-        title: source.title,
-        body: supportSpan,
-        source: {
+      supportSentences(cleaned.text, 520, formalTopicReviewed ? 5 : 3, formalTopicReviewed).forEach((supportSpan, sentenceIndex) => {
+        if (existingSupportBySource.get(source.id)?.has(supportSpan.replace(/\s+/gu, " ").trim())) return;
+        if (
+          source.title &&
+          supportSpan.toLowerCase() === source.title.trim().toLowerCase()
+        )
+          return;
+        const id =
+          sentenceIndex === 0
+            ? `evidence:${source.id}:server-derived:${chunkIndex + 1}`
+            : `evidence:${source.id}:server-derived:${chunkIndex + 1}-${sentenceIndex + 1}`;
+        const relevance = scoreEvidenceRelevance({
+          topic: input.topic,
           title: source.title,
-          doi: source.doi ?? undefined,
-          isPeerReviewed: source.isPeerReviewed ?? undefined,
-          sourceQualityScore: normalizedSourceQuality(source) ?? undefined,
-          recommendationBucket: source.recommendationBucket ?? undefined,
-          accessLevel: source.accessLevel ?? undefined,
-          extractionMode:
-            typeof sourceRecord.extractionMode === "string"
-              ? sourceRecord.extractionMode as never
-              : undefined,
-          sourceUseLevel:
-            typeof sourceRecord.sourceUseLevel === "string"
-              ? sourceRecord.sourceUseLevel as never
-              : undefined,
-          evidenceGrounding: source.evidenceGrounding ?? undefined,
-          canUseForClaims:
-            typeof sourceRecord.canUseForClaims === "boolean"
-              ? sourceRecord.canUseForClaims
-              : undefined,
-        },
-        boilerplateRatio: cleaned.removedLineCount / cleaned.originalLineCount,
-        aliases: [
-          ...input.relevanceBridge.aliases,
-          ...stringList(sourceRecord.aliases),
-          ...stringList(sourceRecord.topicAliases),
-        ],
-        matchedConcepts: [
-          ...input.relevanceBridge.matchedConcepts,
-          ...stringList(sourceRecord.matchedConcepts),
-          ...stringList(sourceRecord.matchedCoreConcepts),
-          ...stringList(sourceRecord.matchedTerms),
-        ],
-        queryUsed: source.queryUsed ?? cleanString(sourceRecord.queryUsed),
-      });
-      if (!relevance.accepted) {
-        rejected.push({
-          id,
-          sourceId: source.id,
-          reason: relevance.reason,
-          diagnostics: relevance.diagnostics,
-          decision: relevance.decision === "indeterminate" ? "indeterminate" : "rejected",
-          traceable: relevance.decision === "indeterminate",
+          body: supportSpan,
+          source: {
+            title: source.title,
+            doi: source.doi ?? undefined,
+            isPeerReviewed: source.isPeerReviewed ?? undefined,
+            sourceQualityScore: normalizedSourceQuality(source) ?? undefined,
+            recommendationBucket: source.recommendationBucket ?? undefined,
+            accessLevel: source.accessLevel ?? undefined,
+            extractionMode:
+              typeof sourceRecord.extractionMode === "string"
+                ? (sourceRecord.extractionMode as never)
+                : undefined,
+            sourceUseLevel:
+              typeof sourceRecord.sourceUseLevel === "string"
+                ? (sourceRecord.sourceUseLevel as never)
+                : undefined,
+            evidenceGrounding: source.evidenceGrounding ?? undefined,
+            canUseForClaims:
+              typeof sourceRecord.canUseForClaims === "boolean"
+                ? sourceRecord.canUseForClaims
+                : undefined,
+          },
+          boilerplateRatio:
+            cleaned.removedLineCount / cleaned.originalLineCount,
+          aliases: [
+            ...input.relevanceBridge.aliases,
+            ...stringList(sourceRecord.aliases),
+            ...stringList(sourceRecord.topicAliases),
+          ],
+          matchedConcepts: [
+            ...input.relevanceBridge.matchedConcepts,
+            ...stringList(sourceRecord.matchedConcepts),
+            ...stringList(sourceRecord.matchedCoreConcepts),
+            ...stringList(sourceRecord.matchedTerms),
+          ],
+          queryUsed: source.queryUsed ?? cleanString(sourceRecord.queryUsed),
         });
-        return;
-      }
-      const sectionFit = derivedSectionFit(source);
-      const createdAt = new Date().toISOString();
-      const readerFacingClaim = verifiedZhTwText(
-        source.mainEvidencePointZhTw,
-        cleanString(sourceRecord.evidenceSummaryZhTw),
-        source.readableSummaryZhTw,
-        source.readableSummaryZhTW,
-        source.abstractZhTw,
-      ) ?? UNTRANSLATED_EVIDENCE_NOTICE;
-      cards.push({
-        id,
-        evidenceId: id,
-        evidenceCardId: id,
-        sourceId: source.id,
-        canonicalSourceKey,
-        dedupeKey: canonicalSourceKey,
-        citationKey: canonicalSourceKey,
-        workflowId: input.workflowId,
-        topicHash: input.hash,
-        claimTextOriginal: supportSpan,
-        claimText: supportSpan,
-        claimTextZh: readerFacingClaim,
-        claim: supportSpan,
-        claimTextZhTw: readerFacingClaim,
-        mainClaim: supportSpan,
-        mainClaimZhTw: readerFacingClaim,
-        supportSpan,
-        supportedByText: supportSpan,
-        supportStart: Math.max(0, cleaned.text.indexOf(supportSpan)),
-        supportEnd: Math.max(0, cleaned.text.indexOf(supportSpan)) + supportSpan.length,
-        evidence: supportSpan,
-        evidencePointZhTw: readerFacingClaim,
-        usableEvidence: readerFacingClaim,
-        summary: readerFacingClaim,
-        supportingClaims: [],
-        supportSpans: [{ text: supportSpan, startOffset: Math.max(0, cleaned.text.indexOf(supportSpan)), endOffset: Math.max(0, cleaned.text.indexOf(supportSpan)) + supportSpan.length, sectionHeading: chunk.sectionHeading }],
-        citationMarker: `[S${sourceIndex + 1}]`,
-        sourceSummaryZhTw: readerFacingClaim,
-        relevance: "server_derived_support_span",
-        sourceType: source.sourceType,
-        reliability: source.confidence ?? "需人工複核",
-        limitations: Array.from(new Set([
-          "server_derived_from_accepted_source_text",
-          "rule_fallback_claim_extraction",
-          ...(sourceRecord.qualityWarnings ?? []),
-        ])),
-        limitationsZhTw: Array.from(new Set([
-          "由伺服器依已接受來源文字抽出 exact supportSpan，仍需人工複核。",
-          ...(sourceRecord.qualityWarnings ?? []),
-        ])),
-        sectionTargets: sectionFit,
-        sectionFit,
-        sourceTitle: source.title,
-        sourceProvider: source.provider ?? source.sourceType,
-        sourceAccessLevel: source.accessLevel ?? "abstract_only",
-        source_access_level: source.accessLevel ?? "abstract_only",
-        extractionStatus: source.extractionStatus ?? null,
-        evidenceType: /(?:\bResults?\b|結果(?:顯示|指出|為)|發現|顯著|associated|correlat|predict|\b(?:OR|RR|HR|r)\s*[=:]|%|％)/iu.test(supportSpan)
-          ? "finding"
-          : "background",
-        evidence_type: /(?:\bResults?\b|結果(?:顯示|指出|為)|發現|顯著|associated|correlat|predict|\b(?:OR|RR|HR|r)\s*[=:]|%|％)/iu.test(supportSpan)
-          ? "finding"
-          : "background",
-        quotedText: supportSpan,
-        quoted_text: supportSpan,
-        sourceLocation: chunk.sourceLocation,
-        source_location: chunk.sourceLocation,
-        sectionHeading: chunk.sectionHeading ?? null,
-        section_heading: chunk.sectionHeading ?? null,
-        trace: {
+        if (!relevance.accepted) {
+          rejected.push({
+            id,
+            sourceId: source.id,
+            reason: relevance.reason,
+            diagnostics: relevance.diagnostics,
+            decision:
+              relevance.decision === "indeterminate"
+                ? "indeterminate"
+                : "rejected",
+            traceable: relevance.decision === "indeterminate",
+          });
+          return;
+        }
+        const sectionFit = derivedSectionFit(source);
+        const createdAt = new Date().toISOString();
+        const readerFacingClaim =
+          verifiedZhTwText(
+            source.mainEvidencePointZhTw,
+            cleanString(sourceRecord.evidenceSummaryZhTw),
+            source.readableSummaryZhTw,
+            source.readableSummaryZhTW,
+            source.abstractZhTw,
+          ) ?? UNTRANSLATED_EVIDENCE_NOTICE;
+        cards.push({
+          id,
+          evidenceId: id,
+          evidenceCardId: id,
+          sourceId: source.id,
+          canonicalSourceKey,
+          dedupeKey: canonicalSourceKey,
+          citationKey: canonicalSourceKey,
+          workflowId: input.workflowId,
+          topicHash: input.hash,
+          claimTextOriginal: supportSpan,
+          claimText: supportSpan,
+          claimTextZh: readerFacingClaim,
+          claim: supportSpan,
+          claimTextZhTw: readerFacingClaim,
+          mainClaim: supportSpan,
+          mainClaimZhTw: readerFacingClaim,
+          supportSpan,
+          supportedByText: supportSpan,
+          supportStart: Math.max(0, cleaned.text.indexOf(supportSpan)),
+          supportEnd:
+            Math.max(0, cleaned.text.indexOf(supportSpan)) + supportSpan.length,
+          evidence: supportSpan,
+          evidencePointZhTw: readerFacingClaim,
+          usableEvidence: readerFacingClaim,
+          summary: readerFacingClaim,
+          supportingClaims: [],
+          supportSpans: [
+            {
+              text: supportSpan,
+              startOffset: Math.max(0, cleaned.text.indexOf(supportSpan)),
+              endOffset:
+                Math.max(0, cleaned.text.indexOf(supportSpan)) +
+                supportSpan.length,
+              sectionHeading: chunk.sectionHeading,
+            },
+          ],
+          citationMarker: `[S${sourceIndex + 1}]`,
+          sourceSummaryZhTw: readerFacingClaim,
+          relevance: "server_derived_support_span",
+          sourceType: source.sourceType,
+          reliability: source.confidence ?? "需人工複核",
+          limitations: Array.from(
+            new Set([
+              "server_derived_from_accepted_source_text",
+              "rule_fallback_claim_extraction",
+              ...(sourceRecord.qualityWarnings ?? []),
+            ]),
+          ),
+          limitationsZhTw: Array.from(
+            new Set([
+              "由伺服器依已接受來源文字抽出 exact supportSpan，仍需人工複核。",
+              ...(sourceRecord.qualityWarnings ?? []),
+            ]),
+          ),
+          sectionTargets: sectionFit,
+          sectionFit,
+          sourceTitle: source.title,
+          sourceProvider: source.provider ?? source.sourceType,
+          sourceAccessLevel: source.accessLevel ?? "abstract_only",
+          source_access_level: source.accessLevel ?? "abstract_only",
+          extractionStatus: source.extractionStatus ?? null,
+          evidenceType:
+            /(?:\bResults?\b|結果(?:顯示|指出|為)|發現|顯著|associated|correlat|predict|\b(?:OR|RR|HR|r)\s*[=:]|%|％)/iu.test(
+              supportSpan,
+            )
+              ? "finding"
+              : "background",
+          evidence_type:
+            /(?:\bResults?\b|結果(?:顯示|指出|為)|發現|顯著|associated|correlat|predict|\b(?:OR|RR|HR|r)\s*[=:]|%|％)/iu.test(
+              supportSpan,
+            )
+              ? "finding"
+              : "background",
+          quotedText: supportSpan,
+          quoted_text: supportSpan,
+          sourceLocation: chunk.sourceLocation,
+          source_location: chunk.sourceLocation,
+          sectionHeading: chunk.sectionHeading ?? null,
+          section_heading: chunk.sectionHeading ?? null,
+          trace: {
+            provider: source.provider ?? source.sourceType,
+            query_used: source.queryUsed ?? undefined,
+            url: source.url ?? undefined,
+            doi: source.doi ?? undefined,
+            extraction_method: "server_rule_support_span",
+          },
+          recommendationBucket: source.recommendationBucket ?? null,
+          sourceRole: source.sourceRole ?? null,
+          retrievalMode: source.retrievalMode ?? null,
+          isPeerReviewed: source.isPeerReviewed ?? null,
+          venue: source.containerTitle ?? null,
+          providerHealthSnapshot: source.providerHealthSnapshot ?? null,
+          acceptedByUser: true,
+          userDecision: source.userDecision ?? "accepted",
+          acceptedAs: source.acceptedAs ?? null,
+          doi: source.doi ?? null,
+          abstract: source.abstract ?? null,
           provider: source.provider ?? source.sourceType,
-          query_used: source.queryUsed ?? undefined,
-          url: source.url ?? undefined,
-          doi: source.doi ?? undefined,
-          extraction_method: "server_rule_support_span",
-        },
-        recommendationBucket: source.recommendationBucket ?? null,
-        sourceRole: source.sourceRole ?? null,
-        retrievalMode: source.retrievalMode ?? null,
-        isPeerReviewed: source.isPeerReviewed ?? null,
-        venue: source.containerTitle ?? null,
-        providerHealthSnapshot: source.providerHealthSnapshot ?? null,
-        acceptedByUser: true,
-        userDecision: source.userDecision ?? "accepted",
-        acceptedAs: source.acceptedAs ?? null,
-        doi: source.doi ?? null,
-        abstract: source.abstract ?? null,
-        provider: source.provider ?? source.sourceType,
-        relevanceScore: source.relevanceScore ?? null,
-        topicRelevance: relevance.score,
-        sourceQualityScore: source.sourceQualityScore ?? null,
-        sourceQuality: relevance.sourceQuality,
-        groundingConfidence: 0.55,
-        finalScore: source.finalScore ?? source.relevanceScore ?? null,
-        year: source.year ?? null,
-        usableSections: sectionFit,
-        citationText: source.title,
-        limitation: "rule_fallback_claim_extraction；需人工複核。",
-        derivation: chunk.sourceLocation === "abstract" ? "abstract-derived" : "fulltext-derived",
-        evidenceGrounding: source.evidenceGrounding ?? null,
-        summaryStructuredStatus: source.summaryStructuredStatus ?? null,
-        llmSummaryStatus: source.llmSummaryStatus ?? null,
-        needsManualReview: true,
-        needsReview: true,
-        extractionMethod: "rule_fallback_claim_extraction",
-        rejectionReason: null,
-        extractedAt: createdAt,
-        governanceFlags: [
-          "server_derived_support_span",
-          "exact_support_span_verified",
-          "rule_fallback_claim_extraction",
-        ],
-        sourceMetadata: {
-          url: source.url,
-          title: source.title,
-          year: source.year,
-          provider: source.provider,
-        },
-      });
+          relevanceScore: source.relevanceScore ?? null,
+          topicRelevance: relevance.score,
+          sourceQualityScore: source.sourceQualityScore ?? null,
+          sourceQuality: relevance.sourceQuality,
+          groundingConfidence: 0.55,
+          finalScore: source.finalScore ?? source.relevanceScore ?? null,
+          year: source.year ?? null,
+          usableSections: sectionFit,
+          citationText: source.title,
+          limitation: "rule_fallback_claim_extraction；需人工複核。",
+          derivation:
+            chunk.sourceLocation === "abstract"
+              ? "abstract-derived"
+              : "fulltext-derived",
+          evidenceGrounding: source.evidenceGrounding ?? null,
+          summaryStructuredStatus: source.summaryStructuredStatus ?? null,
+          llmSummaryStatus: source.llmSummaryStatus ?? null,
+          needsManualReview: true,
+          needsReview: true,
+          extractionMethod: "rule_fallback_claim_extraction",
+          rejectionReason: null,
+          extractedAt: createdAt,
+          governanceFlags: [
+            "server_derived_support_span",
+            "exact_support_span_verified",
+            "rule_fallback_claim_extraction",
+          ],
+          sourceMetadata: {
+            url: source.url,
+            title: source.title,
+            year: source.year,
+            provider: source.provider,
+          },
+        });
       });
     });
   });
   return { cards, rejected };
 }
 
-function normalizeOutline(value: unknown): Array<{ sectionId: string; title: string }> {
+function normalizeOutline(
+  value: unknown,
+): Array<{ sectionId: string; title: string }> {
   if (!Array.isArray(value)) return [...DEFAULT_OUTLINE];
   const normalized = value
     .map((item, index) => {
@@ -1177,33 +1568,60 @@ function normalizeOutline(value: unknown): Array<{ sectionId: string; title: str
       const title = cleanString(data.title) ?? cleanString(data.heading);
       if (!title) return null;
       return {
-        sectionId: cleanString(data.sectionId) ?? cleanString(data.id) ?? `section_${index + 1}`,
+        sectionId:
+          cleanString(data.sectionId) ??
+          cleanString(data.id) ??
+          `section_${index + 1}`,
         title,
       };
     })
-    .filter((section): section is { sectionId: string; title: string } => Boolean(section));
+    .filter((section): section is { sectionId: string; title: string } =>
+      Boolean(section),
+    );
   return normalized.length > 0 ? normalized : [...DEFAULT_OUTLINE];
 }
 
 function roleText(card: ReportWriterEvidenceCard): string {
-  return String(card.sourceRole ?? card.recommendationBucket ?? card.sourceProvider ?? "").toLowerCase();
+  return String(
+    card.formalEvidenceRole ??
+      card.sourceRole ??
+      card.recommendationBucket ??
+      card.sourceProvider ??
+      "",
+  ).toLowerCase();
 }
 
 function roleSupportsFindings(card: ReportWriterEvidenceCard): boolean {
   const text = roleText(card);
-  if (/background_definition|definition_or_concept|case_or_news|news|encyclopedia|wikipedia/.test(text)) {
+  if (card.formalEvidenceRole) {
+    return card.formalEvidenceRole === "DIRECT_FINDING";
+  }
+  if (
+    /background_definition|definition_or_concept|case_or_news|news|encyclopedia|wikipedia/.test(
+      text,
+    )
+  ) {
     return false;
   }
-  return /academic_evidence|core_scholarly|professional_guidance|official_statistics|data_or_dataset|statistics_or_dataset|scholarly|official|peer|journal|doi/.test(text);
+  return /academic_evidence|core_scholarly|professional_guidance|official_statistics|data_or_dataset|statistics_or_dataset|scholarly|official|peer|journal|doi/.test(
+    text,
+  );
 }
 
 function roleSupportsBackground(card: ReportWriterEvidenceCard): boolean {
+  if (card.formalEvidenceRole) {
+    return card.formalEvidenceRole === "DIRECT_FINDING" ||
+      card.formalEvidenceRole === "CONTEXTUAL_BACKGROUND";
+  }
   return /background_definition|official|professional|academic(?:_evidence)?|core_scholarly|scholarly|definition/.test(
     roleText(card),
   );
 }
 
-function cardFitsSection(sectionId: string, card: ReportWriterEvidenceCard): boolean {
+function cardFitsSection(
+  sectionId: string,
+  card: ReportWriterEvidenceCard,
+): boolean {
   const fit = [
     ...stringList(card.sectionFit),
     ...stringList(card.sectionTargets),
@@ -1220,39 +1638,60 @@ function sectionCards(
   // the route-side bundle at the same ceiling so a valid [S5]-[S8] marker does
   // not become "unknown" only because verification saw a smaller card slice.
   const bundleLimit = 8;
-  if (sectionId === "findings" || /finding|發現|文獻|探討|discussion|analysis/.test(sectionId)) {
+  if (
+    sectionId === "findings" ||
+    /finding|發現|文獻|探討|discussion|analysis/.test(sectionId)
+  ) {
     return cards
-      .filter((card) => roleSupportsFindings(card) && cardFitsSection(sectionId, card))
+      .filter(
+        (card) =>
+          roleSupportsFindings(card) && cardFitsSection(sectionId, card),
+      )
       .slice(0, bundleLimit);
   }
   if (/background|intro|背景|introduction/.test(sectionId)) {
     return cards
-      .filter((card) => cardFitsSection(sectionId, card) && roleSupportsBackground(card))
+      .filter(
+        (card) =>
+          cardFitsSection(sectionId, card) && roleSupportsBackground(card),
+      )
       .slice(0, bundleLimit);
   }
-  return cards.filter((card) => cardFitsSection(sectionId, card)).slice(0, bundleLimit);
+  return cards
+    .filter((card) => cardFitsSection(sectionId, card))
+    .slice(0, bundleLimit);
 }
 
-function markerForCard(card: ReportWriterEvidenceCard, cards: ReportWriterEvidenceCard[]): string {
+function markerForCard(
+  card: ReportWriterEvidenceCard,
+  cards: ReportWriterEvidenceCard[],
+): string {
   const index = cards.findIndex((item) => item.id === card.id);
   return `[S${index + 1}]`;
 }
 
 function conciseClaim(card: ReportWriterEvidenceCard): string {
-  const readerFacing = verifiedZhTwText(
-    card.claimTextZhTw,
-    card.mainClaimZhTw,
-    card.evidencePointZhTw,
-    card.sourceSummaryZhTw,
-    card.claimTextZh,
-    card.mainClaim,
-    card.summary,
-    card.claim,
-  ) ?? UNTRANSLATED_EVIDENCE_NOTICE;
-  return firstReportFragment(readerFacing).replace(/[。！？!?]+$/u, "").slice(0, 120);
+  const readerFacing =
+    verifiedZhTwText(
+      card.claimTextZhTw,
+      card.mainClaimZhTw,
+      card.evidencePointZhTw,
+      card.sourceSummaryZhTw,
+      card.claimTextZh,
+      card.mainClaim,
+      card.summary,
+      card.claim,
+    ) ?? UNTRANSLATED_EVIDENCE_NOTICE;
+  return firstReportFragment(readerFacing)
+    .replace(/[。！？!?]+$/u, "")
+    .slice(0, 120);
 }
 
-function fallbackSectionLead(sectionId: string, title: string, topic: string): string {
+function fallbackSectionLead(
+  sectionId: string,
+  title: string,
+  topic: string,
+): string {
   if (/background|intro|背景/u.test(`${sectionId} ${title}`)) {
     return `本節先從已接受來源界定「${topic}」的研究背景與討論範圍。`;
   }
@@ -1281,9 +1720,12 @@ function fallbackSectionLead(sectionId: string, title: string, topic: string): s
 }
 
 function requiredAspectsForSection(sectionId: string): string[] {
-  if (/background|intro|背景/.test(sectionId)) return ["background_or_definition", "topic_relevance"];
-  if (/findings|發現/.test(sectionId)) return ["academic_or_official_evidence", "supported_claim", "citation"];
-  if (/literature|文獻|discussion|探討/.test(sectionId)) return ["multiple_sources", "supported_claim", "limitations"];
+  if (/background|intro|背景/.test(sectionId))
+    return ["background_or_definition", "topic_relevance"];
+  if (/findings|發現/.test(sectionId))
+    return ["academic_or_official_evidence", "supported_claim", "citation"];
+  if (/literature|文獻|discussion|探討/.test(sectionId))
+    return ["multiple_sources", "supported_claim", "limitations"];
   if (/method|方法/.test(sectionId)) return ["method_or_data_boundary"];
   if (/limitations|限制/.test(sectionId)) return ["evidence_boundary"];
   if (/conclusion|結論/.test(sectionId)) return ["prior_supported_claims"];
@@ -1297,6 +1739,14 @@ function reportPlanSectionIdsForOutputSection(
   if (reportPlan.sections.some((section) => section.sectionId === sectionId)) {
     return [sectionId];
   }
+  if (sectionId === "executive_summary") {
+    return ["introduction", "findings", "discussion", "conclusion"];
+  }
+  if (sectionId === "background") return ["introduction", "literature_review"];
+  if (sectionId === "methods") return ["methodology"];
+  if (sectionId === "evidence_overview") return ["literature_review", "methodology"];
+  if (sectionId === "cross_study_synthesis") return ["discussion", "findings"];
+  if (sectionId === "limitations_gaps") return ["limitations"];
   if (sectionId === "abstract") return ["background", "evidence"];
   if (sectionId === "introduction" || sectionId === "research_question") {
     return ["background"];
@@ -1329,7 +1779,7 @@ function planScopedCardsForSection(input: {
       .flatMap((section) => section.evidenceCardIds),
   );
   return input.cards.filter((card) =>
-    allowedEvidenceIds.has(evidenceIdentityForPlan(card))
+    allowedEvidenceIds.has(evidenceIdentityForPlan(card)),
   );
 }
 
@@ -1347,25 +1797,38 @@ function buildSectionEvidenceBundles(input: {
     const canonicalRole = input.reportPlan?.sections.find(
       (item) => item.sectionId === section.sectionId,
     )?.canonicalSectionRole;
-    const cards = canonicalRole === "scope_method"
-      ? scopedCards.slice(0, 8)
-      : sectionCards(section.sectionId, scopedCards);
+    const cards =
+      canonicalRole === "scope_method"
+        ? scopedCards.slice(0, 8)
+        : sectionCards(section.sectionId, scopedCards);
     const sourceCount = new Set(cards.map((card) => card.sourceId)).size;
     const requiredAspects = requiredAspectsForSection(section.sectionId);
-    const fallbackCount = cards.filter((card) => card.extractionMethod === "rule_fallback_claim_extraction").length;
-    const supportedCount = cards.filter((card) => (card.groundingConfidence ?? 0.5) >= 0.56 && !card.needsReview).length;
+    const fallbackCount = cards.filter(
+      (card) => card.extractionMethod === "rule_fallback_claim_extraction",
+    ).length;
+    const supportedCount = cards.filter(
+      (card) => (card.groundingConfidence ?? 0.5) >= 0.56 && !card.needsReview,
+    ).length;
     const missingAspects = requiredAspects.filter((aspect) => {
       if (aspect === "multiple_sources") return sourceCount < 2;
-      if (aspect === "academic_or_official_evidence") return !cards.some(roleSupportsFindings);
+      if (aspect === "academic_or_official_evidence")
+        return !cards.some(roleSupportsFindings);
       if (aspect === "citation") return cards.length === 0;
       if (aspect === "supported_claim") return cards.length === 0;
-      if (aspect === "limitations") return cards.every((card) => (card.limitations ?? []).length === 0);
+      if (aspect === "limitations")
+        return cards.every((card) => (card.limitations ?? []).length === 0);
       return cards.length === 0;
     });
-    const threshold = /literature|文獻|discussion|探討/.test(section.sectionId) ? 3 : /findings|發現/.test(section.sectionId) ? 2 : 1;
+    const threshold = /literature|文獻|discussion|探討/.test(section.sectionId)
+      ? 3
+      : /findings|發現/.test(section.sectionId)
+        ? 2
+        : 1;
     const canBeSufficient = fallbackCount < cards.length && supportedCount > 0;
     const coverageStatus: SectionEvidenceBundle["coverageStatus"] =
-      cards.length >= threshold && sourceCount >= (/literature|findings/.test(section.sectionId) ? 2 : 1) && canBeSufficient
+      cards.length >= threshold &&
+      sourceCount >= (/literature|findings/.test(section.sectionId) ? 2 : 1) &&
+      canBeSufficient
         ? "sufficient"
         : cards.length > 0
           ? "weak"
@@ -1388,6 +1851,48 @@ function buildSectionEvidenceBundles(input: {
   });
 }
 
+function buildFormalSectionEvidenceBundles(input: {
+  outline: Array<{ sectionId: string; title: string }>;
+  cards: ReportWriterEvidenceCard[];
+  architecture: FormalResearchArchitecture;
+}): SectionEvidenceBundle[] {
+  return input.outline.map((section) => {
+    const allocation = input.architecture.sectionClaimAllocations.find(
+      (candidate) => candidate.sectionId === section.sectionId,
+    );
+    const evidenceIds = new Set(allocation?.evidenceIds ?? []);
+    const sourceIds = new Set(allocation?.sourceIds ?? []);
+    const cards = input.cards.filter(
+      (card) =>
+        evidenceIds.has(card.id) ||
+        evidenceIds.has(card.evidenceId ?? card.id) ||
+        sourceIds.has(card.sourceId),
+    );
+    const workflowBound =
+      section.sectionId === "methods" ||
+      section.sectionId === "evidence_overview";
+    const canGenerate = workflowBound || cards.length > 0;
+    return {
+      sectionId: section.sectionId,
+      sectionTitle: section.title,
+      requiredAspects: requiredAspectsForSection(section.sectionId),
+      evidenceCards: cards,
+      coverageStatus: canGenerate ? "sufficient" : "insufficient",
+      missingAspects: canGenerate
+        ? []
+        : requiredAspectsForSection(section.sectionId),
+      canGenerate,
+      diagnostics: [
+        "formal_section_claim_allocation",
+        `owned_claims:${allocation?.ownedClaimIds.length ?? 0}`,
+        `contextual_claims:${allocation?.contextualClaimIds.length ?? 0}`,
+        `evidence:${cards.length}`,
+        `sources:${new Set(cards.map((card) => card.sourceId)).size}`,
+      ],
+    };
+  });
+}
+
 function splitSentences(text: string): string[] {
   return text
     .replace(/\r\n/g, "\n")
@@ -1405,9 +1910,9 @@ const SUBSTANTIVE_CLAIM_PATTERN =
 
 function textTokens(text: string): Set<string> {
   const normalized = text
-      .toLowerCase()
-      .replace(/[^\p{L}\p{N}]+/gu, " ")
-      .trim();
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
   const tokens = normalized.split(/\s+/).filter((token) => token.length >= 2);
   for (const match of text.matchAll(/[\u3400-\u9fff]{2,}/gu)) {
     const cjk = match[0];
@@ -1439,23 +1944,31 @@ function isCrossLanguageText(left: string, right: string): boolean {
   const rightHasCjk = /[\u3400-\u9fff]/u.test(right);
   const leftHasLatin = /[A-Za-z]{3,}/u.test(left);
   const rightHasLatin = /[A-Za-z]{3,}/u.test(right);
-  return (leftHasCjk && !rightHasCjk && rightHasLatin) ||
-    (leftHasLatin && !leftHasCjk && rightHasCjk && !rightHasLatin);
-}
-
-function numericTokens(text: string): string[] {
-  const withoutCitationMarkers = canonicalizeCitationMarkersInText(text)
-    .replace(/\[S\d+\]/gu, "");
-  return Array.from(withoutCitationMarkers.matchAll(/\d+(?:\.\d+)?\s*%?/gu)).map((match) =>
-    match[0].replace(/\s+/g, ""),
+  return (
+    (leftHasCjk && !rightHasCjk && rightHasLatin) ||
+    (leftHasLatin && !leftHasCjk && rightHasCjk && !rightHasLatin)
   );
 }
 
-function sentenceNeedsStrictAlignment(sentence: string): boolean {
-  return /(?:\d|%|因為|因此|導致|造成|影響|降低|提高|增加|減少|高於|低於|比較|優於|劣於|政策|建議|should|because|cause|causal|effect|increase|decrease|higher|lower|compare|policy)/iu.test(sentence);
+function numericTokens(text: string): string[] {
+  const withoutCitationMarkers = canonicalizeCitationMarkersInText(
+    text,
+  ).replace(/\[S\d+\]/gu, "");
+  return Array.from(
+    withoutCitationMarkers.matchAll(/\d+(?:\.\d+)?\s*%?/gu),
+  ).map((match) => match[0].replace(/\s+/g, ""));
 }
 
-function supportContainsRequiredNumbers(sentence: string, support: string): boolean {
+function sentenceNeedsStrictAlignment(sentence: string): boolean {
+  return /(?:\d|%|因為|因此|導致|造成|影響|降低|提高|增加|減少|高於|低於|比較|優於|劣於|政策|建議|should|because|cause|causal|effect|increase|decrease|higher|lower|compare|policy)/iu.test(
+    sentence,
+  );
+}
+
+function supportContainsRequiredNumbers(
+  sentence: string,
+  support: string,
+): boolean {
   const numbers = numericTokens(sentence);
   if (numbers.length === 0) return true;
   const supportNumbers = new Set(numericTokens(support));
@@ -1469,9 +1982,14 @@ function verifiedBilingualClaim(card: ReportWriterEvidenceCard): string | null {
     !card.needsReview &&
     !card.needsManualReview &&
     card.extractionMethod !== "rule_fallback_claim_extraction";
-  const hasExactSupport = card.governanceFlags?.includes("exact_support_span_verified") ?? false;
+  const hasExactSupport =
+    card.governanceFlags?.includes("exact_support_span_verified") ?? false;
   if (!wasReviewed || !hasExactSupport || !claimZhTw || !support) return null;
-  if (!/[\u3400-\u9fff]/u.test(claimZhTw) || !isCrossLanguageText(claimZhTw, support)) return null;
+  if (
+    !/[\u3400-\u9fff]/u.test(claimZhTw) ||
+    !isCrossLanguageText(claimZhTw, support)
+  )
+    return null;
   if (!supportContainsRequiredNumbers(claimZhTw, support)) return null;
   return claimZhTw;
 }
@@ -1487,12 +2005,16 @@ function hasEnoughOverlap(sentence: string, support: string): boolean {
     if (supportTokens.has(token)) overlap += 1;
   }
   const strict = sentenceNeedsStrictAlignment(cleanSentence);
-  if (strict && !supportContainsRequiredNumbers(cleanSentence, support)) return false;
+  if (strict && !supportContainsRequiredNumbers(cleanSentence, support))
+    return false;
   if (overlap >= (strict ? 3 : 2)) return true;
   return support.includes(cleanSentence);
 }
 
-function hasEnoughCombinedOverlap(sentence: string, cards: ReportWriterEvidenceCard[]): boolean {
+function hasEnoughCombinedOverlap(
+  sentence: string,
+  cards: ReportWriterEvidenceCard[],
+): boolean {
   const semanticSupport: string[] = [];
   const exactSupport: string[] = [];
   for (const card of cards) {
@@ -1512,8 +2034,15 @@ function hasEnoughCombinedOverlap(sentence: string, cards: ReportWriterEvidenceC
     if (hasEnoughOverlap(sentence, reviewedSupport)) return true;
   }
   const combinedExactSupport = exactSupport.join(" ");
-  if (!combinedExactSupport || !supportContainsRequiredNumbers(sentence, combinedExactSupport)) return false;
-  return semanticSupport.length > 0 && hasEnoughOverlap(sentence, semanticSupport.join(" "));
+  if (
+    !combinedExactSupport ||
+    !supportContainsRequiredNumbers(sentence, combinedExactSupport)
+  )
+    return false;
+  return (
+    semanticSupport.length > 0 &&
+    hasEnoughOverlap(sentence, semanticSupport.join(" "))
+  );
 }
 
 export function verifyGroundedSection(input: {
@@ -1523,7 +2052,8 @@ export function verifyGroundedSection(input: {
   const canonicalBody = canonicalizeCitationMarkersInText(input.body);
   const cardsByMarker = new Map<string, ReportWriterEvidenceCard[]>();
   input.evidenceCards.forEach((card, index) => {
-    const marker = canonicalCitationMarker(card.citationMarker) ?? `[S${index + 1}]`;
+    const marker =
+      canonicalCitationMarker(card.citationMarker) ?? `[S${index + 1}]`;
     cardsByMarker.set(marker, [...(cardsByMarker.get(marker) ?? []), card]);
   });
   const unsupportedSentences: string[] = [];
@@ -1559,7 +2089,8 @@ export function verifyGroundedSection(input: {
   const groundingStatus: GroundedSectionDiagnostics["groundingStatus"] =
     unsupportedSentences.length === 0
       ? "grounded"
-      : unsupportedSentences.length >= Math.max(1, Math.ceil(splitSentences(canonicalBody).length / 2))
+      : unsupportedSentences.length >=
+          Math.max(1, Math.ceil(splitSentences(canonicalBody).length / 2))
         ? "unsupported"
         : "partially_grounded";
   return {
@@ -1575,11 +2106,18 @@ function buildFallbackSections(input: {
   outline: Array<{ sectionId: string; title: string }>;
   bundles: SectionEvidenceBundle[];
   reportPlan?: ReportPlan;
-}): { sections: ReportWriterSection[]; claims: DraftClaim[]; missingEvidence: MissingEvidenceItem[] } {
+  formalResearchArchitecture?: FormalResearchArchitecture;
+}): {
+  sections: ReportWriterSection[];
+  claims: DraftClaim[];
+  missingEvidence: MissingEvidenceItem[];
+} {
   const claims: DraftClaim[] = [];
   const missingEvidence: MissingEvidenceItem[] = [];
   const sections = input.outline.map((section): ReportWriterSection => {
-    const bundle = input.bundles.find((item) => item.sectionId === section.sectionId) ?? {
+    const bundle = input.bundles.find(
+      (item) => item.sectionId === section.sectionId,
+    ) ?? {
       sectionId: section.sectionId,
       sectionTitle: section.title,
       requiredAspects: requiredAspectsForSection(section.sectionId),
@@ -1589,8 +2127,25 @@ function buildFallbackSections(input: {
       canGenerate: false,
       diagnostics: ["missing_bundle"],
     };
-    const cards = bundle.evidenceCards;
-    const findingsSection = section.sectionId === "findings" || /發現|文獻|探討|discussion|analysis/.test(section.title);
+    const allocation = input.formalResearchArchitecture?.sectionClaimAllocations.find(
+      (item) => item.sectionId === section.sectionId,
+    );
+    const allocationEvidenceIds = new Set(allocation?.evidenceIds ?? []);
+    const allocationSourceIds = new Set(allocation?.sourceIds ?? []);
+    const allocationScopedCards = bundle.evidenceCards.filter((card) =>
+      allocationEvidenceIds.has(card.id) ||
+      (card.evidenceId ? allocationEvidenceIds.has(card.evidenceId) : false) ||
+      allocationSourceIds.has(card.sourceId),
+    );
+    const candidateCards = allocationScopedCards.length > 0
+      ? allocationScopedCards
+      : bundle.evidenceCards;
+    const sectionOrder = input.outline.findIndex((item) => item.sectionId === section.sectionId);
+    const rotation = candidateCards.length > 0 ? Math.max(0, sectionOrder) % candidateCards.length : 0;
+    const cards = [...candidateCards.slice(rotation), ...candidateCards.slice(0, rotation)].slice(0, 3);
+    const findingsSection =
+      section.sectionId === "findings" ||
+      /發現|文獻|探討|discussion|analysis/.test(section.title);
     if (!bundle.canGenerate) {
       missingEvidence.push({
         sectionId: section.sectionId,
@@ -1599,8 +2154,18 @@ function buildFallbackSections(input: {
           ? "主要發現需要 academic/professional/official/data evidence，不能只依賴百科或新聞。"
           : "此章節目前沒有可綁定的 evidence card。",
         requiredEvidenceRoles: findingsSection
-          ? ["academic_evidence", "professional_guidance", "official_statistics", "data_or_dataset"]
-          : ["background_definition", "official_statistics", "professional_guidance", "academic_evidence"],
+          ? [
+              "academic_evidence",
+              "professional_guidance",
+              "official_statistics",
+              "data_or_dataset",
+            ]
+          : [
+              "background_definition",
+              "official_statistics",
+              "professional_guidance",
+              "academic_evidence",
+            ],
       });
       return {
         sectionId: section.sectionId,
@@ -1618,72 +2183,150 @@ function buildFallbackSections(input: {
       };
     }
     const markers = cards.map(
-      (card, index) => canonicalCitationMarker(card.citationMarker) ?? `[S${index + 1}]`,
+      (card, index) =>
+        canonicalCitationMarker(card.citationMarker) ?? `[S${index + 1}]`,
     );
-    const fallbackClaimText = (card: ReportWriterEvidenceCard): string => conciseClaim(card);
+    const fallbackClaimText = (card: ReportWriterEvidenceCard): string => {
+      const claim = conciseClaim(card);
+      if (!input.formalResearchArchitecture) return claim;
+      const rhetoricalLead: Record<string, string> = {
+        executive_summary: "就摘要層次而言，",
+        background: "作為研究問題的背景，",
+        methods: "就本次證據處理而言，",
+        evidence_overview: "在納入證據的概況中，",
+        findings: "實證結果顯示，",
+        cross_study_synthesis: "跨研究比較時，",
+        discussion: "就結果解釋而言，",
+        limitations_gaps: "就證據限制而言，",
+        conclusion: "在閉合正文已建立的發現時，",
+      };
+      return `${rhetoricalLead[section.sectionId] ?? ""}${claim}`;
+    };
     const evidenceSentences = uniqueReportFragments(
-      cards.map((card, index) => `${fallbackClaimText(card)}${markers[index] ?? ""}。`),
+      cards.map(
+        (card, index) => `${fallbackClaimText(card)}${markers[index] ?? ""}。`,
+      ),
     ).slice(0, 3);
     const claimText = evidenceSentences
-      .map((sentence) => sentence.replace(/\[S\d+\]/gu, "").replace(/[。！？!?]+$/u, ""))
+      .map((sentence) =>
+        sentence.replace(/\[S\d+\]/gu, "").replace(/[。！？!?]+$/u, ""),
+      )
       .join("；");
     const cardEvidenceIds = new Set(cards.map(evidenceIdentityForPlan));
     const mappedPlanSectionIds = input.reportPlan
-      ? new Set(reportPlanSectionIdsForOutputSection(input.reportPlan, section.sectionId))
+      ? new Set(
+          reportPlanSectionIdsForOutputSection(
+            input.reportPlan,
+            section.sectionId,
+          ),
+        )
       : new Set<string>();
     const mappedPlanClaimIds = new Set(
       input.reportPlan?.sections
-        .filter((planSection) => mappedPlanSectionIds.has(planSection.sectionId))
+        .filter((planSection) =>
+          mappedPlanSectionIds.has(planSection.sectionId),
+        )
         .flatMap((planSection) => planSection.plannedClaimIds) ?? [],
     );
-    const plannedClaims = input.reportPlan?.plannedClaims.filter((claim) =>
-      mappedPlanClaimIds.has(claim.claimId) &&
-      claim.supportingEvidenceIds.some((evidenceId) => cardEvidenceIds.has(evidenceId))
-    ) ?? [];
+    const plannedClaims =
+      input.reportPlan?.plannedClaims.filter(
+        (claim) =>
+          mappedPlanClaimIds.has(claim.claimId) &&
+          claim.supportingEvidenceIds.some((evidenceId) =>
+            cardEvidenceIds.has(evidenceId),
+          ),
+      ) ?? [];
     const sectionClaim: DraftClaim = {
       id: plannedClaims[0]?.claimId ?? `claim:${section.sectionId}:1`,
       sectionId: section.sectionId,
-      text: (plannedClaims[0]?.claimText ?? claimText) ||
+      text:
+        (plannedClaims[0]?.claimText ?? claimText) ||
         `此段以 ${cards.length} 張 evidence card 保守整理「${input.topic}」。`,
       evidenceCardIds: cards.map((card) => card.id),
       sourceIds: cards.map((card) => card.sourceId),
       supportLevel: cards.length >= 2 ? "supported" : "partial",
     };
-    const sectionClaims = plannedClaims.length > 0
-      ? plannedClaims.map((claim): DraftClaim => {
-          const boundCards = cards.filter((card) =>
-            claim.supportingEvidenceIds.includes(evidenceIdentityForPlan(card))
-          );
-          return {
-            id: claim.claimId,
-            sectionId: claim.sectionId,
-            text: claim.claimText,
-            evidenceCardIds: boundCards.map((card) => card.id),
-            sourceIds: boundCards.map((card) => card.sourceId),
-            supportLevel: claim.evidenceStrength === "insufficient"
-              ? "missing"
-              : claim.evidenceStrength === "weak"
-                ? "partial"
-                : "supported",
-          };
-        })
-      : [sectionClaim];
+    const sectionClaims =
+      plannedClaims.length > 0
+        ? plannedClaims.map((claim): DraftClaim => {
+            const boundCards = cards.filter((card) =>
+              claim.supportingEvidenceIds.includes(
+                evidenceIdentityForPlan(card),
+              ),
+            );
+            return {
+              id: claim.claimId,
+              sectionId: claim.sectionId,
+              text: claim.claimText,
+              evidenceCardIds: boundCards.map((card) => card.id),
+              sourceIds: boundCards.map((card) => card.sourceId),
+              supportLevel:
+                claim.evidenceStrength === "insufficient"
+                  ? "missing"
+                  : claim.evidenceStrength === "weak"
+                    ? "partial"
+                    : "supported",
+            };
+          })
+        : [sectionClaim];
     for (const claim of sectionClaims) {
-      if (!claims.some((existing) => existing.id === claim.id)) claims.push(claim);
+      if (!claims.some((existing) => existing.id === claim.id))
+        claims.push(claim);
     }
-    const evidenceBoundary =
-      cards.some((card) => /background_definition|case_or_news|definition_or_concept/.test(roleText(card)))
-        ? "背景或案例來源只用來界定脈絡，不單獨承擔主要結論。"
-        : "本節的判讀邊界仍是已接受且可追溯的來源，未引用的資料不納入結論。";
-    const synthesis = cards.length > 1
-      ? "綜合以上摘錄，共同部分可組成本節主軸，差異或未覆蓋處則留待後續檢驗。"
-      : "就目前摘錄而言，這項資料只能建立初步脈絡，不外推為完整結論。";
-    const prose = normalizeReportSectionProse([
-      fallbackSectionLead(section.sectionId, section.title, input.topic),
-      evidenceSentences.join(""),
-      `${synthesis}${evidenceBoundary}`,
-    ].join("\n\n"));
-    const grounded = verifyGroundedSection({ body: prose, evidenceCards: cards });
+    const defaultEvidenceBoundary = cards.some((card) =>
+      /background_definition|case_or_news|definition_or_concept/.test(
+        roleText(card),
+      ),
+    )
+      ? "背景或案例來源只用來界定脈絡，不單獨承擔主要結論。"
+      : "本節的判讀邊界仍是已接受且可追溯的來源，未引用的資料不納入結論。";
+    const defaultSynthesis =
+      cards.length > 1
+        ? "綜合以上摘錄，共同部分可組成本節主軸，差異或未覆蓋處則留待後續檢驗。"
+        : "就目前摘錄而言，這項資料只能建立初步脈絡，不外推為完整結論。";
+    const formalSynthesis: Record<string, string> = {
+      executive_summary: "本摘要只濃縮正文已配置的核心發現，不延伸未在正文建立的主張。",
+      background: "這些資料用於界定問題的重要性、範圍與不確定性，不在此提前陳述全部研究結果。",
+      methods: `本次依已接受來源進行${input.formalResearchArchitecture?.method.selectedMethod ?? "結構化文獻整理"}，並保留篩選、抽取與來源可用性邊界。`,
+      evidence_overview: `證據概況以 ${input.formalResearchArchitecture?.diagnostics.structuredStudies ?? cards.length} 項結構化研究記錄為母體，只呈現可確定的組成與可用性。`,
+      findings: "本節只陳述由已配置證據直接支持的實證結果，跨研究解釋留待後續章節。",
+      cross_study_synthesis: "本節比較研究間的一致、衝突與異質性，不重述主要發現章的完整句子。",
+      discussion: "本節將既有發現轉為解釋與適用邊界，不把關聯性結果提升為因果結論。",
+      limitations_gaps: "限制同時涵蓋來源取得、全文可用性、研究異質性與本系統的搜尋及抽取程序。",
+      conclusion: "本節只在正文已建立的主張範圍內回答研究問題，不引入新證據、數值或建議。",
+    };
+    const formalBoundary: Record<string, string> = {
+      executive_summary: "摘要中的證據界線與正文一致。",
+      background: "背景來源不單獨承擔主要結果。",
+      methods: "方法描述只反映本次實際執行流程。",
+      evidence_overview: "未知或未抽取欄位不計入確定性統計。",
+      findings: "未配置給本節的 claim IDs 不得在此實現。",
+      cross_study_synthesis: "比較不足時保留不確定性，不製造共識。",
+      discussion: "機制與含意只有在既有證據可支持時才保留。",
+      limitations_gaps: "缺少全文時不把摘要證據表述為全文結論。",
+      conclusion: "結論的新穎主張數必須為零。",
+    };
+    const synthesis = input.formalResearchArchitecture
+      ? formalSynthesis[section.sectionId] ?? defaultSynthesis
+      : defaultSynthesis;
+    const evidenceBoundary = input.formalResearchArchitecture
+      ? formalBoundary[section.sectionId] ?? defaultEvidenceBoundary
+      : defaultEvidenceBoundary;
+    const quantitativeNarrative = input.formalResearchArchitecture && section.sectionId === "findings"
+      ? input.formalResearchArchitecture?.quantitativeFindings.find((finding) => finding.eligibleForChart || finding.comparabilityStatus === "single_study")?.narrativeText
+      : undefined;
+    const prose = normalizeReportSectionProse(
+      [
+        fallbackSectionLead(section.sectionId, section.title, input.topic),
+        evidenceSentences.join(""),
+        quantitativeNarrative,
+        `${synthesis}${evidenceBoundary}`,
+      ].filter(Boolean).join("\n\n"),
+    );
+    const grounded = verifyGroundedSection({
+      body: prose,
+      evidenceCards: cards,
+    });
     return {
       sectionId: section.sectionId,
       title: section.title,
@@ -1694,7 +2337,8 @@ function buildFallbackSections(input: {
       groundingStatus: grounded.groundingStatus,
       unsupportedSentences: grounded.unsupportedSentences,
       generationMethod: "fallback_bundle_synthesis",
-      paragraphClaims: reportSectionParagraphs(prose).map((paragraph, index) => ({
+      paragraphClaims: reportSectionParagraphs(prose).map(
+        (paragraph, index) => ({
           paragraphId: `${section.sectionId}:p${index + 1}`,
           sectionId: section.sectionId,
           claimIds: sectionClaims.map((claim) => claim.id),
@@ -1702,10 +2346,15 @@ function buildFallbackSections(input: {
           citationMarkers: extractCanonicalCitationMarkers(paragraph),
           generatedTextZhTw: paragraph,
           unsupportedSentences: [],
-        })),
+        }),
+      ),
       warnings: [
-        ...(sectionClaim.supportLevel === "partial" ? ["partial_evidence"] : []),
-        ...(grounded.groundingStatus !== "grounded" ? ["grounding_verification_failed"] : []),
+        ...(sectionClaim.supportLevel === "partial"
+          ? ["partial_evidence"]
+          : []),
+        ...(grounded.groundingStatus !== "grounded"
+          ? ["grounding_verification_failed"]
+          : []),
       ],
     };
   });
@@ -1718,25 +2367,29 @@ function citationsForCards(
 ): DraftCitation[] {
   const firstCardBySource = new Map<string, ReportWriterEvidenceCard>();
   cards.forEach((card) => {
-    if (!firstCardBySource.has(card.sourceId)) firstCardBySource.set(card.sourceId, card);
+    if (!firstCardBySource.has(card.sourceId))
+      firstCardBySource.set(card.sourceId, card);
   });
   return sources.flatMap((source, index) => {
     const card = firstCardBySource.get(source.id);
     if (!card) return [];
-    const canonicalSourceKey = card.canonicalSourceKey ?? canonicalKeyForSource(source);
-    return [{
-      id: `citation:${canonicalSourceKey}`,
-      marker: `[S${index + 1}]`,
-      sourceId: source.id,
-      canonicalSourceKey,
-      citationKey: card.citationKey ?? canonicalSourceKey,
-      evidenceCardId: card.id,
-      title: card.sourceTitle || card.title || source.title || source.id,
-      url:
-        typeof card.sourceMetadata?.url === "string"
-          ? card.sourceMetadata.url
-          : source.url ?? null,
-    }];
+    const canonicalSourceKey =
+      card.canonicalSourceKey ?? canonicalKeyForSource(source);
+    return [
+      {
+        id: `citation:${canonicalSourceKey}`,
+        marker: `[S${index + 1}]`,
+        sourceId: source.id,
+        canonicalSourceKey,
+        citationKey: card.citationKey ?? canonicalSourceKey,
+        evidenceCardId: card.id,
+        title: card.sourceTitle || card.title || source.title || source.id,
+        url:
+          typeof card.sourceMetadata?.url === "string"
+            ? card.sourceMetadata.url
+            : (source.url ?? null),
+      },
+    ];
   });
 }
 
@@ -1752,19 +2405,37 @@ function missingEvidenceFromWriter(
         sectionId: plan.sectionId,
         title: plan.title,
         reason: plan.evidenceGaps.join("；") || "此章節證據仍不足。",
-        requiredEvidenceRoles: ["academic_evidence", "professional_guidance", "official_statistics", "data_or_dataset"],
+        requiredEvidenceRoles: [
+          "academic_evidence",
+          "professional_guidance",
+          "official_statistics",
+          "data_or_dataset",
+        ],
       });
     }
   }
   for (const section of sections) {
-    const findingsSection = section.sectionId === "findings" || /發現|文獻|探討|discussion|analysis/.test(section.title);
-    const boundCards = cards.filter((card) => section.evidenceCardIds.includes(card.id));
-    if (findingsSection && boundCards.length > 0 && !boundCards.some(roleSupportsFindings)) {
+    const findingsSection =
+      section.sectionId === "findings" ||
+      /發現|文獻|探討|discussion|analysis/.test(section.title);
+    const boundCards = cards.filter((card) =>
+      section.evidenceCardIds.includes(card.id),
+    );
+    if (
+      findingsSection &&
+      boundCards.length > 0 &&
+      !boundCards.some(roleSupportsFindings)
+    ) {
       missing.push({
         sectionId: section.sectionId,
         title: section.title,
         reason: "主要發現不得只靠百科、背景或新聞來源。",
-        requiredEvidenceRoles: ["academic_evidence", "professional_guidance", "official_statistics", "data_or_dataset"],
+        requiredEvidenceRoles: [
+          "academic_evidence",
+          "professional_guidance",
+          "official_statistics",
+          "data_or_dataset",
+        ],
       });
     }
     if (section.evidenceCardIds.length === 0) {
@@ -1772,7 +2443,12 @@ function missingEvidenceFromWriter(
         sectionId: section.sectionId,
         title: section.title,
         reason: "正文段落沒有綁定 evidence card。",
-        requiredEvidenceRoles: ["academic_evidence", "professional_guidance", "official_statistics", "background_definition"],
+        requiredEvidenceRoles: [
+          "academic_evidence",
+          "professional_guidance",
+          "official_statistics",
+          "background_definition",
+        ],
       });
     }
   }
@@ -1787,7 +2463,10 @@ function claimsFromSections(sections: ReportWriterSection[]): DraftClaim[] {
       text: claim.generatedTextZhTw,
       evidenceCardIds: claim.evidenceCardIds,
       sourceIds: section.citationIds,
-      supportLevel: claim.evidenceCardIds.length > 0 ? "supported" as const : "missing" as const,
+      supportLevel:
+        claim.evidenceCardIds.length > 0
+          ? ("supported" as const)
+          : ("missing" as const),
     })),
   );
 }
@@ -1797,12 +2476,11 @@ function paragraphClaimsForRenderedProse(
   prose: string,
   evidenceCards: ReportWriterEvidenceCard[],
 ): NonNullable<ReportWriterSection["paragraphClaims"]> {
-  const claimIds = Array.from(new Set(
-    (section.paragraphClaims ?? []).flatMap((claim) => claim.claimIds),
-  ));
-  const fallbackClaimIds = claimIds.length > 0
-    ? claimIds
-    : [`claim:${section.sectionId}:1`];
+  const claimIds = Array.from(
+    new Set((section.paragraphClaims ?? []).flatMap((claim) => claim.claimIds)),
+  );
+  const fallbackClaimIds =
+    claimIds.length > 0 ? claimIds : [`claim:${section.sectionId}:1`];
   return reportSectionParagraphs(prose).map((paragraph, index) => ({
     paragraphId: `${section.sectionId}:p${index + 1}`,
     sectionId: section.sectionId,
@@ -1814,7 +2492,9 @@ function paragraphClaimsForRenderedProse(
   }));
 }
 
-function insufficientSectionFromBundle(bundle: SectionEvidenceBundle): ReportWriterSection {
+function insufficientSectionFromBundle(
+  bundle: SectionEvidenceBundle,
+): ReportWriterSection {
   return {
     sectionId: bundle.sectionId,
     title: bundle.sectionTitle,
@@ -1840,12 +2520,24 @@ function individuallyGroundedSourceSentence(
     .filter((sentence) => {
       const markers = extractMarkers(sentence);
       if (markers.length !== 1 || markers[0] !== marker) return false;
-      const grounded = verifyGroundedSection({ body: sentence, evidenceCards: sourceCards });
-      return grounded.groundingStatus === "grounded" && grounded.unsupportedSentences.length === 0;
+      const grounded = verifyGroundedSection({
+        body: sentence,
+        evidenceCards: sourceCards,
+      });
+      return (
+        grounded.groundingStatus === "grounded" &&
+        grounded.unsupportedSentences.length === 0
+      );
     })
     .sort((left, right) => {
-      const leftSpecific = /(?:案例|研究|顯示|指出|發現|結果|相關|冷卻|溫度|效應)/u.test(left) ? 1 : 0;
-      const rightSpecific = /(?:案例|研究|顯示|指出|發現|結果|相關|冷卻|溫度|效應)/u.test(right) ? 1 : 0;
+      const leftSpecific =
+        /(?:案例|研究|顯示|指出|發現|結果|相關|冷卻|溫度|效應)/u.test(left)
+          ? 1
+          : 0;
+      const rightSpecific =
+        /(?:案例|研究|顯示|指出|發現|結果|相關|冷卻|溫度|效應)/u.test(right)
+          ? 1
+          : 0;
       return rightSpecific - leftSpecific || left.length - right.length;
     });
   return candidates[0] ?? null;
@@ -1857,37 +2549,53 @@ function groundedReviewedEvidenceSentence(
 ): string | null {
   for (const card of sourceCards) {
     if (card.needsReview || card.needsManualReview) continue;
-    const reviewedText = card.claimTextZhTw ?? card.claimText ?? card.claim ?? "";
-    const evidenceStatements = splitSentences(reviewedText)
-      .filter((sentence) =>
+    const reviewedText =
+      card.claimTextZhTw ?? card.claimText ?? card.claim ?? "";
+    const evidenceStatements = splitSentences(reviewedText).filter(
+      (sentence) =>
         sentence.length >= 35 &&
         sentence.length <= 420 &&
-        /(?:結果|顯示|指出|發現|相關|增加|下降|提升|降低|冷卻|溫度|熱島)/u.test(sentence) &&
-        !/(?:限制|未提供|不足|方法上|目的在)/u.test(sentence)
-      );
-    const caseLead = splitSentences(reviewedText)
-      .find((sentence) => /(?:本研究以|案例|建成區為|Hawassa|廣州|西安|大理)/u.test(sentence));
+        /(?:結果|顯示|指出|發現|相關|增加|下降|提升|降低|冷卻|溫度|熱島)/u.test(
+          sentence,
+        ) &&
+        !/(?:限制|未提供|不足|方法上|目的在)/u.test(sentence),
+    );
+    const caseLead = splitSentences(reviewedText).find((sentence) =>
+      /(?:本研究以|案例|建成區為|Hawassa|廣州|西安|大理)/u.test(sentence),
+    );
     const candidates = evidenceStatements
-      .flatMap((statement) => Array.from(new Set([
-          statement,
-        ].filter(Boolean))))
+      .flatMap((statement) => Array.from(new Set([statement].filter(Boolean))))
       .map((sentence) => {
-        const place = caseLead?.match(
-          /(?:本研究以|以)([^，。；]{2,40}?)(?:為|作為)(?:案例|例|對象)/u,
-        )?.[1]?.trim();
-        const cleanSentence = sentence.replace(/^(?:結果|研究)(?:顯示|指出)[，：:\s]*/u, "");
+        const place = caseLead
+          ?.match(
+            /(?:本研究以|以)([^，。；]{2,40}?)(?:為|作為)(?:案例|例|對象)/u,
+          )?.[1]
+          ?.trim();
+        const cleanSentence = sentence.replace(
+          /^(?:結果|研究)(?:顯示|指出)[，：:\s]*/u,
+          "",
+        );
         const casePrefix = place ? `${place}案例顯示，` : "研究結果顯示，";
         return `${casePrefix}${cleanSentence.replace(/[。！？!?；;]+$/u, "")}${marker}。`;
       })
       .filter((sentence) => {
-        const grounded = verifyGroundedSection({ body: sentence, evidenceCards: sourceCards });
-        return grounded.groundingStatus === "grounded" && grounded.unsupportedSentences.length === 0;
+        const grounded = verifyGroundedSection({
+          body: sentence,
+          evidenceCards: sourceCards,
+        });
+        return (
+          grounded.groundingStatus === "grounded" &&
+          grounded.unsupportedSentences.length === 0
+        );
       })
       .sort((left, right) => left.length - right.length);
     if (candidates[0]) return candidates[0];
     const conservative = evidenceStatements
       .map((sentence) => {
-        const cleanSentence = sentence.replace(/^(?:結果|研究)(?:顯示|指出)[，：:\s]*/u, "");
+        const cleanSentence = sentence.replace(
+          /^(?:結果|研究)(?:顯示|指出)[，：:\s]*/u,
+          "",
+        );
         return `研究結果顯示，${cleanSentence.replace(/[。！？!?；;]+$/u, "")}${marker}。`;
       })
       .sort((left, right) => left.length - right.length)[0];
@@ -1905,14 +2613,16 @@ function writerSemanticallyVerifiedSourceSentence(
   const markers = extractMarkers(sentence);
   if (markers.length !== 1 || markers[0] !== marker) return false;
   if (section.groundingStatus !== "grounded") return false;
-  if (/fallback|insufficient|blocked/iu.test(section.generationMethod ?? "")) return false;
+  if (/fallback|insufficient|blocked/iu.test(section.generationMethod ?? ""))
+    return false;
   const sourceCardIds = new Set(sourceCards.map((card) => card.id));
   const claims = section.paragraphClaims ?? [];
   if (claims.length === 0) return false;
-  return claims.some((claim) =>
-    claim.generatedTextZhTw.includes(sentence) &&
-    claim.evidenceCardIds.some((id) => sourceCardIds.has(id)) &&
-    claim.unsupportedSentences.length === 0
+  return claims.some(
+    (claim) =>
+      claim.generatedTextZhTw.includes(sentence) &&
+      claim.evidenceCardIds.some((id) => sourceCardIds.has(id)) &&
+      claim.unsupportedSentences.length === 0,
   );
 }
 
@@ -1922,13 +2632,19 @@ function conclusionHasWriterVerifiedSourceClosure(
 ): boolean {
   const cardsByMarker = new Map<string, ReportWriterEvidenceCard[]>();
   for (const [index, card] of evidenceCards.entries()) {
-    const marker = canonicalCitationMarker(card.citationMarker) ?? `[S${index + 1}]`;
+    const marker =
+      canonicalCitationMarker(card.citationMarker) ?? `[S${index + 1}]`;
     cardsByMarker.set(marker, [...(cardsByMarker.get(marker) ?? []), card]);
   }
   return Array.from(cardsByMarker.entries()).every(([marker, sourceCards]) =>
     splitSentences(section.prose).some((sentence) =>
-      writerSemanticallyVerifiedSourceSentence(section, sentence, marker, sourceCards)
-    )
+      writerSemanticallyVerifiedSourceSentence(
+        section,
+        sentence,
+        marker,
+        sourceCards,
+      ),
+    ),
   );
 }
 
@@ -1938,49 +2654,112 @@ function enforceConclusionSourceClosure(input: {
   bundles: SectionEvidenceBundle[];
   groundingDiagnostics: SectionGroundingDiagnostic[];
   reportPlan?: ReportPlan;
+  writerClaimEntailmentPassed?: boolean;
 }): void {
-  const conclusionIndex = input.sections.findIndex((section) => section.sectionId === "conclusion");
+  const conclusionIndex = input.sections.findIndex(
+    (section) => section.sectionId === "conclusion",
+  );
   if (conclusionIndex < 0) return;
   const conclusion = input.sections[conclusionIndex];
   const bundle = input.bundles.find((item) => item.sectionId === "conclusion");
-  if (!conclusion || !bundle?.canGenerate || bundle.evidenceCards.length === 0) return;
+  if (!conclusion || !bundle?.canGenerate || bundle.evidenceCards.length === 0)
+    return;
+
+  const activeConclusionTraces = (conclusion.sentenceClaimTraces ?? []).filter(
+    (trace) => !trace.deleted && trace.factual !== false,
+  );
+  const writerVNextClosurePassed = Boolean(
+    input.writerClaimEntailmentPassed &&
+      activeConclusionTraces.length > 0 &&
+      activeConclusionTraces.every(
+        (trace) =>
+          trace.validation === "pass" &&
+          trace.realizedClaimIds.length > 0 &&
+          (trace.evidenceIds?.length ?? 0) > 0 &&
+          trace.citationSourceIds.length > 0,
+      ),
+  );
+  if (writerVNextClosurePassed) {
+    const evidenceCardIds = Array.from(
+      new Set(
+        activeConclusionTraces.flatMap((trace) => trace.evidenceIds ?? []),
+      ),
+    );
+    const citationMarkers = Array.from(
+      new Set(
+        activeConclusionTraces.flatMap((trace) => trace.citationIds ?? []),
+      ),
+    );
+    const diagnostic: SectionGroundingDiagnostic = {
+      sectionId: "conclusion",
+      groundingStatus: "grounded",
+      unsupportedSentences: [],
+      diagnostics: ["writer_vnext_claim_lineage_closure"],
+      evidenceCardIds,
+      citationMarkers,
+      evidenceCount: evidenceCardIds.length,
+      needsReviewCount: 0,
+    };
+    const diagnosticIndex = input.groundingDiagnostics.findIndex(
+      (item) => item.sectionId === "conclusion",
+    );
+    if (diagnosticIndex >= 0)
+      input.groundingDiagnostics[diagnosticIndex] = diagnostic;
+    else input.groundingDiagnostics.push(diagnostic);
+    return;
+  }
 
   // A structured conclusion closes a thematic claim, not every source one by
   // one. The plan has already verified the claim→evidence→source identities,
   // so render one multi-source citation cluster from that binding and keep the
   // applicability boundary as a separate, fact-free sentence. This prevents
   // the old closure repair from turning a synthesis back into an abstract list.
-  const plannedConclusion = input.reportPlan?.sections.find((section) =>
-    section.canonicalSectionRole === "conclusion" || section.sectionId === "conclusion"
+  const plannedConclusion = input.reportPlan?.sections.find(
+    (section) =>
+      section.canonicalSectionRole === "conclusion" ||
+      section.sectionId === "conclusion",
   );
   const conclusionClaimIds = new Set(plannedConclusion?.plannedClaimIds ?? []);
-  const plannedClaims = input.reportPlan?.plannedClaims.filter((claim) =>
-    conclusionClaimIds.has(claim.claimId)
-  ) ?? [];
-  const plannedClaim = plannedClaims.find((claim) => claim.supportingEvidenceIds.length >= 2) ??
+  const plannedClaims =
+    input.reportPlan?.plannedClaims.filter((claim) =>
+      conclusionClaimIds.has(claim.claimId),
+    ) ?? [];
+  const plannedClaim =
+    plannedClaims.find((claim) => claim.supportingEvidenceIds.length >= 2) ??
     plannedClaims[0];
   if (plannedClaim) {
     const supportingEvidenceIds = new Set(plannedClaim.supportingEvidenceIds);
     const boundCards = bundle.evidenceCards.filter((card) =>
-      supportingEvidenceIds.has(evidenceIdentityForPlan(card))
+      supportingEvidenceIds.has(evidenceIdentityForPlan(card)),
     );
     if (boundCards.length > 0) {
-      const markers = Array.from(new Set(boundCards.map((card, index) =>
-        canonicalCitationMarker(card.citationMarker) ?? `[S${index + 1}]`
-      )));
-      const claimText = canonicalizeCitationMarkersInText(plannedClaim.claimText)
+      const markers = Array.from(
+        new Set(
+          boundCards.map(
+            (card, index) =>
+              canonicalCitationMarker(card.citationMarker) ?? `[S${index + 1}]`,
+          ),
+        ),
+      );
+      const claimText = canonicalizeCitationMarkersInText(
+        plannedClaim.claimText,
+      )
         .replace(/\[S\d+\]/gu, "")
         .replace(/[。！？!?；;]+$/u, "")
         .trim();
-      const rawBoundary = input.reportPlan?.conclusionBoundary ??
-        input.reportPlan?.argumentMap?.conclusionBoundary ?? "";
+      const rawBoundary =
+        input.reportPlan?.conclusionBoundary ??
+        input.reportPlan?.argumentMap?.conclusionBoundary ??
+        "";
       const boundary = canonicalizeCitationMarkersInText(rawBoundary)
         .replace(/\[S\d+\]/gu, "")
         .trim();
-      const prose = normalizeReportSectionProse([
-        `${claimText}${markers.join("")}。`,
-        ...(boundary ? [boundary] : []),
-      ].join("\n\n"));
+      const prose = normalizeReportSectionProse(
+        [
+          `${claimText}${markers.join("")}。`,
+          ...(boundary ? [boundary] : []),
+        ].join("\n\n"),
+      );
       const paragraphs = reportSectionParagraphs(prose);
       const paragraphClaims = paragraphs.map((paragraph, index) => ({
         paragraphId: `conclusion:p${index + 1}`,
@@ -1995,31 +2774,38 @@ function enforceConclusionSourceClosure(input: {
         ...conclusion,
         prose,
         evidenceCardIds: boundCards.map((card) => card.id),
-        citationIds: Array.from(new Set(boundCards.map((card) => card.sourceId))),
+        citationIds: Array.from(
+          new Set(boundCards.map((card) => card.sourceId)),
+        ),
         coverageStatus: bundle.coverageStatus,
-        groundingStatus: "grounded",
+        groundingStatus: "grounded" as const,
         unsupportedSentences: [],
         generationMethod: "planned_claim_synthesis_closure",
         paragraphClaims,
-        warnings: Array.from(new Set([
-          ...(conclusion.warnings ?? []),
-          "planned_claim_synthesis_closure",
-        ])),
+        warnings: Array.from(
+          new Set([
+            ...(conclusion.warnings ?? []),
+            "planned_claim_synthesis_closure",
+          ]),
+        ),
       };
       const diagnostic: SectionGroundingDiagnostic = {
         sectionId: "conclusion",
-        groundingStatus: "grounded",
+        groundingStatus: "grounded" as const,
         unsupportedSentences: [],
         diagnostics: ["planned_claim_synthesis_closure"],
         evidenceCardIds: boundCards.map((card) => card.id),
         citationMarkers: markers,
         evidenceCount: boundCards.length,
-        needsReviewCount: boundCards.filter((card) => card.needsReview || card.needsManualReview).length,
+        needsReviewCount: boundCards.filter(
+          (card) => card.needsReview || card.needsManualReview,
+        ).length,
       };
       const diagnosticIndex = input.groundingDiagnostics.findIndex(
         (item) => item.sectionId === "conclusion",
       );
-      if (diagnosticIndex >= 0) input.groundingDiagnostics[diagnosticIndex] = diagnostic;
+      if (diagnosticIndex >= 0)
+        input.groundingDiagnostics[diagnosticIndex] = diagnostic;
       else input.groundingDiagnostics.push(diagnostic);
       return;
     }
@@ -2027,7 +2813,8 @@ function enforceConclusionSourceClosure(input: {
 
   const cardsByMarker = new Map<string, ReportWriterEvidenceCard[]>();
   for (const [index, card] of bundle.evidenceCards.entries()) {
-    const marker = canonicalCitationMarker(card.citationMarker) ?? `[S${index + 1}]`;
+    const marker =
+      canonicalCitationMarker(card.citationMarker) ?? `[S${index + 1}]`;
     cardsByMarker.set(marker, [...(cardsByMarker.get(marker) ?? []), card]);
   }
   const individuallyClosedMarkers = new Set(
@@ -2036,34 +2823,50 @@ function enforceConclusionSourceClosure(input: {
       if (markers.length !== 1) return [];
       const sourceCards = cardsByMarker.get(markers[0] ?? "") ?? [];
       if (sourceCards.length === 0) return [];
-      const grounded = verifyGroundedSection({ body: sentence, evidenceCards: sourceCards });
-      return (
-        grounded.groundingStatus === "grounded" && grounded.unsupportedSentences.length === 0
-      ) || writerSemanticallyVerifiedSourceSentence(
-        conclusion,
-        sentence,
-        markers[0] ?? "",
-        sourceCards,
-      )
+      const grounded = verifyGroundedSection({
+        body: sentence,
+        evidenceCards: sourceCards,
+      });
+      return (grounded.groundingStatus === "grounded" &&
+        grounded.unsupportedSentences.length === 0) ||
+        writerSemanticallyVerifiedSourceSentence(
+          conclusion,
+          sentence,
+          markers[0] ?? "",
+          sourceCards,
+        )
         ? markers
         : [];
     }),
   );
   const requiredMarkers = Array.from(cardsByMarker.keys());
-  if (requiredMarkers.every((marker) => individuallyClosedMarkers.has(marker))) return;
+  if (requiredMarkers.every((marker) => individuallyClosedMarkers.has(marker)))
+    return;
 
   const sentencePool = [
-    ...input.rawSections.filter((section) => section.sectionId !== "conclusion"),
+    ...input.rawSections.filter(
+      (section) => section.sectionId !== "conclusion",
+    ),
     ...input.sections.filter((section) => section.sectionId !== "conclusion"),
   ];
   const sourceSentences = requiredMarkers.map((marker) => {
     const sourceCards = cardsByMarker.get(marker) ?? [];
-    return sentencePool
-      .map((section) => individuallyGroundedSourceSentence(section.prose, marker, sourceCards))
-      .find((sentence): sentence is string => Boolean(sentence)) ??
-      groundedReviewedEvidenceSentence(marker, sourceCards);
+    return (
+      sentencePool
+        .map((section) =>
+          individuallyGroundedSourceSentence(
+            section.prose,
+            marker,
+            sourceCards,
+          ),
+        )
+        .find((sentence): sentence is string => Boolean(sentence)) ??
+      groundedReviewedEvidenceSentence(marker, sourceCards)
+    );
   });
-  const missingMarkers = requiredMarkers.filter((_, index) => !sourceSentences[index]);
+  const missingMarkers = requiredMarkers.filter(
+    (_, index) => !sourceSentences[index],
+  );
   const diagnosticIndex = input.groundingDiagnostics.findIndex(
     (diagnostic) => diagnostic.sectionId === "conclusion",
   );
@@ -2076,29 +2879,39 @@ function enforceConclusionSourceClosure(input: {
       groundingStatus: "unsupported",
       unsupportedSentences: [],
       generationMethod: "grounding_verifier_blocked",
-      warnings: Array.from(new Set([
-        ...(conclusion.warnings ?? []),
-        `conclusion_source_closure_missing:${missingMarkers.join(",")}`,
-      ])),
+      warnings: Array.from(
+        new Set([
+          ...(conclusion.warnings ?? []),
+          `conclusion_source_closure_missing:${missingMarkers.join(",")}`,
+        ]),
+      ),
     };
     const blockedDiagnostic: SectionGroundingDiagnostic = {
       sectionId: "conclusion",
       groundingStatus: "unsupported",
       unsupportedSentences: [],
-      diagnostics: [`conclusion_source_closure_missing:${missingMarkers.join(",")}`],
+      diagnostics: [
+        `conclusion_source_closure_missing:${missingMarkers.join(",")}`,
+      ],
       evidenceCardIds: bundle.evidenceCards.map((card) => card.id),
       citationMarkers: [],
       evidenceCount: bundle.evidenceCards.length,
-      needsReviewCount: bundle.evidenceCards.filter((card) => card.needsReview || card.needsManualReview).length,
+      needsReviewCount: bundle.evidenceCards.filter(
+        (card) => card.needsReview || card.needsManualReview,
+      ).length,
     };
-    if (diagnosticIndex >= 0) input.groundingDiagnostics[diagnosticIndex] = blockedDiagnostic;
+    if (diagnosticIndex >= 0)
+      input.groundingDiagnostics[diagnosticIndex] = blockedDiagnostic;
     else input.groundingDiagnostics.push(blockedDiagnostic);
     return;
   }
 
   const prose = normalizeReportSectionProse(
-    uniqueReportFragments(sourceSentences.filter((sentence): sentence is string => Boolean(sentence)))
-      .join("\n\n"),
+    uniqueReportFragments(
+      sourceSentences.filter((sentence): sentence is string =>
+        Boolean(sentence),
+      ),
+    ).join("\n\n"),
   );
   const grounded = verifyGroundedSection({
     body: prose,
@@ -2113,30 +2926,34 @@ function enforceConclusionSourceClosure(input: {
       .replace(/^(?:(?:[^，。；]{2,40})案例顯示|研究結果顯示)[，：:\s]*/u, "")
       .replace(/[。！？!?；;]+$/u, "")
       .trim();
-    return sourceCards.some((card) =>
-      {
-        if (card.needsReview || card.needsManualReview) return false;
-        const reviewedClaim = card.claimTextZhTw ?? card.claimText ?? card.claim ?? "";
-        if (reviewedClaim.includes(normalizedSentence)) return true;
-        if (!supportContainsRequiredNumbers(normalizedSentence, reviewedClaim)) return false;
-        const sentenceTokens = textTokens(normalizedSentence);
-        const claimTokens = textTokens(reviewedClaim);
-        let overlap = 0;
-        for (const token of sentenceTokens) {
-          if (claimTokens.has(token)) overlap += 1;
-        }
-        return overlap >= 5;
+    return sourceCards.some((card) => {
+      if (card.needsReview || card.needsManualReview) return false;
+      const reviewedClaim =
+        card.claimTextZhTw ?? card.claimText ?? card.claim ?? "";
+      if (reviewedClaim.includes(normalizedSentence)) return true;
+      if (!supportContainsRequiredNumbers(normalizedSentence, reviewedClaim))
+        return false;
+      const sentenceTokens = textTokens(normalizedSentence);
+      const claimTokens = textTokens(reviewedClaim);
+      let overlap = 0;
+      for (const token of sentenceTokens) {
+        if (claimTokens.has(token)) overlap += 1;
       }
-    );
+      return overlap >= 5;
+    });
   });
   const closureGroundingStatus: ReportWriterSection["groundingStatus"] =
     reviewedExactClosure ? "grounded" : grounded.groundingStatus;
-  const closureUnsupportedSentences = reviewedExactClosure ? [] : grounded.unsupportedSentences;
+  const closureUnsupportedSentences = reviewedExactClosure
+    ? []
+    : grounded.unsupportedSentences;
   input.sections[conclusionIndex] = {
     ...conclusion,
     prose,
     evidenceCardIds: bundle.evidenceCards.map((card) => card.id),
-    citationIds: Array.from(new Set(bundle.evidenceCards.map((card) => card.sourceId))),
+    citationIds: Array.from(
+      new Set(bundle.evidenceCards.map((card) => card.sourceId)),
+    ),
     coverageStatus: bundle.coverageStatus,
     groundingStatus: closureGroundingStatus,
     unsupportedSentences: closureUnsupportedSentences,
@@ -2146,25 +2963,34 @@ function enforceConclusionSourceClosure(input: {
       prose,
       bundle.evidenceCards,
     ),
-    warnings: Array.from(new Set([
-      ...(conclusion.warnings ?? []),
-      "conclusion_reconstructed_from_individually_grounded_model_or_reviewed_evidence_sentences",
-    ])),
+    warnings: Array.from(
+      new Set([
+        ...(conclusion.warnings ?? []),
+        "conclusion_reconstructed_from_individually_grounded_model_or_reviewed_evidence_sentences",
+      ]),
+    ),
   };
   const reconstructedDiagnostic: SectionGroundingDiagnostic = {
     sectionId: "conclusion",
     groundingStatus: closureGroundingStatus,
     unsupportedSentences: closureUnsupportedSentences,
-    diagnostics: Array.from(new Set([
-      ...(reviewedExactClosure ? ["reviewed_exact_claim_source_closure"] : grounded.diagnostics),
-      "conclusion_source_closure_reconstructed",
-    ])),
+    diagnostics: Array.from(
+      new Set([
+        ...(reviewedExactClosure
+          ? ["reviewed_exact_claim_source_closure"]
+          : grounded.diagnostics),
+        "conclusion_source_closure_reconstructed",
+      ]),
+    ),
     evidenceCardIds: bundle.evidenceCards.map((card) => card.id),
     citationMarkers: grounded.citationMarkers,
     evidenceCount: bundle.evidenceCards.length,
-    needsReviewCount: bundle.evidenceCards.filter((card) => card.needsReview || card.needsManualReview).length,
+    needsReviewCount: bundle.evidenceCards.filter(
+      (card) => card.needsReview || card.needsManualReview,
+    ).length,
   };
-  if (diagnosticIndex >= 0) input.groundingDiagnostics[diagnosticIndex] = reconstructedDiagnostic;
+  if (diagnosticIndex >= 0)
+    input.groundingDiagnostics[diagnosticIndex] = reconstructedDiagnostic;
   else input.groundingDiagnostics.push(reconstructedDiagnostic);
 }
 
@@ -2174,15 +3000,23 @@ function enforceSectionBundles(input: {
   bundles: SectionEvidenceBundle[];
   fallbackSections: ReportWriterSection[];
   reportPlan?: ReportPlan;
+  writerClaimEntailmentPassed?: boolean;
+  formalExactSpanAccepted?: boolean;
 }): {
   sections: ReportWriterSection[];
   groundingDiagnostics: SectionGroundingDiagnostic[];
 } {
-  const sectionById = new Map(input.sections.map((section) => [section.sectionId, section]));
-  const fallbackById = new Map(input.fallbackSections.map((section) => [section.sectionId, section]));
+  const sectionById = new Map(
+    input.sections.map((section) => [section.sectionId, section]),
+  );
+  const fallbackById = new Map(
+    input.fallbackSections.map((section) => [section.sectionId, section]),
+  );
   const groundingDiagnostics: SectionGroundingDiagnostic[] = [];
   const sections = input.outline.map((outlineSection) => {
-    const bundle = input.bundles.find((item) => item.sectionId === outlineSection.sectionId) ?? {
+    const bundle = input.bundles.find(
+      (item) => item.sectionId === outlineSection.sectionId,
+    ) ?? {
       sectionId: outlineSection.sectionId,
       sectionTitle: outlineSection.title,
       requiredAspects: requiredAspectsForSection(outlineSection.sectionId),
@@ -2202,33 +3036,43 @@ function enforceSectionBundles(input: {
         evidenceCardIds: bundle.evidenceCards.map((card) => card.id),
         citationMarkers: [],
         evidenceCount: bundle.evidenceCards.length,
-        needsReviewCount: bundle.evidenceCards.filter((card) => card.needsReview || card.needsManualReview).length,
+        needsReviewCount: bundle.evidenceCards.filter(
+          (card) => card.needsReview || card.needsManualReview,
+        ).length,
       });
       return section;
     }
     const rawGeneratedCandidate = sectionById.get(outlineSection.sectionId);
     const fallbackCandidate = fallbackById.get(outlineSection.sectionId);
-    const structuralFallbackParagraphs = reportSectionParagraphs(fallbackCandidate?.prose ?? "")
-      .filter((paragraph) =>
+    const structuralFallbackParagraphs = reportSectionParagraphs(
+      fallbackCandidate?.prose ?? "",
+    ).filter(
+      (paragraph) =>
         extractCanonicalCitationMarkers(paragraph).length === 0 &&
         !SUBSTANTIVE_CLAIM_PATTERN.test(paragraph),
-      );
+    );
     const generatedCandidate = rawGeneratedCandidate
       ? {
           ...rawGeneratedCandidate,
           prose: normalizeReportSectionProse(rawGeneratedCandidate.prose),
-          paragraphClaims: rawGeneratedCandidate.paragraphClaims?.map((claim) => ({
-            ...claim,
-            generatedTextZhTw: canonicalizeCitationMarkersInText(claim.generatedTextZhTw),
-            citationMarkers: claim.citationMarkers
-              .map((marker) => canonicalCitationMarker(marker))
-              .filter((marker): marker is string => Boolean(marker)),
-          })),
+          paragraphClaims: rawGeneratedCandidate.paragraphClaims?.map(
+            (claim) => ({
+              ...claim,
+              generatedTextZhTw: canonicalizeCitationMarkersInText(
+                claim.generatedTextZhTw,
+              ),
+              citationMarkers: claim.citationMarkers
+                .map((marker) => canonicalCitationMarker(marker))
+                .filter((marker): marker is string => Boolean(marker)),
+            }),
+          ),
         }
       : undefined;
-    const candidate = generatedCandidate && !containsRawEnglishEvidenceText(generatedCandidate.prose)
-      ? generatedCandidate
-      : fallbackCandidate;
+    const candidate =
+      generatedCandidate &&
+      !containsRawEnglishEvidenceText(generatedCandidate.prose)
+        ? generatedCandidate
+        : fallbackCandidate;
     if (!candidate) {
       const section = insufficientSectionFromBundle(bundle);
       groundingDiagnostics.push({
@@ -2239,11 +3083,15 @@ function enforceSectionBundles(input: {
         evidenceCardIds: bundle.evidenceCards.map((card) => card.id),
         citationMarkers: [],
         evidenceCount: bundle.evidenceCards.length,
-        needsReviewCount: bundle.evidenceCards.filter((card) => card.needsReview || card.needsManualReview).length,
+        needsReviewCount: bundle.evidenceCards.filter(
+          (card) => card.needsReview || card.needsManualReview,
+        ).length,
       });
       return section;
     }
-    const allowedEvidenceIds = new Set(bundle.evidenceCards.map((card) => card.id));
+    const allowedEvidenceIds = new Set(
+      bundle.evidenceCards.map((card) => card.id),
+    );
     const referencedMarkers = new Set(extractMarkers(candidate.prose));
     const markerEvidenceCardIds = bundle.evidenceCards
       .filter((card) => {
@@ -2251,10 +3099,12 @@ function enforceSectionBundles(input: {
         return marker ? referencedMarkers.has(marker) : false;
       })
       .map((card) => card.id);
-    const evidenceCardIds = Array.from(new Set([
-      ...candidate.evidenceCardIds.filter((id) => allowedEvidenceIds.has(id)),
-      ...markerEvidenceCardIds,
-    ]));
+    const evidenceCardIds = Array.from(
+      new Set([
+        ...candidate.evidenceCardIds.filter((id) => allowedEvidenceIds.has(id)),
+        ...markerEvidenceCardIds,
+      ]),
+    );
     const effectiveEvidenceCardIds =
       evidenceCardIds.length > 0
         ? evidenceCardIds
@@ -2266,15 +3116,26 @@ function enforceSectionBundles(input: {
       body: candidate.prose,
       evidenceCards,
     });
-    const hasReviewCards = evidenceCards.some((card) => card.needsReview || card.needsManualReview);
+    const cardHasCompletedFormalExactSpanReview = (
+      card: ReportWriterEvidenceCard,
+    ) =>
+      input.formalExactSpanAccepted === true &&
+      card.governanceFlags?.includes("exact_support_span_verified") === true;
+    const hasReviewCards = evidenceCards.some(
+      (card) =>
+        (card.needsReview || card.needsManualReview) &&
+        !cardHasCompletedFormalExactSpanReview(card),
+    );
     const effectiveGroundingStatus =
       grounded.groundingStatus === "grounded" && hasReviewCards
         ? "partially_grounded"
         : grounded.groundingStatus;
-    const effectiveDiagnostics = Array.from(new Set([
-      ...grounded.diagnostics,
-      ...(hasReviewCards ? ["needs_manual_review"] : []),
-    ]));
+    const effectiveDiagnostics = Array.from(
+      new Set([
+        ...grounded.diagnostics,
+        ...(hasReviewCards ? ["needs_manual_review"] : []),
+      ]),
+    );
     const pushFinalDiagnostics = (final: {
       groundingStatus: SectionGroundingDiagnostic["groundingStatus"];
       unsupportedSentences: string[];
@@ -2289,9 +3150,61 @@ function enforceSectionBundles(input: {
         evidenceCardIds: effectiveEvidenceCardIds,
         citationMarkers: final.citationMarkers,
         evidenceCount: evidenceCards.length,
-        needsReviewCount: evidenceCards.filter((card) => card.needsReview || card.needsManualReview).length,
+        needsReviewCount: evidenceCards.filter(
+          (card) => card.needsReview || card.needsManualReview,
+        ).length,
       });
     };
+    const writerSemanticContractPassed =
+      input.writerClaimEntailmentPassed === true &&
+      candidate.sectionId !== "conclusion" &&
+      candidate.generationMethod?.startsWith("llm_") === true &&
+      Boolean(candidate.paragraphClaims?.length) &&
+      candidate.paragraphClaims!.every(
+        (paragraph) => paragraph.unsupportedSentences.length === 0,
+      ) &&
+      evidenceCards.length > 0 &&
+      evidenceCards.every(
+        (card) =>
+          cardHasCompletedFormalExactSpanReview(card) ||
+          (!card.needsReview &&
+            !card.needsManualReview &&
+            card.extractionMethod !== "rule_fallback_claim_extraction" &&
+            card.governanceFlags?.includes("exact_support_span_verified") ===
+              true),
+      );
+    if (
+      grounded.unsupportedSentences.length > 0 &&
+      writerSemanticContractPassed
+    ) {
+      const preservedProse = normalizeReportSectionProse(candidate.prose);
+      pushFinalDiagnostics({
+        groundingStatus: "grounded",
+        unsupportedSentences: [],
+        diagnostics: ["writer_claim_entailment_preserved"],
+        citationMarkers: extractMarkers(preservedProse),
+      });
+      return {
+        ...candidate,
+        prose: preservedProse,
+        evidenceCardIds: effectiveEvidenceCardIds,
+        citationIds: evidenceCards.map((card) => card.sourceId),
+        coverageStatus: bundle.coverageStatus,
+        groundingStatus: "grounded" as const,
+        unsupportedSentences: [],
+        paragraphClaims: paragraphClaimsForRenderedProse(
+          candidate,
+          preservedProse,
+          evidenceCards,
+        ),
+        warnings: Array.from(
+          new Set([
+            ...(candidate.warnings ?? []),
+            "writer_claim_entailment_preserved",
+          ]),
+        ),
+      };
+    }
     if (
       candidate.sectionId === "conclusion" &&
       grounded.unsupportedSentences.length > 0 &&
@@ -2322,25 +3235,29 @@ function enforceSectionBundles(input: {
           preservedProse,
           evidenceCards,
         ),
-        warnings: Array.from(new Set([
-          ...(candidate.warnings ?? []),
-          "writer_semantic_alignment_preserved",
-          ...(hasReviewCards ? ["needs_manual_review"] : []),
-        ])),
+        warnings: Array.from(
+          new Set([
+            ...(candidate.warnings ?? []),
+            "writer_semantic_alignment_preserved",
+            ...(hasReviewCards ? ["needs_manual_review"] : []),
+          ]),
+        ),
       };
     }
     if (grounded.unsupportedSentences.length > 0) {
       const unsupported = new Set(grounded.unsupportedSentences);
-      const groundedSentences = splitSentences(candidate.prose)
-        .filter((sentence) => !unsupported.has(sentence));
-      const groundedProse = groundedSentences.length > 0
-        ? normalizeReportSectionProse(
-            groundedSentences.join("\n\n"),
-            structuralFallbackParagraphs.length > 0
-              ? structuralFallbackParagraphs
-              : ["未被來源覆蓋的部分留待後續查證。"],
-          )
-        : "";
+      const groundedSentences = splitSentences(candidate.prose).filter(
+        (sentence) => !unsupported.has(sentence),
+      );
+      const groundedProse =
+        groundedSentences.length > 0
+          ? normalizeReportSectionProse(
+              groundedSentences.join("\n\n"),
+              structuralFallbackParagraphs.length > 0
+                ? structuralFallbackParagraphs
+                : ["未被來源覆蓋的部分留待後續查證。"],
+            )
+          : "";
       const remainder = groundedProse
         ? verifyGroundedSection({ body: groundedProse, evidenceCards })
         : null;
@@ -2353,11 +3270,13 @@ function enforceSectionBundles(input: {
         pushFinalDiagnostics({
           groundingStatus: prunedGroundingStatus,
           unsupportedSentences: [],
-          diagnostics: Array.from(new Set([
-            ...(remainder.diagnostics ?? []),
-            "unsupported_sentences_removed",
-            ...(hasReviewCards ? ["needs_manual_review"] : []),
-          ])),
+          diagnostics: Array.from(
+            new Set([
+              ...(remainder.diagnostics ?? []),
+              "unsupported_sentences_removed",
+              ...(hasReviewCards ? ["needs_manual_review"] : []),
+            ]),
+          ),
           citationMarkers: remainder.citationMarkers,
         });
         return {
@@ -2374,11 +3293,13 @@ function enforceSectionBundles(input: {
             groundedProse,
             evidenceCards,
           ),
-          warnings: Array.from(new Set([
-            ...(candidate.warnings ?? []),
-            "unsupported_sentences_removed",
-            ...(hasReviewCards ? ["needs_manual_review"] : []),
-          ])),
+          warnings: Array.from(
+            new Set([
+              ...(candidate.warnings ?? []),
+              "unsupported_sentences_removed",
+              ...(hasReviewCards ? ["needs_manual_review"] : []),
+            ]),
+          ),
         };
       }
       pushFinalDiagnostics({
@@ -2404,11 +3325,13 @@ function enforceSectionBundles(input: {
           blockedProse,
           evidenceCards,
         ),
-        warnings: Array.from(new Set([
-          ...(candidate.warnings ?? []),
-          "grounding_verification_failed",
-          ...(hasReviewCards ? ["needs_manual_review"] : []),
-        ])),
+        warnings: Array.from(
+          new Set([
+            ...(candidate.warnings ?? []),
+            "grounding_verification_failed",
+            ...(hasReviewCards ? ["needs_manual_review"] : []),
+          ]),
+        ),
       };
     }
     pushFinalDiagnostics({
@@ -2437,7 +3360,9 @@ function enforceSectionBundles(input: {
         normalizedProse,
         evidenceCards,
       ),
-      warnings: Array.from(new Set([...(candidate.warnings ?? []), ...effectiveDiagnostics])),
+      warnings: Array.from(
+        new Set([...(candidate.warnings ?? []), ...effectiveDiagnostics]),
+      ),
     };
   });
   enforceConclusionSourceClosure({
@@ -2446,6 +3371,7 @@ function enforceSectionBundles(input: {
     bundles: input.bundles,
     groundingDiagnostics,
     reportPlan: input.reportPlan,
+    writerClaimEntailmentPassed: input.writerClaimEntailmentPassed,
   });
   return { sections, groundingDiagnostics };
 }
@@ -2456,24 +3382,32 @@ export function createReportDraftsRouter({
   const router: IRouter = Router();
 
   router.post("/report-evidence-sets", (req, res) => {
-    const body = req.body && typeof req.body === "object"
-      ? req.body as Record<string, unknown>
-      : {};
+    const body =
+      req.body && typeof req.body === "object"
+        ? (req.body as Record<string, unknown>)
+        : {};
     const topic = cleanString(body.topic);
     if (!topic) {
       res.status(400).json({ ok: false, message: "topic is required" });
       return;
     }
-    const workflowId = cleanString(body.workflowId) ?? `evidence-set-${randomUUID()}`;
+    const workflowId =
+      cleanString(body.workflowId) ?? `evidence-set-${randomUUID()}`;
     const hash = cleanString(body.topicHash) ?? topicHash(topic);
-    const acceptedSources = normalizeAcceptedSources(
+    const acceptedSourceReview = normalizeAcceptedSources(
       body.acceptedSources,
       workflowId,
       hash,
       topic,
+      body.topicIntegrityContract,
+      body.researchReportMode === "formal_research_report" ||
+        body.topicIntegrityContract != null,
     );
+    const acceptedSources = acceptedSourceReview.sources;
     if (acceptedSources.length === 0) {
-      res.status(400).json({ ok: false, message: "acceptedSources is required" });
+      res
+        .status(400)
+        .json({ ok: false, message: "acceptedSources is required" });
       return;
     }
     const relevanceBridge: EvidenceRelevanceBridge = {
@@ -2510,6 +3444,12 @@ export function createReportDraftsRouter({
       filteredEvidence: writerEvidenceSet.rejectedEvidenceCards,
       filteredCount: writerEvidenceSet.rejectedEvidenceCards.length,
       acceptedSourceCount: acceptedSources.length,
+      rejectedSourceCount: acceptedSourceReview.rejectedSources.length,
+      directFindingSourceCount: acceptedSources.filter(
+        (source) => source.formalEvidenceRole === "DIRECT_FINDING",
+      ).length,
+      topicIntegrityContract: acceptedSourceReview.contract,
+      sourceRejectionAudit: acceptedSourceReview.rejectedSources,
       eligibleEvidenceCardCount: evidenceCards.length,
       diagnostics: [
         `evidence_set_hash:${writerEvidenceSet.evidenceSetHash}`,
@@ -2520,7 +3460,10 @@ export function createReportDraftsRouter({
   });
 
   router.post("/report-drafts", async (req, res) => {
-    const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
+    const body =
+      req.body && typeof req.body === "object"
+        ? (req.body as Record<string, unknown>)
+        : {};
     const topic = cleanString(body.topic);
     if (!topic) {
       res.status(400).json({ ok: false, message: "topic is required" });
@@ -2528,16 +3471,24 @@ export function createReportDraftsRouter({
     }
     const workflowId = cleanString(body.workflowId) ?? `draft-${randomUUID()}`;
     const hash = cleanString(body.topicHash) ?? topicHash(topic);
-    const acceptedSources = normalizeAcceptedSources(body.acceptedSources, workflowId, hash, topic);
+    const acceptedSourceReview = normalizeAcceptedSources(
+      body.acceptedSources,
+      workflowId,
+      hash,
+      topic,
+      body.topicIntegrityContract,
+      body.researchReportMode === "formal_research_report" ||
+        body.topicIntegrityContract != null,
+    );
+    const acceptedSources = acceptedSourceReview.sources;
     if (acceptedSources.length === 0) {
-      res.status(400).json({ ok: false, message: "acceptedSources is required" });
+      res
+        .status(400)
+        .json({ ok: false, message: "acceptedSources is required" });
       return;
     }
     const relevanceBridge: EvidenceRelevanceBridge = {
-      aliases: [
-        ...stringList(body.aliases),
-        ...stringList(body.topicAliases),
-      ],
+      aliases: [...stringList(body.aliases), ...stringList(body.topicAliases)],
       matchedConcepts: stringList(body.matchedConcepts),
     };
     const evidenceNormalization = normalizeEvidenceCards(
@@ -2557,7 +3508,10 @@ export function createReportDraftsRouter({
       relevanceBridge,
     });
     const serverDerivedEvidenceCards = serverDerivedEvidence.cards;
-    const evidenceCards = [...evidenceNormalization.cards, ...serverDerivedEvidenceCards];
+    const evidenceCards = [
+      ...evidenceNormalization.cards,
+      ...serverDerivedEvidenceCards,
+    ];
     const allRejectedEvidence = [
       ...evidenceNormalization.rejected,
       ...serverDerivedEvidence.rejected,
@@ -2566,8 +3520,13 @@ export function createReportDraftsRouter({
       (item) => item.decision === "indeterminate" && item.traceable,
     );
     let writerEvidenceSet: WriterEvidenceSet | null = null;
-    if (body.writerEvidenceSet !== undefined && body.writerEvidenceSet !== null) {
-      const parsedEvidenceSet = WriterEvidenceSetSchema.safeParse(body.writerEvidenceSet);
+    if (
+      body.writerEvidenceSet !== undefined &&
+      body.writerEvidenceSet !== null
+    ) {
+      const parsedEvidenceSet = WriterEvidenceSetSchema.safeParse(
+        body.writerEvidenceSet,
+      );
       if (!parsedEvidenceSet.success) {
         res.status(400).json({
           ok: false,
@@ -2583,12 +3542,15 @@ export function createReportDraftsRouter({
         eligibleCards: evidenceCards,
         rejectedEvidence: allRejectedEvidence,
       });
-      if (!writerEvidenceSetsEqual(parsedEvidenceSet.data, recomputedEvidenceSet)) {
+      if (
+        !writerEvidenceSetsEqual(parsedEvidenceSet.data, recomputedEvidenceSet)
+      ) {
         res.status(409).json({
           ok: false,
           status: "invalid_input",
           code: "EVIDENCE_SET_REPLAN_REQUIRED",
-          message: "Evidence cards changed after planning; rebuild the canonical evidence set and ReportPlan.",
+          message:
+            "Evidence cards changed after planning; rebuild the canonical evidence set and ReportPlan.",
           planBuildStatus: "plan_invalidated",
           readinessStatus: "invalid_evidence_set",
           submittedEvidenceSetHash: parsedEvidenceSet.data.evidenceSetHash,
@@ -2601,12 +3563,16 @@ export function createReportDraftsRouter({
     }
     let reportPlanResult: SanitizedReportPlanResult | null = null;
     let readinessStatus: ReportReadinessStatus | null = null;
-    if (writerEvidenceSet && (body.reportPlan === undefined || body.reportPlan === null)) {
+    if (
+      writerEvidenceSet &&
+      (body.reportPlan === undefined || body.reportPlan === null)
+    ) {
       res.status(409).json({
         ok: false,
         status: "invalid_input",
         code: "REPORT_PLAN_REBUILD_REQUIRED",
-        message: "A canonical WriterEvidenceSet requires a ReportPlan built from the same evidenceSetHash.",
+        message:
+          "A canonical WriterEvidenceSet requires a ReportPlan built from the same evidenceSetHash.",
         planBuildStatus: "plan_invalidated",
         readinessStatus: "invalid_evidence_set",
       });
@@ -2632,7 +3598,8 @@ export function createReportDraftsRouter({
           ok: false,
           status: "invalid_input",
           code: "REPORT_PLAN_CONTEXT_MISMATCH",
-          message: "reportPlan workflowId/topicHash does not match this report request",
+          message:
+            "reportPlan workflowId/topicHash does not match this report request",
         });
         return;
       }
@@ -2652,7 +3619,8 @@ export function createReportDraftsRouter({
             ok: false,
             status: "invalid_input",
             code: "REPORT_PLAN_REBUILD_REQUIRED",
-            message: "ReportPlan bindings or readiness no longer match the canonical WriterEvidenceSet.",
+            message:
+              "ReportPlan bindings or readiness no longer match the canonical WriterEvidenceSet.",
             planBuildStatus: "plan_invalidated",
             readinessStatus: "invalid_evidence_set",
             evidenceSetHash: writerEvidenceSet.evidenceSetHash,
@@ -2684,21 +3652,23 @@ export function createReportDraftsRouter({
       }
     }
     const reportPlanEvidenceIds = new Set(
-      reportPlanResult?.plan.plannedClaims.flatMap((claim) =>
-        claim.supportingEvidenceIds
+      reportPlanResult?.plan.plannedClaims.flatMap(
+        (claim) => claim.supportingEvidenceIds,
       ) ?? [],
     );
     const reportEvidenceCards = writerEvidenceSet
       ? evidenceCards
       : reportPlanResult
-      ? evidenceCards.filter((card) =>
-          reportPlanEvidenceIds.has(evidenceIdentityForPlan(card))
-        )
-      : evidenceCards;
+        ? evidenceCards.filter((card) =>
+            reportPlanEvidenceIds.has(evidenceIdentityForPlan(card)),
+          )
+        : evidenceCards;
     if (
       writerEvidenceSet &&
       readinessStatus &&
-      !["ready_complete_report", "ready_limited_report"].includes(readinessStatus)
+      !["ready_complete_report", "ready_limited_report"].includes(
+        readinessStatus,
+      )
     ) {
       res.status(readinessStatus === "needs_targeted_search" ? 409 : 422).json({
         ok: false,
@@ -2714,12 +3684,72 @@ export function createReportDraftsRouter({
       });
       return;
     }
-    const outline = writerEvidenceSet && reportPlanResult
-      ? reportPlanResult.plan.sections
-          .filter((section) => section.canonicalSectionRole !== "references")
-          .map((section) => ({ sectionId: section.sectionId, title: section.title }))
-      : normalizeOutline(body.outline);
-    const sectionEvidenceBundles = buildSectionEvidenceBundles({
+    const researchReportMode: ResearchReportMode =
+      body.researchReportMode === "formal_research_report" ||
+      body.reportMode === "formal_research_report"
+        ? "formal_research_report"
+        : "evidence_brief";
+    const citationDisplayMode: CitationDisplayMode =
+      body.citationDisplayMode === "academic" ? "academic" : "compact";
+    let canonicalStudyAdmissions: CanonicalStudyAdmissionResult[] | undefined;
+    if (body.canonicalStudyAdmissions !== undefined) {
+      const parsedCanonicalAdmissions =
+        CanonicalStudyAdmissionResultSchema.array().safeParse(
+          body.canonicalStudyAdmissions,
+        );
+      if (!parsedCanonicalAdmissions.success) {
+        res.status(400).json({
+          ok: false,
+          status: "invalid_input",
+          code: "INVALID_CANONICAL_STUDY_ADMISSION",
+          message: "canonicalStudyAdmissions failed schema validation",
+          details: parsedCanonicalAdmissions.error.flatten(),
+        });
+        return;
+      }
+      canonicalStudyAdmissions = parsedCanonicalAdmissions.data;
+    }
+    const canonicalJobRevision =
+      typeof body.jobRevision === "number" &&
+      Number.isInteger(body.jobRevision) &&
+      body.jobRevision >= 0
+        ? body.jobRevision
+        : undefined;
+    const canonicalCheckpointRevision =
+      typeof body.canonicalCheckpointRevision === "number" &&
+      Number.isInteger(body.canonicalCheckpointRevision) &&
+      body.canonicalCheckpointRevision >= 0
+        ? body.canonicalCheckpointRevision
+        : undefined;
+    const legacyOutline =
+      writerEvidenceSet && reportPlanResult
+        ? reportPlanResult.plan.sections
+            .filter((section) => section.canonicalSectionRole !== "references")
+            .map((section) => ({
+              sectionId: section.sectionId,
+              title: section.title,
+            }))
+        : normalizeOutline(body.outline);
+    let outline =
+      researchReportMode === "formal_research_report"
+        ? FORMAL_RESEARCH_REPORT_SCHEMA.filter((section) =>
+            [
+              "executive_summary",
+              "background",
+              "methods",
+              "evidence_overview",
+              "findings",
+              "cross_study_synthesis",
+              "discussion",
+              "limitations_gaps",
+              "conclusion",
+            ].includes(section.sectionId),
+          ).map((section) => ({
+            sectionId: section.sectionId,
+            title: section.title,
+          }))
+        : legacyOutline;
+    let sectionEvidenceBundles = buildSectionEvidenceBundles({
       outline,
       cards: reportEvidenceCards,
       reportPlan: reportPlanResult?.plan,
@@ -2730,7 +3760,179 @@ export function createReportDraftsRouter({
       audience: cleanString(body.audience),
       topic,
     });
-    const reportMode = normalizeReportMode(body.reportMode, acceptedSources.length);
+    const reportMode = normalizeReportMode(
+      body.reportMode,
+      acceptedSources.length,
+    );
+    const formalResearchArchitecture =
+      researchReportMode === "formal_research_report"
+        ? buildFormalResearchArchitecture({
+            sources: acceptedSources,
+            evidenceCards: reportEvidenceCards,
+            canonicalStudyAdmissions,
+            canonicalContext:
+              cleanString(body.jobId) && canonicalJobRevision !== undefined
+                ? {
+                    jobId: cleanString(body.jobId)!,
+                    jobRevision: canonicalJobRevision,
+                    checkpointRevision: canonicalCheckpointRevision,
+                  }
+                : undefined,
+            workflow: {
+              workflowId,
+              reportId: cleanString(body.reportId) ?? workflowId,
+              topicHash: hash,
+              normalizedTopic: topic,
+              searchPlanWorkflowId: reportPlanResult?.plan.workflowId ?? workflowId,
+              queryTerms: Array.from(new Set(acceptedSources.flatMap((source) =>
+                Array.isArray(source.matchedCoreConcepts) ? source.matchedCoreConcepts : []
+              ))),
+              language: cleanString(body.outputLanguage) ?? "zh-TW",
+              researchQuestion:
+                cleanString(body.researchQuestion) ?? topic,
+              requestedMethod: normalizeResearchMethod(body.researchMethod),
+              namedProviders: Array.from(
+                new Set(
+                  acceptedSources
+                    .map((source) => source.provider)
+                    .filter((provider): provider is string => Boolean(provider)),
+                ),
+              ),
+              reproducibleSearchStrategy: acceptedSources.some((source) =>
+                Boolean(source.queryUsed),
+              ),
+              explicitInclusionCriteria: Array.isArray(body.inclusionCriteria),
+              explicitExclusionCriteria: Array.isArray(body.exclusionCriteria),
+              screeningProcedure: Boolean(writerEvidenceSet),
+              duplicateRemoval: true,
+              documentedStudySelection: Boolean(writerEvidenceSet),
+              qualityAssessment: Boolean(body.qualityAssessmentCompleted),
+              queryExpansion: acceptedSources.some((source) =>
+                Boolean(source.queryPlanHash),
+              ),
+              themeSynthesis: true,
+              searchQueries: Array.from(
+                new Set(
+                  acceptedSources
+                    .map((source) => source.queryUsed)
+                    .filter((query): query is string => Boolean(query)),
+                ),
+              ),
+              searchDates: Array.from(
+                new Set(
+                  acceptedSources
+                    .flatMap((source) => [source.retrievedAt, source.accessedAt])
+                    .filter((value): value is string => Boolean(value))
+                    .map((value) => value.slice(0, 10)),
+                ),
+              ),
+              searchLanguages: Array.from(
+                new Set(
+                  acceptedSources
+                    .map((source) => source.queryUsed)
+                    .filter((query): query is string => Boolean(query))
+                    .flatMap((query) => [
+                      /[\u3400-\u9fff]/u.test(query) ? "繁體中文查詢" : null,
+                      /[A-Za-z]/u.test(query) ? "英文查詢" : null,
+                    ])
+                    .filter((value): value is string => Boolean(value)),
+                ),
+              ),
+              fullTextRetrievalMethods: Array.from(
+                new Set(
+                  acceptedSources
+                    .filter((source) => source.accessLevel === "full_text" || Boolean(source.fullTextUrl))
+                    .map((source) => source.extractionMethod ?? "保存的全文連結"),
+                ),
+              ),
+              evidenceExtractionMethods: Array.from(
+                new Set(
+                  reportEvidenceCards
+                    .map((card) => card.extractionMethod)
+                    .filter((value): value is string => Boolean(value)),
+                ),
+              ),
+              relevanceQualityAssessmentMethods: [
+                `${TOPIC_INTEGRITY_VERSION}/${RELEVANCE_POLICY_VERSION}`,
+                acceptedSources.some((source) => source.sourceQualityScore != null)
+                  ? "來源品質分數與理由"
+                  : "未保存來源品質分數",
+              ],
+              inclusionCriteria: Array.isArray(body.inclusionCriteria)
+                ? body.inclusionCriteria.filter((item): item is string => typeof item === "string")
+                : [],
+              exclusionCriteria: Array.isArray(body.exclusionCriteria)
+                ? body.exclusionCriteria.filter((item): item is string => typeof item === "string")
+                : [],
+              topicIntegrityPolicy: `${TOPIC_INTEGRITY_VERSION}/${RELEVANCE_POLICY_VERSION}`,
+            },
+          })
+        : undefined;
+    if (
+      formalResearchArchitecture &&
+      !formalResearchArchitecture.canonicalAdmissionValidation.pass
+    ) {
+      res.status(409).json({
+        ok: false,
+        status: "invalid_input",
+        code: "CANONICAL_ADMISSION_REPLAN_REQUIRED",
+        message:
+          "Canonical study admission is missing, stale, or bound to another evidence revision.",
+        issues: formalResearchArchitecture.canonicalAdmissionValidation.issues,
+        formalResearchArchitecture,
+      });
+      return;
+    }
+    if (
+      formalResearchArchitecture &&
+      formalResearchArchitecture.writerAdmissionProjection.some(
+        (item) => item.admissionClass === "BLOCKED",
+      ) &&
+      formalResearchArchitecture.writerAdmissionProjection.some(
+        (item) => item.admissionClass !== "BLOCKED",
+      )
+    ) {
+      res.status(409).json({
+        ok: false,
+        status: "invalid_input",
+        code: "CANONICAL_ADMISSION_REPLAN_REQUIRED",
+        message:
+          "ReportPlan contains a mixed canonical admission set. Rebuild it from the admitted evidence revision before invoking Writer.",
+        writerInvoked: false,
+        formalResearchArchitecture,
+      });
+      return;
+    }
+    if (
+      formalResearchArchitecture &&
+      (formalResearchArchitecture.writerAdmissionProjection.every(
+        (item) => item.admissionClass === "BLOCKED",
+      ) ||
+        formalResearchArchitecture.evidenceCoverage
+            .limitedOrBetterAdmissionCount ===
+          0)
+    ) {
+      res.status(422).json({
+        ok: false,
+        status: "insufficient_sources",
+        code: "NO_CANONICAL_WRITER_ADMISSION",
+        message:
+          "No study at the current evidence revision passed canonical Writer admission.",
+        writerInvoked: false,
+        formalResearchArchitecture,
+      });
+      return;
+    }
+    if (formalResearchArchitecture) {
+      outline = formalResearchArchitecture.researchBlueprint.sectionPlan.map(
+        (section) => ({ sectionId: section.id, title: section.title }),
+      );
+      sectionEvidenceBundles = buildFormalSectionEvidenceBundles({
+        outline,
+        cards: reportEvidenceCards,
+        architecture: formalResearchArchitecture,
+      });
+    }
     const input: ReportWriterInput = {
       workflowId,
       jobId: cleanString(body.jobId) ?? workflowId,
@@ -2739,6 +3941,9 @@ export function createReportDraftsRouter({
       originalTopic: cleanString(body.originalTopic),
       displayTitle: cleanString(body.displayTitle) ?? topic,
       reportMode,
+      researchReportMode,
+      citationDisplayMode,
+      formalResearchArchitecture,
       reportType: cleanString(body.reportType),
       audience: cleanString(body.audience),
       language: cleanString(body.language) ?? "繁體中文",
@@ -2748,18 +3953,22 @@ export function createReportDraftsRouter({
       targetWordCount: cleanString(body.targetWordCount),
       specifiedStructure: cleanString(body.specifiedStructure),
       rubric: cleanString(body.rubric),
-      generationMode: reportEvidenceCards.length >= 3 ? "formal" : "preliminary",
+      generationMode:
+        reportEvidenceCards.length >= 3 ? "formal" : "preliminary",
       sourceMixProfile,
       acceptedSources,
       acceptedSourceIds: acceptedSources.map((source) => source.id),
       evidenceCards: reportEvidenceCards,
       evidenceCardIds: reportEvidenceCards.map((card) => card.id),
+      centralAnswerClaimIds: cleanStringArray(body.centralAnswerClaimIds),
       requestedSectionIds: outline.map((section) => section.sectionId),
       reportPlan: reportPlanResult?.plan,
       reportPlanStatus: writerEvidenceSet
         ? "plan_built"
-        : reportPlanResult?.status ?? "degraded_legacy",
-      reportPlanDiagnostics: reportPlanResult?.diagnostics ?? ["legacy_report_plan_missing"],
+        : (reportPlanResult?.status ?? "degraded_legacy"),
+      reportPlanDiagnostics: reportPlanResult?.diagnostics ?? [
+        "legacy_report_plan_missing",
+      ],
       writerEvidenceSet: writerEvidenceSet ?? undefined,
       evidenceSetHash: writerEvidenceSet?.evidenceSetHash,
       readinessStatus: readinessStatus ?? undefined,
@@ -2775,7 +3984,9 @@ export function createReportDraftsRouter({
       writerResult.writerDiagnostics?.fallbackSections ?? 0;
     const sectionFallbackUsed = writerFallbackSectionCount > 0;
     const generationMode: ReportDraftGenerationMode =
-      writerResult.ok && !writerResult.fallbackUsed && writerResult.sections.length > 0
+      writerResult.ok &&
+      !writerResult.fallbackUsed &&
+      writerResult.sections.length > 0
         ? sectionFallbackUsed
           ? "hybrid_evidence_grounded"
           : "llm_evidence_grounded"
@@ -2785,25 +3996,143 @@ export function createReportDraftsRouter({
       outline,
       bundles: sectionEvidenceBundles,
       reportPlan: reportPlanResult?.plan,
+      formalResearchArchitecture,
     });
     const usingWriterSections =
-      generationMode !== "fallback_conservative_draft" && writerResult.sections.length > 0;
-    const rawSections = usingWriterSections ? writerResult.sections : fallback.sections;
+      generationMode !== "fallback_conservative_draft" &&
+      writerResult.sections.length > 0;
+    const rawSections = usingWriterSections
+      ? writerResult.sections
+      : fallback.sections;
     const enforced = enforceSectionBundles({
       sections: rawSections,
       outline,
       bundles: sectionEvidenceBundles,
       fallbackSections: fallback.sections,
       reportPlan: reportPlanResult?.plan,
+      writerClaimEntailmentPassed:
+        writerResult.ok === true &&
+        writerResult.writerDiagnostics?.postEditValidation?.status === "pass",
+      formalExactSpanAccepted:
+        researchReportMode === "formal_research_report",
     });
-    const sections = enforced.sections;
+    const formalSectionRepair = formalResearchArchitecture
+      ? repairFormalSectionsDeterministically({
+          sections: enforced.sections,
+          architecture: formalResearchArchitecture,
+        })
+      : { sections: enforced.sections, repairs: [] };
+    const sections = formalSectionRepair.sections;
+    const formalResearchValidation = formalResearchArchitecture
+      ? (() => {
+          const spans = formalResearchArchitecture.studies.flatMap((study) => study.evidenceSpans);
+          const duplicates = validateCrossSectionDuplicates(
+            sections,
+            0.86,
+            formalResearchArchitecture.sectionClaimAllocations,
+          );
+          const quantitative = validateQuantitativeProvenance({
+            sections,
+            numericEvidence: formalResearchArchitecture.numericEvidence,
+            spans,
+          });
+          const quantitativeIntegration = validateQuantitativeFindingIntegration({
+            sections,
+            findings: formalResearchArchitecture.quantitativeFindings,
+          });
+          const synthesis = validateAnalyticalSynthesis({
+            sections,
+            matrix: formalResearchArchitecture.evidenceMatrix,
+          });
+          const chartProvenance = validateChartProvenance({
+            visualizationPlan: formalResearchArchitecture.visualizationPlan,
+            quantitativeFactRegistry:
+              formalResearchArchitecture.quantitativeFactRegistry,
+          });
+          const blueprint = validateResearchBlueprint(
+            formalResearchArchitecture.researchBlueprint,
+          );
+          const pipelineLeakage = validatePipelineLeakage(sections);
+          const sourceDominance = validateSourceDominance(sections);
+          const semanticDensity = validateSemanticDensity(sections);
+          const researchQuestionClosure = validateResearchQuestionClosure({
+            sections,
+            matrix:
+              formalResearchArchitecture.researchQuestionClosureMatrix,
+          });
+          const figureNarrativeBinding = validateFigureNarrativeBinding({
+            sections,
+            figurePlan: formalResearchArchitecture.figurePlan,
+            quantitativeFacts:
+              formalResearchArchitecture.quantitativeFactRegistry,
+          });
+          const topicIsolation = formalResearchArchitecture.topicIsolation;
+          const quantitativeExtractionGap = {
+            pass: formalResearchArchitecture.diagnostics.quantitativeExtractionGaps.length === 0,
+            code: formalResearchArchitecture.diagnostics.quantitativeExtractionGaps.length === 0
+              ? "PASS" as const
+              : "QUANTITATIVE_EXTRACTION_GAP" as const,
+            issues: formalResearchArchitecture.diagnostics.quantitativeExtractionGaps,
+          };
+          const falseInsufficient = {
+            pass: !(
+              formalResearchArchitecture.directEvidenceReconciliation.falseInsufficient &&
+              formalResearchArchitecture.evidenceMatrix.length === 0
+            ),
+            code:
+              formalResearchArchitecture.directEvidenceReconciliation.falseInsufficient &&
+              formalResearchArchitecture.evidenceMatrix.length === 0
+                ? "BLOCK_EXPORT_FALSE_INSUFFICIENT" as const
+                : "PASS" as const,
+            reconciliation: formalResearchArchitecture.directEvidenceReconciliation,
+          };
+          return {
+            blueprintValidation: blueprint,
+            duplicateValidation: duplicates,
+            quantitativeValidation: quantitative,
+            quantitativeIntegrationValidation: quantitativeIntegration,
+            synthesisValidation: synthesis,
+            chartProvenanceValidation: chartProvenance,
+            pipelineLeakageValidation: pipelineLeakage,
+            sourceDominanceValidation: sourceDominance,
+            semanticDensityValidation: semanticDensity,
+            researchQuestionClosureValidation: researchQuestionClosure,
+            figureNarrativeBindingValidation: figureNarrativeBinding,
+            topicIsolationValidation: topicIsolation,
+            quantitativeExtractionGapValidation: quantitativeExtractionGap,
+            falseInsufficientValidation: falseInsufficient,
+            pass:
+              blueprint.pass &&
+              duplicates.strictDuplicates.length === 0 &&
+              duplicates.semanticDuplicates.length === 0 &&
+              quantitative.pass &&
+              quantitativeIntegration.pass &&
+              synthesis.pass &&
+              chartProvenance.pass &&
+              pipelineLeakage.pass &&
+              sourceDominance.pass &&
+              semanticDensity.pass &&
+              researchQuestionClosure.pass &&
+              figureNarrativeBinding.pass &&
+              topicIsolation.pass &&
+              quantitativeExtractionGap.pass &&
+              falseInsufficient.pass,
+          };
+        })()
+      : null;
     const claims = usingWriterSections
       ? claimsFromSections(sections)
       : fallback.claims;
     const citations = citationsForCards(reportEvidenceCards, acceptedSources);
     const missingEvidence = [
-      ...missingEvidenceFromWriter(writerResult.sectionPlan, sections, reportEvidenceCards),
-      ...(generationMode === "fallback_conservative_draft" ? fallback.missingEvidence : []),
+      ...missingEvidenceFromWriter(
+        writerResult.sectionPlan,
+        sections,
+        reportEvidenceCards,
+      ),
+      ...(generationMode === "fallback_conservative_draft"
+        ? fallback.missingEvidence
+        : []),
     ];
     const warnings = [
       writerResult.warning,
@@ -2822,10 +4151,8 @@ export function createReportDraftsRouter({
         : null,
       generationMode === "fallback_conservative_draft"
         ? "LLM unavailable or incomplete; returned fallback_conservative_draft with explicit missingEvidence."
-      : null,
-      ...(
-        reportPlanResult?.diagnostics ?? ["legacy_report_plan_missing"]
-      ),
+        : null,
+      ...(reportPlanResult?.diagnostics ?? ["legacy_report_plan_missing"]),
       ...missingEvidence.map((item) => `${item.sectionId}: ${item.reason}`),
     ].filter((item): item is string => Boolean(item));
     const blockedSections = sections.filter(
@@ -2837,13 +4164,25 @@ export function createReportDraftsRouter({
       (section) => section.groundingStatus === "partially_grounded",
     );
     const insufficientBundles = sectionEvidenceBundles.filter(
-      (bundle) => !bundle.canGenerate || bundle.coverageStatus === "insufficient",
+      (bundle) =>
+        !bundle.canGenerate || bundle.coverageStatus === "insufficient",
     );
-    const reviewCards = reportEvidenceCards.filter((card) => card.needsReview);
+    const reviewCards = reportEvidenceCards.filter(
+      (card) =>
+        card.needsReview &&
+        !(
+          researchReportMode === "formal_research_report" &&
+          card.governanceFlags?.includes("exact_support_span_verified") === true
+        ),
+    );
     const definitivelyRejectedEvidence = allRejectedEvidence.filter(
       (item) => item.decision !== "indeterminate",
     );
-    const canonicalEvidenceStatus: "complete" | "partial" | "indeterminate" | "empty" =
+    const canonicalEvidenceStatus:
+      | "complete"
+      | "partial"
+      | "indeterminate"
+      | "empty" =
       reportEvidenceCards.length > 0
         ? reviewCards.length > 0 || allRejectedEvidence.length > 0
           ? "partial"
@@ -2863,13 +4202,21 @@ export function createReportDraftsRouter({
       (!writerEvidenceSet && allRejectedEvidence.length > 0);
     const fallbackReasons = [
       writerResult.fallbackReason,
-      generationMode === "fallback_conservative_draft" ? "fallback_conservative_draft" : null,
+      generationMode === "fallback_conservative_draft"
+        ? "fallback_conservative_draft"
+        : null,
       sectionFallbackUsed
         ? `writer_section_fallback:${writerFallbackSectionCount}`
         : null,
-      ...blockedSections.map((section) => `${section.sectionId}:grounding_verifier_blocked`),
-      ...partialSections.map((section) => `${section.sectionId}:partially_grounded`),
-      ...insufficientBundles.map((bundle) => `${bundle.sectionId}:insufficient_evidence_bundle`),
+      ...blockedSections.map(
+        (section) => `${section.sectionId}:grounding_verifier_blocked`,
+      ),
+      ...partialSections.map(
+        (section) => `${section.sectionId}:partially_grounded`,
+      ),
+      ...insufficientBundles.map(
+        (bundle) => `${bundle.sectionId}:insufficient_evidence_bundle`,
+      ),
       !writerEvidenceSet && allRejectedEvidence.length > 0
         ? `${allRejectedEvidence.length}:rejected_or_indeterminate_evidence_cards`
         : null,
@@ -2879,7 +4226,9 @@ export function createReportDraftsRouter({
           ? `report_plan_${reportPlanResult.status}`
           : null,
       ...reviewCards
-        .filter((card) => card.extractionMethod === "rule_fallback_claim_extraction")
+        .filter(
+          (card) => card.extractionMethod === "rule_fallback_claim_extraction",
+        )
         .map((card) => `${card.id}:rule_fallback_claim_extraction`),
     ].filter((item): item is string => Boolean(item));
     const fallbackUsed =
@@ -2887,6 +4236,109 @@ export function createReportDraftsRouter({
     const fallbackReason = fallbackUsed
       ? fallbackReasons.join(" | ") || warnings.join(" | ") || "fallback_used"
       : null;
+    const writerFailureCategories = Array.from(
+      new Set(
+        (writerResult.writerDiagnostics?.writerAttempts ?? [])
+          .filter((attempt) => attempt.status === "failed")
+          .map((attempt) => attempt.failureCategory)
+          .filter((category): category is NonNullable<typeof category> => Boolean(category)),
+      ),
+    );
+    const directFindingSourceCount = acceptedSources.filter(
+      (source) => source.formalEvidenceRole === "DIRECT_FINDING",
+    ).length;
+    const topicIntegrityHash = createHash("sha256")
+      .update(JSON.stringify(acceptedSourceReview.contract))
+      .digest("hex");
+    const contentIntegrityValidated =
+      directFindingSourceCount >= 2 &&
+      formalResearchArchitecture?.topicIsolation.pass !== false &&
+      (formalResearchArchitecture?.diagnostics.quantitativeExtractionGaps.length ?? 0) === 0 &&
+      acceptedSources.every(
+        (source) =>
+          source.formalEvidenceRole !== "REJECTED_OFF_TOPIC" &&
+          source.topicIntegrityAssessment?.hardExclusion.excluded !== true,
+      ) &&
+      reportEvidenceCards.every(
+        (card) => card.formalEvidenceRole !== "REJECTED_OFF_TOPIC",
+      );
+    const formalResearchCheckpoint = formalResearchArchitecture
+      ? {
+          schemaVersion: "formal-research-checkpoint.v2",
+          workflowId,
+          topicHash: hash,
+          topicIntegrityVersion: TOPIC_INTEGRITY_VERSION,
+          topicIntegrityHash,
+          relevancePolicyVersion: RELEVANCE_POLICY_VERSION,
+          evidenceSetHash: writerEvidenceSet?.evidenceSetHash ?? null,
+          acceptedSourceIds: acceptedSources.map((source) => source.id),
+          acceptedSourceCount: acceptedSources.length,
+          rejectedSourceCount: acceptedSourceReview.rejectedSources.length,
+          directFindingSourceCount,
+          contentIntegrityValidated,
+          topicIntegrityValidatedAt: acceptedSourceReview.validatedAt,
+          evidenceIds: formalResearchArchitecture.studies.flatMap((study) =>
+            study.evidenceSpans.map((span) => span.spanId),
+          ),
+          completedStages: [
+            "source_normalization",
+            "source_relevance_review",
+            "topic_integrity_validation",
+            "accepted_source_processing",
+            "structured_study_extraction",
+            "research_blueprint",
+            "methodology_classification",
+            "report_structure_planning",
+            "evidence_matrix",
+            "section_claim_allocation",
+            "quantitative_findings",
+            "figure_planning",
+          ],
+          resumeFrom:
+            !contentIntegrityValidated
+              ? "source_relevance_review"
+              : writerResult.reportGenerationStatus === "success" && !fallbackUsed
+              ? formalResearchValidation?.pass
+                ? "export"
+                : "validation"
+              : "writer_generation",
+          safeToResume: contentIntegrityValidated,
+          providerFailureCategories: writerFailureCategories,
+          invalidatedBy: [
+            "topic_hash_change",
+            "accepted_source_set_change",
+            "evidence_set_hash_change",
+            "topic_integrity_hash_change",
+            "relevance_policy_version_change",
+            "formal_research_schema_version_change",
+          ],
+        }
+      : null;
+    const writerFailureReasons =
+      writerResult.writerDiagnostics?.failureReasons ?? {};
+    const sectionDegradationDiagnostics = [
+      ...Object.entries(writerFailureReasons).map(([sectionId, detail]) => ({
+        sectionId,
+        reason: formalSectionDegradationReason(detail),
+        detail,
+        stage: "writer_generation" as const,
+      })),
+      ...blockedSections
+        .filter((section) => !(section.sectionId in writerFailureReasons))
+        .map((section) => ({
+          sectionId: section.sectionId,
+          reason: "INSUFFICIENT_EVIDENCE" as const,
+          detail:
+            section.warnings?.join(" | ") ?? "grounding_verifier_blocked",
+          stage: "grounding_verification" as const,
+        })),
+      ...formalSectionRepair.repairs.map((repair) => ({
+        sectionId: repair.sectionId,
+        reason: repair.reason,
+        detail: repair.repair,
+        stage: "deterministic_formal_repair" as const,
+      })),
+    ];
 
     res.json({
       ok: true,
@@ -2895,7 +4347,9 @@ export function createReportDraftsRouter({
       fallback_used: fallbackUsed,
       message: writerResult.message,
       warning: warnings.join(" | ") || null,
-      draft: sections.map((section) => `${section.title}\n${section.prose}`).join("\n\n"),
+      draft: sections
+        .map((section) => `${section.title}\n${section.prose}`)
+        .join("\n\n"),
       sections,
       sectionPlan: writerResult.sectionPlan ?? [],
       writerDiagnostics: writerResult.writerDiagnostics ?? null,
@@ -2906,15 +4360,31 @@ export function createReportDraftsRouter({
         original: topic,
         topicHash: hash,
       },
+      topicIntegrityContract: acceptedSourceReview.contract,
+      topicIntegrityReport: {
+        schemaVersion: TOPIC_INTEGRITY_VERSION,
+        policyVersion: RELEVANCE_POLICY_VERSION,
+        topicIntegrityHash,
+        contentIntegrityValidated,
+        acceptedSourceCount: acceptedSources.length,
+        rejectedSourceCount: acceptedSourceReview.rejectedSources.length,
+        directFindingSourceCount,
+        validatedAt: acceptedSourceReview.validatedAt,
+      },
+      sourceRejectionAudit: acceptedSourceReview.rejectedSources,
       sourceCountSummary: {
         accepted: acceptedSources.length,
       },
       chunkCountSummary: {
-        rejectedEvidenceCardCount: allRejectedEvidence.filter((item) => item.decision !== "indeterminate").length,
+        rejectedEvidenceCardCount: allRejectedEvidence.filter(
+          (item) => item.decision !== "indeterminate",
+        ).length,
         indeterminateEvidenceCardCount: indeterminateEvidence.length,
       },
       rejectedChunks: allRejectedEvidence,
-      rejectedChunkCount: allRejectedEvidence.filter((item) => item.decision !== "indeterminate").length,
+      rejectedChunkCount: allRejectedEvidence.filter(
+        (item) => item.decision !== "indeterminate",
+      ).length,
       indeterminateEvidence,
       canonicalEvidenceStatus,
       canonicalEvidenceDiagnostics: {
@@ -2924,15 +4394,19 @@ export function createReportDraftsRouter({
         needsReviewCardCount: reviewCards.length,
         indeterminateCardCount: indeterminateEvidence.length,
         rejectedCardCount: definitivelyRejectedEvidence.length,
-        traceableIndeterminateSourceIds: Array.from(new Set(
-          indeterminateEvidence
-            .map((item) => item.sourceId)
-            .filter((sourceId): sourceId is string => Boolean(sourceId)),
-        )),
-        diagnostics: Array.from(new Set([
-          `canonical_evidence:${canonicalEvidenceStatus}`,
-          ...indeterminateEvidence.flatMap((item) => item.diagnostics),
-        ])),
+        traceableIndeterminateSourceIds: Array.from(
+          new Set(
+            indeterminateEvidence
+              .map((item) => item.sourceId)
+              .filter((sourceId): sourceId is string => Boolean(sourceId)),
+          ),
+        ),
+        diagnostics: Array.from(
+          new Set([
+            `canonical_evidence:${canonicalEvidenceStatus}`,
+            ...indeterminateEvidence.flatMap((item) => item.diagnostics),
+          ]),
+        ),
       },
       evidenceCards: reportEvidenceCards,
       sectionEvidenceBundles,
@@ -2964,11 +4438,21 @@ export function createReportDraftsRouter({
       fallbackUsed,
       fallbackReason,
       reportMode,
+      researchReportMode,
+      citationDisplayMode,
+      formalResearchArchitecture:
+        writerResult.formalResearchArchitecture ?? formalResearchArchitecture ?? null,
+      formalResearchValidation,
+      formalSectionRepairDiagnostics: formalSectionRepair.repairs,
+      sectionDegradationDiagnostics,
+      formalResearchCheckpoint,
       reportPlan: reportPlanResult?.plan ?? null,
       reportPlanStatus: writerEvidenceSet
         ? "plan_built"
-        : reportPlanResult?.status ?? "degraded_legacy",
-      reportPlanDiagnostics: reportPlanResult?.diagnostics ?? ["legacy_report_plan_missing"],
+        : (reportPlanResult?.status ?? "degraded_legacy"),
+      reportPlanDiagnostics: reportPlanResult?.diagnostics ?? [
+        "legacy_report_plan_missing",
+      ],
       planBuildStatus: reportPlanResult ? "plan_built" : "plan_invalidated",
       readinessStatus:
         readinessStatus ??
@@ -2977,11 +4461,14 @@ export function createReportDraftsRouter({
       evidenceSetHash: writerEvidenceSet?.evidenceSetHash ?? null,
       writerEvidenceSetHash: writerEvidenceSet?.evidenceSetHash ?? null,
       filteredEvidence: writerEvidenceSet?.rejectedEvidenceCards ?? [],
-      filteredEvidenceCount: writerEvidenceSet?.rejectedEvidenceCards.length ?? 0,
+      filteredEvidenceCount:
+        writerEvidenceSet?.rejectedEvidenceCards.length ?? 0,
       filteredAfterPlanCount: 0,
       sourceMixProfile,
       details: {
         reportMode,
+        researchReportMode,
+        citationDisplayMode,
         acceptedSourcesCount: acceptedSources.length,
         evidenceCardsCount: reportEvidenceCards.length,
         fallbackUsed,

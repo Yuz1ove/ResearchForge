@@ -1,0 +1,33 @@
+{
+  "schema_version": "researchforge-ironman-day-facts/v1",
+  "day": 3,
+  "title_seed": "引用基礎讓問題浮上來",
+  "historical_period": {"start": "2026-06-12", "end": "2026-06-17", "confidence": "HIGH"},
+  "evidence_boundary": "COMMITTED_GIT",
+  "central_problem": "LLM 可以寫出像報告的文字，但系統如何知道來源與主張是否相連？",
+  "reader_takeaway": "citation identity、source record 與 review state 要先進入資料流，不能只靠 prose prompt。",
+  "known_at_the_time": [
+    {"fact": "f0df507 建立 source-search route、Crossref/Semantic Scholar retrieval、normalized source records 與 shared source contracts。", "source_refs": ["SRC-GIT-CITATION"]},
+    {"fact": "6/17 commit cluster 加入 source relevance、authority/language handling 與 generation readiness。", "source_refs": ["SRC-GIT-EVIDENCE-GATE"]}
+  ],
+  "implemented_at_the_time": [{"fact": "來源可以進入 review 與後續 generation gate，而不是直接從搜尋結果生成。", "source_refs": ["SRC-GIT-CITATION", "SRC-GIT-EVIDENCE-GATE"]}],
+  "not_yet_available": [{"fact": "沒有證據顯示 canonical admission 已在此階段集中決策。", "source_refs": ["SRC-GIT-EVIDENCE-GATE", "SRC-SOURCE-CANONICAL"]}],
+  "observed_failures": [
+    {"failure_id": "SEARCH_RESULT_NOT_EQUAL_EVIDENCE", "date_or_range": "2026-06-12/2026-06-17", "historical_stage": "citation foundation", "symptom": "搜尋結果與可用研究證據仍是不同層級。", "root_cause_if_known": "early source model and gates were foundational, not a final canonical owner", "what_was_known_then": "來源需要被整理與審查。", "later_resolution": "後續分出 facts、claim graph、canonical admission 與 full-text qualification。", "source_refs": ["SRC-GIT-CITATION", "SRC-GIT-EVIDENCE-GATE"]}
+  ],
+  "tests_and_metrics": [{"test_or_metric": "Two named initial academic providers are visible in the citation-foundation source: Crossref and Semantic Scholar.", "result": "provider names verified; no provider success rate asserted", "source_refs": ["SRC-GIT-CITATION"]}],
+  "engineering_decisions": [{"decision": "先建立 shared source record 與 review state，再讓報告生成消費 accepted material。", "source_refs": ["SRC-GIT-CITATION", "SRC-GIT-EVIDENCE-GATE"]}],
+  "architecture_state": [{"state": "topic/query → provider records → normalized sources → review/readiness gates", "source_refs": ["SRC-GIT-CITATION", "SRC-GIT-EVIDENCE-GATE"]}],
+  "terminology_available_at_the_time": ["source record", "citation", "review state", "relevance", "generation readiness"],
+  "terminology_forbidden_due_to_hindsight": ["StudyFactEnvelopeV2", "canonical-study-admission", "FULL_TEXT_STRUCTURED", "V5 authoritative ledger"],
+  "safe_numbers": [{"value": "2 named initial academic providers", "meaning": "Crossref and Semantic Scholar are visible in f0df507 source code", "source_refs": ["SRC-GIT-CITATION"]}],
+  "safe_public_facts": [{"fact": "第一個 source-search/citation foundation 讓『報告像不像』與『主張有沒有來源』開始分離。", "source_refs": ["SRC-GIT-CITATION"]}],
+  "sensitive_or_internal_facts": ["provider credentials", "raw provider payloads", "internal source IDs"],
+  "retrospective_notes": [{"note": "後來 canonical owner 才把不同 consumer 的 evidence eligibility 收斂到一個決策；這裡只能說有早期 gates。", "source_refs": ["SRC-GIT-EVIDENCE-GATE", "SRC-QA-CANONICAL"]}],
+  "source_refs": [
+    {"type": "commit", "ref": "SRC-GIT-CITATION", "why_it_supports_this_fact": "first committed source/citation foundation"},
+    {"type": "commit_group", "ref": "SRC-GIT-EVIDENCE-GATE", "why_it_supports_this_fact": "relevance, authority and readiness gates"}
+  ],
+  "publication_risks": ["不要把 early gates 寫成 canonical truth。", "不要把 provider response 寫成 validated study evidence。"],
+  "confidence": "HIGH"
+}

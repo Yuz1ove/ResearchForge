@@ -89,6 +89,10 @@ const report = {
       evidenceSetHash: "a".repeat(64),
       writerEvidenceSetHash: "a".repeat(64),
       filteredAfterPlanCount: 0,
+      formalResearchValidationPassed: true,
+      contentIntegrityValidated: true,
+      resumeFrom: "export",
+      safeToResume: true,
     },
   },
   sections: [
@@ -281,24 +285,24 @@ test("print, Markdown, text, and JSON share one canonical export document", () =
   assert.equal(json.canonicalDocument.title, report.meta.title);
 });
 
-test("structured citations render clickable author-year labels and alphabetized unnumbered references", () => {
+test("structured citations render one compact numeric cluster and numbered alphabetized sources", () => {
   const plain = buildPlainText(structuredReport, input);
   const markdown = buildMarkdown(structuredReport, input);
   const html = buildPrintHtml(structuredReport, input, DEFAULT_REPORT_PRESENTATION);
 
-  assert.match(plain, /關聯（Alvarez, 2023；Chen, 2024）。/u);
-  assert.doesNotMatch(plain, /\[\d+\]/u);
+  assert.match(plain, /關聯〔1–2〕。/u);
+  assert.doesNotMatch(plain, /（Alvarez, 2023；Chen, 2024）/u);
   assert.ok(
     plain.indexOf("Alvarez, M. (2023)") < plain.indexOf("Chen, W. (2024)"),
     "APA references should be sorted by author instead of citation order",
   );
 
-  assert.match(markdown, /\[Chen, 2024\]\(https:\/\/doi\.org\/10\.1000\/chen\)/u);
-  assert.match(markdown, /<a id="rf-reference-ref-alvarez"><\/a>Alvarez/u);
-  assert.doesNotMatch(markdown, /^\s*(?:\d+\.|- |\[\d+\])/mu);
+  assert.match(markdown, /\[〔1–2〕\]\(#rf-reference-ref-alvarez\)/u);
+  assert.match(markdown, /<a id="rf-reference-ref-alvarez"><\/a>1\. Alvarez/u);
 
   assert.match(html, /<p class="narrative">都市植被/u);
-  assert.match(html, /class="citation-link" href="https:\/\/doi\.org\/10\.1000\/chen">Chen, 2024<\/a>/u);
+  assert.match(html, /<span class="citation-cluster"><a href="#rf-reference-ref-alvarez">〔1–2〕<\/a><\/span>/u);
+  assert.doesNotMatch(html, /class="citation-link"/u);
   assert.match(html, /<p id="rf-reference-ref-alvarez" class="reference-entry">/u);
   assert.match(html, /p\.narrative \{ text-indent:2em; \}/u);
   assert.match(html, /thead \{ display:table-header-group; \}/u);
@@ -361,7 +365,9 @@ test("directed-graph print figures use only PDF-safe semantic tags", () => {
   };
 
   const html = buildPrintHtml(graphReport, input, DEFAULT_REPORT_PRESENTATION);
-  assert.match(html, /<div class="rf-edge"><span>綠覆率<\/span><strong>→<\/strong><span>熱環境<\/span>/u);
+  assert.match(html, /<ol class="rf-workflow">/u);
+  assert.match(html, /<span class="rf-workflow-index">01<\/span><strong>綠覆率<\/strong>/u);
+  assert.equal((html.match(/<strong>綠覆率<\/strong>/gu) ?? []).length, 1);
   assert.doesNotMatch(html, /<\/?b>/u);
 });
 
@@ -375,13 +381,14 @@ test("body_paragraph_first_line_indent", async () => {
   const relationships = parts["word/_rels/document.xml.rels"];
 
   assert.match(documentXml, /<w:ind w:firstLine="440"\/>/u);
-  assert.match(documentXml, /Chen, 2024/u);
-  assert.match(documentXml, /Alvarez, 2023/u);
+  assert.doesNotMatch(documentXml, /w:vertAlign w:val="superscript"/u);
+  assert.match(documentXml, />〔1–2〕<\/w:t>/u);
+  assert.match(documentXml, /<w:hyperlink[^>]*w:anchor="rf-reference-ref-alvarez"/u);
   assert.match(documentXml, /<w:hyperlink[^>]*r:id=/u);
   assert.match(documentXml, /<w:bookmarkStart[^>]*w:name="rf-reference-ref-alvarez"/u);
   assert.match(relationships, /Target="https:\/\/doi\.org\/10\.1000\/chen"[^>]*TargetMode="External"/u);
   assert.ok(documentXml.indexOf("Alvarez, M. (2023)") < documentXml.indexOf("Chen, W. (2024)"));
-  assert.doesNotMatch(documentXml, /\[\d+\]/u);
+  assert.doesNotMatch(documentXml, /Alvarez, 2023；Chen, 2024/u);
 });
 
 test("every formal export blocks unresolved canonical citation mappings", async () => {
@@ -437,16 +444,73 @@ test("Markdown and DOCX formal exports require canonical readiness and matching 
   );
 });
 
+test("canonical limited boundary projection may export without claiming completed Writer validation", () => {
+  const limitedDocument = {
+    ...structuredFormalDocument,
+    metadata: {
+      ...structuredFormalDocument.metadata,
+      reportKind: "limited_evidence_brief" as const,
+      eligibleSourceCount: 2,
+      evidenceExcerptCount: 2,
+    },
+    quality: {
+      passed: true,
+      blockExport: false,
+    },
+  } as unknown as FormalReportDocument;
+  const boundaryReport = {
+    ...structuredReport,
+    meta: {
+      ...structuredReport.meta,
+      formalReportDocument: limitedDocument,
+      formalExportProof: {
+        ...report.meta.formalExportProof!,
+        formalResearchValidationPassed: false,
+        resumeFrom: "validation" as const,
+      },
+    },
+  } satisfies GeneratedReport;
+
+  assert.doesNotThrow(() => buildCanonicalExportDocument(boundaryReport, input));
+  const noLiveEvidence = {
+    ...boundaryReport,
+    meta: {
+      ...boundaryReport.meta,
+      formalReportDocument: {
+        ...limitedDocument,
+        metadata: { ...limitedDocument.metadata, evidenceExcerptCount: 0 },
+      },
+    },
+  } satisfies GeneratedReport;
+  assert.throws(
+    () => buildCanonicalExportDocument(noLiveEvidence, input),
+    ReportExportIntegrityError,
+  );
+});
+
 test("print HTML is clean A4 output with wrapping bibliography styles", () => {
   const html = buildPrintHtml(report, input, DEFAULT_REPORT_PRESENTATION);
 
   assert.match(html, /@page \{ size: A4; margin: 23mm 23mm 24mm; \}/u);
-  assert.match(html, /<section id="rf-section-2" class="references"><h2>參考文獻<\/h2>/u);
+  assert.match(html, /<section id="rf-section-2" class="references"><h1>參考文獻<\/h1>/u);
   assert.match(html, /\.references p, \.references li \{[^}]*text-indent:-2em;/u);
   assert.match(html, /overflow-wrap:anywhere;/u);
   assert.match(html, /word-break:break-word;/u);
   assert.match(html, /\.figure-alt \{ height:0; max-height:0; margin:0;/u);
   assert.doesNotMatch(html, /class="hint"|window\.print|about:blank|<script/iu);
+});
+
+test("every top-level chapter starts a new page in print HTML and DOCX", async () => {
+  const html = buildPrintHtml(structuredReport, input, DEFAULT_REPORT_PRESENTATION);
+  assert.match(html, /section\[id\^="rf-section-"\] \{ break-before:page; page-break-before:always; \}/u);
+  assert.doesNotMatch(html, /\.toc \{ page-break-after:always;/u);
+
+  const blob = await buildDocxBlob(structuredReport, input, DEFAULT_REPORT_PRESENTATION);
+  const parts = await readDocxXmlParts(blob, ["word/document.xml"]);
+  const documentXml = parts["word/document.xml"];
+  const pageBreakBeforeCount = (documentXml.match(/<w:pageBreakBefore\/>/gu) ?? []).length;
+  assert.equal(pageBreakBeforeCount, structuredReport.sections.length);
+  assert.doesNotMatch(documentXml, /<w:br w:type="page"\/>/u);
 });
 
 test("DOCX OOXML separates cover and body and keeps formal print settings", async () => {

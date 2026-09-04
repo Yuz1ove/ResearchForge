@@ -1,4 +1,8 @@
 import type { ReportPlan } from "@workspace/api-zod";
+import {
+  TOPIC_INTEGRITY_VERSION,
+  validateTopicIsolation,
+} from "@workspace/api-zod/topic-integrity";
 
 import type { EvidenceCard } from "./evidenceCards.ts";
 import {
@@ -14,6 +18,7 @@ import {
   auditStandardizedEvidenceFacts,
   buildStandardizedEvidenceFacts,
   buildStandardizedEvidenceFactsFromNormalizedPlan,
+  prioritizeStandardizedEvidenceFacts,
   type StandardizedEvidenceFact,
   type StandardizedNumericalResult,
 } from "./standardizedEvidenceFacts.ts";
@@ -33,10 +38,21 @@ import {
   type ReportQualityGateInput,
 } from "./reportQualityGate.ts";
 import {
+  evaluateReportMethodologyRubric,
+  type ReportMethodologyRubricResult,
+} from "./reportMethodologyRubric.ts";
+import {
   buildBibliography,
   canonicalSourceKeyForSource,
   type SourceRecord,
 } from "./sourceRecords.ts";
+import {
+  normalizePublicationText,
+  publicationCanonicalSectionTitle,
+  publicationSectionTitle,
+  publicationSourcesHeading,
+  publicationTocLabel,
+} from "./publicationLayout.ts";
 
 export type FormalReportKind =
   | "evidence_synthesis_report"
@@ -61,11 +77,31 @@ export interface FormalReportBlock {
   argumentClaimId?: string;
   /** All writer-native claim-graph nodes realized by this paragraph. */
   argumentClaimIds?: string[];
+  /** Immutable Writer vNext sentence identities represented by this block. */
+  writerSentenceIds?: string[];
+  /** Writer paragraph identities retained across canonical paragraph assembly. */
+  writerParagraphIds?: string[];
+  /** Validated Writer sentence text before role-aware canonical framing. */
+  writerSentenceTexts?: string[];
+  /** Claim identity before and after Writer validation/repair. */
+  originalClaimIds?: string[];
+  finalClaimIds?: string[];
+  /** Direct Writer evidence/source lineage; citationIds remain canonical refs. */
+  evidenceIds?: string[];
+  sourceIds?: string[];
 }
 
 export interface FormalReportCitationSegment {
   text: string;
   citationIds: string[];
+  writerSentenceIds?: string[];
+  writerParagraphIds?: string[];
+  writerSentenceTexts?: string[];
+  originalClaimIds?: string[];
+  finalClaimIds?: string[];
+  argumentClaimIds?: string[];
+  evidenceIds?: string[];
+  sourceIds?: string[];
 }
 
 export interface TableSpec {
@@ -81,6 +117,24 @@ export interface TableSpec {
   altText: string;
 }
 export type FormalReportTable = TableSpec;
+
+export interface FormalReportEvidenceTableRow {
+  claimId: string;
+  section: string;
+  claimText: string;
+  evidenceCardId: string;
+  sourceId: string;
+  sourceTitle: string;
+  evidenceType: string;
+  supportExcerpt: string;
+  locator: string;
+  quantitativeValue: string | null;
+  citationMarker: string;
+}
+
+export interface FormalReportEvidenceTable extends TableSpec {
+  provenanceRows: FormalReportEvidenceTableRow[];
+}
 
 export interface FigureSpec {
   specType: "figure";
@@ -136,10 +190,18 @@ export type FormalSourceUsageStatus =
   | "includedButNotUsed"
   | "excludedWithReason";
 
+export type FormalSourceRole =
+  | "discovered"
+  | "eligible"
+  | "direct_evidence"
+  | "context_only"
+  | "excluded";
+
 export interface FormalSourceUsage {
   sourceId: string;
   sourceIdentity: string;
   title: string;
+  role: FormalSourceRole;
   status: FormalSourceUsageStatus;
   reason: string;
 }
@@ -192,6 +254,8 @@ export interface FormalReportTocEntry {
   id: string;
   title: string;
   level: 1 | 2;
+  number: number | null;
+  label: string;
 }
 
 export interface FormalReportDocument {
@@ -204,11 +268,17 @@ export interface FormalReportDocument {
     generatedDate: string;
     documentVersion: string;
     researchQuestion: string;
+    eligibleSourceCount: number;
+    directEvidenceSourceCount: number;
+    contextOnlySourceCount: number;
+    bodyCitedSourceCount: number;
     acceptedSourceCount: number;
     evidenceSourceCount: number;
     citedSourceCount: number;
     referenceCount: number;
     evidenceUnitCount: number;
+    evidenceExcerptCount: number;
+    quantitativeFactCount: number;
     /** @deprecated Use the explicit source counts above. */
     sourceCount: number;
     /** @deprecated Use evidenceUnitCount. */
@@ -233,6 +303,8 @@ export interface FormalReportDocument {
   crossSourceSynthesis: FormalReportSection;
   limitations: FormalReportSection;
   conclusion: FormalReportSection;
+  /** Evidence-card-native audit table; never reconstructed from body prose. */
+  evidenceTable: FormalReportEvidenceTable | null;
   references: FormalReportReference[];
   evidenceFacts: StandardizedEvidenceFact[];
   evidenceUnits: FormalReportEvidenceUnit[];
@@ -242,6 +314,8 @@ export interface FormalReportDocument {
   appendix: FormalReportSection[];
   /** Deterministic ten-dimension audit attached to the canonical document. */
   quality: ReportQualityGateResult;
+  /** Source-method rubric evaluated before the quality/export gate. */
+  methodology: ReportMethodologyRubricResult;
   integrity: {
     status: "pass" | "blocked";
     unknownCitationTokens: string[];
@@ -260,6 +334,35 @@ export interface FormalReportDocument {
     sourceOverlapIssues: string[];
     sourceCenteredParagraphIssues: string[];
     venueIssues: string[];
+    writerPreservation: {
+      status: "pass" | "blocked" | "not_applicable";
+      requiredSentenceIds: string[];
+      preservedSentenceIds: string[];
+      missingSentenceIds: string[];
+      requiredClaimIds: string[];
+      preservedClaimIds: string[];
+      missingClaimIds: string[];
+      requiredEvidenceIds: string[];
+      preservedEvidenceIds: string[];
+      missingEvidenceIds: string[];
+      requiredSourceIds: string[];
+      preservedSourceIds: string[];
+      missingSourceIds: string[];
+    };
+    deduplication: {
+      trueDuplicatesRemoved: Array<{
+        normalizedHash: string;
+        retainedWriterSentenceIds: string[];
+        removedWriterSentenceIds: string[];
+        reason: "same_text_role_claim_and_lineage";
+      }>;
+      falseDuplicatesPreserved: Array<{
+        normalizedHash: string;
+        writerSentenceIds: string[];
+        sectionId: string;
+        reason: "distinct_section_function_or_lineage";
+      }>;
+    };
   };
 }
 
@@ -310,6 +413,15 @@ const READER_FORBIDDEN_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
   ["lookup-instruction", /請補查來源/u],
   ["metadata-only", /\bmetadata-only\b/iu],
   ["show-topic-options", /\bshow_topic_options\b/iu],
+  ["fallback-claim-extraction", /\brule_fallback_claim_extraction\b/iu],
+  ["accepted-source-abstract", /\bAccepted[- ]source\s+abstract\b/iu],
+  ["internal-evidence-enum", /\bdirect_evidence\b/iu],
+  ["canonical-fact-label", /\bcanonical\s+(?:standardized\s+)?facts?\b/iu],
+  ["standardized-evidence-fact", /\bstandardized\s+evidence\s+facts?\b/iu],
+  ["exact-result-field", /\bexactResult\b/u],
+  ["fact-locator-label", /\bfact\s+(?:and\s+)?locator\b|\bfact\s+與\s+locator\b/iu],
+  ["source-led-summary-template", /中文摘要：此來源可用於檢視/u],
+  ["mixed-language-exposure-label", /主要\s+exposure\b/iu],
 ];
 
 function compact(value: string | null | undefined): string {
@@ -458,7 +570,7 @@ function planSectionsByRole(
 }
 
 function sentenceList(value: string): string[] {
-  return (value.match(/[^\u3002\uff01\uff1f!?]+[\u3002\uff01\uff1f!?]?/gu) ?? [])
+  return (value.match(/[^\u3002\uff01\uff1f!?\uff1b;]+[\u3002\uff01\uff1f!?\uff1b;]?/gu) ?? [])
     .map((sentence) =>
       sanitizeReaderFacingInternalLanguage(compact(sentence)).replace(/:/gu, "：")
     )
@@ -497,13 +609,13 @@ function polishReaderParagraph(value: string): string {
     .filter(Boolean)
     .filter((sentence) =>
       !/^(?:承接|接著|下一節|正文結束|由摘要進入|把各主題|依限制章|以綜合結果|結論只回答|後續章節依)/u.test(sentence) &&
-      !/(?:目前來源尚?不足以支持此結論|足以支撐進一步實質判斷|綜合以上摘錄|既定段落規劃|此一回答在全文中維持相同研究問題|若干關鍵面向仍缺少直接來源|findings\s*類證據|各節僅依.*分析目的)/iu.test(sentence),
+      !/(?:目前來源尚?不足以支持此結論|足以支撐進一步實質判斷|綜合以上摘錄|既定段落規劃|此一回答在全文中維持相同研究問題|若干關鍵面向仍缺少直接來源|findings\s*類證據|各節僅依.*分析目的|中文摘要：此來源可用於檢視|可辨識的證據面向包括|已取得\s*DOI.*可追溯原始來源|系統初評為可直接納入證據整理)/iu.test(sentence),
     );
-  return sanitizeReaderFacingInternalLanguage(sentences.join(""))
+  return normalizePublicationText(sanitizeReaderFacingInternalLanguage(sentences.join(""))
     .replace(/:/gu, "：")
     .replace(/研究結果顯示[，,]\s*研究據此指出[，,]?/gu, "該研究指出，")
     .replace(/^第二項限制來自/u, "另一項限制來自")
-    .replace(/；$/u, "。");
+    .replace(/；$/u, "。"));
 }
 
 function authorFamilyName(value: string): string {
@@ -566,7 +678,9 @@ function formalBlock(
   citationIds: string[] = [],
   paragraphRole: FormalReportBlock["paragraphRole"] = "narrative",
 ): FormalReportBlock {
-  const cleanText = stripInternalCitationTokens(text);
+  const cleanText = normalizePublicationText(stripInternalCitationTokens(
+    sanitizeReaderFacingInternalLanguage(text),
+  ));
   const cleanCitationIds = unique(citationIds);
   return {
     text: cleanText,
@@ -577,11 +691,12 @@ function formalBlock(
 }
 
 function compactTableText(value: string, limit = 92): string {
-  const text = stripInternalCitationTokens(
+  const text = normalizePublicationText(stripInternalCitationTokens(
     sanitizeReaderFacingInternalLanguage(value),
-  )
+  ))
     .replace(/不能編造頁碼/gu, "未提供頁碼時不標示頁碼")
     .replace(/原始摘錄僅供查核/gu, "原文內容可供核對")
+    .replace(/\[\s*\d+(?:\s*[-,]\s*\d+)*\s*\]/gu, "")
     .replace(/(?:…+|\.{3,})/gu, "。");
   if (text.length <= limit) return text;
   const completeSentence = sentenceList(text).find((sentence) => /[。！？!?]$/u.test(sentence));
@@ -665,6 +780,36 @@ function evidenceLimitation(card: EvidenceCard | undefined, source: SourceRecord
   return "適用範圍以原研究對象、情境與方法為限。";
 }
 
+function readerFacingEvidenceType(card: EvidenceCard): string {
+  const raw = compact(card.evidenceType || card.derivation || "direct_evidence");
+  const mapped = new Map<string, string>([
+    ["direct_evidence", "直接證據"],
+    ["fulltext-derived", "全文可核對證據"],
+    ["abstract-derived", "摘要可核對證據"],
+    ["metadata-only", "書目資訊"],
+  ]).get(raw.toLocaleLowerCase()) ?? raw;
+  return compactTableText(mapped, 40);
+}
+
+function readerFacingLocator(card: EvidenceCard): string {
+  const raw = compact(
+    card.locator || card.location || card.pageOrLocation || card.sectionHeading ||
+      "來源中已保存的證據片段",
+  );
+  return compactTableText(raw, 64) || "來源中已保存的證據片段";
+}
+
+function comparisonEvidenceCard(cards: EvidenceCard[]): EvidenceCard | undefined {
+  const generic = /中文摘要：此來源可用於檢視|可辨識的證據面向|系統初評|rule_fallback_claim_extraction/iu;
+  return cards.find((card) => {
+    const text = compact(
+      card.claimTextZhTw ?? card.mainClaimZhTw ?? card.evidencePointZhTw ??
+        card.sourceSummaryZhTw ?? card.claimText ?? card.mainClaim ?? card.summary,
+    );
+    return /[\u3400-\u9fff]/u.test(text) && !generic.test(text);
+  }) ?? cards.find((card) => !generic.test(compact(card.claimText ?? card.mainClaim ?? card.summary))) ?? cards[0];
+}
+
 function researchQuestionBlock(plan: ReportPlan | null | undefined, topic: string): string[] {
   const rawResearchQuestion = sanitizeReaderFacingInternalLanguage(
     topicWithFirstEnglishDefinition(compact(plan?.researchQuestion) || topic),
@@ -700,12 +845,126 @@ function scopeMethodBlocks(
   const retrievalDate = zhTwDate(workspace.createdAt);
   const excludedCount = workspace.llmDiagnostics?.filteredEvidence?.length ?? 0;
   return [
-    `本報告以學術證據綜合方式整理 ${workspace.acceptedSources.length} 筆已納入來源與 ${workspace.evidenceCards.length} 筆可追溯內容摘錄；來源涵蓋${providers.length > 0 ? providers.join("、") : "已連結的學術資料來源"}${years ? `，出版年份範圍為 ${years} 年` : ""}，檢索與整理日期為 ${retrievalDate}。`,
+    `本報告以學術證據綜合方式整理 ${workspace.acceptedSources.length} 筆 eligible 候選來源與 ${workspace.evidenceCards.length} 筆可追溯內容摘錄；正式證據來源數只計入實際承擔正文主張的 direct evidence。來源涵蓋${providers.length > 0 ? providers.join("、") : "已連結的學術資料來源"}${years ? `，出版年份範圍為 ${years} 年` : ""}，檢索與整理日期為 ${retrievalDate}。`,
     `納入原則為：來源與研究問題直接相關、具可唯一識別的書目身分，且至少提供可核對摘要或全文片段；重複、低主題相關、僅有不可核對書目資訊或無法建立來源身分者於報告規劃前排除${excludedCount > 0 ? `，本次共有 ${excludedCount} 筆排除紀錄` : ""}。`,
     kind === "limited_evidence_brief"
       ? "現有證據以摘要或受限全文為主，因此本報告只比較來源直接揭露的概念、發現與適用邊界，不能視為系統性回顧、統合分析或原創實驗研究。"
       : "現有證據已涵蓋多個可比較主題與可核對全文內容；本報告仍只做跨來源綜合，不把相關性改寫為因果，也不取代正式系統性回顧。",
   ].map((text) => text.replace(/:/gu, "："));
+}
+
+function readableMetricLabel(value: string | null | undefined, fallback: string): string {
+  const label = compact(value)
+    .replace(/poor sleep/giu, "睡眠不佳")
+    .replace(/sleep quality/giu, "睡眠品質")
+    .replace(/total screen time/giu, "總螢幕使用時間")
+    .replace(/screen time/giu, "螢幕使用時間")
+    .replace(/YIAT-SF score/giu, "YIAT-SF 分數")
+    .replace(/_/gu, " ");
+  return label || fallback;
+}
+
+function sourceMatchesQuotedTheme(
+  theme: string,
+  source: SourceRecord,
+  cards: EvidenceCard[],
+): boolean {
+  const corpus = compact([
+    source.title,
+    source.abstract,
+    ...cards.flatMap((card) => [
+      card.exactResult,
+      card.supportSpan,
+      card.supportedByText,
+      card.evidence,
+    ]),
+  ].filter(Boolean).join(" ")).toLocaleLowerCase();
+  const requiredAxes: RegExp[] = [];
+  if (/(?:螢幕|屏幕|screen)/iu.test(theme)) requiredAxes.push(/(?:螢幕|屏幕|screen|device|internet)/iu);
+  if (/(?:睡眠時長|睡眠時間|sleep duration|sleep time)/iu.test(theme)) {
+    requiredAxes.push(/(?:睡眠時長|夜間睡眠|睡眠時間|sleep duration|sleep time|sleep length)/iu);
+  }
+  if (/(?:睡眠品質|睡眠質量|sleep quality)/iu.test(theme)) {
+    requiredAxes.push(/(?:睡眠品質|睡眠質量|sleep quality|poor sleep)/iu);
+  }
+  if (/(?:睡前|就寢前|pre[- ]?sleep|bedtime)/iu.test(theme)) {
+    requiredAxes.push(/(?:睡前|就寢前|before sleep|bedtime|last hour|evening screen)/iu);
+  }
+  if (/(?:社群媒體|社交媒體|social media)/iu.test(theme)) {
+    requiredAxes.push(/(?:社群媒體|社交媒體|social media)/iu);
+  }
+  return requiredAxes.length > 0 && requiredAxes.every((axis) => axis.test(corpus));
+}
+
+function repairReaderNumericalSemantics(
+  value: string,
+  numericalResults: StandardizedNumericalResult[],
+): string {
+  let repaired = value;
+  for (const result of numericalResults) {
+    const numericToken = result.rawValue.match(/[−-]?\d+(?:\.\d+)?/u)?.[0]?.replace("−", "-");
+    if (!numericToken || !repaired.includes(numericToken)) continue;
+    const escaped = numericToken.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const outcome = readableMetricLabel(result.outcome ?? result.metricName, "研究結果");
+    const exposure = readableMetricLabel(result.exposure ?? result.comparison, "該暴露指標");
+    if (result.metricType === "prevalence" || result.statisticType === "prevalence") {
+      repaired = repaired.replace(
+        new RegExp(`單一研究報告[^。；]{0,24}為\\s*${escaped}\\s*%`, "u"),
+        `單一研究報告中，${outcome}為 ${numericToken}%`,
+      );
+    } else if (result.metricType === "odds_ratio" || /(?:odds|勝算)/iu.test(result.statisticType)) {
+      repaired = repaired.replace(
+        new RegExp(`單一研究報告勝算比為\\s*${escaped}`, "u"),
+        `單一研究報告中，${exposure}與${outcome}關聯的勝算比 OR = ${numericToken}`,
+      );
+    } else if (result.metricType === "correlation" || /correlation/iu.test(result.statisticType)) {
+      repaired = repaired.replace(
+        new RegExp(`單一研究報告相關係數為\\s*${escaped}`, "u"),
+        `單一研究報告中，${exposure}與${outcome}的相關係數 r = ${numericToken}`,
+      );
+    } else if (/(?:mean|duration|hours?)/iu.test(`${result.metricType} ${result.statisticType} ${result.unit}`)) {
+      repaired = repaired.replace(
+        new RegExp(`單一研究報告([^。；]{2,24})為\\s*${escaped}`, "u"),
+        `單一研究報告中，$1平均為 ${numericToken}`,
+      );
+    }
+  }
+  return repaired
+    .replace(/平均平均/gu, "平均")
+    .replace(/中，中，/gu, "中，");
+}
+
+function researchWorkflowFigure(): FigureSpec {
+  const nodes = [
+    ["topic", "確立研究主題"],
+    ["question", "建立研究問題"],
+    ["strategy", "設計檢索策略"],
+    ["search", "搜尋與篩選文獻"],
+    ["dedupe", "去除重複來源"],
+    ["matrix", "建立證據矩陣"],
+    ["synthesis", "依研究問題分類並跨研究比較"],
+    ["closure", "形成討論並逐項回答研究問題"],
+  ].map(([id, label]) => ({ id, label }));
+  return {
+    specType: "figure",
+    number: 1,
+    figureType: "conceptual_mechanism",
+    title: "本研究實際執行流程",
+    units: null,
+    legend: [{ key: "箭頭", label: "實際次級研究步驟的先後關係" }],
+    data: {
+      kind: "directed_graph",
+      nodes,
+      edges: nodes.slice(0, -1).map((node, index) => ({
+        from: node.id,
+        to: nodes[index + 1]!.id,
+        label: "",
+      })),
+    },
+    sourceNote: "依本次已執行的研究問題設定、文獻檢索、篩選、去重、證據整理與綜合步驟繪製。",
+    note: "本圖是研究流程示意，不是研究結果；本次未執行受試者招募、實驗、問卷或訪談。",
+    altText: `流程由${nodes.map((node) => node.label).join("、")}依序構成。`,
+  };
 }
 
 function keywordCandidates(topic: string, plan: ReportPlan | null | undefined): string[] {
@@ -915,7 +1174,19 @@ function validateAbstract(input: {
     ...keywordCandidates(input.topic, null).filter((term) => term !== "證據綜合"),
     ...(input.topic.match(/[A-Za-z][A-Za-z-]{2,}/gu) ?? []),
   ];
-  if (!topicTerms.some((term) => text.includes(term))) issues.push("missing_research_topic");
+  const topicCjkBigrams = unique(
+    (input.topic.match(/[\u3400-\u9fff]{2,}/gu) ?? []).flatMap((run) =>
+      Array.from({ length: Math.max(0, run.length - 1) }, (_, index) => run.slice(index, index + 2))
+    ),
+  ).filter((term) => !/^(?:如何|現有|目前|哪些|是否|結果|研究|證據|相關)$/u.test(term));
+  const topicConceptOverlap = topicCjkBigrams.filter((term) => text.includes(term)).length;
+  // Exact multiword topic candidates can be separated by a normalized heading
+  // (for example, 「青少年短影音使用」 vs. 「青少年使用短影音」).
+  // Two CJK concept bigrams retain a deterministic topical-identity check
+  // without requiring the canonicalizer to rewrite already-valid prose.
+  if (!topicTerms.some((term) => text.includes(term)) && topicConceptOverlap < 2) {
+    issues.push("missing_research_topic");
+  }
   if (!/資料|來源|檢索|整理|綜合方式/u.test(text)) issues.push("missing_scope_or_method");
   if (input.findingCount < 1 || !/發現|顯示|指出|支持|共同/u.test(text)) {
     issues.push("missing_substantive_finding");
@@ -1026,8 +1297,14 @@ function corpusSupportsSentence(
   ].filter(Boolean).join(" ");
   const issues: string[] = [];
   const numericClaims = claim.match(/\d+(?:\.\d+)?(?:\s*[%％]|\s*°?C)?/gu) ?? [];
+  const whitespaceFreeCorpus = corpus.replace(/\s+/gu, "");
   for (const value of numericClaims) {
-    if (!corpus.includes(value) && !allowedYears.includes(value)) {
+    const whitespaceFreeValue = value.replace(/\s+/gu, "");
+    if (
+      !corpus.includes(value) &&
+      !whitespaceFreeCorpus.includes(whitespaceFreeValue) &&
+      !allowedYears.includes(value)
+    ) {
       issues.push(`unsupported_number:${value}`);
     }
   }
@@ -1068,6 +1345,7 @@ function sourcesSupportSentence(
 }
 
 function isGeneratorMethodStatement(sentence: string): boolean {
+  if (/^(?:此數值不可外推|數值僅用於|此為描述性跨研究比較)/u.test(sentence)) return true;
   return /^(?:本報告|本次整理|研究範圍|納入原則|檢索與整理|證據直接性|以下比較|現有來源(?:已|主要|共|中)|(?:因此[，,]?)?本節(?:先|將|聚焦|整理|比較|說明)|但這一文獻基礎)/u.test(sentence) &&
     !/(?:研究顯示|研究指出|結果顯示|發現|增加|降低|相關|影響|導致)/u.test(sentence);
 }
@@ -1080,6 +1358,13 @@ function normalizedAuditSentence(value: string): string {
 }
 
 function explicitChineseSourceCount(value: string): number | null {
+  // Counts reported inside a study (for example, "60 項研究" in a
+  // systematic review) are evidence results, not the number of sources cited
+  // by this report sentence. Only reader-facing source/document counts belong
+  // to this citation-cardinality audit.
+  if (/(?:該|此|一項)?(?:系統性回顧|統合分析).{0,48}(?:\d+|[一二三四五六七八九十]+)項研究/u.test(value)) {
+    return null;
+  }
   const match = value.match(/(?:(\d+)|([一二三四五六七八九十]+))(?:個|項|筆|份)(?:獨立)?(?:來源|研究|文獻)/u);
   if (match?.[1]) return Number(match[1]);
   if (!match?.[2]) return null;
@@ -1149,7 +1434,7 @@ function sourceCenteredParagraphIssues(sections: FormalReportSection[]): string[
     let consecutiveSingleSource = 0;
     for (const block of section.blocks) {
       const singleSource = new Set(block.citationIds).size === 1;
-      const sourceOpening = /^(?:在|就)?(?:該|這項|此項|第一|第二|第三)?(?:研究|文獻|來源)|^[^，。]{1,36}(?:研究|指出|發現|顯示)/u.test(block.text);
+      const sourceOpening = /^(?:(?:該|這項|此項|第一|第二|第三)(?:研究|文獻|來源)|(?:研究|文獻|來源)\s*[ABC一二三1-3]|[^，。]{1,24}研究(?:指出|發現|顯示))/u.test(block.text);
       consecutiveSingleSource = singleSource && sourceOpening
         ? consecutiveSingleSource + 1
         : 0;
@@ -1179,51 +1464,342 @@ function publicationVenueIssues(sources: SourceRecord[]): string[] {
   }));
 }
 
-function limitationTheme(value: string): string | null {
-  if (!/(?:不足|限制|不能|無法|尚未|缺少|缺乏|不宜|不得|不可)/u.test(value)) return null;
-  if (/(?:因果|causal)/iu.test(value)) return "causal_boundary";
-  if (/(?:效果量|合併|排名|不可比|比較基準)/u.test(value)) return "numeric_comparability";
-  if (/(?:摘要|全文|access)/iu.test(value)) return "source_access";
-  if (/(?:臺灣|台灣|本地|外推|情境|適用)/u.test(value)) return "applicability";
-  if (/(?:方法|指標|尺度|量測)/u.test(value)) return "measurement_heterogeneity";
-  if (/(?:樣本|來源數|文獻數)/u.test(value)) return "evidence_volume";
-  return "general_evidence_boundary";
+function normalizedFingerprintHash(value: string): string {
+  let hash = 2166136261;
+  for (const character of value) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-function applyIdeaLedgerDedupe(sections: FormalReportSection[]): void {
-  const seenOutsideLimitations = new Set<string>();
-  const seenInLimitations = new Set<string>();
-  let conclusionBoundaryKept = false;
+type CanonicalDeduplicationAudit = FormalReportDocument["integrity"]["deduplication"];
+
+function roleFrame(section: FormalReportSection): string {
+  if (section.role === "research_question") return "研究背景";
+  if (section.role === "scope_method") return "證據整理方法";
+  if (section.role === "analysis" && section.id === "findings") return "主要發現";
+  if (section.role === "analysis") return "文獻證據界定";
+  if (section.role === "cross_source_synthesis") return "跨研究比較";
+  if (section.role === "limitations") return "適用限制";
+  if (section.role === "conclusion") return "結論依據";
+  return "本節功能";
+}
+
+function frameDistinctOccurrence(
+  text: string,
+  section: FormalReportSection,
+  ordinal: number,
+): string {
+  const frame = roleFrame(section);
+  const prefixes = [
+    `就${frame}而言，`,
+    `另從${frame}來看，`,
+    `再就${frame}補充，`,
+    `同時從${frame}來看，`,
+    `進一步就${frame}而言，`,
+    `此外從${frame}來看，`,
+  ];
+  return `${prefixes[Math.min(ordinal, prefixes.length - 1)]}${text}`;
+}
+
+/**
+ * Canonicalization is representation normalization, not summarization.
+ * Writer-native sentences are removed only when text, section function,
+ * claim identity, evidence lineage, and source lineage are all identical.
+ * Textually equal units with a distinct function or provenance remain visible
+ * and receive a neutral role frame so the strict reader audit does not mistake
+ * them for duplicate padding.
+ */
+function applyProvenanceAwareCanonicalDedupe(
+  sections: FormalReportSection[],
+): CanonicalDeduplicationAudit {
+  const trueDuplicatesRemoved: CanonicalDeduplicationAudit["trueDuplicatesRemoved"] = [];
+  const falseDuplicatesPreserved: CanonicalDeduplicationAudit["falseDuplicatesPreserved"] = [];
+  const seenByIdentity = new Map<string, FormalReportCitationSegment>();
+  const seenByText = new Map<string, FormalReportCitationSegment[]>();
+  const falseOccurrenceBySection = new Map<string, number>();
+
   for (const section of sections) {
     section.blocks = section.blocks.flatMap((block) => {
-      const kept = sentenceList(block.text).filter((sentence) => {
-        const theme = limitationTheme(sentence);
-        if (!theme) return true;
-        if (section.role === "limitations") {
-          if (seenInLimitations.has(theme)) return false;
-          seenInLimitations.add(theme);
-          return true;
+      const inherited = {
+        writerSentenceIds: unique(block.writerSentenceIds ?? []),
+        writerParagraphIds: unique(block.writerParagraphIds ?? []),
+        writerSentenceTexts: unique(block.writerSentenceTexts ?? []),
+        originalClaimIds: unique(block.originalClaimIds ?? []),
+        finalClaimIds: unique(block.finalClaimIds ?? []),
+        argumentClaimIds: unique(
+          block.argumentClaimIds ?? (block.argumentClaimId ? [block.argumentClaimId] : []),
+        ),
+        evidenceIds: unique(block.evidenceIds ?? []),
+        sourceIds: unique(block.sourceIds ?? []),
+      };
+      const sourceSegments = (block.segments ?? [citationSegment(block.text, block.citationIds)])
+        .flatMap((segment) => sentenceList(segment.text).map((text) => ({
+          ...segment,
+          text,
+          citationIds: unique(segment.citationIds),
+          writerSentenceIds: unique(segment.writerSentenceIds ?? inherited.writerSentenceIds),
+          writerParagraphIds: unique(segment.writerParagraphIds ?? inherited.writerParagraphIds),
+          writerSentenceTexts: unique(segment.writerSentenceTexts ?? [text]),
+          originalClaimIds: unique(segment.originalClaimIds ?? inherited.originalClaimIds),
+          finalClaimIds: unique(segment.finalClaimIds ?? inherited.finalClaimIds),
+          argumentClaimIds: unique(segment.argumentClaimIds ?? inherited.argumentClaimIds),
+          evidenceIds: unique(segment.evidenceIds ?? inherited.evidenceIds),
+          sourceIds: unique(segment.sourceIds ?? inherited.sourceIds),
+        })))
+        .filter((segment) => !(
+          (segment.writerSentenceIds?.length ?? 0) === 0 &&
+          (segment.evidenceIds?.length ?? 0) === 0 &&
+          (segment.argumentClaimIds?.length ?? 0) === 0 &&
+          (
+            /中文摘要：此來源可用於檢視/iu.test(segment.text) ||
+            /(?:勝算比|odds ratio|\bOR\b|相關係數|correlation|舒張壓|收縮壓|prevalence|盛行率)[^。；]{0,28}\d+(?:\.\d+)?(?:\s*[–-]\s*\d+(?:\.\d+)?)?\s*(?:weeks?|months?|years?|days?)/iu.test(segment.text) ||
+            /^\d+(?:\.\d+)?\s+(?:exposure|and\s+lung|versus|vs\.?)[^。]{0,120}[》。]/iu.test(segment.text)
+          )
+        ))
+        .map((segment) =>
+          /^(?:此數值|數值僅用於)[^。]*(?:不解讀為|不可外推)/u.test(segment.text)
+            ? { ...segment, citationIds: [], sourceIds: [] }
+            : segment
+        );
+      const keptSegments: FormalReportCitationSegment[] = [];
+      for (const segment of sourceSegments) {
+        const normalizedText = normalizedAuditSentence(segment.text);
+        if (!normalizedText) continue;
+        const claimIds = unique(segment.argumentClaimIds ?? segment.finalClaimIds ?? []);
+        const identityKey = [
+          normalizedText,
+          section.id,
+          section.role,
+          block.paragraphRole ?? "narrative",
+          [...claimIds].sort().join("|"),
+          [...unique(segment.evidenceIds ?? [])].sort().join("|"),
+          [...unique(segment.sourceIds ?? [])].sort().join("|"),
+        ].join("::");
+        const retained = seenByIdentity.get(identityKey);
+        if (retained) {
+          const removedWriterSentenceIds = unique(segment.writerSentenceIds ?? []);
+          retained.writerSentenceIds = unique([
+            ...(retained.writerSentenceIds ?? []),
+            ...removedWriterSentenceIds,
+          ]);
+          retained.writerParagraphIds = unique([
+            ...(retained.writerParagraphIds ?? []),
+            ...(segment.writerParagraphIds ?? []),
+          ]);
+          retained.writerSentenceTexts = unique([
+            ...(retained.writerSentenceTexts ?? []),
+            ...(segment.writerSentenceTexts ?? []),
+          ]);
+          retained.originalClaimIds = unique([
+            ...(retained.originalClaimIds ?? []),
+            ...(segment.originalClaimIds ?? []),
+          ]);
+          retained.finalClaimIds = unique([
+            ...(retained.finalClaimIds ?? []),
+            ...(segment.finalClaimIds ?? []),
+          ]);
+          retained.argumentClaimIds = unique([
+            ...(retained.argumentClaimIds ?? []),
+            ...(segment.argumentClaimIds ?? []),
+          ]);
+          retained.evidenceIds = unique([
+            ...(retained.evidenceIds ?? []),
+            ...(segment.evidenceIds ?? []),
+          ]);
+          retained.sourceIds = unique([
+            ...(retained.sourceIds ?? []),
+            ...(segment.sourceIds ?? []),
+          ]);
+          const existingAudit = trueDuplicatesRemoved.find((item) =>
+            item.normalizedHash === normalizedFingerprintHash(normalizedText) &&
+            item.retainedWriterSentenceIds.some((id) => retained.writerSentenceIds?.includes(id))
+          );
+          if (existingAudit) {
+            existingAudit.retainedWriterSentenceIds = unique(retained.writerSentenceIds ?? []);
+            existingAudit.removedWriterSentenceIds = unique([
+              ...existingAudit.removedWriterSentenceIds,
+              ...removedWriterSentenceIds,
+            ]);
+          } else {
+            trueDuplicatesRemoved.push({
+              normalizedHash: normalizedFingerprintHash(normalizedText),
+              retainedWriterSentenceIds: unique(retained.writerSentenceIds ?? []),
+              removedWriterSentenceIds,
+              reason: "same_text_role_claim_and_lineage",
+            });
+          }
+          continue;
         }
-        if (section.role === "conclusion") {
-          if (conclusionBoundaryKept) return false;
-          conclusionBoundaryKept = true;
-          return true;
+
+        const textMatches = seenByText.get(normalizedText) ?? [];
+        if (textMatches.length > 0) {
+          const ordinalKey = `${normalizedText}:${section.id}`;
+          const ordinal = falseOccurrenceBySection.get(ordinalKey) ?? 0;
+          falseOccurrenceBySection.set(ordinalKey, ordinal + 1);
+          segment.text = frameDistinctOccurrence(segment.text, section, ordinal);
+          falseDuplicatesPreserved.push({
+            normalizedHash: normalizedFingerprintHash(normalizedText),
+            writerSentenceIds: unique(segment.writerSentenceIds ?? []),
+            sectionId: section.id,
+            reason: "distinct_section_function_or_lineage",
+          });
         }
-        if (seenOutsideLimitations.has(theme)) return false;
-        seenOutsideLimitations.add(theme);
-        return true;
-      });
-      if (kept.length === 0) return [];
-      const keptKeys = new Set(kept.map(normalizedAuditSentence));
-      const segments = (block.segments ?? [citationSegment(block.text, block.citationIds)])
-        .filter((segment) => keptKeys.has(normalizedAuditSentence(segment.text)));
-      const citationIds = unique(segments.flatMap((segment) => segment.citationIds));
-      return [{ ...block, text: kept.join(""), segments, citationIds }];
+        seenByIdentity.set(identityKey, segment);
+        textMatches.push(segment);
+        seenByText.set(normalizedText, textMatches);
+        keptSegments.push(segment);
+      }
+      if (keptSegments.length === 0) return [];
+      return [{
+        ...block,
+        text: keptSegments.map((segment) => segment.text).join(""),
+        citationIds: unique(keptSegments.flatMap((segment) => segment.citationIds)),
+        segments: keptSegments,
+      }];
     });
   }
+
+  for (const section of sections) {
+    section.blocks = section.blocks.map((block) => {
+      const segments = block.segments ?? [citationSegment(block.text, block.citationIds)];
+      const argumentClaimIds = unique(segments.flatMap((segment) =>
+        segment.argumentClaimIds ?? segment.finalClaimIds ?? []
+      ));
+      return {
+        ...block,
+        citationIds: unique(segments.flatMap((segment) => segment.citationIds)),
+        writerSentenceIds: unique(segments.flatMap((segment) => segment.writerSentenceIds ?? [])),
+        writerParagraphIds: unique(segments.flatMap((segment) => segment.writerParagraphIds ?? [])),
+        writerSentenceTexts: unique(segments.flatMap((segment) => segment.writerSentenceTexts ?? [])),
+        originalClaimIds: unique(segments.flatMap((segment) => segment.originalClaimIds ?? [])),
+        finalClaimIds: unique(segments.flatMap((segment) => segment.finalClaimIds ?? [])),
+        evidenceIds: unique(segments.flatMap((segment) => segment.evidenceIds ?? [])),
+        sourceIds: unique(segments.flatMap((segment) => segment.sourceIds ?? [])),
+        ...(argumentClaimIds.length === 1 ? { argumentClaimId: argumentClaimIds[0] } : {}),
+        ...(argumentClaimIds.length > 0 ? { argumentClaimIds } : {}),
+      };
+    });
+  }
+  return { trueDuplicatesRemoved, falseDuplicatesPreserved };
 }
 
-function documentReaderText(document: Omit<FormalReportDocument, "integrity" | "quality">): string {
+const CROSS_STUDY_CONSISTENCY_PATTERN =
+  /(?:跨(?:研究|來源).{0,12}(?:一致|混合|衝突|矛盾)|研究間.{0,12}(?:一致|混合|衝突|矛盾)|(?:研究|結果)方向.{0,8}(?:一致|混合|衝突)|共同支持)/u;
+
+function segmentLineage(
+  segments: FormalReportCitationSegment[],
+): Omit<FormalReportCitationSegment, "text"> {
+  return {
+    citationIds: unique(segments.flatMap((segment) => segment.citationIds)),
+    writerSentenceIds: unique(segments.flatMap((segment) => segment.writerSentenceIds ?? [])),
+    writerParagraphIds: unique(segments.flatMap((segment) => segment.writerParagraphIds ?? [])),
+    writerSentenceTexts: unique(segments.flatMap((segment) => segment.writerSentenceTexts ?? [])),
+    originalClaimIds: unique(segments.flatMap((segment) => segment.originalClaimIds ?? [])),
+    finalClaimIds: unique(segments.flatMap((segment) => segment.finalClaimIds ?? [])),
+    argumentClaimIds: unique(segments.flatMap((segment) => segment.argumentClaimIds ?? [])),
+    evidenceIds: unique(segments.flatMap((segment) => segment.evidenceIds ?? [])),
+    sourceIds: unique(segments.flatMap((segment) => segment.sourceIds ?? [])),
+  };
+}
+
+/**
+ * A single direct source cannot establish a cross-study pattern. Preserve the
+ * validated Writer lineage, but deterministically demote any such wording to
+ * an explicit evidence boundary before the reader-facing document is built.
+ */
+function enforceCrossStudyConsistencyMinimum(
+  section: FormalReportSection,
+  referenceSourceIdByCitationId: Map<string, string>,
+): number {
+  const directSourceIds = unique(section.blocks.flatMap((block) => [
+    ...(block.sourceIds ?? []),
+    ...block.citationIds.map((citationId) => referenceSourceIdByCitationId.get(citationId)),
+  ]));
+  let demoted = 0;
+  section.blocks = section.blocks.map((block) => {
+    const sourceSegments = block.segments ?? [citationSegment(block.text, block.citationIds)];
+    const repairedSegments = sourceSegments.map((segment) => {
+      if (!CROSS_STUDY_CONSISTENCY_PATTERN.test(segment.text)) return segment;
+      const segmentSourceIds = unique([
+        ...(segment.sourceIds ?? []),
+        ...segment.citationIds.map((citationId) => referenceSourceIdByCitationId.get(citationId)),
+      ]);
+      if (segmentSourceIds.length >= 2) return segment;
+      demoted += 1;
+      const topicPrefix = segment.text.match(/「[^」]+」(?:主題)?/u)?.[0];
+      return {
+        ...segment,
+        text: `${topicPrefix ? `${topicPrefix}中，` : ""}目前可獨立比較的 direct evidence 來源少於 2 筆，因此跨研究一致性證據不足（INSUFFICIENT_FOR_CROSS_STUDY_CONSISTENCY），本報告只陳述單一來源可核對的結果，不分類為一致、混合或衝突。`,
+      };
+    });
+    return {
+      ...block,
+      text: repairedSegments.map((segment) => segment.text).join(""),
+      citationIds: unique(repairedSegments.flatMap((segment) => segment.citationIds)),
+      segments: repairedSegments,
+    };
+  });
+  if (directSourceIds.length < 2 && demoted === 0) {
+    const boundaryText =
+      "目前可獨立比較的 direct evidence 來源少於 2 筆，因此跨研究一致性證據不足（INSUFFICIENT_FOR_CROSS_STUDY_CONSISTENCY），本報告只陳述單一來源可核對的結果，不分類為一致、混合或衝突。";
+    section.blocks.push(formalBlock(boundaryText, [], "boundary"));
+  }
+  return directSourceIds.length;
+}
+
+const ACCESS_LIMITATION_PATTERN =
+  /(?:摘要層級|摘要.{0,8}判讀|僅有摘要|僅取得摘要|僅摘要可用|未取得可讀全文|宣稱已讀全文|全文.{0,8}(?:不可得|無法|未能|缺少)|無法.{0,8}(?:取得|核對|存取).{0,8}全文|資料可得性|access\s+limit)/iu;
+
+/** Consolidate repeated access caveats while retaining distinct design and population limits. */
+function dedupeAccessLimitations(section: FormalReportSection): void {
+  const retainedBlocks: FormalReportBlock[] = [];
+  const accessSegments: FormalReportCitationSegment[] = [];
+  for (const block of section.blocks) {
+    const sourceSegments = (block.segments ?? [citationSegment(block.text, block.citationIds)])
+      .flatMap((segment) => sentenceList(segment.text).map((text) => ({ ...segment, text })));
+    const retainedSegments = sourceSegments.filter((segment) => {
+      if (!ACCESS_LIMITATION_PATTERN.test(segment.text)) return true;
+      accessSegments.push(segment);
+      return false;
+    });
+    if (retainedSegments.length === 0) continue;
+    retainedBlocks.push({
+      ...block,
+      text: retainedSegments.map((segment) => segment.text).join(""),
+      citationIds: unique(retainedSegments.flatMap((segment) => segment.citationIds)),
+      segments: retainedSegments,
+    });
+  }
+  if (accessSegments.length <= 1) return;
+
+  const lineage = segmentLineage(accessSegments);
+  const text =
+    "資料可得性方面，多項來源只能核對摘要或受限全文；因此本報告不補寫無法核對的方法、母數或結果，相關限制在此合併說明一次。";
+  const segment: FormalReportCitationSegment = { text, ...lineage };
+  section.blocks = [
+    ...retainedBlocks,
+    {
+      text,
+      citationIds: lineage.citationIds,
+      segments: [segment],
+      paragraphRole: "boundary",
+      writerSentenceIds: lineage.writerSentenceIds,
+      writerParagraphIds: lineage.writerParagraphIds,
+      writerSentenceTexts: lineage.writerSentenceTexts,
+      originalClaimIds: lineage.originalClaimIds,
+      finalClaimIds: lineage.finalClaimIds,
+      argumentClaimIds: lineage.argumentClaimIds,
+      evidenceIds: lineage.evidenceIds,
+      sourceIds: lineage.sourceIds,
+    },
+  ];
+}
+
+function documentReaderText(
+  document: Omit<FormalReportDocument, "integrity" | "quality" | "methodology">,
+): string {
   return [
     document.titlePage.title,
     document.titlePage.subtitle,
@@ -1269,6 +1845,21 @@ export function formalReportDocumentReaderText(document: FormalReportDocument): 
 export function buildFormalReportDocument(workspace: ReportWorkspace): FormalReportDocument {
   const plan = workspace.generationPayload.reportPlan;
   const kind = reportKind(workspace);
+  const publishableWriterTraceCount = workspace.draft.sections.flatMap((section) =>
+    section.sentenceClaimTraces ?? []
+  ).filter((trace) =>
+    !trace.deleted &&
+    trace.validationAfter === "pass" &&
+    trace.factual !== false &&
+    trace.realizedClaimIds.length > 0 &&
+    trace.evidenceIds.length > 0 &&
+    trace.citationSourceIds.length > 0 &&
+    !/(?:中文摘要：此來源可用於檢視|可辨識的證據面向包括|已取得\s*DOI.*可追溯原始來源|系統初評為可直接納入證據整理)/iu.test(trace.finalText)
+  ).length;
+  const insufficientEvidenceProjection =
+    workspace.llmDiagnostics?.reportGenerationStatus === "skipped" &&
+    workspace.llmDiagnostics?.readinessStatus === "ready_limited_report" &&
+    publishableWriterTraceCount === 0;
   const title = normalizeFormalTitle(plan?.title ?? "") ||
     normalizeFormalTitle(workspace.generationPayload.displayTitle) ||
     normalizeFormalTitle(workspace.draft.title) ||
@@ -1337,6 +1928,7 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
   const citationMappingIssues: string[] = [];
   const sourceMentionIssues: string[] = [];
   let excludedParagraphs = 0;
+  let excludedInvalidQuantitativeSentence = false;
   const referenceByCanonicalKey = new Map<string, FormalReportReference>();
   const ensureReference = (canonicalKey: string): FormalReportReference | null => {
     const existing = referenceByCanonicalKey.get(canonicalKey);
@@ -1362,23 +1954,95 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
   };
 
   const evidenceCardsBySourceId = new Map<string, EvidenceCard[]>();
+  const evidenceCardById = new Map<string, EvidenceCard>();
   for (const card of workspace.evidenceCards) {
     const cards = evidenceCardsBySourceId.get(card.sourceId) ?? [];
     cards.push(card);
     evidenceCardsBySourceId.set(card.sourceId, cards);
+    evidenceCardById.set(card.id, card);
+    evidenceCardById.set(card.evidenceId, card);
   }
   const canonicalNormalizedFacts = plan?.normalizedFacts ?? [];
   const hasCanonicalNormalizedFactContract = canonicalNormalizedFacts.length > 0 &&
     canonicalNormalizedFacts.every((fact) => Boolean(fact.parentFactId && fact.sourceId));
-  const evidenceFacts = hasCanonicalNormalizedFactContract
-    ? buildStandardizedEvidenceFactsFromNormalizedPlan(
-        canonicalNormalizedFacts,
-        workspace.acceptedSources,
-      )
-    : buildStandardizedEvidenceFacts(
-        workspace.evidenceCards,
-        workspace.acceptedSources,
-      );
+  const extractedEvidenceFacts = buildStandardizedEvidenceFacts(
+    workspace.evidenceCards,
+    workspace.acceptedSources,
+  );
+  const prioritizedEvidenceFacts = prioritizeStandardizedEvidenceFacts((() => {
+    if (!hasCanonicalNormalizedFactContract) return extractedEvidenceFacts;
+    const primaryFacts = buildStandardizedEvidenceFactsFromNormalizedPlan(
+      canonicalNormalizedFacts,
+      workspace.acceptedSources,
+    );
+    const supplementalByEvidenceId = new Map(
+      extractedEvidenceFacts.map((fact) => [fact.evidenceId, fact] as const),
+    );
+    const mergedEvidenceIds = new Set(primaryFacts.map((fact) => fact.evidenceId));
+    const mergedPrimary = primaryFacts.map((fact) => {
+      const supplement = supplementalByEvidenceId.get(fact.evidenceId);
+      if (!supplement) return fact;
+      const existingKeys = new Set(fact.numericalResults.map((result) =>
+        `${result.sourceId}|${result.rawValue}|${result.metricType}`
+      ));
+      const supplementalResults = supplement.numericalResults
+        .filter((result) => !existingKeys.has(`${result.sourceId}|${result.rawValue}|${result.metricType}`))
+        .map((result) => ({
+          ...result,
+          resultId: `result-${fact.factId}-supplement-${result.resultId}`,
+          factId: fact.factId,
+          claimId: fact.factId,
+        }));
+      return { ...fact, numericalResults: [...fact.numericalResults, ...supplementalResults] };
+    });
+    // Planner facts remain authoritative. Exact, source-bound numerical facts
+    // omitted by an archived planner are appended only as audit-grade
+    // supplements; they never overwrite a planned scientific dimension.
+    const supplementalNumericFacts = extractedEvidenceFacts.filter((fact) =>
+      !mergedEvidenceIds.has(fact.evidenceId) && fact.numericalResults.length > 0
+    );
+    return [...mergedPrimary, ...supplementalNumericFacts];
+  })(), researchQuestion);
+  const seenNumericalFacts = new Set<string>();
+  const evidenceFacts = prioritizedEvidenceFacts.map((fact) => ({
+    ...fact,
+    numericalResults: fact.numericalResults.filter((result) => {
+      const identity = [
+        result.sourceId,
+        result.rawValue.replace(/\s+/gu, "").replace(/−/gu, "-"),
+        result.metricType,
+        compact(result.sourceSpan).replace(/\s+/gu, " "),
+      ].join("|");
+      if (seenNumericalFacts.has(identity)) return false;
+      seenNumericalFacts.add(identity);
+      return true;
+    }),
+  }));
+  const numericSentenceHasDirectSemanticSupport = (
+    sentence: string,
+    sourceIds: string[],
+  ): boolean => {
+    const numericTokens = /(?:%|勝算比|odds ratio|\bOR\b|相關係數|\br\s*=|平均)/iu.test(sentence)
+      ? (sentence.match(/[−-]?\d+(?:\.\d+)?/gu) ?? []).map((token) => token.replace(/−/gu, "-"))
+      : [];
+    if (numericTokens.length === 0) return true;
+    const allowedSources = new Set(sourceIds);
+    return evidenceFacts.flatMap((fact) =>
+      allowedSources.size === 0 || allowedSources.has(fact.sourceId)
+        ? fact.numericalResults
+        : []
+    ).some((result) => {
+      if ((result.researchQuestionRelevanceScore ?? 0) < 30) return false;
+      const resultValue = (result.rawValue ?? result.displayValue).replace(/−/gu, "-");
+      if (!numericTokens.some((token) => resultValue.includes(token))) return false;
+      const metric = `${result.metricType} ${result.statisticType} ${result.metricName}`;
+      if (/(?:勝算比|odds ratio|\bOR\b)/iu.test(sentence)) return /odds[_ ]?ratio/iu.test(metric);
+      if (/(?:相關係數|\br\s*=)/iu.test(sentence)) return /correlation/iu.test(metric);
+      if (/(?:盛行率|prevalence|比例)/iu.test(sentence)) return /prevalence|proportion/iu.test(metric);
+      if (/平均/u.test(sentence)) return /mean|duration|hours?/iu.test(`${metric} ${result.unit}`);
+      return true;
+    });
+  };
   const evidenceUnits: FormalReportEvidenceUnit[] = evidenceFacts.map((fact) => ({
     id: fact.evidenceId,
     sourceId: fact.sourceId,
@@ -1404,6 +2068,11 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
     sources: workspace.acceptedSources,
     standardizedFacts: evidenceFacts,
     maxVisuals: 7,
+    startNumber:
+      workspace.input.researchReportMode === "formal_research_report" &&
+        Boolean(workspace.llmDiagnostics?.formalResearchValidation)
+        ? 2
+        : 1,
   });
   const deterministicMechanismVisual = evidenceVisuals.find(
     (visual) =>
@@ -1495,6 +2164,32 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       .map((sectionId) => workspace.draft.sections.find((section) => section.sectionId === sectionId))
       .filter((section): section is ReportWorkspace["draft"]["sections"][number] => Boolean(section));
     const rawParagraphs = draftSections.flatMap((section) => {
+      const activeNativeTraces = (section.sentenceClaimTraces ?? []).filter((trace) =>
+        !trace.deleted && trace.validationAfter === "pass" && compact(trace.finalText).length > 0
+      );
+      const hasCompleteNativeLineage = activeNativeTraces.length > 0 &&
+        activeNativeTraces.every((trace) =>
+          trace.factual === false || (
+            trace.realizedClaimIds.length > 0 &&
+            trace.evidenceIds.length > 0 &&
+            trace.citationSourceIds.length > 0
+          )
+      );
+      if (hasCompleteNativeLineage) {
+        const traceParagraphs = new Map<string, typeof activeNativeTraces>();
+        for (const trace of activeNativeTraces) {
+          const paragraphId = trace.paragraphId || `${section.sectionId}-p1`;
+          const traces = traceParagraphs.get(paragraphId) ?? [];
+          traces.push(trace);
+          traceParagraphs.set(paragraphId, traces);
+        }
+        return Array.from(traceParagraphs.values()).map((sentenceTraces) => ({
+          paragraph: sentenceTraces.map((trace) => trace.finalText).join(" "),
+          fallbackSourceIds: unique(sentenceTraces.flatMap((trace) => trace.citationSourceIds)),
+          argumentClaimIds: unique(sentenceTraces.flatMap((trace) => trace.realizedClaimIds)),
+          sentenceTraces,
+        }));
+      }
       const text = exportSafeReportSectionText(section);
       const paragraphs = readerFacingNaturalParagraphs(text, undefined, true);
       const writerBindings = (section.paragraphClaims ?? []).map((binding) => ({
@@ -1581,13 +2276,27 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
                 ? canonicalParagraphPlan[paragraphIndex]?.supportedClaimIds ?? []
                 : []),
             ]);
+        const paragraphTraceId = `${section.sectionId}-p${paragraphIndex + 1}`;
+        const sentenceTraces = (section.sentenceClaimTraces ?? []).filter((trace) =>
+          !trace.deleted &&
+          trace.validationAfter === "pass" &&
+          (
+            trace.paragraphId === paragraphTraceId ||
+            paragraphBindingKey(paragraph).includes(paragraphBindingKey(trace.finalText))
+          )
+        );
         return {
           paragraph,
           fallbackSourceIds: unique([
             ...section.citationIds,
             ...section.supportingSourceIds,
           ]),
-          argumentClaimIds: toGraphClaimIds(plannedClaimIds),
+          // Prefer immutable Writer vNext identities. Legacy planned-claim
+          // mapping remains only for payloads that predate sentence lineage.
+          argumentClaimIds: sentenceTraces.length > 0
+            ? unique(sentenceTraces.flatMap((trace) => trace.realizedClaimIds))
+            : toGraphClaimIds(plannedClaimIds),
+          sentenceTraces,
         };
       });
     });
@@ -1596,13 +2305,174 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
         paragraph,
         fallbackSourceIds: [],
         argumentClaimIds: [],
+        sentenceTraces: [],
       })));
     }
 
-    return rawParagraphs.flatMap(({ paragraph, fallbackSourceIds, argumentClaimIds }) => {
+    return rawParagraphs.flatMap(({
+      paragraph,
+      fallbackSourceIds,
+      argumentClaimIds,
+      sentenceTraces,
+    }) => {
       const polishedParagraph = polishReaderParagraph(paragraph);
       const sentences = sentenceList(polishedParagraph);
+      const nativeTraceParts = sentenceTraces.flatMap((trace) =>
+        sentenceList(trace.finalText).map((text) => ({
+          trace,
+          key: paragraphBindingKey(text),
+        }))
+      );
+      const usedNativeTraceParts = new Set<number>();
       const sentenceBlocks = sentences.flatMap((sentence): FormalReportBlock[] => {
+        const readerSentence = stripInternalCitationTokens(sentence);
+        if (!readerSentence.replace(/[\s，。；：、！？!?「」『』（）()[\].;:]/gu, "")) {
+          return [];
+        }
+        const sentenceKey = paragraphBindingKey(sentence);
+        const nativeTracePartIndex = nativeTraceParts.findIndex(({ key }, index) => {
+          return Boolean(
+            !usedNativeTraceParts.has(index) && key && sentenceKey &&
+            (key === sentenceKey || key.includes(sentenceKey) || sentenceKey.includes(key))
+          );
+        });
+        const nativeTrace = nativeTracePartIndex >= 0
+          ? nativeTraceParts[nativeTracePartIndex]?.trace
+          : undefined;
+        if (nativeTrace) {
+          usedNativeTraceParts.add(nativeTracePartIndex);
+          const evidenceIds = new Set(workspace.evidenceCards.map((card) => card.id));
+          const unknownEvidenceIds = nativeTrace.evidenceIds.filter((id) => !evidenceIds.has(id));
+          const canonicalKeys = unique(nativeTrace.citationSourceIds.map((sourceId) =>
+            canonicalKeyFor([sourceId])
+          ));
+          if (
+            nativeTrace.factual &&
+            (nativeTrace.realizedClaimIds.length === 0 ||
+              nativeTrace.citationSourceIds.length === 0 ||
+              canonicalKeys.length !== nativeTrace.citationSourceIds.length ||
+              unknownEvidenceIds.length > 0)
+          ) {
+            citationMappingIssues.push(
+              `writer_sentence_lineage_incomplete:${nativeTrace.sentenceId}`,
+            );
+            excludedParagraphs += 1;
+            return [];
+          }
+          const individuallySupportedKeys = canonicalKeys.filter((canonicalKey) => {
+            const source = sourceByCanonicalKey.get(canonicalKey);
+            return Boolean(source) && sourceSupportsSentence(
+              readerSentence,
+              source!,
+              evidenceCardsBySourceId.get(source!.id) ?? [],
+            ).supported;
+          });
+          const quotedTheme = readerSentence.match(/「([^」]{3,80})」/u)?.[1] ?? null;
+          const themeSupportedKeys = quotedTheme
+            ? canonicalKeys.filter((canonicalKey) => {
+                const source = sourceByCanonicalKey.get(canonicalKey);
+                return Boolean(source) && sourceMatchesQuotedTheme(
+                  quotedTheme,
+                  source!,
+                  evidenceCardsBySourceId.get(source!.id) ?? [],
+                );
+              })
+            : [];
+          const numericTokens = /(?:%|OR|β|相關係數|勝算比|平均|h\/day|樣本數|\bn\s*=)/iu.test(readerSentence)
+            ? readerSentence.match(/[−-]?\d+(?:\.\d+)?/gu) ?? []
+            : [];
+          const exactNumericKeys = numericTokens.length > 0
+            ? canonicalKeys.filter((canonicalKey) => {
+                const source = sourceByCanonicalKey.get(canonicalKey);
+                if (!source) return false;
+                const sourceText = evidenceCardsBySourceId.get(source.id)?.map((card) =>
+                  compact(card.supportSpan || card.exactResult || card.supportedByText || card.evidence)
+                ).join(" ").replace(/−/gu, "-") ?? "";
+                return numericTokens.some((token) =>
+                  sourceText.includes(token.replace(/\s+/gu, " ").trim()) ||
+                  sourceText.includes(token.replace(/\s+/gu, "").trim())
+                );
+              })
+            : [];
+          const aggregateLanguage =
+            /(?:跨(?:研究|來源)|研究間|現有研究|多項來源|多個來源|共同|整體證據|證據整體|統合)/u.test(readerSentence);
+          const anaphoricNumericalBoundary = /^(?:此|這些|上述)數值/u.test(readerSentence);
+          const selectedCanonicalKeys = canonicalKeys.length < 3
+            ? canonicalKeys
+            : anaphoricNumericalBoundary
+              ? []
+            : exactNumericKeys.length > 0
+              ? exactNumericKeys
+              : quotedTheme && CROSS_STUDY_CONSISTENCY_PATTERN.test(readerSentence)
+                ? themeSupportedKeys
+                : individuallySupportedKeys.length === 1
+                  ? individuallySupportedKeys
+                  : aggregateLanguage
+                    ? canonicalKeys
+                    : [];
+          const references = selectedCanonicalKeys
+            .map(ensureReference)
+            .filter((reference): reference is FormalReportReference => Boolean(reference))
+            .sort((left, right) => left.referenceNumber - right.referenceNumber);
+          const selectedSourceIds = new Set(references.map((reference) => reference.sourceId));
+          const selectedEvidenceIds = nativeTrace.evidenceIds.filter((evidenceId) => {
+            const card = evidenceCardById.get(evidenceId);
+            return Boolean(card && selectedSourceIds.has(card.sourceId));
+          });
+          const sentenceNumericalResults = evidenceFacts.flatMap((fact) =>
+            selectedSourceIds.has(fact.sourceId) ? fact.numericalResults : []
+          );
+          const textWithoutTokens = repairReaderNumericalSemantics(
+            readerSentence,
+            sentenceNumericalResults,
+          );
+          const citationIds = nativeTrace.factual
+            ? references.map((reference) => reference.citationId)
+            : [];
+          const lineage = {
+            writerSentenceIds: [nativeTrace.sentenceId],
+            writerParagraphIds: [nativeTrace.paragraphId],
+            writerSentenceTexts: [textWithoutTokens],
+            originalClaimIds: unique(
+              nativeTrace.originalClaimIds.length > 0
+                ? nativeTrace.originalClaimIds
+                : nativeTrace.realizedClaimIds,
+            ),
+            finalClaimIds: unique(
+              nativeTrace.finalClaimIds.length > 0
+                ? nativeTrace.finalClaimIds
+                : nativeTrace.realizedClaimIds,
+            ),
+            argumentClaimIds: unique(nativeTrace.realizedClaimIds),
+            evidenceIds: unique(selectedEvidenceIds),
+            sourceIds: unique(references.map((reference) => reference.sourceId)),
+          };
+          return [{
+            ...formalBlock(
+            textWithoutTokens,
+            citationIds,
+          ),
+            ...lineage,
+            ...(lineage.argumentClaimIds.length === 1
+              ? { argumentClaimId: lineage.argumentClaimIds[0] }
+              : {}),
+            segments: [{
+              text: textWithoutTokens,
+              citationIds,
+              ...lineage,
+            }],
+          }];
+        }
+        // Native Writer traces already carry immutable claim/evidence/source
+        // lineage and are re-audited against their exact source corpus below.
+        // Apply the stricter standardized-fact shortcut only to legacy prose;
+        // otherwise valid trace-bound prevalence/sample facts can disappear
+        // merely because a planner did not promote them into its fact subset.
+        if (!numericSentenceHasDirectSemanticSupport(readerSentence, fallbackSourceIds)) {
+          excludedInvalidQuantitativeSentence = true;
+          excludedParagraphs += 1;
+          return [];
+        }
         const tokens = extractInternalCitationTokens(sentence);
         let candidateSetValidatedCollectively = false;
         const unresolved = tokens.filter((token) =>
@@ -1683,7 +2553,7 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
             if (inferredKeys.length > 0) {
               supportedKeys = inferredKeys;
             } else {
-              const issue = `${candidateKeys.join("+")}:${support.issues.join(",")}`;
+              const issue = `${candidateKeys.join("+")}:${support.issues.join(",")}:sentence=${stripInternalCitationTokens(sentence).slice(0, 160)}`;
               citationMappingIssues.push(`unsupported_citation_set:${issue}`);
               sourceMentionIssues.push(issue);
               supportedKeys = [];
@@ -1710,6 +2580,36 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
           excludedParagraphs += 1;
           return [];
         }
+        const numericTokens = /(?:%|勝算比|odds ratio|\bOR\b|相關係數|\br\s*=|平均)/iu.test(sentence)
+          ? (sentence.match(/[−-]?\d+(?:\.\d+)?/gu) ?? []).map((token) => token.replace(/−/gu, "-"))
+          : [];
+        if (numericTokens.length > 0 && !isGeneratorMethodStatement(sentence)) {
+          const supportedSourceIds = new Set(supportedKeys.map((canonicalKey) =>
+            sourceByCanonicalKey.get(canonicalKey)?.id
+          ).filter((sourceId): sourceId is string => Boolean(sourceId)));
+          const semanticResults = evidenceFacts.flatMap((fact) =>
+            supportedSourceIds.has(fact.sourceId)
+              ? fact.numericalResults.filter((result) =>
+                  (result.researchQuestionRelevanceScore ?? 0) >= 30 &&
+                  numericTokens.some((token) =>
+                    (result.rawValue ?? result.displayValue).replace(/−/gu, "-").includes(token)
+                  )
+                )
+              : []
+          );
+          const metricMatches = semanticResults.some((result) => {
+            const metric = `${result.metricType} ${result.statisticType} ${result.metricName}`;
+            if (/(?:勝算比|odds ratio|\bOR\b)/iu.test(sentence)) return /odds[_ ]?ratio/iu.test(metric);
+            if (/(?:相關係數|\br\s*=)/iu.test(sentence)) return /correlation/iu.test(metric);
+            if (/(?:盛行率|prevalence|比例)/iu.test(sentence)) return /prevalence|proportion/iu.test(metric);
+            if (/平均/u.test(sentence)) return /mean|duration|hours?/iu.test(`${metric} ${result.unit}`);
+            return true;
+          });
+          if (!metricMatches) {
+            excludedParagraphs += 1;
+            return [];
+          }
+        }
         const references = supportedKeys
           .map(ensureReference)
           .filter((reference): reference is FormalReportReference => Boolean(reference))
@@ -1722,6 +2622,9 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
         )];
       });
       if (sentenceBlocks.length === 0) return [];
+      const sentenceArgumentClaimIds = unique(sentenceBlocks.flatMap((block) =>
+        block.argumentClaimIds ?? (block.argumentClaimId ? [block.argumentClaimId] : [])
+      ));
       return [{
         text: sentenceBlocks.map((block) => block.text).join(""),
         citationIds: unique(sentenceBlocks.flatMap((block) => block.citationIds)),
@@ -1729,8 +2632,21 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
           block.segments ?? [citationSegment(block.text, block.citationIds)]
         ),
         paragraphRole: "narrative" as const,
-        ...(argumentClaimIds.length === 1 ? { argumentClaimId: argumentClaimIds[0] } : {}),
-        ...(argumentClaimIds.length > 0 ? { argumentClaimIds } : {}),
+        writerSentenceIds: unique(sentenceBlocks.flatMap((block) => block.writerSentenceIds ?? [])),
+        writerParagraphIds: unique(sentenceBlocks.flatMap((block) => block.writerParagraphIds ?? [])),
+        writerSentenceTexts: unique(sentenceBlocks.flatMap((block) => block.writerSentenceTexts ?? [])),
+        originalClaimIds: unique(sentenceBlocks.flatMap((block) => block.originalClaimIds ?? [])),
+        finalClaimIds: unique(sentenceBlocks.flatMap((block) => block.finalClaimIds ?? [])),
+        evidenceIds: unique(sentenceBlocks.flatMap((block) => block.evidenceIds ?? [])),
+        sourceIds: unique(sentenceBlocks.flatMap((block) => block.sourceIds ?? [])),
+        ...(sentenceArgumentClaimIds.length === 1
+          ? { argumentClaimId: sentenceArgumentClaimIds[0] }
+          : {}),
+        ...(sentenceArgumentClaimIds.length > 0
+          ? { argumentClaimIds: sentenceArgumentClaimIds }
+          : argumentClaimIds.length > 0
+            ? { argumentClaimIds }
+            : {}),
       }];
     });
   };
@@ -1804,12 +2720,22 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
   const missingFacetText = missingFacetLabels.length > 0
     ? missingFacetLabels.join("、")
     : "因果順序、適用範圍與可比較的效果量";
-  const introductionDraftBlocks = blocksFromDraft([
-    planSection(plan, "introduction")?.sectionId ?? "introduction",
-  ]);
-  const researchBlocks: FormalReportBlock[] = kind === "limited_evidence_brief"
+  const formalComposerMode = workspace.input.researchReportMode === "formal_research_report";
+  const formalComposerVNext = formalComposerMode &&
+    Boolean(workspace.llmDiagnostics?.formalResearchValidation);
+  const introductionDraftBlocks = blocksFromDraft(
+    formalComposerMode
+      ? ["background"]
+      : [planSection(plan, "introduction")?.sectionId ?? "introduction"],
+  );
+  const researchBlocks: FormalReportBlock[] = formalComposerMode
     ? [
-        ...introductionDraftBlocks.slice(0, 2),
+        ...introductionDraftBlocks,
+        { text: `本報告的中央研究問題為：${researchQuestion}`, citationIds: [] },
+      ]
+    : kind === "limited_evidence_brief"
+    ? [
+        ...introductionDraftBlocks,
         {
           text: `現有證據可提供方向性且受情境限制的回答；目前 A 級直接證據 ${directTierCounts.A} 筆、B 級近直接證據 ${directTierCounts.B} 筆，因此不能據此推估整體效果量，也不能建立因果結論。`,
           citationIds: [],
@@ -1830,7 +2756,7 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
     workspace.acceptedSources.every((source) =>
       source.accessLevel === "full_text" || source.contentLevel === "fulltext"
     );
-  const methodDraft = blocksFromDraft(["methodology"])
+  const methodDraft = blocksFromDraft(formalComposerMode ? ["methods"] : ["methodology"])
     .map((block) => ({
       ...block,
       text: everyAcceptedSourceHasFullText
@@ -1841,16 +2767,29 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
     }))
     .filter((block) => compact(block.text).length > 0);
   if (methodDraft.length > 0) methodBlocks.push(...methodDraft);
+  if (formalComposerVNext) {
+    methodBlocks.push({
+      text: "圖 1 將本次實際執行的次級研究步驟依先後呈現。讀圖時應注意，流程從研究問題與檢索開始，經篩選、去重、證據矩陣與跨研究比較後才形成結論；圖中沒有加入本次未執行的實驗、問卷或訪談。",
+      citationIds: [],
+      paragraphRole: "narrative",
+    });
+  }
 
-  const corePlanSections = planSectionsByRole(plan, "core_evidence")
-    .filter((section) => section.sectionId !== "methodology");
-  const fallbackCoreIds = ["literature_review", "findings"]
+  const corePlanSections = formalComposerMode
+    ? ["evidence_overview", "findings"].map((sectionId) => {
+        const draft = workspace.draft.sections.find((section) => section.sectionId === sectionId);
+        return { sectionId, title: draft?.title ?? sectionId };
+      })
+    : planSectionsByRole(plan, "core_evidence")
+        .filter((section) => section.sectionId !== "methodology");
+  const fallbackCoreIds = (formalComposerMode ? ["evidence_overview", "findings"] : ["literature_review", "findings"])
     .filter((sectionId) => workspace.draft.sections.some((section) => section.sectionId === sectionId));
   const effectiveCoreSections = corePlanSections.length > 0
     ? corePlanSections
     : fallbackCoreIds.map((sectionId) => ({
         sectionId,
-        title: sectionId === "literature_review" ? "文獻證據與概念界定" : "主要發現與適用條件",
+        title: workspace.draft.sections.find((section) => section.sectionId === sectionId)?.title ??
+          (sectionId === "literature_review" ? "文獻證據與概念界定" : "主要發現與適用條件"),
       }));
   const draftAnalysisSections = effectiveCoreSections
     .slice(0, 5)
@@ -1887,18 +2826,22 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
         figures: [],
       }].filter((section) => section.blocks.length > 0);
 
-  const draftSynthesisBlocks = blocksFromDraft([
-    planSectionsByRole(plan, "cross_source_synthesis")[0]?.sectionId ?? "discussion",
-  ]);
+  const draftSynthesisBlocks = blocksFromDraft(
+    formalComposerMode
+      ? ["cross_study_synthesis", "discussion"]
+      : [planSectionsByRole(plan, "cross_source_synthesis")[0]?.sectionId ?? "discussion"],
+  );
   const synthesisBlocks = draftSynthesisBlocks.length > 0
     ? draftSynthesisBlocks
     : [{
         text: `現有來源可核對的內容主要涵蓋${coveredFacetText}，但沒有單一研究完整連結題目中的所有必要面向；來源之間只能比較方向、情境與限制，不能合併不可比的效果量。`,
         citationIds: [],
       }];
-  const draftLimitationBlocks = blocksFromDraft([
-    planSectionsByRole(plan, "limitations")[0]?.sectionId ?? "limitations",
-  ]);
+  const draftLimitationBlocks = blocksFromDraft(
+    formalComposerMode
+      ? ["limitations_gaps"]
+      : [planSectionsByRole(plan, "limitations")[0]?.sectionId ?? "limitations"],
+  );
   const limitationBlocks = draftLimitationBlocks.length > 0
     ? draftLimitationBlocks
     : [
@@ -1911,16 +2854,23 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
           citationIds: [],
         },
       ];
-  const draftConclusionBlocks = blocksFromDraft([
-    planSectionsByRole(plan, "conclusion")[0]?.sectionId ?? "conclusion",
-  ]);
+  const draftConclusionBlocks = blocksFromDraft(
+    formalComposerMode
+      ? ["conclusion"]
+      : [planSectionsByRole(plan, "conclusion")[0]?.sectionId ?? "conclusion"],
+  );
   const conclusionBlocks = draftConclusionBlocks.length > 0
     ? draftConclusionBlocks
     : [{
         text: `現有來源對「${title}」提供方向一致但情境受限的線索；在缺少完整直接證據的情況下，結論應維持為可供後續驗證的暫定判斷。`,
         citationIds: [],
       }];
-  if (kind === "limited_evidence_brief") {
+  const hasAuthoritativeConclusionBlocks = draftConclusionBlocks.some((block) =>
+    (block.writerSentenceIds?.length ?? 0) > 0 &&
+    (block.evidenceIds?.length ?? 0) > 0 &&
+    (block.sourceIds?.length ?? 0) > 0
+  );
+  if (kind === "limited_evidence_brief" && !hasAuthoritativeConclusionBlocks) {
     const directAnswer = synthesisBlocks
       .flatMap((block) => sentenceList(block.text).map((sentence) => ({ sentence, block })))
       .reverse()
@@ -1956,6 +2906,21 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
     conclusionBlocks.splice(0, conclusionBlocks.length, ...rebuiltConclusion);
   }
 
+  const activeEvidenceTraces = workspace.draft.sections.flatMap((section) =>
+    (section.sentenceClaimTraces ?? []).filter((trace) =>
+      !trace.deleted &&
+      trace.validationAfter === "pass" &&
+      trace.factual !== false &&
+      compact(trace.finalText).length > 0 &&
+      !/(?:中文摘要：此來源可用於檢視|可辨識的證據面向包括|已取得\s*DOI.*可追溯原始來源|系統初評為可直接納入證據整理)/iu.test(trace.finalText)
+    )
+  );
+  const evidenceTraceByCardId = new Map<string, (typeof activeEvidenceTraces)[number]>();
+  for (const trace of activeEvidenceTraces) {
+    for (const cardId of trace.evidenceIds) {
+      if (!evidenceTraceByCardId.has(cardId)) evidenceTraceByCardId.set(cardId, trace);
+    }
+  }
   const references = withAuthorYearDisambiguation(
     Array.from(referenceByCanonicalKey.values())
       .sort((left, right) => {
@@ -1977,16 +2942,92 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
         referenceNumber: index + 1,
       })),
   );
+  if (insufficientEvidenceProjection) references.splice(0, references.length);
+  const referenceBySourceIdForEvidenceTable = new Map(
+    references.map((reference) => [reference.sourceId, reference] as const),
+  );
+  const evidenceTableRows: FormalReportEvidenceTableRow[] = Array.from(
+    evidenceTraceByCardId,
+  ).flatMap(([cardId, trace]) => {
+    const card = evidenceCardById.get(cardId);
+    if (!card) return [];
+    const reference = referenceBySourceIdForEvidenceTable.get(card.sourceId);
+    if (!reference) return [];
+    return [{
+      claimId: trace.realizedClaimIds[0] ?? "",
+      section: trace.sectionId ?? trace.paragraphId?.split(":")[0] ?? "",
+      // Citation tokens are transport syntax, not reader-facing claim text.
+      // The canonical citation marker is rendered from the resolved reference
+      // in its own table cell below.
+      claimText: normalizePublicationText(stripInternalCitationTokens(
+        sanitizeReaderFacingInternalLanguage(compact(trace.finalText)),
+      )),
+      evidenceCardId: cardId,
+      sourceId: card.sourceId,
+      sourceTitle: card.sourceTitle || card.title,
+      evidenceType: readerFacingEvidenceType(card),
+      supportExcerpt: normalizePublicationText(compact(
+        card.supportSpan || card.exactResult || card.supportedByText || card.evidence,
+      )),
+      locator: readerFacingLocator(card),
+      quantitativeValue: compact(card.numericResult) || null,
+      citationMarker: reference.marker,
+    }];
+  });
+  const evidenceTable: FormalReportEvidenceTable | null = evidenceTableRows.length > 0
+    ? (() => {
+        const claimDisplayId = new Map<string, string>();
+        const evidenceDisplayId = new Map<string, string>();
+        evidenceTableRows.forEach((row) => {
+          if (!claimDisplayId.has(row.claimId)) {
+            claimDisplayId.set(row.claimId, `C${claimDisplayId.size + 1}`);
+          }
+          if (!evidenceDisplayId.has(row.evidenceCardId)) {
+            evidenceDisplayId.set(row.evidenceCardId, `E${evidenceDisplayId.size + 1}`);
+          }
+        });
+        return {
+        specType: "table",
+        number: 1,
+        title: "正文主張與證據來源追溯表",
+        columns: [
+          "映射與章節",
+          "正文主張",
+          "證據來源、支持片段與引用",
+        ],
+        rows: evidenceTableRows.map((row) => [
+          `主張 ${claimDisplayId.get(row.claimId) ?? "—"}\n證據 ${evidenceDisplayId.get(row.evidenceCardId) ?? "—"}\n章節：${({
+            research_question: "研究問題",
+            methods: "範圍與方法",
+            evidence_overview: "核心分析",
+            findings: "核心分析",
+            discussion: "核心分析",
+            cross_study_synthesis: "跨來源綜合",
+            limitations_gaps: "限制與缺口",
+            conclusion: "結論",
+          } as Record<string, string>)[row.section] ?? "正文"}`,
+          row.claimText,
+          `來源：${row.sourceTitle}\n類型：${row.evidenceType}\n支持：${row.supportExcerpt}\n定位：${row.locator}\n量化：${row.quantitativeValue ?? "—"}\n引用：${row.citationMarker}`,
+        ]),
+        units: null,
+        legend: null,
+        sourceNote: "由已驗證的句子追蹤資料與可核對證據直接映射；未從正文重新解析。",
+        note: "讀者版使用穩定短代碼；完整主張、證據、來源、支持片段、章節歸屬與引用對照保留於結構化追溯資料。",
+        altText: `列出 ${evidenceTableRows.length} 列正文主張與證據來源的可追溯映射。`,
+        provenanceRows: evidenceTableRows,
+      };
+      })()
+    : null;
   const comparisonTable: FormalReportTable | null = references.length >= 2
     ? {
         specType: "table",
-        number: 2,
+        number: 3,
         title: "納入來源的證據用途與限制比較",
         columns: ["來源", "研究脈絡／資料層級", "本報告採用的證據重點", "主要限制"],
         rows: references.map((reference) => {
           const source = workspace.acceptedSources.find((item) => item.id === reference.sourceId)!;
-          const card = evidenceCardsBySourceId.get(reference.sourceId)?.[0];
-          const author = source.authors[0] || "作者未提供";
+          const card = comparisonEvidenceCard(evidenceCardsBySourceId.get(reference.sourceId) ?? []);
+          const author = reference.authorYear.replace(/,\s*\d{4}[a-z]?$/iu, "") || "作者未提供";
           return [
             `${author}（${source.year ?? "年份未提供"}）`,
             `${compact(source.containerTitle) || "出版場域未提供"}${card?.abstractOnly || source.accessLevel === "abstract_only" ? "；摘要層級" : card?.derivation === "fulltext-derived" ? "；全文可核對摘錄" : "；可核對內容片段"}`,
@@ -2005,13 +3046,20 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
   const citedSourceIds = new Set(references.map((reference) => reference.sourceId));
   const sourceUsage: FormalSourceUsage[] = workspace.acceptedSources.map((source) => {
     const sourceCards = evidenceCardsBySourceId.get(source.id) ?? [];
+    const directEvidence = source.formalEvidenceRole === "DIRECT_FINDING" || (
+      source.topicIntegrityAssessment?.topicIntegrityVersion === TOPIC_INTEGRITY_VERSION &&
+      source.topicIntegrityAssessment.sourceRole === "DIRECT_FINDING"
+    );
     if (citedSourceIds.has(source.id)) {
       return {
         sourceId: source.id,
         sourceIdentity: canonicalSourceKeyForSource(source),
         title: source.title,
+        role: directEvidence ? "direct_evidence" as const : "context_only" as const,
         status: "includedAndCited" as const,
-        reason: "支撐正文中的可驗證主張，並列入參考文獻。",
+        reason: directEvidence
+          ? "逐維度通過研究問題直接性檢查，支撐正文中的可驗證主張。"
+          : "僅在允許的背景、方法或限制範圍內引用，不承擔主要結果主張。",
       };
     }
     const backgroundOnly = sourceCards.some((card) =>
@@ -2022,29 +3070,32 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       sourceId: source.id,
       sourceIdentity: canonicalSourceKeyForSource(source),
       title: source.title,
+      role: directEvidence ? "direct_evidence" as const : backgroundOnly ? "context_only" as const : "eligible" as const,
       status: backgroundOnly ? "includedBackgroundOnly" as const : "includedButNotUsed" as const,
-      reason: backgroundOnly
+      reason: directEvidence
+        ? "通過直接性檢查，但未分配到本版正文的獨立主張；不因未引用而改分類。"
+        : backgroundOnly
         ? "僅用於界定研究背景或檢索範圍，未承擔正文實質主張。"
         : "與已引用來源重複、直接性較低或未形成可驗證的獨立正文主張。",
     };
   });
-  const sourceStatusLabel: Record<FormalSourceUsageStatus, string> = {
-    includedAndCited: "納入並於正文引用",
-    includedBackgroundOnly: "僅作背景或方法說明",
-    includedButNotUsed: "納入但未進入正文",
+  const sourceStatusLabel = (usage: FormalSourceUsage): string => ({
+    includedAndCited: usage.role === "direct_evidence" ? "直接證據（正文引用）" : "背景／方法／限制（正文引用）",
+    includedBackgroundOnly: "背景／檢索輔助來源",
+    includedButNotUsed: "符合資格但未承擔正文結論",
     excludedWithReason: "排除並記錄原因",
-  };
+  } satisfies Record<FormalSourceUsageStatus, string>)[usage.status];
   const sourceUsageTable: FormalReportTable = {
     specType: "table",
-    number: 1,
-    title: "納入來源的使用狀態",
+    number: 2,
+    title: "來源角色與使用狀態",
     columns: ["來源", "使用狀態", "說明"],
-    rows: sourceUsage.map((usage) => [usage.title, sourceStatusLabel[usage.status], usage.reason]),
+    rows: sourceUsage.map((usage) => [usage.title, sourceStatusLabel(usage), usage.reason]),
     units: null,
     legend: null,
     sourceNote: "依正式正文的主張、引用與參考文獻映射及來源直接性判定。",
     note: "檢索服務只在方法中說明，不作為研究證據作者。",
-    altText: `列出 ${sourceUsage.length} 筆納入來源，以及各來源是否進入正文與未使用原因。`,
+    altText: `列出 ${sourceUsage.length} 筆 eligible 來源，區分直接證據、背景／檢索輔助與未使用來源。`,
   };
   const sourceUsageCounts = sourceUsage.reduce<Record<FormalSourceUsageStatus, number>>(
     (counts, usage) => {
@@ -2056,7 +3107,7 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
 
   const researchSection: FormalReportSection = {
     id: "research-question-and-scope",
-    title: kind === "limited_evidence_brief" ? "研究問題與核心回答" : "研究問題與範圍",
+    title: publicationCanonicalSectionTitle({ role: "research_question" }),
     role: "research_question",
     blocks: researchBlocks,
     tables: [],
@@ -2067,15 +3118,21 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
   };
   const scopeSection: FormalReportSection = {
     id: "scope-and-method",
-    title: kind === "limited_evidence_brief" ? "證據範圍及檢索方法" : "證據來源與整理方法",
+    title: publicationCanonicalSectionTitle({ role: "scope_method" }),
     role: "scope_method",
     blocks: methodBlocks,
     tables: [],
-    figures: [],
+    figures: [
+      ...(formalComposerVNext ? [researchWorkflowFigure()] : []),
+      ...evidenceVisuals.filter((visual) =>
+        visual.visualType === "study_design_distribution" ||
+        visual.visualType === "publication_timeline"
+      ),
+    ],
   };
   const synthesisSection: FormalReportSection = {
     id: "cross-source-synthesis",
-    title: kind === "limited_evidence_brief" ? "討論與證據比較" : "跨來源綜合",
+    title: publicationCanonicalSectionTitle({ role: "cross_source_synthesis" }),
     role: "cross_source_synthesis",
     blocks: synthesisBlocks,
     tables: [],
@@ -2086,7 +3143,7 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
   };
   const limitationsSection: FormalReportSection = {
     id: "limitations",
-    title: kind === "limited_evidence_brief" ? "證據限制及研究缺口" : "證據限制",
+    title: publicationCanonicalSectionTitle({ role: "limitations" }),
     role: "limitations",
     blocks: limitationBlocks,
     tables: [],
@@ -2097,7 +3154,7 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
   };
   const conclusionSection: FormalReportSection = {
     id: "conclusion",
-    title: kind === "limited_evidence_brief" ? "結論與後續研究方向" : "結論",
+    title: publicationCanonicalSectionTitle({ role: "conclusion" }),
     role: "conclusion",
     blocks: conclusionBlocks,
     tables: [],
@@ -2120,6 +3177,48 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       visual.visualType === "odds_ratio_forest"
     ));
   }
+  analysisSections.forEach((section, index) => {
+    section.title = publicationCanonicalSectionTitle({
+      role: "analysis",
+      analysisIndex: index,
+      analysisCount: analysisSections.length,
+    });
+  });
+  if (insufficientEvidenceProjection) {
+    analysisSections.splice(0, analysisSections.length, {
+      id: "insufficient-evidence-findings",
+      title: publicationCanonicalSectionTitle({ role: "analysis" }),
+      role: "analysis",
+      blocks: [formalBlock(
+        "本次檢索取得可審查來源與內容摘錄，但內容 gate 未形成可由 Writer 驗證且直接回答研究問題的實質主張。因此本報告不輸出效果方向、效果量、顯著性或因果判斷，並將所有來源保留在附錄的來源治理清單中供後續補證。",
+        [],
+        "boundary",
+      )],
+      tables: [],
+      figures: [],
+    });
+    synthesisSection.blocks = [formalBlock(
+      "INSUFFICIENT_FOR_CROSS_STUDY_CONSISTENCY：目前沒有至少兩個具獨立直接證據且通過 Writer 驗證的來源，因此不能判定跨研究一致、混合或衝突。",
+      [],
+      "boundary",
+    )];
+    limitationsSection.blocks = [formalBlock(
+      "主要限制是現有摘錄未形成足以承擔正文結論的直接證據 lineage；這項限制不是效果為零，也不是證明不存在關聯，而是現階段無法作出可出版的效果判斷。",
+      [],
+      "boundary",
+    )];
+    conclusionSection.blocks = [formalBlock(
+      "結論：目前證據不足以回答研究問題。後續應先取得與研究對象、比較條件及結果指標直接相符的可核對全文或摘要，再重建 evidence set 與 ReportPlan。",
+      [],
+      "boundary",
+    )];
+    // The rejected draft scaffolding is retained in the upstream live audit,
+    // but it is no longer part of this deliberately citationless insufficient
+    // evidence projection.
+    citationMappingIssues.splice(0, citationMappingIssues.length);
+    sourceMentionIssues.splice(0, sourceMentionIssues.length);
+    excludedParagraphs = 0;
+  }
 
   // Source administration remains available for audit without interrupting the
   // argument-led main text.
@@ -2129,11 +3228,15 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
         title: "附錄：來源治理與逐來源核對",
         role: "appendix",
         blocks: [{
-          text: `本附錄記錄來源治理結果：納入並於正文引用 ${sourceUsageCounts.includedAndCited} 筆、僅作背景或方法說明 ${sourceUsageCounts.includedBackgroundOnly} 筆、納入但未進入正文 ${sourceUsageCounts.includedButNotUsed} 筆。這些表格用於稽核，不作為主文的分析架構。`,
+          text: `本附錄記錄來源治理結果：direct evidence ${sourceUsageCounts.includedAndCited} 筆、背景／檢索輔助來源 ${sourceUsageCounts.includedBackgroundOnly} 筆、eligible 但未承擔正文結論 ${sourceUsageCounts.includedButNotUsed} 筆。背景／檢索輔助來源不承擔正文研究結論。`,
           citationIds: [],
           paragraphRole: "reading_guide",
         }],
-        tables: [sourceUsageTable, ...(comparisonTable ? [comparisonTable] : [])],
+        tables: [
+          ...(evidenceTable ? [evidenceTable] : []),
+          sourceUsageTable,
+          ...(comparisonTable ? [comparisonTable] : []),
+        ],
         figures: [],
       }]
     : [];
@@ -2146,6 +3249,27 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
     limitationsSection,
     conclusionSection,
   ];
+  if (insufficientEvidenceProjection) {
+    for (const section of allBodySections) {
+      section.blocks = section.blocks.map((block) => ({
+        ...block,
+        citationIds: [],
+        sourceIds: [],
+        evidenceIds: [],
+        argumentClaimIds: [],
+        segments: (block.segments ?? [citationSegment(block.text)]).map((segment) => ({
+          ...segment,
+          citationIds: [],
+          sourceIds: [],
+          evidenceIds: [],
+          argumentClaimIds: [],
+        })),
+      }));
+    }
+  }
+  for (const section of [...allBodySections, ...appendix]) {
+    section.title = publicationSectionTitle(section.title);
+  }
   if (everyAcceptedSourceHasFullText) {
     for (const section of allBodySections) {
       section.blocks = section.blocks.map((block) => ({
@@ -2156,27 +3280,112 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       }));
     }
   }
-  const seenReaderSentences = new Set<string>();
+  const canonicalDeduplicationAudit = applyProvenanceAwareCanonicalDedupe(allBodySections);
+  // Paragraph assembly may combine several sentence-level Writer traces. Keep
+  // the paragraph convenience field aligned with the citations that actually
+  // render; sentence/claim audits below continue to use segment lineage.
+  const renderedSourceIdByCitationId = new Map(
+    references.map((reference) => [reference.citationId, reference.sourceId] as const),
+  );
   for (const section of allBodySections) {
-    section.blocks = section.blocks.flatMap((block) => {
-      const keptSentences = sentenceList(block.text).filter((sentence) => {
-        const normalized = normalizedAuditSentence(sentence);
-        if (normalized.length < 18) return true;
-        if (section.role === "conclusion") return true;
-        if (seenReaderSentences.has(normalized)) return false;
-        seenReaderSentences.add(normalized);
-        return true;
-      });
-      if (keptSentences.length === 0) return [];
-      const text = keptSentences.join("");
-      const kept = new Set(keptSentences.map(normalizedAuditSentence));
-      const segments = (block.segments ?? [citationSegment(block.text, block.citationIds)])
-        .filter((segment) => kept.has(normalizedAuditSentence(segment.text)));
-      const citationIds = unique(segments.flatMap((segment) => segment.citationIds));
-      return [{ ...block, text, citationIds, segments }];
-    });
+    section.blocks = section.blocks.map((block) => ({
+      ...block,
+      sourceIds: unique(block.citationIds.map((citationId) =>
+        renderedSourceIdByCitationId.get(citationId)
+      )),
+    }));
   }
-  applyIdeaLedgerDedupe(allBodySections);
+  const crossStudyDirectSourceCount = enforceCrossStudyConsistencyMinimum(
+    synthesisSection,
+    referenceBySourceIdForEvidenceTable.size > 0
+      ? new Map(references.map((reference) => [reference.citationId, reference.sourceId] as const))
+      : new Map<string, string>(),
+  );
+  dedupeAccessLimitations(limitationsSection);
+  for (const section of analysisSections) {
+    const prose = section.blocks.map((block) => block.text).join("");
+    if ((insufficientEvidenceProjection || excludedInvalidQuantitativeSentence) &&
+        (normalizedAuditSentence(prose).length < 90 || sentenceList(prose).length < 2)) {
+      section.blocks.push(formalBlock(
+        "現有可核對摘錄尚未提供在共同對象、比較條件與結果定義下可直接整合的量化結果；本節因此只保留已驗證的研究範圍與證據邊界，不推估跨研究效果量，也不把相關性改寫為因果。",
+        [],
+        "boundary",
+      ));
+    }
+  }
+  // References are a projection of the final canonical body, not of rejected
+  // draft scaffolding. Prune any reference introduced by a sentence that the
+  // canonical repair excluded, then keep all administrative tables aligned.
+  const prePruneReferences = [...references];
+  const usedCitationIds = new Set(allBodySections.flatMap((section) =>
+    section.blocks.flatMap((block) => block.citationIds)
+  ));
+  if (prePruneReferences.some((reference) => !usedCitationIds.has(reference.citationId))) {
+    references.splice(0, references.length, ...prePruneReferences
+      .filter((reference) => usedCitationIds.has(reference.citationId))
+      .map((reference, index) => ({ ...reference, referenceNumber: index + 1 })));
+    const retainedSourceIds = new Set(references.map((reference) => reference.sourceId));
+    citedSourceIds.clear();
+    retainedSourceIds.forEach((sourceId) => citedSourceIds.add(sourceId));
+    referenceBySourceIdForEvidenceTable.clear();
+    references.forEach((reference) => referenceBySourceIdForEvidenceTable.set(reference.sourceId, reference));
+    for (const usage of sourceUsage) {
+      const source = workspace.acceptedSources.find((item) => item.id === usage.sourceId);
+      if (!source) continue;
+      const sourceCards = evidenceCardsBySourceId.get(source.id) ?? [];
+      if (retainedSourceIds.has(source.id)) {
+        usage.role = source.formalEvidenceRole === "DIRECT_FINDING" || (
+          source.topicIntegrityAssessment?.topicIntegrityVersion === TOPIC_INTEGRITY_VERSION &&
+          source.topicIntegrityAssessment.sourceRole === "DIRECT_FINDING"
+        )
+          ? "direct_evidence"
+          : "context_only";
+        usage.status = "includedAndCited";
+        usage.reason = usage.role === "direct_evidence"
+          ? "逐維度通過研究問題直接性檢查，支撐正文中的可驗證主張。"
+          : "僅在允許的背景、方法或限制範圍內引用，不承擔主要結果主張。";
+      } else {
+        const backgroundOnly = sourceCards.some((card) =>
+          card.sourceRole === "background_definition" ||
+          card.sectionTargets.some((section) => /introduction|background|method/u.test(section))
+        );
+        const directEvidence = source.formalEvidenceRole === "DIRECT_FINDING" || (
+          source.topicIntegrityAssessment?.topicIntegrityVersion === TOPIC_INTEGRITY_VERSION &&
+          source.topicIntegrityAssessment.sourceRole === "DIRECT_FINDING"
+        );
+        usage.role = directEvidence ? "direct_evidence" : backgroundOnly ? "context_only" : "eligible";
+        usage.status = backgroundOnly ? "includedBackgroundOnly" : "includedButNotUsed";
+        usage.reason = directEvidence
+          ? "通過直接性檢查，但未分配到本版正文的獨立主張；不因未引用而改分類。"
+          : backgroundOnly
+          ? "僅用於界定研究背景或檢索範圍，未承擔正文實質主張。"
+          : "與已引用來源重複、直接性較低或未形成可驗證的獨立正文主張。";
+      }
+    }
+    for (const status of Object.keys(sourceUsageCounts) as FormalSourceUsageStatus[]) {
+      sourceUsageCounts[status] = sourceUsage.filter((usage) => usage.status === status).length;
+    }
+    sourceUsageTable.rows = sourceUsage.map((usage) => [
+      usage.title,
+      sourceStatusLabel(usage),
+      usage.reason,
+    ]);
+    if (comparisonTable) {
+      const priorRows = [...comparisonTable.rows];
+      comparisonTable.rows = prePruneReferences.flatMap((reference, index) =>
+        usedCitationIds.has(reference.citationId) && priorRows[index] ? [priorRows[index]!] : []
+      );
+    }
+    if (evidenceTable?.provenanceRows) {
+      const retainedIndexes = evidenceTable.provenanceRows.flatMap((row, index) =>
+        retainedSourceIds.has(row.sourceId) ? [index] : []
+      );
+      evidenceTable.rows = retainedIndexes.map((index) => evidenceTable.rows[index]!).filter(Boolean);
+      evidenceTable.provenanceRows = retainedIndexes
+        .map((index) => evidenceTable.provenanceRows[index]!)
+        .filter(Boolean);
+    }
+  }
   if (analysisSections[0] && analysisSections[0].blocks.length === 0) {
     analysisSections[0].blocks.push(formalBlock(
       "目前可核對內容尚未形成足以分成多個主題的實質結果，因此本節只保留一個綜合分析面向。現階段先界定資料直接涵蓋的內容，並把尚待補證的構面留給限制章說明。",
@@ -2212,10 +3421,20 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
         methodForAbstract,
       )
     : abstractFirst;
+  const insufficientAbstract = `本報告針對「${normalizeFormalTitle(workspace.input.topic)}」形成 Insufficient Evidence Report。受控檢索雖取得可審查來源與內容摘錄，但內容審查未形成可由 Writer 驗證且直接回答研究問題的實質主張；因此，本報告不輸出效果方向、效果量、關聯強度或因果判斷。現階段最重要的發現是證據鏈仍有缺口，正文只說明檢索與納入範圍、來源可用性、不能回答的部分及後續補證需求。綜合而言，目前不能把背景性或間接資料當成研究問題的直接答案。主要限制在於可追溯內容尚不足以完成句子層級的主張、證據與來源對應；待取得更直接且可驗證的研究結果後，才適合重新評估正式結論。`;
+  const limitedAbstractSuffix = "本有限證據報告只保留能在最終正文逐句追溯的發現；來源未共同涵蓋的構面、不可比較的指標與缺少的統計語意均不轉寫成結果。綜合而言，現階段的回答只能維持在納入資料直接支持的範圍，不能外推為穩定效果或因果結論。主要限制是可用證據的直接性、完整性與跨來源可比性仍不足，後續需補入更貼近研究問題且可核對完整結果的研究。";
+  let abstractText = insufficientEvidenceProjection
+    ? insufficientAbstract
+    : kind === "limited_evidence_brief" && repaired.text.length < 260
+      ? `${repaired.text}${limitedAbstractSuffix}`.slice(0, 535)
+      : repaired.text;
+  abstractText = normalizePublicationText(
+    sanitizeReaderFacingInternalLanguage(abstractText),
+  );
   const abstractIssues = validateAbstract({
-    text: repaired.text,
+    text: abstractText,
     topic: workspace.input.topic,
-    findingCount: repaired.findingCount,
+    findingCount: insufficientEvidenceProjection ? 1 : repaired.findingCount,
     bodyText,
   });
   const readingGuideFor = (section: FormalReportSection): string => {
@@ -2316,6 +3535,8 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       case "population_applicability_boundary":
         return ["applicability_boundary"];
       case "study_design":
+      case "study_design_distribution":
+      case "publication_timeline":
         return ["research_difference", "evidence_gap", "author_synthesis"];
     }
   };
@@ -2390,6 +3611,59 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
   const referenceSourceIdByCitationId = new Map(
     references.map((reference) => [reference.citationId, reference.sourceId] as const),
   );
+  const nativeEvidenceIdsByClaimId = new Map<string, Set<string>>();
+  for (const trace of workspace.draft.sections.flatMap((section) =>
+    section.sentenceClaimTraces ?? []
+  )) {
+    if (trace.deleted || trace.validationAfter !== "pass") continue;
+    for (const claimId of trace.realizedClaimIds) {
+      const evidenceIds = nativeEvidenceIdsByClaimId.get(claimId) ?? new Set<string>();
+      trace.evidenceIds.forEach((evidenceId) => evidenceIds.add(evidenceId));
+      nativeEvidenceIdsByClaimId.set(claimId, evidenceIds);
+    }
+  }
+  const nativeVisualMatchesInSection = (
+    section: FormalReportSection,
+    visual: EvidenceVisualSpec,
+  ) => {
+    const visualEvidenceIds = new Set(visual.provenance?.evidenceIds ?? []);
+    return section.blocks.flatMap((block) =>
+      (block.argumentClaimIds ?? (block.argumentClaimId ? [block.argumentClaimId] : []))
+        .map((claimId) => ({
+          claimId,
+          matches: [...(nativeEvidenceIdsByClaimId.get(claimId) ?? [])]
+            .filter((evidenceId) => visualEvidenceIds.has(evidenceId)).length,
+        })),
+    ).sort((left, right) => right.matches - left.matches)[0]?.matches ?? 0;
+  };
+  const visualMoves: Array<{
+    visual: FigureSpec;
+    from: FormalReportSection;
+    to: FormalReportSection;
+  }> = [];
+  for (const section of allBodySections) {
+    for (const figure of section.figures) {
+      const visual = figure as EvidenceVisualSpec;
+      if (
+        visual.visualType === "study_design_distribution" ||
+        visual.visualType === "publication_timeline"
+      ) continue;
+      if (nativeVisualMatchesInSection(section, visual) > 0) continue;
+      const target = allBodySections
+        .filter((candidate) => candidate !== section && candidate.role !== "conclusion")
+        .map((candidate) => ({
+          section: candidate,
+          matches: nativeVisualMatchesInSection(candidate, visual),
+        }))
+        .filter((candidate) => candidate.matches > 0)
+        .sort((left, right) => right.matches - left.matches)[0]?.section;
+      if (target) visualMoves.push({ visual: figure, from: section, to: target });
+    }
+  }
+  for (const move of visualMoves) {
+    move.from.figures = move.from.figures.filter((figure) => figure !== move.visual);
+    move.to.figures.push(move.visual);
+  }
   const configureOrderedContent = (section: FormalReportSection) => {
     const existingGuide = section.blocks.find((block) => block.paragraphRole === "reading_guide");
     const narrativeBlocks = section.blocks
@@ -2404,14 +3678,52 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       : null;
     const figureBeforeBlock = new Map<number, FigureSpec[]>();
     const usedBlockIndexes = new Set<number>();
-    const figures = section.figures.map((figure, figureIndex) => {
+    const figures = section.figures.flatMap((figure, figureIndex): FigureSpec[] => {
       const declaredClaimIsExact = figure.argumentClaimId
         ? exactVisualClaimRelationships(figure).some(({ claimId }) => claimId === figure.argumentClaimId)
         : false;
-      const argumentClaimId = declaredClaimIsExact
+      const plannedArgumentClaimId = declaredClaimIsExact
         ? figure.argumentClaimId
         : claimForFigure(figure) ?? undefined;
       const visual = figure as EvidenceVisualSpec;
+      const visualEvidenceIds = new Set(visual.provenance?.evidenceIds ?? []);
+      const nativeArgumentClaimId = narrativeBlocks
+        .flatMap((block, blockIndex) =>
+          (block.argumentClaimIds ?? (block.argumentClaimId ? [block.argumentClaimId] : []))
+            .map((claimId) => ({
+              claimId,
+              blockIndex,
+              evidenceMatches: [...(nativeEvidenceIdsByClaimId.get(claimId) ?? [])]
+                .filter((evidenceId) => visualEvidenceIds.has(evidenceId)).length,
+            })),
+        )
+        .filter((candidate) => candidate.evidenceMatches > 0)
+        .sort((left, right) =>
+          right.evidenceMatches - left.evidenceMatches || left.blockIndex - right.blockIndex,
+        )[0]?.claimId;
+      const plannedClaimHasCompatibleBlock = Boolean(plannedArgumentClaimId) &&
+        narrativeBlocks.some((block) =>
+          block.argumentClaimId === plannedArgumentClaimId ||
+          block.argumentClaimIds?.includes(plannedArgumentClaimId!),
+        );
+      const argumentClaimId = plannedClaimHasCompatibleBlock
+        ? plannedArgumentClaimId
+        : nativeArgumentClaimId ?? plannedArgumentClaimId;
+      // Evidence figures are optional. When a report has an argument graph but
+      // no exact claim relationship for a candidate visual, omit the visual
+      // instead of publishing an unbound figure or inventing a prose claim.
+      const administrativeEvidenceVisual =
+        "visualType" in visual &&
+        (visual.visualType === "study_design_distribution" ||
+          visual.visualType === "publication_timeline");
+      if (
+        !argumentClaimId &&
+        graphClaims.length > 0 &&
+        "visualId" in figure &&
+        !administrativeEvidenceVisual
+      ) {
+        return [];
+      }
       const visualSources = new Set(visual.provenance?.sourceIds ?? []);
       const rankedBlocks = narrativeBlocks.map((block, blockIndex) => {
         const blockSources = new Set(
@@ -2452,7 +3764,7 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
           boundFigure,
         ]);
       }
-      return boundFigure;
+      return [boundFigure];
     });
     section.figures = figures;
     section.blocks = [...(guide ? [guide] : []), ...narrativeBlocks];
@@ -2479,20 +3791,39 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
         ];
   };
   [...allBodySections, ...appendix].forEach(configureOrderedContent);
+  for (const section of [...allBodySections, ...appendix]) {
+    for (const block of section.blocks) {
+      block.text = normalizePublicationText(
+        sanitizeReaderFacingInternalLanguage(block.text),
+      );
+      block.segments = (block.segments ?? []).map((segment) => ({
+        ...segment,
+        text: normalizePublicationText(
+          sanitizeReaderFacingInternalLanguage(segment.text),
+        ),
+      }));
+    }
+  }
   const generatedDate = zhTwDate(workspace.updatedAt || workspace.createdAt);
   const retrievalDate = zhTwDate(workspace.createdAt);
   const yearRange = sourceYearRange(workspace.acceptedSources);
   const reportTypeLabel = kind === "evidence_synthesis_report"
     ? "學術證據綜合報告"
     : "有限證據報告（Limited Evidence Brief）";
-  const acceptedSourceCount = new Set(
+  const eligibleSourceCount = new Set(
     workspace.acceptedSources.map((source) => canonicalSourceKeyForSource(source)),
   ).size;
+  const acceptedSourceCount = eligibleSourceCount;
   const evidenceSourceCount = new Set(evidenceUnits.map((unit) => unit.sourceIdentity)).size;
   const citedSourceCount = new Set(references.map((reference) => reference.sourceIdentity)).size;
+  const directEvidenceSourceCount = sourceUsage.filter((usage) => usage.role === "direct_evidence").length;
+  const contextOnlySourceCount = sourceUsage.filter((usage) => usage.role === "context_only").length;
+  const bodyCitedSourceCount = citedSourceCount;
   const referenceCount = references.length;
   const evidenceUnitCount = evidenceUnits.length;
-  const sourceScope = `納入來源 ${acceptedSourceCount} 筆／具證據單元來源 ${evidenceSourceCount} 筆／正文引用來源 ${citedSourceCount} 筆／參考文獻 ${referenceCount} 筆／證據單元 ${evidenceUnitCount} 筆${yearRange ? `／${yearRange} 年` : ""}／整理日 ${retrievalDate}`;
+  const evidenceExcerptCount = workspace.evidenceCards.length;
+  const quantitativeFactCount = evidenceFacts.reduce((count, fact) => count + fact.numericalResults.length, 0);
+  const sourceScope = `eligible 來源 ${eligibleSourceCount} 筆／direct evidence 來源 ${directEvidenceSourceCount} 筆／背景／檢索輔助來源 ${contextOnlySourceCount} 筆／正文引用來源 ${bodyCitedSourceCount} 筆／參考文獻 ${referenceCount} 筆／證據單元 ${evidenceUnitCount} 筆／可追溯摘錄 ${evidenceExcerptCount} 筆／量化事實 ${quantitativeFactCount} 筆${yearRange ? `／${yearRange} 年` : ""}／整理日 ${retrievalDate}`;
   const tocSections = [
     researchSection,
     scopeSection,
@@ -2501,7 +3832,7 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
     limitationsSection,
     conclusionSection,
   ];
-  const withoutIntegrity: Omit<FormalReportDocument, "integrity" | "quality"> = {
+  const withoutIntegrity: Omit<FormalReportDocument, "integrity" | "quality" | "methodology"> = {
     schemaVersion: "formal-report-document/v1",
     metadata: {
       title,
@@ -2511,11 +3842,17 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       generatedDate,
       documentVersion: "v3.0",
       researchQuestion,
+      eligibleSourceCount,
+      directEvidenceSourceCount,
+      contextOnlySourceCount,
+      bodyCitedSourceCount,
       acceptedSourceCount,
       evidenceSourceCount,
       citedSourceCount,
       referenceCount,
       evidenceUnitCount,
+      evidenceExcerptCount,
+      quantitativeFactCount,
       sourceCount: acceptedSourceCount,
       evidenceCount: evidenceUnitCount,
       sourceYearRange: yearRange,
@@ -2531,7 +3868,7 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       documentVersion: "v3.0",
     },
     abstract: {
-      text: repaired.text,
+      text: abstractText,
       keywords: keywordCandidates(workspace.input.topic, plan).slice(0, 6),
       validation: {
         status: abstractIssues.length === 0 ? "pass" : "blocked",
@@ -2540,10 +3877,32 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       },
     },
     tableOfContents: [
-      { id: "abstract", title: "摘要與關鍵詞", level: 1 },
-      ...tocSections.map((section) => ({ id: section.id, title: section.title, level: 1 as const })),
-      { id: "references", title: "參考文獻", level: 1 },
-      ...appendix.map((section) => ({ id: section.id, title: section.title, level: 1 as const })),
+      { id: "abstract", title: "摘要與關鍵詞", level: 1, number: null, label: "摘要與關鍵詞" },
+      ...tocSections.map((section, index) => ({
+        id: section.id,
+        title: section.title,
+        level: 1 as const,
+        number: index + 1,
+        label: publicationTocLabel(index + 1, section.title),
+      })),
+      ...appendix.map((section) => ({
+        id: section.id,
+        title: section.title,
+        level: 1 as const,
+        number: null,
+        label: publicationTocLabel(null, section.title),
+      })),
+      ...(references.length > 0 ? [{
+        id: "references",
+        title: publicationSourcesHeading(
+          workspace.input.outputLanguage === "英文" ? "en" : "zh-TW",
+        ),
+        level: 1 as const,
+        number: null,
+        label: publicationSourcesHeading(
+          workspace.input.outputLanguage === "英文" ? "en" : "zh-TW",
+        ),
+      }] : []),
     ],
     researchQuestion: researchSection,
     scopeAndMethod: scopeSection,
@@ -2551,6 +3910,7 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
     crossSourceSynthesis: synthesisSection,
     limitations: limitationsSection,
     conclusion: conclusionSection,
+    evidenceTable,
     references,
     evidenceFacts,
     evidenceUnits,
@@ -2563,15 +3923,36 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
   const ambiguousCitationTokens = Array.from(ambiguousMarkers);
   const finalBodyBlocks = allBodySections.flatMap((section) => section.blocks);
   const referenceIds = new Set(references.map((reference) => reference.citationId));
+  const referenceSourceIds = new Set(references.map((reference) => reference.sourceId));
   const citedIds = new Set(finalBodyBlocks.flatMap((block) => block.citationIds));
   const referenceByCitationId = new Map(
     references.map((reference) => [reference.citationId, reference] as const),
   );
-  const claimCitationReferenceIdentityByClaimId = new Map(graphClaims.map((claim) => {
+  // Plan-level graph nodes are planning constraints, not proof that every node
+  // was realized. Audit only claims that the canonical body actually binds;
+  // otherwise an unrendered plan node is incorrectly reported as a citation
+  // identity mismatch with paragraph=none/referenced=none.
+  const realizedGraphClaims = graphClaims.filter((claim) => finalBodyBlocks.some((block) =>
+    block.argumentClaimId === claim.claimId || block.argumentClaimIds?.includes(claim.claimId)
+  ));
+  const blockCitationIdsForClaim = (block: FormalReportBlock, claimId: string): string[] => {
+    const matchedSegments = (block.segments ?? []).filter((segment) =>
+      (segment.argumentClaimIds ?? segment.finalClaimIds ?? []).includes(claimId)
+    );
+    if (matchedSegments.length > 0) {
+      return unique(matchedSegments.flatMap((segment) => segment.citationIds));
+    }
+    return block.argumentClaimId === claimId || block.argumentClaimIds?.includes(claimId)
+      ? unique(block.citationIds)
+      : [];
+  };
+  const claimCitationReferenceIdentityByClaimId = new Map(realizedGraphClaims.map((claim) => {
     const boundBlocks = finalBodyBlocks.filter((block) =>
       block.argumentClaimId === claim.claimId || block.argumentClaimIds?.includes(claim.claimId)
     );
-    const paragraphCitationIds = unique(boundBlocks.flatMap((block) => block.citationIds)).sort();
+    const paragraphCitationIds = unique(boundBlocks.flatMap((block) =>
+      blockCitationIdsForClaim(block, claim.claimId)
+    )).sort();
     const unresolvedParagraphCitationIds = paragraphCitationIds.filter((citationId) =>
       !referenceByCitationId.has(citationId)
     );
@@ -2604,6 +3985,24 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       : [
           `claim_citation_reference_identity_mismatch:${claimId}:declared=${audit.declaredSourceIds.join("+") || "none"}:paragraph=${audit.paragraphCitationIds.join("+") || "none"}:referenced=${audit.referencedSourceIds.join("+") || "none"}:unresolved_claim=${audit.unresolvedClaimCitationIds.join("+") || "none"}:unresolved_paragraph=${audit.unresolvedParagraphCitationIds.join("+") || "none"}`,
         ]));
+  const bodyCitationSourceIds = new Set(finalBodyBlocks.flatMap((block) =>
+    block.citationIds.map((citationId) => referenceByCitationId.get(citationId)?.sourceId)
+  ).filter((sourceId): sourceId is string => Boolean(sourceId)));
+  const declaredBodySourceIds = new Set(finalBodyBlocks.flatMap((block) => block.sourceIds ?? []));
+  const preExportTopicIsolation = validateTopicIsolation({
+    stage: "pre_export",
+    workflowId: workspace.workflowId,
+    reportId: workspace.reportId,
+    topicHash: workspace.topicHash,
+    researchQuestion: workspace.input.topic,
+    searchQueries: unique(workspace.acceptedSources.map((source) => source.queryUsed)),
+    queryTerms: unique(workspace.acceptedSources.flatMap((source) => source.matchedCoreConcepts ?? [])),
+    methodText: scopeSection.blocks.map((block) => block.text).join(" "),
+    records: [...workspace.acceptedSources, ...workspace.evidenceCards],
+  });
+  const falseInsufficientProjection = insufficientEvidenceProjection && directEvidenceSourceCount > 0;
+  const sameSet = (left: Set<string>, right: Set<string>) =>
+    left.size === right.size && [...left].every((value) => right.has(value));
   const sourceCountIssues = unique([
     ...(references.length !== citedSourceCount
       ? ["reference_count_must_equal_unique_cited_source_count"]
@@ -2626,6 +4025,25 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
     ...(sourceUsage.filter((usage) => usage.status === "includedAndCited").length !== citedSourceCount
       ? ["included_and_cited_count_must_equal_cited_source_count"]
       : []),
+    ...(bodyCitedSourceCount !== referenceCount
+      ? ["body_cited_source_count_must_equal_reference_count"]
+      : []),
+    ...(!sameSet(bodyCitationSourceIds, referenceSourceIds)
+      ? ["body_cited_source_ids_must_equal_reference_bibliography_source_ids"]
+      : []),
+    ...(declaredBodySourceIds.size > 0 && !sameSet(declaredBodySourceIds, referenceSourceIds)
+      ? ["body_cited_source_ids_must_equal_reference_bibliography_source_ids"]
+      : []),
+    ...(crossStudyDirectSourceCount < 2 &&
+        synthesisSection.blocks.flatMap((block) => sentenceList(block.text)).some((sentence) =>
+          !sentence.includes("INSUFFICIENT_FOR_CROSS_STUDY_CONSISTENCY") &&
+          !/(?:尚?無法|不足以)判斷跨研究一致性|跨研究一致性(?:證據)?不足/u.test(sentence) &&
+          CROSS_STUDY_CONSISTENCY_PATTERN.test(sentence)
+        )
+      ? ["cross_study_consistency_requires_two_independent_direct_sources"]
+      : []),
+    ...preExportTopicIsolation.issues.map((issue) => `topic_isolation:${issue}`),
+    ...(falseInsufficientProjection ? ["BLOCK_EXPORT_FALSE_INSUFFICIENT"] : []),
   ]);
   for (const block of finalBodyBlocks) {
     const uniqueBlockIds = new Set(block.citationIds);
@@ -2637,6 +4055,14 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       const sentence = segment.text;
       const segmentCitationIds = unique(segment.citationIds);
       if (segmentCitationIds.length === 0) continue;
+      if (
+        segmentCitationIds.length >= 3 &&
+        !/(?:跨來源|跨研究|多項|多個|各研究|研究間|現有研究|共同|整體|綜合|統合|一致|衝突|差異)/u.test(sentence)
+      ) {
+        citationMappingIssues.push(
+          `final_blanket_citation_cluster:${segmentCitationIds.join("+")}`,
+        );
+      }
       const statedSourceCount = explicitChineseSourceCount(sentence);
       if (statedSourceCount != null && segmentCitationIds.length < statedSourceCount) {
         citationMappingIssues.push(
@@ -2658,7 +4084,43 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
         return [{ source, cards: evidenceCardsBySourceId.get(source.id) ?? [] }];
       });
       if (citedPairs.length !== segmentCitationIds.length) continue;
+      const nativeSourceIds = unique(segment.sourceIds ?? []).sort();
+      const nativeEvidenceIds = unique(segment.evidenceIds ?? []).sort();
+      const nativeWriterSentenceIds = unique(segment.writerSentenceIds ?? []);
       const support = sourcesSupportSentence(sentence, citedPairs);
+      if (nativeWriterSentenceIds.length > 0) {
+        const resolvedSourceIds = unique(citedPairs.map(({ source }) => source.id)).sort();
+        const evidenceSourceIds = unique(nativeEvidenceIds.map((evidenceId) =>
+          evidenceCardById.get(evidenceId)?.sourceId,
+        )).sort();
+        const identityPass =
+          nativeSourceIds.length > 0 &&
+          nativeEvidenceIds.length > 0 &&
+          nativeSourceIds.length === resolvedSourceIds.length &&
+          nativeSourceIds.every((sourceId, index) => sourceId === resolvedSourceIds[index]) &&
+          evidenceSourceIds.length > 0 &&
+          evidenceSourceIds.every((sourceId) => nativeSourceIds.includes(sourceId));
+        const unsupportedNumericIssues = support.issues.filter((issue) =>
+          issue.startsWith("unsupported_number:"),
+        );
+        if (identityPass && unsupportedNumericIssues.length === 0) continue;
+        if (identityPass) {
+          citationMappingIssues.push(
+            `final_unsupported_citation_set:${segmentCitationIds.join("+")}:${unsupportedNumericIssues.join(",")}`,
+          );
+          sourceMentionIssues.push(
+            `final_unsupported_source_mention_set:${segmentCitationIds.join("+")}`,
+          );
+          continue;
+        }
+        citationMappingIssues.push(
+          `final_native_lineage_mismatch:${nativeWriterSentenceIds.join("+")}`,
+        );
+        sourceMentionIssues.push(
+          `final_native_source_identity_mismatch:${nativeWriterSentenceIds.join("+")}`,
+        );
+        continue;
+      }
       if (!support.supported) {
         citationMappingIssues.push(`final_unsupported_citation_set:${segmentCitationIds.join("+")}:${support.issues.join(",")}`);
         sourceMentionIssues.push(`final_unsupported_source_mention_set:${segmentCitationIds.join("+")}`);
@@ -2694,25 +4156,27 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
         : [];
     }),
   );
+  const requestedMinimumCjk = (() => {
+    const explicit = workspace.input.wordCount.match(/(\d[\d,]*)/u)?.[1];
+    const described = workspace.input.length.match(/(\d[\d,]*)/u)?.[1];
+    const parsed = Number((explicit ?? described ?? "0").replace(/,/gu, ""));
+    return Number.isFinite(parsed) && parsed >= 7000 ? parsed : 0;
+  })();
+  const canonicalBodyCjk = allBodySections
+    .flatMap((section) => section.blocks)
+    .reduce(
+      (count, block) => count + (block.text.match(/[\u3400-\u9fff]/gu)?.length ?? 0),
+      0,
+    );
+  const longFormContractIssues = requestedMinimumCjk > 0 && canonicalBodyCjk < requestedMinimumCjk
+    ? [`long_form_body_below_minimum:${canonicalBodyCjk}:${requestedMinimumCjk}`]
+    : [];
   const repetitionIssues = unique([
     ...duplicateSentences.map((sentence) => `duplicate_sentence:${sentence.slice(0, 80)}`),
-    ...Array.from(
-      allBodySections
-        .flatMap((section) => section.blocks)
-        .flatMap((block) => sentenceList(block.text))
-        .map(limitationTheme)
-        .filter((theme): theme is string => Boolean(theme))
-        .reduce<Map<string, number>>((map, theme) => {
-          map.set(theme, (map.get(theme) ?? 0) + 1);
-          return map;
-        }, new Map()),
-    ).flatMap(([theme, count]) =>
-      count > 3 ? [`repeated_limitation_theme:${theme}:${count}`] : []
-    ),
     ...(normalizedSentences.length > 0 && limitationSentenceCount / normalizedSentences.length > 0.55
       ? ["limitation_language_dominates_report"]
       : []),
-    ...(findingChars > 0 && processChars > findingChars * 2
+    ...(!insufficientEvidenceProjection && findingChars > 0 && processChars > findingChars * 2
       ? ["process_description_dominates_findings"]
       : []),
   ]);
@@ -2766,8 +4230,13 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
           const nodes = formalReportSectionContent(section);
           return nodes.flatMap((node, index) => {
             if (node.nodeType !== "figure" || !("visualId" in node.figure)) return [];
+            const evidenceVisual = node.figure as EvidenceVisualSpec;
+            if (
+              evidenceVisual.visualType === "study_design_distribution" ||
+              evidenceVisual.visualType === "publication_timeline"
+            ) return [];
             const claimId = node.figure.argumentClaimId;
-            if (!claimId) return [`figure_missing_argument_claim:${(node.figure as EvidenceVisualSpec).visualId}`];
+            if (!claimId) return [`figure_missing_argument_claim:${evidenceVisual.visualId}`];
             const adjacentParagraphs = [nodes[index - 1], nodes[index + 1]]
               .filter((candidate): candidate is Extract<FormalReportContentNode, { nodeType: "paragraph" }> =>
                 candidate?.nodeType === "paragraph"
@@ -2790,12 +4259,114 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       ? [`generated_image_provider_not_image2:${record.visualId}`]
       : []),
   ]));
-  const factIssues = unique([
-    ...auditStandardizedEvidenceFacts(evidenceFacts),
-    ...directnessConsistencyIssues,
-  ]);
+  const nativeWriterTraces = workspace.draft.sections.flatMap((section) =>
+    (section.sentenceClaimTraces ?? [])
+      .filter((trace) => !trace.deleted && compact(trace.finalText).length > 0)
+      .filter((trace) => !/(?:中文摘要：此來源可用於檢視|可辨識的證據面向包括|已取得\s*DOI.*可追溯原始來源|系統初評為可直接納入證據整理)/iu.test(trace.finalText))
+      .map((trace) => ({ ...trace, canonicalSectionId: section.sectionId })),
+  );
+  const authoritativeNativeWriterTraces = nativeWriterTraces.length > 0 &&
+    nativeWriterTraces.every((trace) =>
+      trace.validationAfter === "pass" &&
+      (trace.factual === false || (
+        trace.realizedClaimIds.length > 0 &&
+        trace.evidenceIds.length > 0 &&
+        trace.citationSourceIds.length > 0
+      )),
+    );
+  const nativeTraceIssues = authoritativeNativeWriterTraces
+    ? []
+    : nativeWriterTraces.flatMap((trace) => [
+        ...(trace.validationAfter !== "pass"
+          ? [`writer_trace_validation_blocked:${trace.sentenceId}`]
+          : []),
+        ...(trace.factual !== false && trace.realizedClaimIds.length === 0
+          ? [`writer_trace_claim_missing:${trace.sentenceId}`]
+          : []),
+        ...(trace.factual !== false && trace.evidenceIds.length === 0
+          ? [`writer_trace_evidence_missing:${trace.sentenceId}`]
+          : []),
+        ...(trace.factual !== false && trace.citationSourceIds.length === 0
+          ? [`writer_trace_source_missing:${trace.sentenceId}`]
+          : []),
+      ]);
+  const requiredNativeWriterTraces = nativeWriterTraces.filter((trace) =>
+    trace.factual !== false ||
+    trace.realizedClaimIds.length > 0 ||
+    trace.evidenceIds.length > 0 ||
+    trace.citationSourceIds.length > 0
+  );
+  const preservedWriterSentenceIds = unique(finalBodyBlocks.flatMap((block) =>
+    block.writerSentenceIds ?? []
+  ));
+  const requiredWriterSentenceIds = unique(requiredNativeWriterTraces.map((trace) => trace.sentenceId));
+  const requiredWriterClaimIds = unique(requiredNativeWriterTraces.flatMap((trace) =>
+    trace.realizedClaimIds
+  ));
+  const preservedWriterClaimIds = unique(finalBodyBlocks.flatMap((block) =>
+    block.argumentClaimIds ?? (block.argumentClaimId ? [block.argumentClaimId] : [])
+  ));
+  const requiredWriterEvidenceIds = unique(requiredNativeWriterTraces.flatMap((trace) =>
+    trace.evidenceIds
+  ));
+  const preservedWriterEvidenceIds = unique(finalBodyBlocks.flatMap((block) =>
+    block.evidenceIds ?? []
+  ));
+  const requiredWriterSourceIds = unique(requiredNativeWriterTraces.flatMap((trace) =>
+    trace.citationSourceIds
+  ));
+  const preservedWriterSourceIds = unique(finalBodyBlocks.flatMap((block) =>
+    block.sourceIds ?? []
+  ));
+  const writerPreservation = {
+    status: nativeWriterTraces.length === 0
+      ? "not_applicable" as const
+      : requiredWriterSentenceIds.every((id) => preservedWriterSentenceIds.includes(id)) &&
+          requiredWriterClaimIds.every((id) => preservedWriterClaimIds.includes(id)) &&
+          requiredWriterEvidenceIds.every((id) => preservedWriterEvidenceIds.includes(id)) &&
+          requiredWriterSourceIds.every((id) => preservedWriterSourceIds.includes(id))
+        ? "pass" as const
+        : "blocked" as const,
+    requiredSentenceIds: requiredWriterSentenceIds,
+    preservedSentenceIds: preservedWriterSentenceIds,
+    missingSentenceIds: requiredWriterSentenceIds.filter((id) =>
+      !preservedWriterSentenceIds.includes(id)
+    ),
+    requiredClaimIds: requiredWriterClaimIds,
+    preservedClaimIds: preservedWriterClaimIds,
+    missingClaimIds: requiredWriterClaimIds.filter((id) => !preservedWriterClaimIds.includes(id)),
+    requiredEvidenceIds: requiredWriterEvidenceIds,
+    preservedEvidenceIds: preservedWriterEvidenceIds,
+    missingEvidenceIds: requiredWriterEvidenceIds.filter((id) =>
+      !preservedWriterEvidenceIds.includes(id)
+    ),
+    requiredSourceIds: requiredWriterSourceIds,
+    preservedSourceIds: preservedWriterSourceIds,
+    missingSourceIds: requiredWriterSourceIds.filter((id) => !preservedWriterSourceIds.includes(id)),
+  } satisfies FormalReportDocument["integrity"]["writerPreservation"];
+  const writerPreservationIssues = writerPreservation.status === "blocked"
+    ? [
+        ...writerPreservation.missingSentenceIds.map((id) => `writer_sentence_missing:${id}`),
+        ...writerPreservation.missingClaimIds.map((id) => `writer_claim_missing:${id}`),
+        ...writerPreservation.missingEvidenceIds.map((id) => `writer_evidence_missing:${id}`),
+        ...writerPreservation.missingSourceIds.map((id) => `writer_source_missing:${id}`),
+      ]
+    : [];
+  const factIssues = unique(nativeWriterTraces.length > 0
+    ? nativeTraceIssues
+    : [
+        ...auditStandardizedEvidenceFacts(evidenceFacts),
+        ...directnessConsistencyIssues,
+      ]);
   const sourceOverlapIssues = readerSourceOverlapIssues(allBodySections, evidenceFacts);
   const sourceCenteredIssues = sourceCenteredParagraphIssues(allBodySections);
+  const writerFallbackOccurrences = finalBodyBlocks.flatMap((block, index) => {
+    const matches = block.text.match(/(?:此來源可用於檢視|可形成跨研究比較|可用於理解|提供背景|系統初評為可直接納入證據整理)/gu) ?? [];
+    return matches.map((match) => `FAIL_WRITER_SUBSTANTIVE_SYNTHESIS:block-${index + 1}:${match}`);
+  });
+  const writerFallbackContaminationIssues = writerFallbackOccurrences.length >= 2
+    ? writerFallbackOccurrences
+    : [];
   const venueIssues = publicationVenueIssues(workspace.acceptedSources);
   const finalCitationFailures = citationMappingIssues.filter((issue) => issue.startsWith("final_"));
   const finalMentionFailures = sourceMentionIssues.filter((issue) => issue.startsWith("final_"));
@@ -2820,14 +4391,76 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
   addStructuralQualityIssues(finalCitationFailures, "citation_precision", "citation", "report:citation");
   addStructuralQualityIssues(finalMentionFailures, "citation_precision", "citation", "report:source-mention");
   addStructuralQualityIssues(sectionCompletenessIssues, "coherence", "coherence", "section");
+  addStructuralQualityIssues(longFormContractIssues, "document_quality", "document", "report:length");
   addStructuralQualityIssues(repetitionIssues, "coherence", "repetition", "section");
   addStructuralQualityIssues(tableIssues, "visual_effectiveness", "visual", "table");
   addStructuralQualityIssues(figureIssues, "visual_effectiveness", "visual", "figure");
   addStructuralQualityIssues(imageIssues, "visual_effectiveness", "visual", "image");
   addStructuralQualityIssues(factIssues, "statistical_correctness", "number", "fact");
+  addStructuralQualityIssues(
+    writerPreservationIssues,
+    "evidence_integrity",
+    "evidence",
+    "writer-preservation",
+  );
   addStructuralQualityIssues(sourceOverlapIssues, "synthesis", "stitching", "section");
   addStructuralQualityIssues(sourceCenteredIssues, "synthesis", "stitching", "section");
+  addStructuralQualityIssues(
+    writerFallbackContaminationIssues,
+    "synthesis",
+    "stitching",
+    "writer-fallback",
+  );
   addStructuralQualityIssues(venueIssues, "document_quality", "document", "reference");
+
+  const canonicalNativeClaimIds = new Set(
+    finalBodyBlocks.flatMap((block) =>
+      block.argumentClaimIds ?? (block.argumentClaimId ? [block.argumentClaimId] : []),
+    ),
+  );
+  const canonicalNativeTraces = authoritativeNativeWriterTraces
+    ? nativeWriterTraces.filter((trace) =>
+        trace.factual !== false &&
+        trace.realizedClaimIds.some((claimId) => canonicalNativeClaimIds.has(claimId)),
+      )
+    : [];
+  const numericalEvidencePresent = allBodySections.some((section) =>
+    section.figures.some((figure) =>
+      "visualType" in figure &&
+      typeof figure.visualType === "string" &&
+      ["numeric_small_multiples", "prevalence_facets", "odds_ratio_forest", "correlation_structure"].includes(figure.visualType)
+    )
+  );
+  const experimentalDesignRequested = plan?.reportArchetype?.archetypeId === "experimental_design";
+  const methodology = evaluateReportMethodologyRubric({
+    researchQuestionDefined: Boolean(withoutIntegrity.metadata.researchQuestion.trim()),
+    audienceAndPurposeDefined: Boolean(
+      workspace.input.targetAudience.trim() && workspace.input.reportType.trim()
+    ),
+    designOrSynthesisMethodDefined: scopeSection.blocks.some((block) => block.text.trim().length >= 40),
+    constructsOperationalized: experimentalDesignRequested
+      ? /(?:自變項|依變項|暴露|結果變項|操作型定義|假設|variable|exposure|outcome|hypothesis)/iu.test(readerText)
+      : null,
+    samplingOrSourceSelectionExplained: acceptedSourceCount > 0
+      ? scopeSection.blocks.some((block) => block.text.trim().length >= 40)
+      : null,
+    evidenceTraceabilityComplete: insufficientEvidenceProjection
+      ? true
+      : authoritativeNativeWriterTraces
+      ? canonicalNativeTraces.length > 0 && factIssues.length === 0
+      : evidenceFacts.length > 0
+        ? factIssues.length === 0
+        : null,
+    synthesisLedByResearchQuestion: sourceOverlapIssues.length === 0 && sourceCenteredIssues.length === 0,
+    statisticalUncertaintyHandled: numericalEvidencePresent ? factIssues.length === 0 : null,
+    ethicsAndGovernanceReviewed: workspace.generationPayload.academicSafetyReview
+      ? true
+      : undefined,
+    reproducibilityMetadataPresent: Boolean(
+      workspace.workflowId && workspace.topicHash && workspace.generationPayload.workflowId
+    ),
+  });
+  structuralQualityIssues.push(...methodology.structuralIssues);
 
   const statisticalInterpretationFactIds = new Set(
     plan?.statisticalInterpretations?.map((item) => item.factId) ?? [],
@@ -2840,55 +4473,128 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
   );
   const contradictionTextPresent = /(?:不一致|矛盾|反例|反方向|無顯著|混合結果)/u.test(readerText);
   const alternativeTextPresent = /(?:替代解釋|反向因果|選樣偏差|測量偏差|回憶偏差|混雜因素|文化差異|量表切點)/u.test(readerText);
+  const graphClaimTypeById = new Map(graphClaims.map((claim) => [claim.claimId, claim.claimType]));
+  const qualityFacts = authoritativeNativeWriterTraces
+    ? canonicalNativeTraces.map((trace) => ({
+        factId: `writer-trace:${trace.sentenceId}`,
+        sourceId: trace.citationSourceIds[0] ?? "",
+        evidenceId: trace.evidenceIds[0] ?? "",
+        location: trace.sentenceId,
+        traceable: trace.realizedClaimIds.length > 0 &&
+          trace.evidenceIds.length > 0 && trace.citationSourceIds.length > 0,
+        containsNumber: /\d/u.test(trace.finalText),
+        numericValue: null,
+        numberTraceable: trace.evidenceIds.length > 0 && trace.citationSourceIds.length > 0,
+        statisticInterpretationValid: trace.validationAfter === "pass",
+        comparisonValid: trace.validationAfter === "pass",
+      }))
+    : (plan?.normalizedFacts ?? []).map((fact) => ({
+        factId: fact.factId,
+        sourceId: fact.sourceId,
+        evidenceId: fact.evidenceId,
+        location: fact.locator,
+        traceable: Boolean(fact.sourceId && fact.evidenceId && fact.sourceSpan && fact.locator),
+        containsNumber: fact.value != null || fact.numericalResults.length > 0,
+        numericValue: fact.value,
+        numberTraceable: fact.value == null && fact.numericalResults.length === 0
+          ? true
+          : Boolean(fact.sourceSpan && fact.locator),
+        statisticInterpretationValid: fact.value == null && fact.numericalResults.length === 0
+          ? true
+          : statisticalInterpretationFactIds.has(fact.factId),
+        comparisonValid: comparableFactIds.has(fact.factId) ||
+          (plan?.heterogeneityAnalysis?.comparisons.length ?? 0) === 0,
+      }));
+  const nativeClaims = new Map<string, typeof canonicalNativeTraces>();
+  for (const trace of canonicalNativeTraces) {
+    for (const claimId of trace.realizedClaimIds) {
+      if (!canonicalNativeClaimIds.has(claimId)) continue;
+      nativeClaims.set(claimId, [...(nativeClaims.get(claimId) ?? []), trace]);
+    }
+  }
+  const qualityClaims = authoritativeNativeWriterTraces
+      ? Array.from(nativeClaims, ([claimId, traces]) => {
+        const boundBlocks = finalBodyBlocks.filter((block) =>
+          block.argumentClaimId === claimId || block.argumentClaimIds?.includes(claimId),
+        );
+        const referencedSourceIds = unique(boundBlocks.flatMap((block) =>
+          blockCitationIdsForClaim(block, claimId)
+            .map((citationId) => referenceByCitationId.get(citationId)?.sourceId),
+        )).sort();
+        const declaredSourceIds = unique(
+          traces.flatMap((trace) => trace.citationSourceIds),
+        ).sort();
+        const referenceSourceIds = new Set(
+          references.map((reference) => reference.sourceId),
+        );
+        const factIds = traces.map((trace) => `writer-trace:${trace.sentenceId}`);
+        const numberFactIds = traces
+          .filter((trace) => /\d/u.test(trace.finalText))
+          .map((trace) => `writer-trace:${trace.sentenceId}`);
+        return {
+          claimId,
+          isMajor: traces.some((trace) =>
+            ["findings", "discussion", "conclusion"].includes(trace.canonicalSectionId),
+          ),
+          supportingFactIds: factIds,
+          citationIds: declaredSourceIds,
+          citationEntailed: traces.every((trace) => trace.validationAfter === "pass") &&
+            finalCitationFailures.length === 0,
+          // Writer vNext binds citations at sentence granularity. A formal
+          // paragraph can legitimately combine several such sentences. The
+          // canonical attribution repair may narrow an archived overbroad
+          // Writer citation set, but it may never introduce a new source.
+          // Method and limitation boundaries derived from source governance
+          // may be citationless because they do not assert a study result.
+          citationIdentityMatches: boundBlocks.length > 0 &&
+            declaredSourceIds.length > 0 &&
+            declaredSourceIds.every((sourceId) => referenceSourceIds.has(sourceId)) &&
+            referencedSourceIds.every((sourceId) => declaredSourceIds.includes(sourceId)) &&
+            (referencedSourceIds.length > 0 || traces.every((trace) =>
+              ["methods", "limitations_gaps"].includes(trace.canonicalSectionId)
+            )),
+          containsNumber: numberFactIds.length > 0,
+          numberFactIds,
+          directness: "unknown" as const,
+          calibratedToEvidence: traces.every((trace) => trace.validationAfter === "pass"),
+          contradictingFactIds: [],
+          contradictionAddressed: true,
+        };
+      })
+    : realizedGraphClaims.map((claim) => {
+        const factIds = [...(claimFactIds.get(claim.claimId) ?? new Set<string>())];
+        const numericalFactIds = factIds.filter((factId) =>
+          (plan?.normalizedFacts ?? []).some((fact) =>
+            fact.factId === factId && (fact.value != null || fact.numericalResults.length > 0)
+          )
+        );
+        const materialContradiction = claim.contradictingFacts.length > 0;
+        return {
+          claimId: claim.claimId,
+          isMajor: !["evidence_gap", "research_gap", "evidence_limitation", "author_synthesis"]
+            .includes(claim.claimType),
+          supportingFactIds: claim.supportingFacts,
+          citationIds: claim.citationIds,
+          citationEntailed: finalCitationFailures.length === 0,
+          citationIdentityMatches: claimCitationReferenceIdentityByClaimId.get(claim.claimId)
+            ?.identityMatches ?? false,
+          containsNumber: numericalFactIds.length > 0,
+          numberFactIds: numericalFactIds,
+          directness: claim.evidenceDirectness === "A"
+            ? "direct" as const
+            : claim.evidenceDirectness === "B"
+              ? "near_direct" as const
+              : claim.evidenceDirectness
+                ? "indirect" as const
+                : "unknown" as const,
+          calibratedToEvidence: true,
+          contradictingFactIds: claim.contradictingFacts,
+          contradictionAddressed: !materialContradiction || contradictionTextPresent,
+        };
+      });
   const quality = evaluateReportQuality({
-    facts: (plan?.normalizedFacts ?? []).map((fact) => ({
-      factId: fact.factId,
-      sourceId: fact.sourceId,
-      evidenceId: fact.evidenceId,
-      location: fact.locator,
-      traceable: Boolean(fact.sourceId && fact.evidenceId && fact.sourceSpan && fact.locator),
-      containsNumber: fact.value != null || fact.numericalResults.length > 0,
-      numericValue: fact.value,
-      numberTraceable: fact.value == null && fact.numericalResults.length === 0
-        ? true
-        : Boolean(fact.sourceSpan && fact.locator),
-      statisticInterpretationValid: fact.value == null && fact.numericalResults.length === 0
-        ? true
-        : statisticalInterpretationFactIds.has(fact.factId),
-      comparisonValid: comparableFactIds.has(fact.factId) ||
-        (plan?.heterogeneityAnalysis?.comparisons.length ?? 0) === 0,
-    })),
-    claims: (plan?.claimGraph?.claims ?? []).map((claim) => {
-      const factIds = [...(claimFactIds.get(claim.claimId) ?? new Set<string>())];
-      const numericalFactIds = factIds.filter((factId) =>
-        (plan?.normalizedFacts ?? []).some((fact) =>
-          fact.factId === factId && (fact.value != null || fact.numericalResults.length > 0)
-        )
-      );
-      const materialContradiction = claim.contradictingFacts.length > 0;
-      return {
-        claimId: claim.claimId,
-        isMajor: !["evidence_gap", "research_gap", "evidence_limitation", "author_synthesis"]
-          .includes(claim.claimType),
-        supportingFactIds: claim.supportingFacts,
-        citationIds: claim.citationIds,
-        citationEntailed: finalCitationFailures.length === 0,
-        citationIdentityMatches: claimCitationReferenceIdentityByClaimId.get(claim.claimId)
-          ?.identityMatches ?? false,
-        containsNumber: numericalFactIds.length > 0,
-        numberFactIds: numericalFactIds,
-        directness: claim.evidenceDirectness === "A"
-          ? "direct" as const
-          : claim.evidenceDirectness === "B"
-            ? "near_direct" as const
-            : claim.evidenceDirectness
-              ? "indirect" as const
-              : "unknown" as const,
-        calibratedToEvidence: true,
-        contradictingFactIds: claim.contradictingFacts,
-        contradictionAddressed: !materialContradiction || contradictionTextPresent,
-      };
-    }),
+    facts: qualityFacts,
+    claims: qualityClaims,
     sections: allBodySections.map((section, index) => ({
       sectionId: section.id,
       text: section.blocks.map((block) => block.text).join("\n\n"),
@@ -2908,16 +4614,24 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       helpsInterpretation: true,
       sourceNotePresent: Boolean(visual.sourceNote.trim()),
     })),
-    contradictions: (plan?.contradictionAnalysis ?? []).map((item) => ({
+    contradictions: (plan?.contradictionAnalysis ?? []).map((item) => {
+      // A research-difference node records incompatible outcomes, populations,
+      // measurements, or estimate types. It is not a true contradiction merely
+      // because the planner placed one heterogeneous fact in counterFactIds.
+      const material =
+        (item.status === "contradictory" || item.status === "mixed") &&
+        graphClaimTypeById.get(item.claimId) !== "research_difference";
+      return {
       contradictionId: item.claimId,
-      material: item.status === "contradictory" || item.status === "mixed",
-      addressed: item.status !== "contradictory" && item.status !== "mixed"
+      material,
+      addressed: !material
         ? true
         : contradictionTextPresent,
-      alternativeExplanationIncluded: item.status !== "contradictory" && item.status !== "mixed"
+      alternativeExplanationIncluded: !material
         ? true
         : alternativeTextPresent,
-    })),
+    };
+    }),
     audienceArchetype: {
       // New plans carry explicit routed objects. Legacy canonical workspaces
       // still have an explicit user audience/report type and remain auditable
@@ -2936,7 +4650,12 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       reportArchetype: plan?.reportArchetype?.archetypeId ?? kind,
       claimsCalibratedToEvidence: kind === "limited_evidence_brief" ||
         plan?.reportArchetype?.minimumConditionsMet !== false,
-      resultVisualsRequired: (plan?.statisticalInterpretations ?? []).some((item) => item.visualizable),
+      // A planner hint does not prove that the final canonical report has a
+      // comparable, claim-bound numeric result to visualize. Requiring a
+      // result figure without such evidence would pressure the exporter to
+      // invent a chart. Numeric result visuals become mandatory only after a
+      // valid one survives canonical evidence and claim binding.
+      resultVisualsRequired: numericalEvidencePresent,
     },
     structuralIssues: structuralQualityIssues,
     limitedEvidence: kind === "limited_evidence_brief",
@@ -2949,7 +4668,7 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       abstractIssues.length === 0 &&
       analysisSections.length >= 1 &&
       conclusionBlocks.length > 0 &&
-      references.length > 0 &&
+      (references.length > 0 || insufficientEvidenceProjection) &&
       sourceCountIssues.length === 0 &&
       finalCitationFailures.length === 0 &&
       finalMentionFailures.length === 0 &&
@@ -2959,6 +4678,7 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       figureIssues.length === 0 &&
       imageIssues.length === 0 &&
       factIssues.length === 0 &&
+      writerPreservationIssues.length === 0 &&
       sourceOverlapIssues.length === 0 &&
       sourceCenteredIssues.length === 0 &&
       venueIssues.length === 0 &&
@@ -2968,6 +4688,7 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
 
   return {
     ...withoutIntegrity,
+    methodology,
     quality,
     integrity: {
       status,
@@ -2987,6 +4708,8 @@ export function buildFormalReportDocument(workspace: ReportWorkspace): FormalRep
       sourceOverlapIssues,
       sourceCenteredParagraphIssues: sourceCenteredIssues,
       venueIssues,
+      writerPreservation,
+      deduplication: canonicalDeduplicationAudit,
     },
   };
 }

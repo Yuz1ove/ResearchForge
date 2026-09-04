@@ -27,6 +27,7 @@ export function Footer() {
               <li><Link href="/faq" className="hover:text-primary transition-colors" data-testid="link-footer-faq">常見問題</Link></li>
               <li><Link href="/generator" className="hover:text-primary transition-colors" data-testid="link-footer-generator">搜尋論文與摘要</Link></li>
               <li><Link href="/workspace" className="hover:text-primary transition-colors">進階研究工作台</Link></li>
+              <li><Link href="/research-project" className="hover:text-primary transition-colors">可追溯研究專案</Link></li>
             </ul>
           </div>
 

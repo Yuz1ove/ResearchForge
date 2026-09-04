@@ -8,7 +8,6 @@ import { Link, useRoute } from "wouter";
 import { Navbar } from "@/components/layout/navbar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -73,10 +72,15 @@ import {
   PdfExportError,
   REPORT_CJK_FONT_STACK,
 } from "@/lib/exportReport";
-import type { FigureSpec, FormalReportTable } from "@/lib/formalReportDocument";
+import {
+  formalReportSectionSequence,
+  type FigureSpec,
+  type FormalReportTable,
+} from "@/lib/formalReportDocument";
 import {
   baseAuthorYearCitationLabel,
   buildReaderCitationEntries,
+  readerAcademicCitationMarker,
   stripReaderCitationTokens,
 } from "@/lib/readerCitations";
 import {
@@ -91,6 +95,9 @@ import {
   RefreshCw,
   Search,
   Shapes,
+  CheckCircle2,
+  Loader2,
+  XCircle,
 } from "lucide-react";
 
 function sourceCategoryLabel(value: string | null | undefined): string {
@@ -129,47 +136,52 @@ function compactCitationDetail(value: string, maxLength: number): string {
 function InlineCitationText({
   text,
   citations,
+  displayMode,
   citationKeyPrefix,
   activeCitationKey,
   onToggle,
 }: {
   text: string;
   citations: DetailedReportCitation[];
+  displayMode: "compact" | "academic";
   citationKeyPrefix: string;
   activeCitationKey: string | null;
   onToggle: (citationKey: string, citation: DetailedReportCitation) => void;
 }) {
+  void citationKeyPrefix;
+  void activeCitationKey;
+  void onToggle;
   const cleanText = stripReaderCitationTokens(text);
   const { body, punctuation } = splitTerminalPunctuation(cleanText);
+  const citationNumbers = Array.from(new Set(citations
+    .map((citation) => Number.parseInt(citation.marker, 10))
+    .filter((value) => Number.isInteger(value) && value > 0)))
+    .sort((left, right) => left - right);
+  const ranges: string[] = [];
+  for (let index = 0; index < citationNumbers.length; index += 1) {
+    const start = citationNumbers[index]!;
+    let end = start;
+    while (index + 1 < citationNumbers.length && citationNumbers[index + 1] === end + 1) {
+      index += 1;
+      end = citationNumbers[index]!;
+    }
+    ranges.push(start === end ? String(start) : `${start}\u2013${end}`);
+  }
+  const readerLabel = ranges.join(", ");
+  const readerMarker = readerAcademicCitationMarker(citationNumbers);
+  const firstCitation = citations[0];
   return (
     <>
       <span>{body}</span>
-      {citations.length > 0 ? (
-        <span className="citation-cluster whitespace-nowrap" aria-label="引用來源">（
-          {citations.map((citation, index) => {
-            const label = citationReaderLabel(citation);
-            const stableId = citation.citationId || citation.source.id || String(index);
-            const citationKey = `${citationKeyPrefix}-${stableId}-${index}`;
-            const expanded = activeCitationKey === citationKey;
-            return (
-              <span key={citationKey}>
-                {index > 0 ? "；" : null}
-                <a
-                  href={citation.href || (citation.anchorId ? `#${citation.anchorId}` : "#preview-report-references")}
-                  target={citation.href ? "_blank" : undefined}
-                  rel={citation.href ? "noreferrer" : undefined}
-                  className="inline rounded-sm text-primary underline decoration-primary/35 underline-offset-2 hover:decoration-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                  aria-expanded={expanded}
-                  aria-controls={`${citationKey}-detail`}
-                  title={`查看 ${label} 的來源證據`}
-                  data-testid={`inline-citation-${stableId.replace(/[^A-Za-z0-9_-]+/gu, "-")}`}
-                  onClick={() => onToggle(citationKey, citation)}
-                >
-                  {label}
-                </a>
-              </span>
-            );
-          })}）
+      {citations.length > 0 && firstCitation ? (
+        <span className="citation-cluster ml-1 whitespace-nowrap text-[0.88em] font-semibold text-muted-foreground" aria-label={`資料來源 ${readerLabel}`} data-citation-display-mode={displayMode}>
+          <a
+            href={firstCitation.anchorId ? `#${firstCitation.anchorId}` : "#preview-report-references"}
+            className="rounded-sm text-inherit no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            title={`資料來源 ${readerLabel}`}
+          >
+            {readerMarker}
+          </a>
         </span>
       ) : null}
       <span>{punctuation}</span>
@@ -179,11 +191,13 @@ function InlineCitationText({
 
 function InlineCitationSegments({
   segments,
+  displayMode,
   citationKeyPrefix,
   activeCitationKey,
   onToggle,
 }: {
   segments: Array<{ text: string; citations: DetailedReportCitation[] }>;
+  displayMode: "compact" | "academic";
   citationKeyPrefix: string;
   activeCitationKey: string | null;
   onToggle: (citationKey: string, citation: DetailedReportCitation) => void;
@@ -193,6 +207,7 @@ function InlineCitationSegments({
       key={`${citationKeyPrefix}-segment-${index}`}
       text={segment.text}
       citations={segment.citations}
+      displayMode={displayMode}
       citationKeyPrefix={`${citationKeyPrefix}-segment-${index}`}
       activeCitationKey={activeCitationKey}
       onToggle={onToggle}
@@ -281,7 +296,13 @@ function FormalFigurePreview({ figure }: { figure: FigureSpec }) {
       {semantic.panels.map((panel) => (
         <div key={panel.datumKey} className="rounded border border-border bg-muted/10 p-3">
           <div className="flex items-start justify-between gap-2 text-xs"><strong>{panel.label}</strong><span className="tabular-nums">{panel.value}%</span></div>
-          <div className="my-2 h-3 overflow-hidden bg-muted"><span className="block h-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, panel.value))}%` }} /></div>
+          <div className="relative my-4 h-px bg-border" aria-label={`0 至 100%，點估計 ${panel.value}%`}>
+            <span className="absolute -top-1.5 h-3 w-3 -translate-x-1/2 rounded-full border-2 border-background bg-primary" style={{ left: `${Math.max(0, Math.min(100, panel.value))}%` }} />
+            <span className="absolute top-2 left-0 text-[9px] text-muted-foreground">0</span>
+            <span className="absolute top-2 left-1/2 -translate-x-1/2 text-[9px] text-muted-foreground">50</span>
+            <span className="absolute top-2 right-0 text-[9px] text-muted-foreground">100%</span>
+          </div>
+          <div className="h-3" />
           <p className="text-[11px] leading-5 text-muted-foreground">{panel.metric}｜{panel.sampleDefinition}</p>
         </div>
       ))}
@@ -353,13 +374,15 @@ function FormalFigurePreview({ figure }: { figure: FigureSpec }) {
       </table>
     </div>
   ) : (
-    <div className="space-y-2 rounded-md border border-border p-3">
-      {data.edges.map((edge, index) => {
-        const from = data.nodes.find((node) => node.id === edge.from)?.label ?? edge.from;
-        const to = data.nodes.find((node) => node.id === edge.to)?.label ?? edge.to;
-        return <div key={`${edge.from}-${edge.to}-${index}`} className="grid grid-cols-[1fr_24px_1fr] items-center gap-2 text-center text-xs"><span className="rounded border border-border bg-muted/30 p-2">{from}</span><strong>→</strong><span className="rounded border border-border bg-muted/30 p-2">{to}</span>{edge.label ? <small className="col-span-3 text-muted-foreground">{edge.label}</small> : null}</div>;
-      })}
-    </div>
+    <ol className="grid list-none gap-3 rounded-md border border-border p-3 sm:grid-cols-2 lg:grid-cols-4">
+      {data.nodes.map((node, index) => (
+        <li key={node.id} className="relative border-t-2 border-primary bg-muted/20 px-3 py-3 text-xs leading-5">
+          <span className="mb-1 block text-[10px] font-semibold tracking-[0.12em] text-amber-700">{String(index + 1).padStart(2, "0")}</span>
+          <strong className="font-medium">{node.label}</strong>
+          {index < data.nodes.length - 1 ? <span className="absolute -right-2.5 top-1/2 hidden -translate-y-1/2 text-primary lg:block">→</span> : null}
+        </li>
+      ))}
+    </ol>
   );
   return (
     <figure className="mt-4" aria-label={figure.altText} data-testid={`formal-figure-${figure.number}`}>
@@ -700,6 +723,12 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
     applyDetailedReportSummary(initialWorkspace),
   );
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [regenerationStage, setRegenerationStage] = useState<
+    "idle" | "rebuilding" | "drafting" | "saving" | "completed" | "failed"
+  >("idle");
+  const [regenerationFailedStage, setRegenerationFailedStage] = useState<
+    "rebuilding" | "drafting" | "saving" | null
+  >(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [activeSectionId, setActiveSectionId] = useState(
     initialWorkspace.draft.sections.find((section) => section.sectionId !== "title")?.sectionId ??
@@ -711,6 +740,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
     key: string;
     citation: DetailedReportCitation;
   } | null>(null);
+  const citationDisplayMode = workspace.input.citationDisplayMode ?? "compact";
   const category = useMemo(
     () => detectTopicCategory(workspace.input.topic, workspace.input.reportType, workspace.input.purpose),
     [workspace.input.purpose, workspace.input.reportType, workspace.input.topic],
@@ -728,13 +758,20 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
   const citationExportBlocked = exportWarnings.some(
     (warning) => warning.code === "citation-integrity-blocked",
   );
+  const exportAuditSections = formalReportDocument
+    ? formalReportSectionSequence(formalReportDocument).map((section) => ({
+        sectionId: section.id,
+        title: section.title,
+        body: section.blocks.map((block) => block.text).join("\n\n"),
+      }))
+    : workspace.draft.sections;
   const exportBlockReasons = formalExportBlockReasons({
     citationExportBlocked,
     sectionRequiresReview: formalReportDocument
       ? formalReportDocument.integrity.status !== "pass"
       : workspace.draft.sections.some(sectionRequiresExportReview),
     diagnostics: workspace.llmDiagnostics,
-    sections: workspace.draft.sections,
+    sections: exportAuditSections,
     reportPlan: workspace.generationPayload.reportPlan ?? null,
   });
   const formalExportBlocked = exportBlockReasons.length > 0;
@@ -937,7 +974,10 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
   };
 
   const handleRegenerate = async () => {
+    let activeStage: "rebuilding" | "drafting" | "saving" = "rebuilding";
     setIsRegenerating(true);
+    setRegenerationStage("rebuilding");
+    setRegenerationFailedStage(null);
     try {
       const recoveredEvidenceCards = recoverReportEvidenceCards(workspace);
       const rebuiltWorkspace = regenerateReportWorkspace({
@@ -951,6 +991,8 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
       saveReportWorkspace(rebuiltWorkspace);
       setWorkspace(rebuiltWorkspace);
 
+      activeStage = "drafting";
+      setRegenerationStage(activeStage);
       const llmDraft = await requestLlmReportDraft({
         reportInput: rebuiltWorkspace.input,
         workflowId: rebuiltWorkspace.workflowId,
@@ -978,8 +1020,11 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
         updatedAt: new Date().toISOString(),
       };
 
+      activeStage = "saving";
+      setRegenerationStage(activeStage);
       saveReportWorkspace(mergedWorkspace);
       setWorkspace(mergedWorkspace);
+      setRegenerationStage("completed");
       const regenerationStatus = previewLlmStatus(llmDraft);
       toast(
         regenerationStatus.kind === "complete"
@@ -998,6 +1043,8 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
             },
       );
     } catch {
+      setRegenerationFailedStage(activeStage);
+      setRegenerationStage("failed");
       toast({
         title: "重新生成失敗",
         description: "請稍後再試一次。",
@@ -1133,13 +1180,46 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
           </div>
         </section>
 
-        {isRegenerating && (
-          <section className="mb-4 rounded-lg border border-border bg-card p-4" data-testid="preview-generation-progress">
-            <div className="mb-2 flex items-center justify-between gap-2 text-sm">
-              <span className="font-medium text-foreground">正在更新工作區</span>
-              <span className="text-muted-foreground">大綱與草稿</span>
+        {regenerationStage !== "idle" && (
+          <section
+            className="mb-4 rounded-lg border border-border bg-card p-4"
+            data-testid="preview-generation-progress"
+            aria-live="polite"
+          >
+            <div className="mb-3 flex items-center justify-between gap-2 text-sm">
+              <span className="font-medium text-foreground">重新生成階段</span>
+              <Badge variant={regenerationStage === "failed" ? "destructive" : regenerationStage === "completed" ? "secondary" : "outline"}>
+                {regenerationStage === "completed" ? "已完成" : regenerationStage === "failed" ? "失敗" : "執行中"}
+              </Badge>
             </div>
-            <Progress value={76} />
+            <ol className="grid gap-2 sm:grid-cols-3">
+              {([
+                ["rebuilding", "重建 Evidence Card 與工作區"],
+                ["drafting", "呼叫現有 Report Writer"],
+                ["saving", "驗證並保存報告"],
+              ] as const).map(([stage, label], index, all) => {
+                const currentIndex = all.findIndex(([item]) =>
+                  item === (regenerationStage === "failed" ? regenerationFailedStage : regenerationStage),
+                );
+                const completed = regenerationStage === "completed" || currentIndex > index;
+                const running = stage === regenerationStage;
+                const failed = regenerationStage === "failed" && index === currentIndex;
+                return (
+                  <li key={stage} className="flex items-start gap-2 rounded-md border border-border bg-muted/15 px-3 py-2.5 text-sm">
+                    {completed ? (
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
+                    ) : running ? (
+                      <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-primary motion-reduce:animate-none" />
+                    ) : failed ? (
+                      <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                    ) : (
+                      <span className="mt-0.5 block h-4 w-4 shrink-0 rounded-full border border-border" />
+                    )}
+                    <span className="leading-5 text-foreground">{label}</span>
+                  </li>
+                );
+              })}
+            </ol>
           </section>
         )}
 
@@ -1193,7 +1273,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
               </a>
             ))}
             {readerReferences.length > 0 ? (
-              <a className="rounded-md px-3 py-2 text-muted-foreground hover:bg-muted hover:text-foreground" href="#preview-report-references">參考文獻</a>
+              <a className="rounded-md px-3 py-2 text-muted-foreground hover:bg-muted hover:text-foreground" href="#preview-report-references">資料來源</a>
             ) : null}
             <a className="rounded-md px-3 py-2 text-muted-foreground hover:bg-muted hover:text-foreground" href="#preview-export-actions">匯出</a>
           </div>
@@ -1270,6 +1350,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                             {node.citationSegments?.length ? (
                               <InlineCitationSegments
                                 segments={node.citationSegments}
+                                displayMode={citationDisplayMode}
                                 citationKeyPrefix={citationPrefix}
                                 activeCitationKey={activeInlineCitation?.key ?? null}
                                 onToggle={(key, citation) =>
@@ -1282,6 +1363,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                               <InlineCitationText
                                 text={node.text}
                                 citations={node.citations}
+                                displayMode={citationDisplayMode}
                                 citationKeyPrefix={citationPrefix}
                                 activeCitationKey={activeInlineCitation?.key ?? null}
                                 onToggle={(key, citation) =>
@@ -1335,6 +1417,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                                 <InlineCitationText
                                   text={body}
                                   citations={subsection.citationGroups?.[bodyIndex] ?? paragraph.citations}
+                                  displayMode={citationDisplayMode}
                                   citationKeyPrefix={`${paragraph.id}-${subsection.sectionId}-${bodyIndex}`}
                                   activeCitationKey={activeInlineCitation?.key ?? null}
                                   onToggle={(key, citation) =>
@@ -1371,6 +1454,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                     <InlineCitationText
                       text={paragraph.body || "此段尚待重新生成。"}
                       citations={paragraph.citations}
+                      displayMode={citationDisplayMode}
                       citationKeyPrefix={`${paragraph.id}-body`}
                       activeCitationKey={activeInlineCitation?.key ?? null}
                       onToggle={(key, citation) =>
@@ -1404,7 +1488,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                 className="scroll-mt-32 rounded-md border border-border bg-background px-4 py-4 sm:px-5"
                 data-testid="preview-report-references"
               >
-                <h3 className="text-base font-semibold leading-6 text-foreground">參考文獻</h3>
+                <h3 className="text-base font-semibold leading-6 text-foreground">資料來源</h3>
                 <div className="mt-4 space-y-3 text-sm leading-7 text-foreground/90">
                   {readerReferences.map((reference) => (
                     <p
@@ -1412,6 +1496,7 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                       key={reference.citationId}
                       style={{ paddingLeft: "2em", textIndent: "-2em" }}
                     >
+                      <span className="mr-2 font-semibold text-muted-foreground">{reference.referenceNumber}.</span>
                       {reference.externalHref ? (
                         <a
                           href={reference.externalHref}
@@ -1429,9 +1514,6 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
             ) : null}
           </div>
         </section>
-
-        {false ? (
-          <>
 
         <section className="mb-5 rounded-lg border border-border bg-card p-4 shadow-sm sm:p-5" data-testid="preview-quality-report">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -1533,15 +1615,15 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                   <BookOpen className="h-4 w-4 text-primary" />
                   <h2 className="text-base font-semibold text-foreground">生成草稿</h2>
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">左側查看本段落由哪些來源語句構成，中間直接改字，右側對照整體骨架。</p>
+                <p className="mt-1 text-xs text-muted-foreground">左側瀏覽章節計畫，中間直接編修報告，右側核對目前段落的 Evidence Card 與來源。</p>
               </div>
               <Badge variant="outline">{workspace.draft.sections.length} 段</Badge>
             </div>
             <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(260px,0.9fr)_minmax(0,1.45fr)_minmax(230px,0.8fr)] xl:items-start">
-              <aside className="order-2 space-y-3 xl:order-1">
+              <aside className="order-3 space-y-3 xl:order-3">
                 <div className="flex items-center gap-2">
                   <FileText className="h-4 w-4 text-primary" />
-                  <h3 className="text-sm font-semibold text-foreground">段落依據</h3>
+                  <h3 className="text-sm font-semibold text-foreground">證據與來源</h3>
                 </div>
                 <div className="rounded-md border border-border bg-background px-3 py-3">
                   <p className="text-sm font-semibold text-foreground">{activeSection?.title ?? "尚未選取段落"}</p>
@@ -1725,10 +1807,10 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
                 })}
               </div>
 
-              <aside className="order-3 space-y-3 xl:order-3">
+              <aside className="order-2 space-y-3 xl:order-1">
                 <div className="flex items-center gap-2">
                   <Shapes className="h-4 w-4 text-primary" />
-                  <h3 className="text-sm font-semibold text-foreground">整體骨架</h3>
+                  <h3 className="text-sm font-semibold text-foreground">章節計畫</h3>
                 </div>
                 <div className="space-y-2.5">
                   {workspace.outline.sections.map((section) => {
@@ -1952,8 +2034,6 @@ function ReportPreviewContent({ initialWorkspace }: { initialWorkspace: ReportWo
             </section>
           </div>
         </div>
-          </>
-        ) : null}
       </main>
     </div>
   );

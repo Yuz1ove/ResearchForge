@@ -32,6 +32,12 @@ export interface PreviewLlmStatusDiagnostics extends PreviewLlmReasonDiagnostics
   evidenceSetHash?: string;
   writerEvidenceSetHash?: string;
   filteredAfterPlanCount?: number;
+  formalResearchValidation?: unknown;
+  formalResearchCheckpoint?: {
+    contentIntegrityValidated?: boolean;
+    resumeFrom?: "source_relevance_review" | "writer_generation" | "validation" | "export";
+    safeToResume?: boolean;
+  };
 }
 
 export interface PreviewLlmStatus {
@@ -118,7 +124,27 @@ export function formalExportBlockReasons(
       }
     }
   }
-  if (!diagnostics) return reasons;
+  if (!diagnostics) {
+    reasons.push("缺少正式研究生成與驗證診斷。");
+    return [...new Set(reasons)];
+  }
+  const formalValidation = diagnostics.formalResearchValidation;
+  const formalValidationPassed =
+    formalValidation !== null &&
+    typeof formalValidation === "object" &&
+    (formalValidation as { pass?: unknown }).pass === true;
+  if (!formalValidationPassed) {
+    reasons.push("正式研究 formal validation 尚未通過。");
+  }
+  if (diagnostics.formalResearchCheckpoint?.contentIntegrityValidated !== true) {
+    reasons.push("正式研究 content-integrity checkpoint 尚未驗證。");
+  }
+  if (
+    diagnostics.formalResearchCheckpoint?.resumeFrom !== "export" ||
+    diagnostics.formalResearchCheckpoint?.safeToResume !== true
+  ) {
+    reasons.push("正式研究 checkpoint 尚未到達可安全匯出狀態。");
+  }
   if (diagnostics.writerDiagnostics?.postEditValidation?.status === "blocked") {
     reasons.push("正文 post-edit 驗證未通過，正式輸出已阻擋。");
   }

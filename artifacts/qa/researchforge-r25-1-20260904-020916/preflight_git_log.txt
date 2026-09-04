@@ -1,0 +1,8 @@
+a89549a feat: upgrade ResearchForge report intelligence
+2c2afc0 fix: filter irrelevant paper search results
+42502f6 perf: show more papers before progressive AI summaries
+912babd feat: add direct paper search and summary workflow
+8084334 fix: localize grounding error states
+60daa45 fix: configure preview frontend build output
+3922d4a fix: make research grounding jobs durable on Vercel
+f275f64 fix: use ESM Vercel API wrapper

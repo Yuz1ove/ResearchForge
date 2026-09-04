@@ -35,7 +35,8 @@ export type LlmServiceOperation =
   | "topic_expansion"
   | "source_summary"
   | "claim_extraction"
-  | "report_generation";
+  | "report_generation"
+  | "claim_verification";
 
 export interface RequestLlmTextOptions {
   operation: LlmServiceOperation;
@@ -44,6 +45,7 @@ export interface RequestLlmTextOptions {
   messages: OpenAICompatibleMessage[];
   temperature?: number;
   maxTokens?: number;
+  reasoningEffort?: ChatCompletionRequest["reasoningEffort"];
   responseFormat?: ChatCompletionRequest["responseFormat"];
   llm?: Partial<OpenAICompatibleLlmConfig>;
   fetchImpl?: ChatCompletionRequest["fetchImpl"];
@@ -199,6 +201,9 @@ export function statusFromLlmError(error: unknown): LlmStructuredStatus {
     error.code === "model-missing" ||
     error.code === "provider-timeout" ||
     error.code === "provider-quota" ||
+    error.code === "provider-auth" ||
+    error.code === "provider-rate-limit" ||
+    error.code === "provider-empty-output" ||
     error.code === "provider-failure"
   ) {
     return "unavailable";
@@ -285,6 +290,7 @@ export async function requestLlmText(
     messages: options.messages,
     temperature: options.temperature,
     maxTokens: options.maxTokens,
+    reasoningEffort: options.reasoningEffort,
     responseFormat: options.responseFormat,
     llm: options.llm,
     fetchImpl: options.fetchImpl,

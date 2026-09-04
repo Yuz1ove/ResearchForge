@@ -72,10 +72,12 @@ const SECTION_FIT_ALIASES: Record<string, CanonicalReportSectionId[]> = {
 };
 
 const REPORT_SECTION_ID_ALIASES: Record<string, CanonicalReportSectionId> = {
+  executive_summary: "abstract",
   summary: "abstract",
   摘要: "abstract",
   intro: "introduction",
   background: "introduction",
+  evidence_overview: "literature_review",
   研究背景: "introduction",
   背景: "introduction",
   導論: "introduction",
@@ -105,8 +107,10 @@ const REPORT_SECTION_ID_ALIASES: Record<string, CanonicalReportSectionId> = {
   主要发现: "findings",
   討論: "discussion",
   讨论: "discussion",
+  cross_study_synthesis: "discussion",
   限制: "limitations",
   研究限制: "limitations",
+  limitations_gaps: "limitations",
   結論: "conclusion",
   结论: "conclusion",
 };

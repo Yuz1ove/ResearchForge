@@ -32,7 +32,9 @@ export type EvidenceVisualPurpose =
   | "odds_ratio_forest"
   | "correlation_structure"
   | "statistical_mediation_path"
-  | "population_applicability_boundary";
+  | "population_applicability_boundary"
+  | "study_design_distribution"
+  | "publication_timeline";
 
 export type EvidenceVisualClaimMode =
   | "evidence_synthesis"
@@ -116,6 +118,45 @@ export interface BuildEvidenceVisualsInput {
   standardizedFacts?: StandardizedEvidenceFact[];
   startNumber?: number;
   maxVisuals?: number;
+}
+
+export interface AcademicFigureEligibilityDecision {
+  candidateId: string;
+  evidenceClass:
+    | "single_study_single_metric"
+    | "multi_study_comparable_metric"
+    | "heterogeneous_outcomes"
+    | "study_characteristic_distribution"
+    | "publication_timeline";
+  status: "APPROVED" | "FIGURE_NOT_SUPPORTED_BY_AVAILABLE_EVIDENCE";
+  recommendedRepresentation:
+    | "point_or_interval_plot"
+    | "compact_evidence_statistic_or_table"
+    | "evidence_map_or_structured_table"
+    | "categorical_distribution"
+    | "publication_timeline";
+  sourceIds: string[];
+  evidenceIds: string[];
+  metric: string | null;
+  unit: string | null;
+  comparabilityStatus: "comparable" | "not_comparable" | "not_applicable";
+  poolingStatus: "not_performed";
+  reason: string;
+}
+
+export interface FigureGroundingManifestRecord {
+  figure_id: string;
+  figure_type: string;
+  source_ids: string[];
+  evidence_card_ids: string[];
+  metric: string | null;
+  unit: string | null;
+  n: number[] | null;
+  denominator: string | null;
+  transform_applied: string[];
+  comparability_status: string;
+  pooling_status: "not_performed";
+  caveat: string | null;
 }
 
 interface FactorProfile {
@@ -1299,7 +1340,7 @@ function buildSleepEvidenceCoverageVisual(
         },
       ],
     },
-    sourceNote: "依題名、結構化主暴露／結果欄位與 canonical facts 的明確概念分類，按來源身分去重；不使用主題導向摘要來改寫來源層級暴露。",
+    sourceNote: "依題名、結構化主暴露／結果欄位與可核對研究內容的明確概念分類，按來源身分去重；不使用主題導向摘要來改寫來源層級暴露。",
     note: "一般社群媒體研究可補充睡眠關聯脈絡，但不因摘要列出 TikTok 就計為短影音來源；回顧、非睡眠結果與大學生研究也不會被計入高中生短影音直接睡眠證據。",
     altText: `三個核心構面的來源覆蓋，以及同時涵蓋高中或中學、短影音或 TikTok 與睡眠結果的直接來源共 ${intersection.length} 筆。`,
     visualId: "evidence-visual-sleep-evidence-coverage",
@@ -1440,7 +1481,7 @@ function buildPrevalenceFacetsVisual(
         ],
       })),
     },
-    sourceNote: "每一比例均取自 standardized evidence fact 的 exactResult 數值，並保留來源、樣本與睡眠判定語境。",
+    sourceNote: "每一比例均取自可核對的標準化研究數值，並保留來源、樣本與睡眠判定語境。",
     note: warning,
     altText: `分開呈現 ${panels.map((panel) => `${panel.result.value}%`).join(" 與 ")} 的睡眠比例；兩者樣本與判定方式不同，不能直接比較高低。`,
     visualId: "evidence-visual-sleep-prevalence-facets",
@@ -1887,7 +1928,7 @@ function buildSleepApplicabilityBoundaryVisual(
         ],
       })),
     },
-    sourceNote: "只依題名、結構化主暴露與 canonical facts 明示的研究對象、睡眠／非睡眠結果分層，按來源去重；不採用主題導向摘要的回響詞分類。",
+    sourceNote: "只依題名、結構化主暴露與可核對研究內容明示的研究對象、睡眠／非睡眠結果分層，按來源去重；不採用主題導向摘要的回響詞分類。",
     note: "TikTok 使用不等於短影音成癮；以一般社群媒體為主暴露的中學生睡眠研究可作直接睡眠脈絡，但不計入短影音來源；一般社群媒體回顧只作背景。大學生與高中生、睡眠與憂鬱等結果也不能互換。",
     altText: "將納入來源分為高中或中學生短影音直接睡眠證據、大學生機制參照、青少年短影音但非睡眠結果、一般社群媒體的直接睡眠脈絡，以及一般社群媒體回顧背景，並標示各層不可外推之處。",
     visualId: "evidence-visual-sleep-applicability-boundary",
@@ -1964,6 +2005,345 @@ function genericSampleDefinition(
   return `${population}${size}；${measure}`;
 }
 
+type StudyDesignCategory = {
+  key: string;
+  label: string;
+  boundary: string;
+};
+
+const STUDY_DESIGN_CATEGORIES: Array<StudyDesignCategory & { pattern: RegExp }> = [
+  {
+    key: "evidence-synthesis",
+    label: "系統性回顧／統合分析",
+    boundary: "整合既有研究；不等同新的原始樣本",
+    pattern: /(?:systematic\s+review|meta[- ]?analysis|系統性回顧|統合分析)/iu,
+  },
+  {
+    key: "intervention",
+    label: "介入／隨機試驗",
+    boundary: "可評估介入；仍依隨訪、執行與偏差解讀",
+    pattern: /(?:randomi[sz]ed|controlled\s+trial|intervention|experiment|隨機|介入|實驗)/iu,
+  },
+  {
+    key: "longitudinal",
+    label: "縱貫／世代研究",
+    boundary: "有時間序列；不自動排除殘餘混雜",
+    pattern: /(?:longitudinal|prospective|retrospective|cohort|縱貫|前瞻|回溯|世代)/iu,
+  },
+  {
+    key: "cross-sectional",
+    label: "橫斷式研究",
+    boundary: "描述同時點關聯；不建立時間先後或因果",
+    pattern: /(?:cross[- ]?sectional|橫斷)/iu,
+  },
+  {
+    key: "qualitative",
+    label: "質性研究",
+    boundary: "支持經驗與脈絡理解；不作效果量估計",
+    pattern: /(?:qualitative|interview|focus\s+group|質性|訪談|焦點團體)/iu,
+  },
+  {
+    key: "observational-other",
+    label: "其他觀察性研究",
+    boundary: "保留原研究設計標示；不提升為因果證據",
+    pattern: /(?:observational|survey|case[- ]?control|ecological|觀察|調查|病例對照|生態)/iu,
+  },
+];
+
+function classifyStudyDesign(value: string, hasStructuredDesign: boolean): StudyDesignCategory {
+  const matched = STUDY_DESIGN_CATEGORIES.find((category) => category.pattern.test(value));
+  if (matched) return matched;
+  if (hasStructuredDesign) return {
+    key: "other-explicit",
+    label: "其他明示研究設計",
+    boundary: "依來源明示文字保留；不推定未記載的方法細節",
+  };
+  return {
+    key: "not-explicit",
+    label: "未明示／不可判定",
+    boundary: "結構化欄位與題名未明示設計；不由結果或作者自行推定",
+  };
+}
+
+function buildStudyDesignDistributionVisual(input: BuildEvidenceVisualsInput): EvidenceVisualSpec | null {
+  const cardsBySource = new Map<string, EvidenceCard[]>();
+  input.evidenceCards.filter(cardIsUsable).forEach((card) => {
+    const sourceId = compact(card.sourceId);
+    cardsBySource.set(sourceId, [...(cardsBySource.get(sourceId) ?? []), card]);
+  });
+  if (cardsBySource.size < 2) return null;
+
+  const factsBySource = new Map<string, StandardizedEvidenceFact[]>();
+  (input.standardizedFacts ?? []).forEach((fact) => {
+    const sourceId = compact(fact.sourceId);
+    factsBySource.set(sourceId, [...(factsBySource.get(sourceId) ?? []), fact]);
+  });
+  const sourceById = new Map((input.sources ?? []).map((source) => [compact(source.id), source] as const));
+
+  const categorySources = new Map<string, {
+    category: StudyDesignCategory;
+    sourceIds: string[];
+    evidenceIds: string[];
+  }>();
+  for (const [sourceId, cards] of cardsBySource) {
+    const facts = factsBySource.get(sourceId) ?? [];
+    const structuredDesign = unique([
+      ...cards.map((card) => compact(card.studyDesign)),
+      ...facts.flatMap((fact) => [compact(fact.studyDesign), compact(fact.design), compact(fact.method)]),
+    ]).join("；");
+    const title = compact(sourceById.get(sourceId)?.title) || compact(cards[0]?.sourceTitle);
+    const category = classifyStudyDesign(`${structuredDesign} ${title}`, Boolean(structuredDesign));
+    const current = categorySources.get(category.key) ?? { category, sourceIds: [], evidenceIds: [] };
+    current.sourceIds.push(sourceId);
+    current.evidenceIds.push(...cards.map(evidenceId), ...facts.map((fact) => fact.evidenceId));
+    categorySources.set(category.key, current);
+  }
+  const groups = [...categorySources.values()].sort((left, right) =>
+    right.sourceIds.length - left.sourceIds.length || left.category.label.localeCompare(right.category.label),
+  );
+  const dataPoints: EvidenceVisualDatumProvenance[] = groups.map((group) => ({
+    datumKey: `study-design-${group.category.key}`,
+    displayValue: String(group.sourceIds.length),
+    metric: group.category.label,
+    unit: "去重來源數",
+    evidenceIds: unique(group.evidenceIds),
+    sourceIds: unique(group.sourceIds),
+    factIds: [],
+    numericalResultIds: [],
+    sourceField: "derived_coverage_count",
+    exactText: null,
+    locator: null,
+    derivation: "先按穩定來源身分去重；再依結構化證據紀錄的明示研究設計或來源題名中的明示設計詞歸入互斥類別；其餘保留為不可判定。",
+  }));
+
+  return {
+    specType: "figure",
+    number: 0,
+    figureType: "evidence_gap_matrix",
+    title: "納入證據的研究設計分布與推論邊界",
+    units: "去重來源數",
+    legend: [
+      { key: "研究設計", label: "只採用結構化證據紀錄或來源題名中的明示設計" },
+      { key: "推論邊界", label: "類別數量不是效果量或品質排名" },
+    ],
+    data: {
+      kind: "matrix",
+      columns: ["來源數", "推論邊界"],
+      rows: groups.map((group) => ({
+        label: group.category.label,
+        values: [String(group.sourceIds.length), group.category.boundary],
+      })),
+    },
+    sourceNote: "依結構化證據紀錄的明示研究設計或來源題名中的明示設計詞，先按穩定來源身分去重再分類；未明示者保留為不可判定，未合併研究結果。",
+    note: "此證據圖描述納入文獻的設計組成，不比較效果大小、不代表證據品質排名，也不執行 pooled estimate。",
+    altText: groups.map((group) => `${group.category.label} ${group.sourceIds.length} 筆來源`).join("；") + "。各列僅描述研究設計分布。",
+    visualId: "evidence-visual-study-design-distribution",
+    visualType: "study_design_distribution",
+    renderMode: "deterministic",
+    claimMode: "evidence_synthesis",
+    preferredSectionId: "scope-and-method",
+    provenance: {
+      origin: "structured_evidence",
+      evidenceIds: unique(dataPoints.flatMap((point) => point.evidenceIds)),
+      sourceIds: unique(dataPoints.flatMap((point) => point.sourceIds)),
+      dataPoints,
+    },
+    comparabilityWarning: "研究設計類別不可視為效果量或品質排名；未進行任何合併估計。",
+  };
+}
+
+function buildPublicationTimelineVisual(input: BuildEvidenceVisualsInput): EvidenceVisualSpec | null {
+  const datedSources = (input.sources ?? []).filter((source) => source.year != null);
+  if (datedSources.length < 2) return null;
+  const evidenceIdsBySource = new Map<string, string[]>();
+  for (const card of input.evidenceCards) {
+    const sourceId = compact(card.sourceId);
+    evidenceIdsBySource.set(sourceId, unique([
+      ...(evidenceIdsBySource.get(sourceId) ?? []),
+      evidenceId(card),
+    ]));
+  }
+  const traceableDatedSources = datedSources.filter((source) =>
+    (evidenceIdsBySource.get(compact(source.id)) ?? []).length > 0
+  );
+  if (traceableDatedSources.length < 2) return null;
+  const byYear = new Map<number, SourceRecord[]>();
+  for (const source of traceableDatedSources) {
+    byYear.set(source.year!, [...(byYear.get(source.year!) ?? []), source]);
+  }
+  const groups = [...byYear.entries()].sort(([left], [right]) => left - right);
+  const dataPoints: EvidenceVisualDatumProvenance[] = groups.map(([year, sources]) => ({
+    datumKey: `publication-year-${year}`,
+    displayValue: String(sources.length),
+    metric: String(year),
+    unit: "去重來源數",
+    evidenceIds: unique(sources.flatMap((source) =>
+      evidenceIdsBySource.get(compact(source.id)) ?? []
+    )),
+    sourceIds: unique(sources.map((source) => source.id)),
+    factIds: [],
+    numericalResultIds: [],
+    sourceField: "derived_coverage_count",
+    exactText: null,
+    locator: null,
+    derivation: "依 accepted source 的明示出版年分組，並以穩定來源身分去重；未把出版年解讀成結果趨勢。",
+  }));
+  return {
+    specType: "figure",
+    number: 0,
+    figureType: "evidence_gap_matrix",
+    title: "納入來源的出版年份分布",
+    units: "去重來源數",
+    legend: [
+      { key: "出版年", label: "來源明示的出版年份" },
+      { key: "來源數", label: "按穩定來源身分去重後的筆數" },
+    ],
+    data: {
+      kind: "matrix",
+      columns: ["來源數", "解讀邊界"],
+      rows: groups.map(([year, sources]) => ({
+        label: String(year),
+        values: [String(sources.length), "文獻組成描述；不是效果或研究品質趨勢"],
+      })),
+    },
+    sourceNote: "依 accepted sources 的明示出版年分組並去重；未使用推定年份，未合併研究結果。",
+    note: "此圖只描述可審查來源的年份覆蓋，不代表效果隨時間改變，也不代表研究品質排名。",
+    altText: groups.map(([year, sources]) => `${year} 年 ${sources.length} 筆來源`).join("；") + "。",
+    visualId: "evidence-visual-publication-timeline",
+    visualType: "publication_timeline",
+    renderMode: "deterministic",
+    claimMode: "research_design",
+    preferredSectionId: "scope-and-method",
+    provenance: {
+      origin: "structured_evidence",
+      evidenceIds: unique(dataPoints.flatMap((point) => point.evidenceIds)),
+      sourceIds: unique(traceableDatedSources.map((source) => source.id)),
+      dataPoints,
+    },
+    comparabilityWarning: "出版年分布不可視為研究結果、效果量或品質趨勢。",
+  };
+}
+
+function normalizedMetricKey(result: StandardizedNumericalResult): string {
+  return `${compact(result.metric).toLocaleLowerCase()}\u0000${compact(result.unit).toLocaleLowerCase()}`;
+}
+
+function comparableMultiStudyGroups(
+  results: StandardizedNumericalResult[],
+): StandardizedNumericalResult[][] {
+  const groups = new Map<string, StandardizedNumericalResult[]>();
+  for (const result of results) {
+    const key = normalizedMetricKey(result);
+    groups.set(key, [...(groups.get(key) ?? []), result]);
+  }
+  return [...groups.values()]
+    .filter((group) => new Set(group.map((result) => result.sourceId)).size >= 2)
+    .sort((left, right) =>
+      right.length - left.length || normalizedMetricKey(left[0]!).localeCompare(normalizedMetricKey(right[0]!)),
+    );
+}
+
+/**
+ * Records the pre-render decision independently of whether a figure is later
+ * selected for the report. Single-study single metrics fail closed to prose or
+ * a compact table; heterogeneous outcomes never share a quantitative axis.
+ */
+export function academicFigureEligibilityDecisions(
+  input: BuildEvidenceVisualsInput,
+): AcademicFigureEligibilityDecision[] {
+  const facts = input.standardizedFacts ?? [];
+  const results = facts
+    .flatMap((fact) => fact.numericalResults)
+    .filter((result, index, all) => all.findIndex((candidate) => candidate.resultId === result.resultId) === index);
+  const decisions: AcademicFigureEligibilityDecision[] = [];
+  const proportions = results.filter((result) => {
+    const routed = routeVisualStatistic(result);
+    return routed.ok && routed.route.visualType === "proportion_facets";
+  });
+  const comparableProportionGroups = comparableMultiStudyGroups(proportions);
+  if (proportions.length === 1) {
+    const result = proportions[0]!;
+    decisions.push({
+      candidateId: `proportion:${result.resultId}`,
+      evidenceClass: "single_study_single_metric",
+      status: "FIGURE_NOT_SUPPORTED_BY_AVAILABLE_EVIDENCE",
+      recommendedRepresentation: "compact_evidence_statistic_or_table",
+      sourceIds: [result.sourceId],
+      evidenceIds: [result.evidenceId],
+      metric: result.metric,
+      unit: result.unit || null,
+      comparabilityStatus: "not_applicable",
+      poolingStatus: "not_performed",
+      reason: "A single study-level proportion does not justify a large quantitative figure.",
+    });
+  } else if (proportions.length > 1 && comparableProportionGroups.length === 0) {
+    decisions.push({
+      candidateId: "proportion:heterogeneous",
+      evidenceClass: "heterogeneous_outcomes",
+      status: "FIGURE_NOT_SUPPORTED_BY_AVAILABLE_EVIDENCE",
+      recommendedRepresentation: "evidence_map_or_structured_table",
+      sourceIds: unique(proportions.map((result) => result.sourceId)),
+      evidenceIds: unique(proportions.map((result) => result.evidenceId)),
+      metric: null,
+      unit: "%",
+      comparabilityStatus: "not_comparable",
+      poolingStatus: "not_performed",
+      reason: "Percentage values use different metrics or do not span at least two distinct studies.",
+    });
+  } else {
+    comparableProportionGroups.forEach((group, index) => {
+      decisions.push({
+        candidateId: `proportion:comparable:${index + 1}`,
+        evidenceClass: "multi_study_comparable_metric",
+        status: "APPROVED",
+        recommendedRepresentation: "point_or_interval_plot",
+        sourceIds: unique(group.map((result) => result.sourceId)),
+        evidenceIds: unique(group.map((result) => result.evidenceId)),
+        metric: group[0]!.metric,
+        unit: group[0]!.unit || null,
+        comparabilityStatus: "comparable",
+        poolingStatus: "not_performed",
+        reason: "At least two distinct studies report the same normalized metric and unit; values remain unpooled.",
+      });
+    });
+  }
+
+  const studyDesignDistribution = buildStudyDesignDistributionVisual(input);
+  if (studyDesignDistribution) {
+    decisions.push({
+      candidateId: "study-characteristics:design",
+      evidenceClass: "study_characteristic_distribution",
+      status: "APPROVED",
+      recommendedRepresentation: "categorical_distribution",
+      sourceIds: studyDesignDistribution.provenance.sourceIds,
+      evidenceIds: studyDesignDistribution.provenance.evidenceIds,
+      metric: "study_design",
+      unit: "accepted sources",
+      comparabilityStatus: "not_applicable",
+      poolingStatus: "not_performed",
+      reason: "Study-design counts use only explicit structured or title-level design labels, retain unspecified sources as unknown, and are deduplicated by source.",
+    });
+  }
+
+  const datedSources = (input.sources ?? []).filter((source) => source.year != null);
+  if (datedSources.length >= 2) {
+    decisions.push({
+      candidateId: "study-characteristics:publication-year",
+      evidenceClass: "publication_timeline",
+      status: "APPROVED",
+      recommendedRepresentation: "publication_timeline",
+      sourceIds: unique(datedSources.map((source) => source.id)),
+      evidenceIds: [],
+      metric: "publication_year",
+      unit: "accepted sources",
+      comparabilityStatus: "not_applicable",
+      poolingStatus: "not_performed",
+      reason: "This is a corpus publication timeline, not a cohort or outcome trend.",
+    });
+  }
+  return decisions;
+}
+
 /**
  * Topic grammars can add domain-specific coverage and mechanism figures, but
  * reported statistics must not depend on a topic whitelist. This fallback is
@@ -1982,16 +2362,17 @@ function buildGenericStatisticalVisuals(input: BuildEvidenceVisualsInput): Evide
   const candidates: EvidenceVisualSpec[] = [];
 
   const proportions = results.filter((result) => routeKind(result) === "proportion_facets");
-  if (proportions.length > 0) {
+  const comparableProportions = comparableMultiStudyGroups(proportions)[0] ?? [];
+  if (comparableProportions.length > 0) {
     const routed = routeVisualStatisticGroup({
-      results: proportions,
+      results: comparableProportions,
       requestedVisualType: "proportion_facets",
       comparisonMode: "independent_facets",
     });
     if (routed.ok) {
       const labelFor = (result: StandardizedNumericalResult) => genericResultLabel(result, factById);
       const provenance = provenanceFromResults(
-        proportions,
+        comparableProportions,
         labelFor,
         "依 canonical fact 的比例原值建立獨立分面；不合併、不相減，也不依高低排序。",
       );
@@ -2008,7 +2389,7 @@ function buildGenericStatisticalVisuals(input: BuildEvidenceVisualsInput): Evide
         data: {
           kind: "matrix",
           columns: ["0–100% 比例條", "原值", "樣本／定義", "比較規則"],
-          rows: proportions.map((result) => ({
+          rows: comparableProportions.map((result) => ({
             label: labelFor(result),
             values: [
               percentageGlyph(result.value!),
@@ -2018,9 +2399,9 @@ function buildGenericStatisticalVisuals(input: BuildEvidenceVisualsInput): Evide
             ],
           })),
         },
-        sourceNote: "比例取自 canonical standardized facts，並保留逐值來源、fact 與 locator。",
+        sourceNote: "比例取自可核對的標準化研究數值，並保留逐值來源與原文定位。",
         note: "各研究樣本與判定方式可能不同；數值僅供分別理解，不作直接高低比較。",
-        altText: proportions.map((result) => `${labelFor(result)}：${result.value}%`).join("；") + "。各分面不可直接排名。",
+        altText: comparableProportions.map((result) => `${labelFor(result)}：${result.value}%`).join("；") + "。各點不可直接排名，也未進行合併。",
         visualId: "evidence-visual-generic-proportion-facets",
         visualType: "prevalence_facets",
         renderMode: "deterministic",
@@ -2038,7 +2419,7 @@ function buildGenericStatisticalVisuals(input: BuildEvidenceVisualsInput): Evide
           directComparisonAllowed: false,
           rankingAllowed: false,
           poolingAllowed: false,
-          panels: proportions.map((result) => ({
+          panels: comparableProportions.map((result) => ({
             datumKey: `generic-statistic-${result.resultId}`,
             label: labelFor(result),
             value: result.value!,
@@ -2089,7 +2470,7 @@ function buildGenericStatisticalVisuals(input: BuildEvidenceVisualsInput): Evide
             values: [String(result.lowerBound), String(result.value), String(result.upperBound), "1"],
           })),
         },
-        sourceNote: "每列取自 canonical standardized fact 的一個完整 OR 與 95% CI datum。",
+        sourceNote: "每列取自可核對來源中的一組完整勝算比（OR）與 95% 信賴區間。",
         note: "OR 不等於風險百分比；圖中不進行跨研究合併，也不依點估計排序重要性。",
         altText: oddsRatios.map((result) => `${labelFor(result)}：OR ${result.value}，95% CI ${result.lowerBound}–${result.upperBound}`).join("；") + "。基準線為 1。",
         visualId: "evidence-visual-generic-odds-ratio-forest",
@@ -2170,7 +2551,7 @@ function buildGenericStatisticalVisuals(input: BuildEvidenceVisualsInput): Evide
             label: `r = ${result.value}`,
           })),
         },
-        sourceNote: "節點、配對與 r 均由 canonical standardized facts 確定性生成。",
+        sourceNote: "節點、配對與相關係數 r 均由可核對的標準化研究數值生成。",
         note: "相關係數不換算成百分比；未核定量尺方向時，不把正負號翻譯成結果較好或較差。",
         altText: pairedCorrelations.map(({ result, pair }) => `${pair[0]}與${pair[1]}：r = ${result.value}`).join("；") + "。圖示不代表因果。",
         visualId: "evidence-visual-generic-correlation-structure",
@@ -2202,6 +2583,13 @@ function buildGenericStatisticalVisuals(input: BuildEvidenceVisualsInput): Evide
       });
     }
   }
+  // Keep one corpus-level visual available even when candidate statistical
+  // figures later fail exact claim binding. This figure is derived only from
+  // explicit study-design labels, is placed in Methods, and never represents
+  // an effect size or substitutes for a missing result figure.
+  const administrativeVisual = buildStudyDesignDistributionVisual(input) ??
+    buildPublicationTimelineVisual(input);
+  if (administrativeVisual) candidates.unshift(administrativeVisual);
   return candidates;
 }
 
@@ -2243,6 +2631,50 @@ export function buildEvidenceVisuals(input: BuildEvidenceVisualsInput): Evidence
     ...visual,
     number: startNumber + index,
   }));
+}
+
+export function evidenceFigureGroundingManifest(
+  visuals: EvidenceVisualSpec[],
+): FigureGroundingManifestRecord[] {
+  return visuals.map((visual) => {
+    const metrics = unique(visual.provenance.dataPoints.map((point) => point.metric));
+    const units = unique(visual.provenance.dataPoints
+      .map((point) => point.unit)
+      .filter((unit): unit is string => Boolean(unit)));
+    const sampleDefinitions = visual.semanticData?.kind === "proportion_facets"
+      ? visual.semanticData.panels.map((panel) => panel.sampleDefinition)
+      : [];
+    const sampleSizes = unique(sampleDefinitions.flatMap((definition) => {
+      const match = definition.match(/\bn\s*=\s*([0-9][0-9,]*)/iu);
+      return match?.[1] ? [match[1].replace(/,/gu, "")] : [];
+    })).map(Number).filter((value) => Number.isFinite(value));
+    const semantic = visual.semanticData;
+    const comparability = semantic?.kind === "proportion_facets"
+      ? "independent_points_same_metric_no_ranking"
+      : semantic?.kind === "forest_plot"
+        ? "interval_display_no_pooling"
+        : semantic?.kind === "correlation_structure"
+          ? "association_structure_no_percent_conversion"
+          : visual.comparabilityWarning
+            ? "heterogeneous_structured_display"
+            : "not_applicable";
+    return {
+      figure_id: visual.visualId,
+      figure_type: semantic?.kind ?? visual.visualType,
+      source_ids: [...visual.provenance.sourceIds],
+      evidence_card_ids: [...visual.provenance.evidenceIds],
+      metric: metrics.length === 1 ? metrics[0]! : metrics.length > 1 ? metrics.join(" | ") : null,
+      unit: units.length === 1 ? units[0]! : units.length > 1 ? units.join(" | ") : visual.units,
+      n: sampleSizes.length > 0 ? sampleSizes : null,
+      denominator: semantic?.kind === "proportion_facets"
+        ? "Each point uses its source study denominator; no cross-study denominator is constructed."
+        : null,
+      transform_applied: unique(visual.provenance.dataPoints.map((point) => point.derivation)),
+      comparability_status: comparability,
+      pooling_status: "not_performed",
+      caveat: visual.comparabilityWarning ?? visual.note ?? null,
+    };
+  });
 }
 
 export function evidenceVisualsHaveCompleteProvenance(visuals: EvidenceVisualSpec[]): boolean {
@@ -2332,21 +2764,30 @@ export function mainBodyEvidenceVisualIssues(
   if (!(SHORT_VIDEO_PATTERN.test(topic) && SLEEP_PATTERN.test(topic) && SCHOOL_AGE_PATTERN.test(topic))) {
     return [];
   }
-  const required: EvidenceVisualPurpose[] = [
+  const requiredContext: EvidenceVisualPurpose[] = [
     "sleep_evidence_coverage",
-    "prevalence_facets",
-    "odds_ratio_forest",
-    "correlation_structure",
-    "statistical_mediation_path",
     "population_applicability_boundary",
   ];
-  return required.flatMap((visualType) => {
+  const issues = requiredContext.flatMap((visualType) => {
     const visual = visuals.find((candidate) => candidate.visualType === visualType);
     if (!visual) return [`main_body_has_result_visuals:missing:${visualType}`];
     return /appendix/iu.test(visual.preferredSectionId)
       ? [`main_body_has_result_visuals:appendix_only:${visualType}`]
       : [];
   });
+  const resultTypes: EvidenceVisualPurpose[] = [
+    "prevalence_facets",
+    "odds_ratio_forest",
+    "correlation_structure",
+    "statistical_mediation_path",
+  ];
+  const resultVisuals = visuals.filter((visual) => resultTypes.includes(visual.visualType));
+  if (resultVisuals.length === 0) {
+    issues.push("main_body_has_result_visuals:missing:evidence_compatible_result_visual");
+  } else if (resultVisuals.every((visual) => /appendix/iu.test(visual.preferredSectionId))) {
+    issues.push("main_body_has_result_visuals:appendix_only:evidence_compatible_result_visual");
+  }
+  return issues;
 }
 
 export function generatedConceptImageRecordIsTruthful(record: GeneratedConceptImageRecord): boolean {

@@ -66,8 +66,8 @@ test("falls back when LLM provider returns 403", async () => {
   );
 
   assert.equal(result.fallback_used, true);
-  assert.equal(result.llm_status, "quota_exceeded");
-  assert.ok(result.reasoning_notes.some((note) => note.includes("provider-quota")));
+  assert.equal(result.llm_status, "failed");
+  assert.ok(result.reasoning_notes.some((note) => note.includes("provider-auth")));
   assert.ok(result.reasoning_notes.every((note) => !note.includes("sk-")));
 });
 

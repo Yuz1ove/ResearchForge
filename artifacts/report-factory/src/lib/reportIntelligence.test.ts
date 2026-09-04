@@ -225,6 +225,91 @@ test("odds_ratio_not_rendered_as_percentage", () => {
   assert.ok(!result?.readerExplanation.includes("42%"));
 });
 
+test("advanced statistical families retain their required interpretation boundaries", () => {
+  const advanced = [
+    fact("survival", {
+      statisticType: "kaplan_meier_survival_probability",
+      value: 0.72,
+      unit: "proportion",
+      numericalResults: [{
+        rawText: "Kaplan-Meier survival probability at 24 months = 0.72",
+        measure: "24-month event-free survival",
+        value: 0.72,
+        unit: "proportion",
+        statisticType: "kaplan_meier_survival_probability",
+        lowerCI: 0.65,
+        upperCI: 0.79,
+        pValue: null,
+        uncertainty: "95% CI",
+      }],
+    }),
+    fact("multilevel", {
+      statisticType: "mixed_effects_coefficient",
+      value: 0.31,
+      unit: "coefficient",
+      numericalResults: [{
+        rawText: "Mixed-effects coefficient = 0.31 with random school intercept",
+        measure: "school-adjusted learning score",
+        value: 0.31,
+        unit: "coefficient",
+        statisticType: "mixed_effects_coefficient",
+        lowerCI: 0.12,
+        upperCI: 0.5,
+        pValue: 0.002,
+        uncertainty: "95% CI",
+      }],
+    }),
+    fact("posterior", {
+      statisticType: "bayesian_posterior_mean",
+      value: 0.44,
+      unit: "coefficient",
+      numericalResults: [{
+        rawText: "Posterior mean = 0.44, 95% credible interval 0.08 to 0.77",
+        measure: "posterior treatment effect",
+        value: 0.44,
+        unit: "coefficient",
+        statisticType: "bayesian_posterior_mean",
+        lowerCI: 0.08,
+        upperCI: 0.77,
+        pValue: null,
+        uncertainty: "95% credible interval",
+      }],
+    }),
+    fact("network-meta", {
+      statisticType: "network_meta_analysis_odds_ratio",
+      value: 0.81,
+      unit: "ratio",
+      numericalResults: [{
+        rawText: "Network meta-analysis odds ratio = 0.81; SUCRA ranking also reported",
+        measure: "treatment response",
+        value: 0.81,
+        unit: "ratio",
+        statisticType: "network_meta_analysis_odds_ratio",
+        lowerCI: 0.64,
+        upperCI: 1.04,
+        pValue: null,
+        uncertainty: "95% CI",
+      }],
+    }),
+  ];
+
+  const results = buildStatisticalInterpretations({ facts: advanced });
+  assert.deepEqual(results.map((result) => result.statisticType), [
+    "survival_probability",
+    "multilevel_coefficient",
+    "bayesian_posterior",
+    "network_meta_analysis",
+  ]);
+  assert.equal(results[0]?.recommendedVisual, "line_chart");
+  assert.match(results[0]?.warnings.join(" ") ?? "", /風險人數/u);
+  assert.equal(results[1]?.recommendedVisual, "comparison_matrix");
+  assert.match(results[1]?.warnings.join(" ") ?? "", /ICC/u);
+  assert.match(results[2]?.technicalExplanation ?? "", /可信區間/u);
+  assert.match(results[2]?.warnings.join(" ") ?? "", /先驗敏感度/u);
+  assert.equal(results[3]?.recommendedVisual, "comparison_matrix");
+  assert.match(results[3]?.warnings.join(" ") ?? "", /可傳遞性/u);
+});
+
 test("correlation_not_claimed_as_causation", () => {
   const [result] = buildStatisticalInterpretations({ facts: [fact("correlation")] });
   assert.equal(result?.causalInterpretationAllowed, false);

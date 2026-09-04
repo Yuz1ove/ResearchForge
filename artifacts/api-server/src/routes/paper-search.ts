@@ -1,8 +1,5 @@
-import { Router, type IRouter } from "express";
-import {
-  dedupeSourceRecords,
-  type SourceRecord,
-} from "@workspace/api-zod";
+import { Router, type IRouter, type Request } from "express";
+import { dedupeSourceRecords, type SourceRecord } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
 import {
   buildFallbackKeywordExpansion,
@@ -12,6 +9,7 @@ import {
 import {
   searchSourceProviders,
   type SourceProviderSearchResult,
+  type SourceSearchErrorCode,
   type SourceSearchOptions,
 } from "../services/source-retrieval";
 import {
@@ -30,7 +28,11 @@ const MAX_LIMIT = 20;
 const MIN_QUERY_LENGTH = 2;
 const MAX_QUERY_LENGTH = 200;
 const SUMMARY_EXCERPT_LENGTH = 420;
-const EXPANDED_PROVIDERS = ["OpenAlex", "Crossref", "Semantic Scholar"] as const;
+const EXPANDED_PROVIDERS = [
+  "OpenAlex",
+  "Crossref",
+  "Semantic Scholar",
+] as const;
 const FAST_PROVIDERS = ["OpenAlex", "Crossref"] as const;
 const SUMMARY_REQUEST_MAX_PAPERS = 4;
 const MAX_PAPER_ID_LENGTH = 500;
@@ -67,6 +69,14 @@ const GENERIC_EXPANSION_TERMS = new Set([
 
 export type PaperSearchMode = "fast" | "expanded";
 type SummaryMode = "llm" | "mixed" | "fallback" | "none" | "deferred";
+type PaperSearchStatus = "SEARCH_SUCCESS" | "SEARCH_PARTIAL_SUCCESS";
+
+export interface PaperSearchProviderFailure {
+  provider: string;
+  errorCode: SourceSearchErrorCode;
+  retryable: boolean;
+  latencyMs: number | null;
+}
 
 export interface PaperSearchRequest {
   query: string;
@@ -95,12 +105,19 @@ export interface PaperSearchPaper {
 
 export interface PaperSearchResponse {
   ok: true;
+  status: PaperSearchStatus;
+  requestId: string;
   query: string;
   count: number;
   queries: string[];
   papers: PaperSearchPaper[];
   warnings: string[];
   summaryMode: SummaryMode;
+  providersAttempted: string[];
+  providersSucceeded: string[];
+  providerFailures: PaperSearchProviderFailure[];
+  resultsBeforeDedupe: number;
+  resultsAfterDedupe: number;
 }
 
 export interface PaperSummariesRequest {
@@ -148,14 +165,17 @@ function textLength(value: string): number {
   return Array.from(value).length;
 }
 
-export function normalizePaperSearchRequest(body: unknown): PaperSearchRequest | null {
+export function normalizePaperSearchRequest(
+  body: unknown,
+): PaperSearchRequest | null {
   if (!body || typeof body !== "object") return null;
   const data = body as Record<string, unknown>;
   if (typeof data.query !== "string") return null;
 
   const query = data.query.trim();
   const queryLength = textLength(query);
-  if (queryLength < MIN_QUERY_LENGTH || queryLength > MAX_QUERY_LENGTH) return null;
+  if (queryLength < MIN_QUERY_LENGTH || queryLength > MAX_QUERY_LENGTH)
+    return null;
 
   const limit = data.limit === undefined ? DEFAULT_LIMIT : data.limit;
   if (
@@ -167,7 +187,8 @@ export function normalizePaperSearchRequest(body: unknown): PaperSearchRequest |
     return null;
   }
 
-  const searchMode = data.searchMode === undefined ? "expanded" : data.searchMode;
+  const searchMode =
+    data.searchMode === undefined ? "expanded" : data.searchMode;
   if (searchMode !== "fast" && searchMode !== "expanded") return null;
 
   const includeSummaries =
@@ -191,21 +212,33 @@ function distinctQueries(values: string[]): string[] {
   return result;
 }
 
-function searchQueriesFor(query: string, expansion: KeywordExpansionResult): string[] {
+function searchQueriesFor(
+  query: string,
+  expansion: KeywordExpansionResult,
+): string[] {
   const originalKey = query.toLocaleLowerCase();
   const englishCandidates = distinctQueries([
     ...expansion.english_queries,
     ...expansion.search_queries.filter((candidate) => /[a-z]/i.test(candidate)),
   ]);
   const expandedEnglishText = englishCandidates.join(" ").toLocaleLowerCase();
-  const focusedCoreQuery =
+  const canineFocusedQuery =
     /\b(?:dog|dogs|canine|canines)\b/u.test(expandedEnglishText) &&
     /\bresource\s+guard(?:ing|er|ers)\b/u.test(expandedEnglishText)
       ? "dog resource guarding"
       : null;
+  const marineMelatoninFocusedQuery =
+    /\bmelatonin\b/u.test(expandedEnglishText) &&
+    /\b(?:marine|ocean|aquatic|ecology|ecosystems?)\b/u.test(
+      expandedEnglishText,
+    )
+      ? "melatonin marine organisms"
+      : null;
+  const focusedCoreQuery = canineFocusedQuery ?? marineMelatoninFocusedQuery;
   const bestEnglishQuery =
-    englishCandidates.find((candidate) => candidate.toLocaleLowerCase() !== originalKey) ??
-    `${query} academic research`;
+    englishCandidates.find(
+      (candidate) => candidate.toLocaleLowerCase() !== originalKey,
+    ) ?? `${query} academic research`;
 
   // Compound topics lose retrieval precision when every modifier is packed into
   // one long translated query.  Preserve the user's narrow entity + phenomenon
@@ -225,9 +258,13 @@ function containsCjk(value: string): boolean {
 }
 
 function englishTerms(value: string, excludeGenericTerms: boolean): string[] {
-  return (value.toLocaleLowerCase().match(/[a-z0-9][a-z0-9-]*/g) ?? [])
+  const matches: string[] =
+    value.toLocaleLowerCase().match(/[a-z0-9][a-z0-9-]*/g) ?? [];
+  return matches
     .filter((term) => term.length >= 2)
-    .filter((term) => !excludeGenericTerms || !GENERIC_EXPANSION_TERMS.has(term));
+    .filter(
+      (term) => !excludeGenericTerms || !GENERIC_EXPANSION_TERMS.has(term),
+    );
 }
 
 /**
@@ -258,13 +295,17 @@ function termMatchesSourceText(text: string, term: string): boolean {
   return new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`, "i").test(text);
 }
 
-export function sourceTopicMatchCount(source: SourceRecord, anchors: string[]): number {
+export function sourceTopicMatchCount(
+  source: SourceRecord,
+  anchors: string[],
+): number {
   const searchableText = [source.title, source.abstract, source.snippet]
     .map((value) => cleanText(value)?.toLocaleLowerCase() ?? "")
     .filter(Boolean)
     .join(" ");
   if (!searchableText) return 0;
-  return anchors.filter((term) => termMatchesSourceText(searchableText, term)).length;
+  return anchors.filter((term) => termMatchesSourceText(searchableText, term))
+    .length;
 }
 
 const CANINE_SUBJECT_TERMS = [
@@ -300,8 +341,25 @@ const REINFORCEMENT_TRAINING_TERMS = [
   "socialization practices",
   "socialisation practices",
 ];
+const MARINE_ECOSYSTEM_TERMS = [
+  "marine",
+  "ocean",
+  "oceanic",
+  "aquatic",
+  "seawater",
+  "coral",
+  "fish",
+  "teleost",
+  "shellfish",
+  "crustacean",
+  "mollusc",
+  "mollusk",
+];
 
-function sourceSearchableText(source: SourceRecord): { title: string; all: string } {
+function sourceSearchableText(source: SourceRecord): {
+  title: string;
+  all: string;
+} {
   const title = cleanText(source.title)?.toLocaleLowerCase() ?? "";
   const all = [source.title, source.abstract, source.snippet]
     .map((value) => cleanText(value)?.toLocaleLowerCase() ?? "")
@@ -315,11 +373,23 @@ function matchesAnyTerm(text: string, terms: string[]): boolean {
 }
 
 function isCanineResourceGuardingQuery(anchors: string[]): boolean {
-  const normalized = new Set(anchors.map((anchor) => anchor.toLocaleLowerCase()));
+  const normalized = new Set(
+    anchors.map((anchor) => anchor.toLocaleLowerCase()),
+  );
   return (
     ["dog", "dogs", "canine", "canines"].some((term) => normalized.has(term)) &&
     normalized.has("resource") &&
     normalized.has("guarding")
+  );
+}
+
+function isMarineMelatoninQuery(anchors: string[]): boolean {
+  const normalized = new Set(
+    anchors.map((anchor) => anchor.toLocaleLowerCase()),
+  );
+  return (
+    normalized.has("melatonin") &&
+    ["marine", "ecosystem", "ecosystems"].some((term) => normalized.has(term))
   );
 }
 
@@ -329,8 +399,22 @@ function isCanineResourceGuardingQuery(anchors: string[]): boolean {
  * animal training papers.  Require both the canine entity and one of the
  * user's actual guarding or reinforcement-intervention concepts.
  */
-export function sourceCoreTopicScore(source: SourceRecord, anchors: string[]): number {
+export function sourceCoreTopicScore(
+  source: SourceRecord,
+  anchors: string[],
+): number {
   const genericScore = sourceTopicMatchCount(source, anchors);
+  if (isMarineMelatoninQuery(anchors)) {
+    const text = sourceSearchableText(source);
+    const melatoninTitleMatch = termMatchesSourceText(text.title, "melatonin");
+    const marineContextMatch = matchesAnyTerm(text.all, MARINE_ECOSYSTEM_TERMS);
+    if (!melatoninTitleMatch || !marineContextMatch) return 0;
+    return (
+      genericScore +
+      8 +
+      (matchesAnyTerm(text.title, MARINE_ECOSYSTEM_TERMS) ? 6 : 2)
+    );
+  }
   if (!isCanineResourceGuardingQuery(anchors)) return genericScore;
 
   const text = sourceSearchableText(source);
@@ -339,18 +423,26 @@ export function sourceCoreTopicScore(source: SourceRecord, anchors: string[]): n
   const trainingMatch = matchesAnyTerm(text.all, REINFORCEMENT_TRAINING_TERMS);
   if (!subjectMatch || (!guardingMatch && !trainingMatch)) return 0;
 
-  const titleNamesOtherSpecies = /\b(horse|horses|monkey|monkeys|primate|primates|coyote|coyotes)\b/iu.test(
-    text.title,
-  );
+  const titleNamesOtherSpecies =
+    /\b(horse|horses|monkey|monkeys|primate|primates|coyote|coyotes)\b/iu.test(
+      text.title,
+    );
   const titleHasCanineFocus = matchesAnyTerm(text.title, CANINE_SUBJECT_TERMS);
-  const titleHasGuardingFocus = matchesAnyTerm(text.title, RESOURCE_GUARDING_TERMS);
+  const titleHasGuardingFocus = matchesAnyTerm(
+    text.title,
+    RESOURCE_GUARDING_TERMS,
+  );
   if (titleNamesOtherSpecies && !titleHasGuardingFocus) return 0;
 
   return (
     genericScore +
     (titleHasCanineFocus ? 4 : 1) +
     (titleHasGuardingFocus ? 10 : guardingMatch ? 6 : 0) +
-    (matchesAnyTerm(text.title, REINFORCEMENT_TRAINING_TERMS) ? 8 : trainingMatch ? 4 : 0)
+    (matchesAnyTerm(text.title, REINFORCEMENT_TRAINING_TERMS)
+      ? 8
+      : trainingMatch
+        ? 4
+        : 0)
   );
 }
 
@@ -371,13 +463,14 @@ function selectPapers(
     .filter(({ topicMatchCount }) => topicMatchCount > 0);
   return {
     selected: relevant
-    .sort((left, right) =>
-      right.topicMatchCount - left.topicMatchCount ||
-      contentRank(left.source) - contentRank(right.source) ||
-      left.index - right.index,
-    )
-    .slice(0, limit)
-    .map(({ source }) => ({ ...source, relevanceLevel: "primary" as const })),
+      .sort(
+        (left, right) =>
+          right.topicMatchCount - left.topicMatchCount ||
+          contentRank(left.source) - contentRank(right.source) ||
+          left.index - right.index,
+      )
+      .slice(0, limit)
+      .map(({ source }) => ({ ...source, relevanceLevel: "primary" as const })),
     filteredCount: deduped.length - relevant.length,
   };
 }
@@ -436,12 +529,134 @@ function safeExcerpt(value: string): string {
   const text = cleanText(value) ?? "";
   if (textLength(text) <= SUMMARY_EXCERPT_LENGTH) return text;
   const characters = Array.from(text).slice(0, SUMMARY_EXCERPT_LENGTH);
-  const truncated = characters.join("").replace(/\s+\S*$/, "").trim();
+  const truncated = characters
+    .join("")
+    .replace(/\s+\S*$/, "")
+    .trim();
   return `${truncated || characters.join("").trim()}…`;
 }
 
 function pushWarning(warnings: string[], warning: string): void {
   if (!warnings.includes(warning)) warnings.push(warning);
+}
+
+function requestIdFrom(req: Request): string {
+  const requestId = (req as Request & { id?: string | number }).id;
+  return requestId === undefined ? "unassigned" : String(requestId);
+}
+
+function providerFailure(
+  provider: string,
+  errorCode: SourceSearchErrorCode,
+  latencyMs?: number,
+): PaperSearchProviderFailure {
+  return {
+    provider,
+    errorCode,
+    retryable: [
+      "timeout",
+      "api-failure",
+      "rate_limited",
+      "server_error",
+    ].includes(errorCode),
+    latencyMs:
+      typeof latencyMs === "number" && Number.isFinite(latencyMs)
+        ? latencyMs
+        : null,
+  };
+}
+
+function normalizeProviderSource(value: unknown): SourceRecord | null {
+  if (!value || typeof value !== "object") return null;
+  const source = value as Partial<SourceRecord>;
+  const id = cleanText(source.id);
+  const title = cleanText(source.title);
+  const sourceType = cleanText(source.sourceType);
+  if (!id || !title || !sourceType) return null;
+
+  return {
+    ...(source as SourceRecord),
+    id,
+    title,
+    sourceType: sourceType as SourceRecord["sourceType"],
+    authors: Array.isArray(source.authors)
+      ? source.authors
+          .map((author) => cleanText(author))
+          .filter((author): author is string => Boolean(author))
+      : [],
+    year:
+      typeof source.year === "number" && Number.isInteger(source.year)
+        ? source.year
+        : null,
+    abstract: cleanText(source.abstract),
+    snippet: cleanText(source.snippet),
+    doi: cleanText(source.doi),
+    url: cleanText(source.url),
+  };
+}
+
+function normalizeProviderGroup(value: unknown): {
+  group: SourceProviderSearchResult;
+  invalidSourceCount: number;
+} | null {
+  if (!value || typeof value !== "object") return null;
+  const group = value as Partial<SourceProviderSearchResult>;
+  const provider = cleanText(group.provider);
+  const query = cleanText(group.query);
+  if (
+    !provider ||
+    !query ||
+    typeof group.ok !== "boolean" ||
+    !Array.isArray(group.results)
+  ) {
+    return null;
+  }
+  const normalizedResults = group.results
+    .map(normalizeProviderSource)
+    .filter((source): source is SourceRecord => Boolean(source));
+  return {
+    group: {
+      ...(group as SourceProviderSearchResult),
+      provider: provider as SourceProviderSearchResult["provider"],
+      query,
+      results: normalizedResults,
+      error_type: group.error_type ?? (group.ok ? null : "api-failure"),
+      error_message: cleanText(group.error_message),
+    },
+    invalidSourceCount: group.results.length - normalizedResults.length,
+  };
+}
+
+function responseMetadata(
+  requestId: string,
+  groups: SourceProviderSearchResult[],
+  failures: PaperSearchProviderFailure[],
+  candidates: SourceRecord[],
+  dedupeSources: typeof dedupeSourceRecords,
+): Pick<
+  PaperSearchResponse,
+  | "status"
+  | "requestId"
+  | "providersAttempted"
+  | "providersSucceeded"
+  | "providerFailures"
+  | "resultsBeforeDedupe"
+  | "resultsAfterDedupe"
+> {
+  return {
+    status: failures.length > 0 ? "SEARCH_PARTIAL_SUCCESS" : "SEARCH_SUCCESS",
+    requestId,
+    providersAttempted: distinctQueries([
+      ...groups.map((group) => group.provider),
+      ...failures.map((failure) => failure.provider),
+    ]),
+    providersSucceeded: distinctQueries(
+      groups.filter((group) => group.ok).map((group) => group.provider),
+    ),
+    providerFailures: failures,
+    resultsBeforeDedupe: candidates.length,
+    resultsAfterDedupe: dedupeSources(candidates).length,
+  };
 }
 
 function mapPaper(
@@ -452,14 +667,15 @@ function mapPaper(
   const title = cleanText(source.title) ?? "";
   const abstract = cleanText(source.abstract);
   const snippet = cleanText(source.snippet);
-  const reportedStatus = source.summaryStatus ?? source.llmSummaryStatus ?? null;
+  const reportedStatus =
+    source.summaryStatus ?? source.llmSummaryStatus ?? null;
   const rawLlmSummary = cleanText(source.llmSummaryZhTw);
   const readableSummary =
-    cleanText(source.readableSummaryZhTW) ?? cleanText(source.readableSummaryZhTw);
-  const preferredSummary =
-    options.preferSuccessfulRawLlmSummary
-      ? rawLlmSummary ?? readableSummary
-      : readableSummary ?? rawLlmSummary;
+    cleanText(source.readableSummaryZhTW) ??
+    cleanText(source.readableSummaryZhTw);
+  const preferredSummary = options.preferSuccessfulRawLlmSummary
+    ? (rawLlmSummary ?? readableSummary)
+    : (readableSummary ?? rawLlmSummary);
 
   let summary: string;
   let summaryStatus: string | null;
@@ -468,11 +684,16 @@ function mapPaper(
   let usedSuccessfulLlmSummary = false;
 
   if (options.deferred) {
-    summary = abstract || snippet
-      ? safeExcerpt(abstract ?? snippet ?? "")
-      : `目前僅取得「${title}」的書目資訊，尚無原文摘要可供整理。`;
+    summary =
+      abstract || snippet
+        ? safeExcerpt(abstract ?? snippet ?? "")
+        : `目前僅取得「${title}」的書目資訊，尚無原文摘要可供整理。`;
     summaryStatus = "pending";
-    summarySourceType = abstract ? "abstract" : snippet ? "snippet" : "metadataFallback";
+    summarySourceType = abstract
+      ? "abstract"
+      : snippet
+        ? "snippet"
+        : "metadataFallback";
     summaryConfidence = "low";
   } else if (preferredSummary) {
     summary = preferredSummary;
@@ -515,7 +736,8 @@ function mapPaper(
       url: cleanText(source.url),
       provider: cleanText(source.provider) ?? cleanText(source.sourceType),
       citationCount:
-        typeof source.citationCount === "number" && Number.isFinite(source.citationCount)
+        typeof source.citationCount === "number" &&
+        Number.isFinite(source.citationCount)
           ? source.citationCount
           : null,
       isOpenAccess:
@@ -532,7 +754,9 @@ function mapPaper(
 
 function summaryModeFor(mapped: MappedPaper[]): SummaryMode {
   if (mapped.length === 0) return "none";
-  const successfulLlmCount = mapped.filter((item) => item.usedSuccessfulLlmSummary).length;
+  const successfulLlmCount = mapped.filter(
+    (item) => item.usedSuccessfulLlmSummary,
+  ).length;
   if (successfulLlmCount === mapped.length) return "llm";
   if (successfulLlmCount > 0) return "mixed";
   return "fallback";
@@ -544,7 +768,9 @@ function boundedCleanText(value: unknown, maxLength: number): string | null {
   return Array.from(text).slice(0, maxLength).join("");
 }
 
-function sourceTypeFromPaperProvider(value: unknown): SourceRecord["sourceType"] | null {
+function sourceTypeFromPaperProvider(
+  value: unknown,
+): SourceRecord["sourceType"] | null {
   const provider = cleanText(value)?.toLocaleLowerCase();
   if (!provider) return null;
   if (provider.includes("openalex")) return "OpenAlex";
@@ -556,7 +782,8 @@ function sourceTypeFromPaperProvider(value: unknown): SourceRecord["sourceType"]
     provider.includes("semantic scholar") ||
     provider.includes("semantic_scholar") ||
     /(?:^|[\s,;/|])s2(?:$|[\s,;/|])/.test(provider)
-  ) return "Semantic Scholar";
+  )
+    return "Semantic Scholar";
   return null;
 }
 
@@ -601,7 +828,10 @@ function sourceFromPaperShape(value: unknown): SourceRecord | null {
     // full-text excerpt from the product's retrieval stage. Preserve it for
     // the summarizer instead of silently downgrading the source to its
     // abstract. The public response still exposes only the summary.
-    extractedText: boundedCleanText(paper.extractedText, MAX_PAPER_ABSTRACT_LENGTH),
+    extractedText: boundedCleanText(
+      paper.extractedText,
+      MAX_PAPER_ABSTRACT_LENGTH,
+    ),
     doi: boundedCleanText(paper.doi, MAX_PAPER_METADATA_LENGTH),
     url: boundedCleanText(paper.url, MAX_PAPER_METADATA_LENGTH),
     sourceType,
@@ -617,7 +847,9 @@ function sourceFromPaperShape(value: unknown): SourceRecord | null {
   };
 }
 
-export function normalizePaperSummariesRequest(body: unknown): PaperSummariesRequest | null {
+export function normalizePaperSummariesRequest(
+  body: unknown,
+): PaperSummariesRequest | null {
   if (!body || typeof body !== "object") return null;
   const data = body as Record<string, unknown>;
   const normalizedQuery = normalizePaperSearchRequest({
@@ -625,7 +857,8 @@ export function normalizePaperSummariesRequest(body: unknown): PaperSummariesReq
     limit: MIN_LIMIT,
   });
   if (!normalizedQuery || !Array.isArray(data.papers)) return null;
-  if (data.papers.length < 1 || data.papers.length > SUMMARY_REQUEST_MAX_PAPERS) return null;
+  if (data.papers.length < 1 || data.papers.length > SUMMARY_REQUEST_MAX_PAPERS)
+    return null;
 
   const sources = data.papers.map(sourceFromPaperShape);
   if (sources.some((source) => !source)) return null;
@@ -637,9 +870,15 @@ export function normalizePaperSummariesRequest(body: unknown): PaperSummariesReq
   };
 }
 
-function emptyResponse(query: string, queries: string[], warnings: string[]): PaperSearchResponse {
+function emptyResponse(
+  query: string,
+  queries: string[],
+  warnings: string[],
+  metadata: ReturnType<typeof responseMetadata>,
+): PaperSearchResponse {
   return {
     ok: true,
+    ...metadata,
     query,
     count: 0,
     queries,
@@ -659,10 +898,16 @@ export function createPaperSearchRouter({
   const router: IRouter = Router();
 
   router.post("/paper-search", async (req, res) => {
+    const requestId = requestIdFrom(req);
+    res.setHeader("X-Request-Id", requestId);
     const input = normalizePaperSearchRequest(req.body);
     if (!input) {
       res.status(400).json({
         ok: false,
+        errorCode: "REQUEST_SCHEMA_FAILURE",
+        requestId,
+        stage: "request-schema",
+        retryable: false,
         message: "請輸入 2 至 200 個字的關鍵詞；limit 必須是 3 至 20 的整數。",
       });
       return;
@@ -681,7 +926,10 @@ export function createPaperSearchRouter({
             language: "zh-TW",
           });
         } catch (error) {
-          logger.warn({ err: error, route: "/api/paper-search" }, "Paper keyword expansion failed");
+          logger.warn(
+            { err: error, route: "/api/paper-search" },
+            "Paper keyword expansion failed",
+          );
           expansion = buildFallbackKeywordExpansion(
             { topic: input.query, sourceMode: "academic", language: "zh-TW" },
             "Keyword expansion failed; deterministic fallback used.",
@@ -695,45 +943,113 @@ export function createPaperSearchRouter({
         }
       }
 
-      const searchOptions = searchOptionsForMode(input.searchMode, getProviderConfigs);
+      const searchOptions = searchOptionsForMode(
+        input.searchMode,
+        getProviderConfigs,
+      );
       const attempts = await Promise.allSettled(
         queries.map((query) => searchProviders(query, searchOptions)),
       );
       const groups: SourceProviderSearchResult[] = [];
-      let rejectedSearchCount = 0;
+      const providerFailures: PaperSearchProviderFailure[] = [];
+      let invalidSourceCount = 0;
       for (const attempt of attempts) {
         if (attempt.status === "fulfilled") {
-          groups.push(...attempt.value);
+          if (!Array.isArray(attempt.value) || attempt.value.length === 0) {
+            providerFailures.push(providerFailure("all", "schema_error"));
+            continue;
+          }
+          for (const rawGroup of attempt.value) {
+            const normalized = normalizeProviderGroup(rawGroup);
+            if (!normalized) {
+              providerFailures.push(providerFailure("unknown", "schema_error"));
+              continue;
+            }
+            groups.push(normalized.group);
+            invalidSourceCount += normalized.invalidSourceCount;
+            if (!normalized.group.ok) {
+              providerFailures.push(
+                providerFailure(
+                  normalized.group.provider,
+                  normalized.group.error_type ?? "api-failure",
+                  normalized.group.latency_ms,
+                ),
+              );
+            }
+          }
         } else {
-          rejectedSearchCount += 1;
+          providerFailures.push(providerFailure("all", "api-failure"));
           logger.warn(
-            { err: attempt.reason, route: "/api/paper-search" },
+            {
+              err: attempt.reason,
+              errorCode: "SEARCH_PROVIDER_REQUEST_FAILED",
+              requestId,
+              stage: "provider-request",
+              provider: "all",
+              retryable: true,
+              route: "/api/paper-search",
+            },
             "Paper provider search failed",
           );
         }
       }
 
-      const failedProviders = distinctQueries(
-        groups.filter((group) => !group.ok).map((group) => group.provider),
+      const successfulGroups = groups.filter((group) => group.ok);
+      const hasUsableProviderData = groups.some(
+        (group) => group.ok || group.results.length > 0,
       );
-      if (failedProviders.length > 0 || rejectedSearchCount > 0) {
-        const providerSuffix = failedProviders.length > 0
-          ? `（${failedProviders.join("、")}）`
-          : "";
+      if (!hasUsableProviderData) {
+        logger.warn(
+          {
+            errorCode: "SEARCH_ALL_PROVIDERS_UNAVAILABLE",
+            requestId,
+            stage: "provider-aggregation",
+            providerFailures,
+          },
+          "All paper search providers unavailable",
+        );
+        res.status(503).json({
+          ok: false,
+          errorCode: "SEARCH_ALL_PROVIDERS_UNAVAILABLE",
+          requestId,
+          stage: "provider-aggregation",
+          retryable: providerFailures.some((failure) => failure.retryable),
+          providerFailures,
+          message:
+            "暫時無法完成論文搜尋。部分學術資料來源目前無法回應，請稍後重試。",
+        });
+        return;
+      }
+
+      const failedProviders = distinctQueries(
+        providerFailures.map((failure) => failure.provider),
+      );
+      if (providerFailures.length > 0) {
+        const providerSuffix =
+          failedProviders.length > 0 ? `（${failedProviders.join("、")}）` : "";
         pushWarning(
           warnings,
           `部分論文來源暫時無法使用${providerSuffix}，已保留其餘可用結果。`,
         );
       }
+      if (invalidSourceCount > 0) {
+        pushWarning(
+          warnings,
+          `已略過 ${invalidSourceCount} 筆格式不完整的來源資料。`,
+        );
+      }
 
-      const candidateBuckets = attempts
-        .flatMap((attempt) =>
-          attempt.status === "fulfilled"
-            ? attempt.value.map((group) => group.results)
-            : [],
-        )
+      const candidateBuckets = groups
+        .map((group) => group.results)
         .filter((bucket) => bucket.length > 0);
       const candidates = interleaveSourceBuckets(candidateBuckets);
+      const metadata = responseMetadata(
+        requestId,
+        groups,
+        providerFailures,
+        candidates,
+        dedupeSources,
+      );
       const { selected, filteredCount } = selectPapers(
         candidates,
         input.limit,
@@ -748,7 +1064,9 @@ export function createPaperSearchRouter({
       }
       if (selected.length === 0) {
         pushWarning(warnings, "找不到符合條件且具有標題的論文。");
-        res.status(200).json(emptyResponse(input.query, queries, warnings));
+        res
+          .status(200)
+          .json(emptyResponse(input.query, queries, warnings, metadata));
         return;
       }
 
@@ -760,6 +1078,7 @@ export function createPaperSearchRouter({
         const papers = mapped.map((item) => item.paper);
         const response: PaperSearchResponse = {
           ok: true,
+          ...metadata,
           query: input.query,
           count: papers.length,
           queries,
@@ -776,17 +1095,28 @@ export function createPaperSearchRouter({
         const summaryResult = await summarizeSources(input.query, selected, {
           maxSources: selected.length,
         });
-        const summaryById = new Map(summaryResult.map((source) => [source.id, source]));
-        summarized = selected.map((source) => summaryById.get(source.id) ?? source);
+        const summaryById = new Map(
+          summaryResult.map((source) => [source.id, source]),
+        );
+        summarized = selected.map(
+          (source) => summaryById.get(source.id) ?? source,
+        );
       } catch (error) {
-        logger.warn({ err: error, route: "/api/paper-search" }, "Paper summaries failed");
-        pushWarning(warnings, "繁中摘要服務暫時無法使用，已改用原文摘要或片段節錄。");
+        logger.warn(
+          { err: error, route: "/api/paper-search" },
+          "Paper summaries failed",
+        );
+        pushWarning(
+          warnings,
+          "繁中摘要服務暫時無法使用，已改用原文摘要或片段節錄。",
+        );
       }
 
       const mapped = summarized.map((source) => mapPaper(source, warnings));
       const papers = mapped.map((item) => item.paper);
       const response: PaperSearchResponse = {
         ok: true,
+        ...metadata,
         query: input.query,
         count: papers.length,
         queries,
@@ -796,9 +1126,26 @@ export function createPaperSearchRouter({
       };
       res.status(200).json(response);
     } catch (error) {
-      logger.warn({ err: error, route: "/api/paper-search" }, "Paper search failed");
-      pushWarning(warnings, "論文搜尋暫時無法使用，請稍後再試。");
-      res.status(200).json(emptyResponse(input.query, queries, warnings));
+      logger.error(
+        {
+          err: error,
+          errorCode: "UNKNOWN_SEARCH_FAILURE",
+          requestId,
+          stage: "search-pipeline",
+          retryable: false,
+          route: "/api/paper-search",
+        },
+        "Paper search failed",
+      );
+      res.status(500).json({
+        ok: false,
+        errorCode: "UNKNOWN_SEARCH_FAILURE",
+        requestId,
+        stage: "search-pipeline",
+        retryable: false,
+        message:
+          "暫時無法完成論文搜尋。請稍後重試；若問題持續，請提供請求識別碼。",
+      });
     }
   });
 
@@ -819,14 +1166,21 @@ export function createPaperSearchRouter({
         maxSources: input.sources.length,
         detailLevel: "detailed",
       });
-      const summaryById = new Map(summaryResult.map((source) => [source.id, source]));
-      summarized = input.sources.map((source) => summaryById.get(source.id) ?? source);
+      const summaryById = new Map(
+        summaryResult.map((source) => [source.id, source]),
+      );
+      summarized = input.sources.map(
+        (source) => summaryById.get(source.id) ?? source,
+      );
     } catch (error) {
       logger.warn(
         { err: error, route: "/api/paper-search/summaries" },
         "Deferred paper summaries failed",
       );
-      pushWarning(warnings, "繁中摘要服務暫時無法使用，已改用原文摘要或片段節錄。");
+      pushWarning(
+        warnings,
+        "繁中摘要服務暫時無法使用，已改用原文摘要或片段節錄。",
+      );
     }
 
     const mapped = summarized.map((source) =>

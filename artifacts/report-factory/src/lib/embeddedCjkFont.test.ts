@@ -112,7 +112,9 @@ test("cjk_render_preserved: portable LibreOffice path renders searchable Traditi
       expectedText,
     ], {
       encoding: "utf8",
-      timeout: 30_000,
+      // First-run LibreOffice/font-cache initialization can exceed 30 seconds
+      // on macOS even when the renderer completes successfully.
+      timeout: 90_000,
       env: {
         ...process.env,
         TMPDIR: "/private/tmp",

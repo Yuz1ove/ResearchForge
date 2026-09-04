@@ -18,10 +18,13 @@ import {
   type FormalReportTable,
 } from "./formalReportDocument.ts";
 import {
+  buildReaderCitationGroup,
   buildReaderCitationEntries,
+  readerAcademicCitationMarker,
   stripReaderCitationTokens,
   type ReaderCitationEntry,
 } from "./readerCitations.ts";
+import { RESEARCHFORGE_PUBLICATION_LAYOUT } from "./publicationLayout.ts";
 import { loadEmbeddedCjkFont } from "./embeddedCjkFont.ts";
 
 // docx is heavy; it is lazy-loaded inside downloadDocx so it never enters the
@@ -49,6 +52,11 @@ export const REPORT_CJK_FONT_STACK = REPORT_CJK_FONT_FALLBACKS
 
 interface ReaderCitationContext {
   entries: ReaderCitationEntry[];
+}
+
+export interface PublicationExportHints {
+  /** Cached visible TOC pages from a deterministic first-pass render. */
+  tocPageNumbers?: readonly number[];
 }
 
 function readerCitationContext(
@@ -92,12 +100,12 @@ function appendReaderCitationText(
   const clean = entries.length > 0 ? stripReaderCitationTokens(value) : value;
   if (entries.length === 0) return clean;
   const { body, punctuation } = splitTerminalPunctuation(clean);
-  const labels = entries.map((entry) => {
-    if (!markdown) return entry.label;
-    const href = entry.externalHref || `#${entry.anchorId}`;
-    return `[${entry.label}](${href})`;
-  });
-  return `${body}（${labels.join("；")}）${punctuation}`;
+  const group = buildReaderCitationGroup(entries);
+  const academicMarker = readerAcademicCitationMarker(group.referenceNumbers);
+  const marker = markdown && entries[0]
+    ? `[${academicMarker}](#${entries[0].anchorId})`
+    : academicMarker;
+  return `${body}${marker}${punctuation}`;
 }
 
 function referenceLines(
@@ -105,8 +113,8 @@ function referenceLines(
   markdown: boolean,
 ): string[] {
   return context.entries.flatMap((entry) => markdown
-    ? [`<a id="${entry.anchorId}"></a>${entry.referenceText}`, ""]
-    : [entry.referenceText]);
+    ? [`<a id="${entry.anchorId}"></a>${entry.referenceNumber}. ${entry.referenceText}`, ""]
+    : [`${entry.referenceNumber}. ${entry.referenceText}`]);
 }
 
 interface SemanticFigureTabulation {
@@ -120,17 +128,22 @@ function semanticNumber(value: number): string {
   return value.toFixed(3).replace(/0+$/u, "").replace(/\.$/u, "");
 }
 
+function readerMetricLabel(value: string): string {
+  if (value === "poor_sleep_prevalence") return "睡眠不佳比例";
+  return value.replace(/_/gu, " ");
+}
+
 function semanticFigureTabulation(figure: FigureSpec): SemanticFigureTabulation | null {
   const semantic = figure.semanticData;
   if (!semantic) return null;
   switch (semantic.kind) {
     case "proportion_facets":
       return {
-        columns: ["獨立面板", "比例", "指標與樣本定義"],
+        columns: ["獨立面板", "比例", "樣本與判定定義"],
         rows: semantic.panels.map((panel) => [
           panel.label,
           `${semanticNumber(panel.value)}%`,
-          `${panel.metric}；${panel.sampleDefinition}`,
+          panel.sampleDefinition || readerMetricLabel(panel.metric),
         ]),
         caveat: "各面板保留原研究的樣本與判定定義，不直接排名或合併。",
       };
@@ -413,10 +426,10 @@ function semanticFigureDrawing(figure: FigureSpec): SemanticFigureDrawing | null
     const height = 60 + semantic.panels.length * 62;
     const rows = semantic.panels.map((panel, index) => {
       const y = 42 + index * 62;
-      const barWidth = Math.max(0, Math.min(100, panel.value)) * 4.2;
+      const pointX = 245 + Math.max(0, Math.min(100, panel.value)) * 4.2;
       return `<g data-datum-key="${svgEscape(panel.datumKey)}"><text class="label" x="20" y="${y}">${svgEscape(compactSvgLabel(panel.label, 27))}</text>` +
-        `<rect class="track" x="245" y="${y - 16}" width="420" height="18" rx="3"/><rect class="mark" x="245" y="${y - 16}" width="${barWidth}" height="18" rx="3"/>` +
-        `<text class="value" x="680" y="${y}">${semanticNumber(panel.value)}%</text><text class="small" x="245" y="${y + 20}">${svgEscape(compactSvgLabel(`${panel.metric}｜${panel.sampleDefinition}`, 58))}</text></g>`;
+        `<line x1="245" y1="${y - 8}" x2="665" y2="${y - 8}" stroke="#9fb7b5" stroke-width="1.5"/><circle class="mark" cx="${pointX}" cy="${y - 8}" r="7"/>` +
+        `<text class="value" x="680" y="${y}">${semanticNumber(panel.value)}%</text><text class="small" x="245" y="${y + 20}">${svgEscape(compactSvgLabel(`${readerMetricLabel(panel.metric)}｜${panel.sampleDefinition}`, 58))}</text></g>`;
     }).join("");
     return shell(height, `<text class="value" x="20" y="22">獨立比例面板（0–100%）</text>${rows}`);
   }
@@ -733,18 +746,40 @@ function assertReaderFacingIntegrity(report: GeneratedReport): void {
 
 function assertFormalExportProof(report: GeneratedReport): void {
   const proof = report.meta.formalExportProof;
-  if (
+  const formalDocument = report.meta.formalReportDocument;
+  const canonicalLimitedBoundaryProjection = Boolean(
+    formalDocument?.metadata.reportKind === "limited_evidence_brief" &&
+    formalDocument.integrity.status === "pass" &&
+    formalDocument.quality.passed === true &&
+    formalDocument.quality.blockExport === false &&
+    formalDocument.abstract.validation.status === "pass" &&
+    formalDocument.metadata.eligibleSourceCount > 0 &&
+    formalDocument.metadata.evidenceExcerptCount > 0 &&
     proof?.planBuildStatus === "plan_built" &&
-    (proof.readinessStatus === "ready_complete_report" ||
-      proof.readinessStatus === "ready_limited_report") &&
+    proof.readinessStatus === "ready_limited_report" &&
     proof.evidenceSetHash.length === 64 &&
     proof.evidenceSetHash === proof.writerEvidenceSetHash &&
-    proof.filteredAfterPlanCount === 0
+    proof.filteredAfterPlanCount === 0 &&
+    proof.contentIntegrityValidated === true &&
+    proof.safeToResume === true
+  );
+  if (
+    canonicalLimitedBoundaryProjection ||
+    (proof?.planBuildStatus === "plan_built" &&
+      (proof.readinessStatus === "ready_complete_report" ||
+        proof.readinessStatus === "ready_limited_report") &&
+      proof.evidenceSetHash.length === 64 &&
+      proof.evidenceSetHash === proof.writerEvidenceSetHash &&
+      proof.filteredAfterPlanCount === 0 &&
+      proof.formalResearchValidationPassed === true &&
+      proof.contentIntegrityValidated === true &&
+      proof.resumeFrom === "export" &&
+      proof.safeToResume === true)
   ) {
     return;
   }
   throw new ReportExportIntegrityError(
-    "canonical WriterEvidenceSet、readiness 或 evidenceSetHash 尚未通過正式匯出 gate。",
+    "canonical WriterEvidenceSet、formal validation、content integrity、readiness 或 evidenceSetHash 尚未通過正式匯出 gate。",
   );
 }
 
@@ -784,7 +819,7 @@ export function buildPlainText(report: GeneratedReport, input: ReportInput): str
   if (document.formalDocument?.tableOfContents.length) {
     lines.push(
       "【目錄】",
-      ...document.formalDocument.tableOfContents.map((entry, index) => `${index + 1}. ${entry.title}`),
+      ...document.formalDocument.tableOfContents.map((entry) => entry.label),
       "",
     );
   }
@@ -818,7 +853,7 @@ export function buildMarkdown(report: GeneratedReport, input: ReportInput): stri
     lines.push(
       "## 目錄",
       "",
-      ...document.formalDocument.tableOfContents.map((entry, index) => `${index + 1}. ${entry.title}`),
+      ...document.formalDocument.tableOfContents.map((entry) => entry.label),
       "",
     );
   }
@@ -992,14 +1027,15 @@ const DOCX_BODY_LINE_SPACING_TWIPS = 330;
 const DOCX_BODY_FIRST_LINE_TWIPS = 440;
 const DOCX_REFERENCE_HANGING_TWIPS = 720;
 const DOCX_EMBEDDED_CJK_FONT_FAMILY = "Noto Sans TC Thin";
+const DOCX_PRIMARY_CJK_FONT_FAMILY = DOCX_EMBEDDED_CJK_FONT_FAMILY;
 const DOCX_CJK_FONT = {
-  // OOXML exposes one face per script rather than a CSS cascade. Use the
-  // OFL-licensed font embedded by buildDocxBlob for every script and carry the
-  // ordered platform fallbacks in document metadata.
-  ascii: DOCX_EMBEDDED_CJK_FONT_FAMILY,
-  hAnsi: DOCX_EMBEDDED_CJK_FONT_FAMILY,
-  eastAsia: DOCX_EMBEDDED_CJK_FONT_FAMILY,
-  cs: DOCX_EMBEDDED_CJK_FONT_FAMILY,
+  // OOXML exposes one face per script rather than a CSS cascade. Point every
+  // script slot at the same OFL face embedded below so layout metrics and
+  // glyph selection remain stable across Word and portable QA rendering.
+  ascii: DOCX_PRIMARY_CJK_FONT_FAMILY,
+  hAnsi: DOCX_PRIMARY_CJK_FONT_FAMILY,
+  eastAsia: DOCX_PRIMARY_CJK_FONT_FAMILY,
+  cs: DOCX_PRIMARY_CJK_FONT_FAMILY,
   hint: "eastAsia",
 } as const;
 const DOCX_ZH_TW_LANGUAGE = {
@@ -1015,7 +1051,7 @@ const DOCX_BODY_SPACING = {
 };
 
 function isReferenceSection(heading: string): boolean {
-  return /(?:參考文獻|參考資料|references|bibliography)/iu.test(heading);
+  return /(?:資料來源|參考文獻|參考資料|references|bibliography)/iu.test(heading);
 }
 
 function referenceTextRuns(D: DocxModule, text: string) {
@@ -1040,28 +1076,25 @@ function docxReaderCitationRuns(
   text: string,
   entries: readonly ReaderCitationEntry[],
 ) {
-  const { ExternalHyperlink, InternalHyperlink, TextRun } = D;
+  const { InternalHyperlink, TextRun } = D;
   const clean = entries.length > 0 ? stripReaderCitationTokens(text) : text;
   if (entries.length === 0) return [new TextRun(clean)];
   const { body, punctuation } = splitTerminalPunctuation(clean);
-  const children: Array<
-    InstanceType<DocxModule["TextRun"]> |
-    InstanceType<DocxModule["ExternalHyperlink"]> |
-    InstanceType<DocxModule["InternalHyperlink"]>
-  > = [new TextRun(body), new TextRun("（")];
-  entries.forEach((entry, index) => {
-    if (index > 0) children.push(new TextRun("；"));
-    const labelRun = new TextRun({
-      text: entry.label,
-      color: "0563C1",
-      underline: {},
-    });
-    children.push(entry.externalHref
-      ? new ExternalHyperlink({ link: entry.externalHref, children: [labelRun] })
-      : new InternalHyperlink({ anchor: entry.anchorId, children: [labelRun] }));
+  const group = buildReaderCitationGroup(entries);
+  const markerRun = new TextRun({
+    text: readerAcademicCitationMarker(group.referenceNumbers),
+    size: 19,
+    bold: true,
+    color: DOCX_MUTED_TEAL,
+    font: DOCX_CJK_FONT,
   });
-  children.push(new TextRun(`）${punctuation}`));
-  return children;
+  return [
+    new TextRun(body),
+    entries[0]
+      ? new InternalHyperlink({ anchor: entries[0].anchorId, children: [markerRun] })
+      : markerRun,
+    new TextRun(punctuation),
+  ];
 }
 
 function docxReferenceParagraphs(
@@ -1072,7 +1105,10 @@ function docxReferenceParagraphs(
   return context.entries.map((entry) => new Paragraph({
     children: [new Bookmark({
       id: entry.anchorId,
-      children: referenceTextRuns(D, entry.referenceText),
+      children: [
+        new D.TextRun({ text: `${entry.referenceNumber}. `, bold: true, color: DOCX_DEEP_TEAL }),
+        ...referenceTextRuns(D, entry.referenceText),
+      ],
     })],
     spacing: { after: 160, ...DOCX_BODY_SPACING },
     indent: {
@@ -1277,7 +1313,11 @@ function docxFormalTable(
         }),
         ...table.rows.map((row) =>
           new TableRow({
-            cantSplit: true,
+            // Evidence-trace rows can be taller than one printable page. Let
+            // Word/LibreOffice split those rows so a caption is never orphaned
+            // on an otherwise blank page while the whole first row is pushed
+            // forward. The repeating header preserves table context.
+            cantSplit: false,
             children: table.columns.map((_, index) => cell(row[index] ?? "", index)),
           }),
         ),
@@ -1346,16 +1386,17 @@ function docxFormalFigure(
     spacing: { before: 180, after: 80, ...DOCX_BODY_SPACING },
     keepNext: true,
   });
+  const compactProportion = figure.semanticData?.kind === "proportion_facets";
   const footerLines = [
-    semanticDrawing ? `圖形資料：${semanticFigureDataNote(figure)}` : null,
+    !compactProportion && semanticDrawing ? `圖形資料：${semanticFigureDataNote(figure)}` : null,
     semanticTable ? `解讀邊界：${semanticTable.caveat}` : null,
-    figure.units ? `單位：${figure.units}` : null,
-    figure.legend.length > 0
+    !compactProportion && figure.units ? `單位：${figure.units}` : null,
+    !compactProportion && figure.legend.length > 0
       ? `圖例：${figure.legend.map((item) => `${item.key}＝${item.label}`).join("；")}`
       : null,
     `資料來源：${figure.sourceNote}`,
     figure.note ? `註：${figure.note}` : null,
-    `文字摘要：${figure.altText}`,
+    !compactProportion ? `文字摘要：${figure.altText}` : null,
   ].filter((value): value is string => Boolean(value));
   const footer = footerLines.map((line) => new Paragraph({
     children: [new TextRun({
@@ -1455,12 +1496,13 @@ function docxFormalFigure(
     ];
   } else {
     widths = [DOCX_CONTENT_WIDTH_TWIPS];
-    rows = data.edges.map((edge) => {
-      const from = data.nodes.find((node) => node.id === edge.from)?.label ?? edge.from;
-      const to = data.nodes.find((node) => node.id === edge.to)?.label ?? edge.to;
+    rows = data.nodes.map((node, index) => {
       return new TableRow({
         cantSplit: true,
-        children: [makeCell(`${from} → ${to}${edge.label ? `（${edge.label}）` : ""}`, widths[0])],
+        children: [makeCell(
+          `${String(index + 1).padStart(2, "0")}　${node.label}${index < data.nodes.length - 1 ? "　↓" : ""}`,
+          widths[0],
+        )],
       });
     });
   }
@@ -1479,7 +1521,7 @@ function docxFormalFigure(
       insideVertical: border,
     },
   });
-  const drawingParagraph = semanticDrawing
+  const drawingParagraph = semanticDrawing && figure.semanticData?.kind !== "proportion_facets"
     ? new Paragraph({
         alignment: AlignmentType.CENTER,
         keepNext: true,
@@ -1524,6 +1566,7 @@ export async function buildDocxBlob(
   report: GeneratedReport,
   input: ReportInput,
   presentation: ReportPresentationSettings = DEFAULT_REPORT_PRESENTATION,
+  publicationHints: PublicationExportHints = {},
 ): Promise<Blob> {
   const D = await import("docx");
   const {
@@ -1536,10 +1579,10 @@ export async function buildDocxBlob(
     PageNumber,
     Header,
     Footer,
-    PageBreak,
     PageOrientation,
     SectionType,
     LineRuleType,
+    TableOfContents,
   } = D;
   const canonicalDocument = buildCanonicalExportDocument(report, input);
   const citations = readerCitationContext(canonicalDocument.formalDocument, report);
@@ -1654,17 +1697,36 @@ export async function buildDocxBlob(
           })],
           spacing: { after: 240, ...DOCX_BODY_SPACING },
         }),
-        ...formal.tableOfContents.map((entry, index) => new Paragraph({
+        new Paragraph({
           children: [new TextRun({
-            text: `${String(index + 1).padStart(2, "0")}　${entry.title}`,
-            size: DOCX_BODY_FONT_SIZE_HALF_POINTS,
-            color: entry.level === 1 ? DOCX_DEEP_TEAL : "526566",
+            text: `${formal.titlePage.reportTypeLabel}　|　${formal.metadata.documentVersion}　|　${formal.metadata.generatedDate}`,
+            size: 18,
+            color: "6A7778",
             font: DOCX_CJK_FONT,
           })],
-          indent: { left: entry.level === 1 ? 0 : 420 },
-          spacing: { after: 115, ...DOCX_BODY_SPACING },
-        })),
-        new Paragraph({ children: [new PageBreak()] }),
+          spacing: { after: 60, ...DOCX_BODY_SPACING },
+        }),
+        new Paragraph({
+          children: [new TextRun({
+            text: `研究問題：${formal.metadata.researchQuestion}`,
+            size: 18,
+            color: "6A7778",
+            font: DOCX_CJK_FONT,
+          })],
+          spacing: { after: 180, ...DOCX_BODY_SPACING },
+        }),
+        new TableOfContents("ResearchForge Table of Contents", {
+          hyperlink: true,
+          headingStyleRange: "1-3",
+          beginDirty: true,
+          cachedEntries: formal.tableOfContents.map((entry, index) => ({
+            title: entry.label,
+            level: entry.level,
+            page: (publicationHints.tocPageNumbers?.[index] ?? 0) > 0
+              ? publicationHints.tocPageNumbers?.[index]
+              : undefined,
+          })),
+        }),
       ]
     : [];
 
@@ -1694,6 +1756,8 @@ export async function buildDocxBlob(
           font: DOCX_CJK_FONT,
         })],
         spacing: { before: 240, after: 120, ...DOCX_BODY_SPACING },
+        pageBreakBefore: true,
+        keepNext: true,
       }),
     );
     if (referenceSection && citations.entries.length > 0) {
@@ -1866,8 +1930,8 @@ function formalFigureToHtml(figure: FigureSpec): string {
   if (semantic?.kind === "proportion_facets") {
     visual = `<div class="rf-proportion-panels">${semantic.panels.map((panel) => (
       `<div class="rf-proportion-panel"><div class="rf-panel-heading"><strong>${escapeHtml(panel.label)}</strong><span>${semanticNumber(panel.value)}%</span></div>` +
-      `<div class="rf-proportion-track"><span class="rf-proportion-glyph">${"■".repeat(panel.value === 0 ? 0 : Math.max(1, Math.round(Math.max(0, Math.min(100, panel.value)) / 5)))}</span></div>` +
-      `<small>${escapeHtml(panel.metric)}｜${escapeHtml(panel.sampleDefinition)}</small></div>`
+      `<div class="rf-proportion-axis"><i style="left:${Math.max(0, Math.min(100, panel.value))}%"></i><b class="tick-zero">0</b><b class="tick-mid">50</b><b class="tick-max">100%</b></div>` +
+      `<small>${escapeHtml(readerMetricLabel(panel.metric))}｜${escapeHtml(panel.sampleDefinition)}</small></div>`
     )).join("")}</div>`;
   } else if (semantic?.kind === "forest_plot") {
     const bounds = semantic.rows.flatMap((row) => [row.lowerBound, row.upperBound, semantic.referenceValue]).filter((value) => value > 0);
@@ -1918,11 +1982,9 @@ function formalFigureToHtml(figure: FigureSpec): string {
     visual = `<table class="rf-matrix"><thead><tr><th>範圍</th>${data.columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>` +
       `<tbody>${data.rows.map((row) => `<tr><th>${escapeHtml(row.label)}</th>${row.values.map((value) => `<td>${escapeHtml(value)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   } else {
-    visual = `<div class="rf-graph">${data.edges.map((edge) => {
-      const from = data.nodes.find((node) => node.id === edge.from)?.label ?? edge.from;
-      const to = data.nodes.find((node) => node.id === edge.to)?.label ?? edge.to;
-      return `<div class="rf-edge"><span>${escapeHtml(from)}</span><strong>→</strong><span>${escapeHtml(to)}</span>${edge.label ? `<small>${escapeHtml(edge.label)}</small>` : ""}</div>`;
-    }).join("")}</div>`;
+    visual = `<ol class="rf-workflow">${data.nodes.map((node, index) => (
+      `<li><span class="rf-workflow-index">${String(index + 1).padStart(2, "0")}</span><strong>${escapeHtml(node.label)}</strong>${index < data.nodes.length - 1 ? '<i aria-hidden="true">→</i>' : ""}</li>`
+    )).join("")}</ol>`;
   }
   return `<figure class="rf-figure">` +
     `<figcaption>圖 ${figure.number}　${escapeHtml(figure.title)}</figcaption>${visual}` +
@@ -1939,17 +2001,16 @@ function readerCitationHtml(
 ): string {
   const clean = entries.length > 0 ? stripReaderCitationTokens(text) : text;
   const { body, punctuation } = splitTerminalPunctuation(clean);
+  const group = buildReaderCitationGroup(entries);
   const citationCluster = entries.length > 0
-    ? `<span class="citation-cluster">（${entries.map((entry) => (
-        `<a class="citation-link" href="${entry.printHref}">${escapeHtml(entry.label)}</a>`
-      )).join("；")}）</span>`
+    ? `<span class="citation-cluster"><a href="#${entries[0]!.anchorId}">${escapeHtml(readerAcademicCitationMarker(group.referenceNumbers))}</a></span>`
     : "";
   return `${escapeHtml(body)}${citationCluster}${escapeHtml(punctuation)}`;
 }
 
 function referenceEntriesToHtml(context: ReaderCitationContext): string {
   return context.entries.map((entry) => (
-    `<p id="${entry.anchorId}" class="reference-entry">${linkifyDoiHtml(entry.referenceText)}</p>`
+    `<p id="${entry.anchorId}" class="reference-entry"><span class="reference-index">${entry.referenceNumber}.</span>${linkifyDoiHtml(entry.referenceText)}</p>`
   )).join("");
 }
 
@@ -2042,6 +2103,7 @@ export function buildPrintHtml(
   report: GeneratedReport,
   input: ReportInput,
   presentation: ReportPresentationSettings,
+  publicationHints: PublicationExportHints = {},
 ): string {
   const canonicalDocument = buildCanonicalExportDocument(report, input);
   const citations = readerCitationContext(canonicalDocument.formalDocument, report);
@@ -2054,48 +2116,51 @@ export function buildPrintHtml(
         const body = referenceSection && citations.entries.length > 0
           ? referenceEntriesToHtml(citations)
           : s.blocks.map((block) => blockToHtml(block, citations)).join("");
-        return `<section id="rf-section-${index + 1}"${referenceSection ? ' class="references"' : ""}><h2>${escapeHtml(s.heading)}</h2>${body}</section>`;
+        return `<section id="rf-section-${index + 1}"${referenceSection ? ' class="references"' : ""}><h1>${escapeHtml(s.heading)}</h1>${body}</section>`;
       },
     )
     .join("");
   const formal = canonicalDocument.formalDocument;
   const tocHtml = formal?.tableOfContents.length
-    ? `<section class="toc"><h2>目錄</h2>${formal.tableOfContents
-        .map((entry, index) => `<p><a href="#rf-section-${index + 1}"><span>${index + 1}. ${escapeHtml(entry.title)}</span></a></p>`)
+    ? `<section class="toc"><h2>目錄</h2><div class="toc-meta"><strong>${escapeHtml(formal.titlePage.reportTypeLabel)}</strong><span>${escapeHtml(`${formal.metadata.documentVersion}　|　${formal.metadata.generatedDate}`)}</span><span>研究問題：${escapeHtml(formal.metadata.researchQuestion)}</span></div>${formal.tableOfContents
+        .map((entry, index) => `<p><a href="#rf-section-${index + 1}"><span>${escapeHtml(entry.label)}</span><b>${publicationHints.tocPageNumbers?.[index] ?? ""}</b></a></p>`)
         .join("")}</section>`
     : "";
   const shortTopicHtml = canonicalDocument.shortTopic
     ? `<p class="note">提醒：${escapeHtml(canonicalDocument.shortTopic.message)}</p>`
     : "";
 
-  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8" />
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8" /><link rel="icon" href="data:," />
 <title>${escapeHtml(canonicalDocument.title)}</title>
 <style>
   @page { size: A4; margin: 23mm 23mm 24mm; }
   * { box-sizing: border-box; }
-  body { font-family:${REPORT_CJK_FONT_STACK},${fontFamily}; color:#243535; line-height:${Math.max(1.55, normalizedPresentation.lineHeight)}; font-size:${Math.min(15, normalizedPresentation.fontSizePx)}px; margin:0; }
+  body { font-family:${REPORT_CJK_FONT_STACK},${fontFamily}; color:#${RESEARCHFORGE_PUBLICATION_LAYOUT.color.ink}; line-height:${Math.min(1.7, Math.max(RESEARCHFORGE_PUBLICATION_LAYOUT.typography.bodyLineHeight, normalizedPresentation.lineHeight))}; font-size:${Math.min(14.67, normalizedPresentation.fontSizePx)}px; margin:0; }
   .cover { text-align:center; padding:28vh 0 0; page-break-after:always; }
   .cover .kicker { color:#a3833b; font-size:10pt; font-weight:700; letter-spacing:0.12em; margin:0 0 20px; }
   .cover h1 { color:#173f42; font-size:${normalizedPresentation.headingStyle === "classic" ? "28pt" : "26pt"}; line-height:1.35; margin:0 0 12px; letter-spacing:${normalizedPresentation.headingStyle === "modern" ? "0.02em" : "0"}; }
   .cover .subtitle { color:#416b6c; font-size:13pt; margin:0 0 52px; }
   .cover .meta { color:#526566; font-size:10.5pt; margin:6px 0; }
   .cover .scope { color:#6a7778; font-size:9.5pt; margin:10px 0 0; }
-  .toc { page-break-after:always; }
-  .toc p { border-bottom:1px dotted #c7d3d2; padding:4px 0; margin:0; }
-  .toc a { color:#314849; text-decoration:none; display:flex; justify-content:space-between; }
-  .toc a::after { content:target-counter(attr(href), page); padding-left:10px; }
-  h2 { color:#173f42; font-size:${normalizedPresentation.headingStyle === "classic" ? "17pt" : "16pt"}; border-bottom:1.5px solid #a3833b; padding-bottom:5px; margin:24px 0 12px; page-break-after:avoid; letter-spacing:${normalizedPresentation.headingStyle === "modern" ? "0.012em" : "0"}; }
-  p { margin:0 0 ${normalizedPresentation.paragraphSpacingPx}px; orphans:2; widows:2; }
+  .toc { padding-top:10mm; }
+  .toc-meta { display:grid; grid-template-columns:auto 1fr; gap:4px 18px; margin:0 0 18px; padding:12px 14px; border-left:2px solid #a3833b; color:#5f6f70; font-size:8.5pt; }
+  .toc-meta span:last-child { grid-column:1 / -1; }
+  .toc p { border-bottom:1px dotted #c7d3d2; padding:6px 0 4px; margin:0; }
+  .toc a { color:#314849; text-decoration:none; display:flex; justify-content:space-between; gap:12px; }
+  .toc a b { color:#5f6f70; font-weight:500; padding-left:10px; font-variant-numeric:tabular-nums; }
+  h2, section[id^="rf-section-"] > h1 { color:#173f42; font-size:${normalizedPresentation.headingStyle === "classic" ? "16pt" : "15pt"}; border-bottom:1px solid #a3833b; padding-bottom:5px; margin:24px 0 12px; page-break-after:avoid; break-after:avoid-page; letter-spacing:${normalizedPresentation.headingStyle === "modern" ? "0.012em" : "0"}; }
+  p { margin:0 0 ${Math.min(8, normalizedPresentation.paragraphSpacingPx)}px; orphans:2; widows:2; }
   p.narrative { text-indent:2em; }
   ul { margin:0 0 12px; padding-left:22px; }
   li { margin:0 0 5px; }
   p, li, td { overflow-wrap:anywhere; word-break:break-word; }
   .references ul { list-style:none; padding-left:0; }
   .references p, .references li { padding-left:2em; text-indent:-2em; overflow-wrap:anywhere; word-break:break-word; }
-  .reference-entry { break-inside:avoid; page-break-inside:avoid; }
-  .citation-cluster { white-space:nowrap; }
-  a.citation-link { color:#165d8f; text-decoration:underline; text-underline-offset:2px; }
-  a.doi-link { color:#165d8f; text-decoration:underline; overflow-wrap:anywhere; word-break:break-all; }
+  .reference-entry { break-inside:avoid; page-break-inside:avoid; position:relative; }
+  .reference-index { display:inline-block; min-width:2em; color:#416b6c; font-weight:700; }
+  .citation-cluster { white-space:nowrap; color:#416b6c; font-size:0.88em; line-height:inherit; margin-left:0.22em; vertical-align:baseline; font-weight:600; }
+  .citation-cluster a { color:inherit; text-decoration:none; }
+  a.doi-link { color:#416b6c; text-decoration:none; border-bottom:1px dotted #9fb7b5; overflow-wrap:anywhere; word-break:break-all; }
   .note { background:#fbf7ec; border-left:3px solid #a3833b; padding:7px 11px; color:#765f27; }
   .sugg, .slide { border:1px solid #e2e8f0; border-radius:6px; padding:8px 10px; margin:0 0 10px; }
   .visual { color:#64748b; font-size:10.5pt; }
@@ -2118,11 +2183,22 @@ export function buildPrintHtml(
   .rf-edge { display:grid; grid-template-columns:1fr 24px 1fr; align-items:center; gap:5px; margin:6px 0; text-align:center; }
   .rf-edge span { border:1px solid #9fb7b5; padding:6px; border-radius:4px; background:#f3f7f6; }
   .rf-edge small { grid-column:1 / -1; color:#627273; }
-  .rf-proportion-panels { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
-  .rf-proportion-panel { border:1px solid #b9c9c7; padding:10px; break-inside:avoid; }
-  .rf-panel-heading { display:flex; justify-content:space-between; gap:8px; font-size:9pt; }
-  .rf-proportion-track { height:14px; margin:7px 0; background:#e4eceb; overflow:hidden; }
-  .rf-proportion-glyph { display:block; height:100%; color:#416b6c; line-height:14px; white-space:nowrap; letter-spacing:1px; }
+  .rf-workflow { list-style:none; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px 18px; margin:0; padding:14px; border:1px solid #b9c9c7; counter-reset:workflow; }
+  .rf-workflow li { position:relative; min-height:72px; padding:12px 10px 10px; border-top:2px solid #416b6c; background:#f3f7f6; break-inside:avoid; }
+  .rf-workflow-index { display:block; margin-bottom:7px; color:#a3833b; font-size:8pt; font-variant-numeric:tabular-nums; letter-spacing:0.08em; }
+  .rf-workflow strong { display:block; color:#243535; font-size:9pt; font-weight:600; line-height:1.45; }
+  .rf-workflow i { position:absolute; right:-15px; top:30px; color:#416b6c; font-size:12pt; font-style:normal; }
+  .rf-workflow li:nth-child(4) i { display:none; }
+  .rf-proportion-panels { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; }
+  .rf-proportion-panel { border:1px solid #b9c9c7; border-top:3px solid #416b6c; padding:16px 18px; break-inside:avoid; background:#fff; }
+  .rf-panel-heading { display:flex; align-items:baseline; justify-content:space-between; gap:8px; font-size:9.5pt; }
+  .rf-panel-heading span { color:#173f42; font-size:22pt; font-weight:700; line-height:1; }
+  .rf-proportion-axis { position:relative; height:28px; margin:18px 4px 12px; border-top:1px solid #9fb7b5; }
+  .rf-proportion-axis i { position:absolute; top:-6px; width:11px; height:11px; border:2px solid #fff; border-radius:50%; background:#416b6c; transform:translateX(-50%); box-shadow:0 0 0 1px #416b6c; }
+  .rf-proportion-axis b { position:absolute; top:7px; color:#627273; font-size:7.5pt; font-weight:500; }
+  .rf-proportion-axis .tick-zero { left:0; }
+  .rf-proportion-axis .tick-mid { left:50%; transform:translateX(-50%); }
+  .rf-proportion-axis .tick-max { right:0; }
   .rf-proportion-panel small { color:#627273; font-size:8pt; }
   .rf-forest { border:1px solid #b9c9c7; padding:10px; }
   .rf-forest-row { display:grid; grid-template-columns:minmax(90px,1.2fr) minmax(180px,2fr) minmax(125px,1.3fr); gap:9px; align-items:center; margin:9px 0; font-size:8.5pt; break-inside:avoid; }
@@ -2142,6 +2218,8 @@ export function buildPrintHtml(
   th, td { border:1px solid #b9c9c7; padding:7px 8px; text-align:left; vertical-align:middle; }
   th { background:#173f42; color:#fff; font-weight:700; }
   section { break-inside:auto; }
+  section[id^="rf-section-"] { break-before:page; page-break-before:always; }
+  section[id^="rf-section-"] > h2 { margin-top:0; }
 </style></head>
 <body>
   <div class="cover">

@@ -1,0 +1,38 @@
+{
+  "schema_version": "researchforge-ironman-day-facts/v1",
+  "day": 1,
+  "title_seed": "從報告生成器開始",
+  "historical_period": {"start": "2026-05-28", "end": "2026-06-10", "confidence": "HIGH"},
+  "evidence_boundary": "COMMITTED_GIT",
+  "central_problem": "最初的產品是什麼，而不是把成熟的 evidence system 倒灌到起點。",
+  "reader_takeaway": "先描述真實產品起點，再談後來為何需要研究證據。",
+  "known_at_the_time": [
+    {"fact": "2026-05-28 的初始 commit 是 repository scaffold。", "source_refs": ["SRC-GIT-ROOT"]},
+    {"fact": "2026-06-10 出現以 generator UI 為中心的 AI report-generator application。", "source_refs": ["SRC-GIT-INITIAL"]}
+  ],
+  "implemented_at_the_time": [
+    {"fact": "初始應用包含 report generator page 與前端應用殼。", "source_refs": ["SRC-GIT-INITIAL"]}
+  ],
+  "not_yet_available": [
+    {"fact": "沒有證據顯示當時已有後來的 canonical admission、Study Facts V2 或 V5 execution ledger。", "source_refs": ["SRC-GIT-INITIAL", "SRC-GIT-INTELLIGENCE"]}
+  ],
+  "observed_failures": [
+    {"failure_id": "EARLY_SCOPE_AMBIGUITY", "date_or_range": "2026-06-10", "historical_stage": "project origin", "symptom": "學習紀錄描述報告類型與產品範圍仍然寬泛。", "root_cause_if_known": "UNKNOWN; only retrospective scope notes survive.", "what_was_known_then": "產品需要先從 generator problem 開始。", "later_resolution": "後續收斂成 source-first research workflow。", "source_refs": ["SRC-DOC-LEARNING-LOG"]}
+  ],
+  "tests_and_metrics": [{"test_or_metric": "Two dated origin commits are identifiable; no effort-hour metric is asserted.", "result": "bounded historical evidence", "source_refs": ["SRC-GIT-ROOT", "SRC-GIT-INITIAL"]}],
+  "engineering_decisions": [{"decision": "先把 generator 的起點記錄下來，不宣稱它一開始就是 evidence infrastructure。", "source_refs": ["SRC-GIT-INITIAL", "SRC-DOC-LEARNING-LOG"]}],
+  "architecture_state": [{"state": "generator-centered application; research source pipeline not yet proven", "source_refs": ["SRC-GIT-INITIAL"]}],
+  "terminology_available_at_the_time": ["AI report generator", "generator UI", "report output"],
+  "terminology_forbidden_due_to_hindsight": ["canonical admission", "StudyFactEnvelopeV2", "FORMAL/LIMITED/BLOCKED admission", "authoritative execution budget", "legal full-text qualification"],
+  "safe_numbers": [{"value": "2 dated origin commits", "meaning": "scaffold and first substantial app, not effort hours", "source_refs": ["SRC-GIT-ROOT", "SRC-GIT-INITIAL"]}],
+  "safe_public_facts": [{"fact": "ResearchForge did not begin as a finished research platform; its first substantial application was a report generator.", "source_refs": ["SRC-GIT-INITIAL"]}],
+  "sensitive_or_internal_facts": ["personal time estimates from the learning log", "local paths", "internal source IDs"],
+  "retrospective_notes": [{"note": "後來回頭看，真正的產品問題從輸出文章移到材料與主張之間的證據邊界。這不是 Day 01 已完成的能力。", "source_refs": ["SRC-GIT-INITIAL", "SRC-SOURCE-CANONICAL"]}],
+  "source_refs": [
+    {"type": "commit", "ref": "SRC-GIT-ROOT", "why_it_supports_this_fact": "first repository commit"},
+    {"type": "commit", "ref": "SRC-GIT-INITIAL", "why_it_supports_this_fact": "first substantial generator application"},
+    {"type": "doc", "ref": "SRC-DOC-LEARNING-LOG", "why_it_supports_this_fact": "early retrospective scope context"}
+  ],
+  "publication_risks": ["不要把 learning-log 的估計工時寫成 telemetry。", "不要說當時已有 source-grounded research。"],
+  "confidence": "HIGH"
+}

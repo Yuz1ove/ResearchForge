@@ -24,7 +24,7 @@ const DEFAULT_METADATA_TIMEOUT_MS = 4000;
 const DEFAULT_FULLER_METADATA_TIMEOUT_MS = 6000;
 const DEFAULT_RESULTS_PER_PROVIDER = 25;
 const DEFAULT_PAGES_PER_PROVIDER_QUERY = 2;
-const DEFAULT_USER_AGENT = "ReportFactoryAI/1.0";
+const DEFAULT_USER_AGENT = "ResearchForge/1.0 (mailto:kuanyunimo@gmail.com)";
 
 function positiveNumber(value: string | undefined, fallback: number): number {
   const numeric = Number(value);

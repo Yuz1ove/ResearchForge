@@ -45,6 +45,10 @@ import {
   parseResearchInput,
 } from "@workspace/api-zod/research-intent";
 import type { ParsedResearchInput } from "@workspace/api-zod/research-intent";
+import {
+  assessSourceTopicIntegrity,
+  buildTopicIntegrityContract,
+} from "@workspace/api-zod/topic-integrity";
 import { dedupeSourceRecords, type SourceRecord } from "@workspace/api-zod";
 import { understandTopic } from "@workspace/api-zod/topic-understanding";
 import type {
@@ -84,6 +88,12 @@ import {
   resolveEvidenceCandidates,
   type ResolvedEvidence,
 } from "./evidenceResolution";
+import {
+  retrieveEvidenceChunks,
+  type EvidenceChunkRetrievalOptions,
+} from "./evidenceChunkRetrieval";
+import { auditDirectStudyCandidatesV3 } from "../../direct-study-relevance-v3";
+import { buildEvidenceGapDrivenQueryPlan } from "../../evidence-gap-driven-query-planner";
 
 const ACTIONABLE_HARM_PATTERNS = [
   /如何/u,
@@ -102,14 +112,29 @@ const HIGH_RISK_PATTERNS: Array<{
   category: AcademicSafetyReview["riskCategories"][number];
   pattern: RegExp;
 }> = [
-  { category: "crime", pattern: /犯罪|詐騙|再犯|執法|警方|forensic|crime|fraud/i },
-  { category: "drugs", pattern: /毒品|成癮|藥物濫用|drug|addiction|substance abuse/i },
-  { category: "sexual_content", pattern: /性教育|性犯罪|sexual|sex education/i },
+  {
+    category: "crime",
+    pattern: /犯罪|詐騙|再犯|執法|警方|forensic|crime|fraud/i,
+  },
+  {
+    category: "drugs",
+    pattern: /毒品|成癮|藥物濫用|drug|addiction|substance abuse/i,
+  },
+  {
+    category: "sexual_content",
+    pattern: /性教育|性犯罪|sexual|sex education/i,
+  },
   { category: "violence", pattern: /霸凌|暴力|傷害|violence|bullying/i },
   { category: "self_harm", pattern: /自殺|自傷|self-harm|suicide/i },
-  { category: "medical", pattern: /醫療|醫學|抗藥性|medical|clinical|antibiotic/i },
+  {
+    category: "medical",
+    pattern: /醫療|醫學|抗藥性|medical|clinical|antibiotic/i,
+  },
   { category: "weapons", pattern: /武器|爆炸物|weapon|explosive/i },
-  { category: "privacy", pattern: /帳號|隱私|追蹤|帳密|privacy|credential|account/i },
+  {
+    category: "privacy",
+    pattern: /帳號|隱私|追蹤|帳密|privacy|credential|account/i,
+  },
 ];
 
 const ACADEMIC_INTENT_PATTERNS = [
@@ -242,45 +267,103 @@ const LOCAL_TRANSLATIONS: Record<string, string[]> = {
     "Chinese terminology",
     "Taiwan panda terminology",
   ],
-  大熊貓: [
-    "giant panda",
-    "Ailuropoda melanoleuca",
-    "giant panda taxonomy",
-  ],
-  小熊貓: [
-    "red panda",
-    "Ailurus fulgens",
-    "red panda taxonomy",
-  ],
-  小貓熊: [
-    "red panda",
-    "Ailurus fulgens",
-    "red panda taxonomy",
-  ],
+  大熊貓: ["giant panda", "Ailuropoda melanoleuca", "giant panda taxonomy"],
+  小熊貓: ["red panda", "Ailurus fulgens", "red panda taxonomy"],
+  小貓熊: ["red panda", "Ailurus fulgens", "red panda taxonomy"],
 };
 
 const DOMAIN_INTENT_PATTERNS: Array<{
   domain: string;
   pattern: RegExp;
 }> = [
-  { domain: "animal behavior / veterinary behavior", pattern: /狗|犬|護食|資源防衛|食物攻擊|犬類行為|dog|canine|resource guarding|food aggression|veterinary behavior/i },
-  { domain: "psychology / adolescent cognition", pattern: /睡眠不足|睡眠限制|青少年.*(?:工作記憶|注意力|認知)|sleep deprivation|sleep restriction|adolescent cognition|working memory.*attention/i },
-  { domain: "marine ecology / sea turtle hatchling orientation", pattern: /海龜|綠蠵龜|幼龜|海龜幼體|入海|人工夜間照明|夜間照明|光害|sea turtle|marine turtle|hatchling orientation|artificial light at night|coastal lighting|light pollution/i },
-  { domain: "applied linguistics / writing education", pattern: /同儕回饋|第二語言|寫作修訂|修訂品質|peer feedback|second language writing|L2 writing|writing revision/i },
-  { domain: "indoor air / adsorption engineering", pattern: /活性碳|活性炭|甲醛|室內空氣|移除效率|activated carbon|formaldehyde|indoor air quality|adsorption efficiency/i },
-  { domain: "biomedical / oral health / dentistry", pattern: /健康|醫|睡眠|心率|氣喘|咖啡因|抗生素|抗藥性|牙菌斑|牙垢|口腔生物膜|牙周病|health|medical|sleep|heart rate|asthma|caffeine|antibiotic|dental plaque|oral biofilm|periodontal|plaque control/i },
-  { domain: "physics / aerospace", pattern: /太陽帆|輻射壓|光壓|航天推進|深空探測|solar sail|solar sailing|radiation pressure|spacecraft propulsion|deep space/i },
-  { domain: "energy / photovoltaic engineering", pattern: /太陽能板|光伏|光電轉換|表面粗糙|反射率|光反射|發電效率|solar panel|photovoltaic|surface roughness|optical reflectance|anti-reflection|power conversion efficiency|solar cell efficiency/i },
-  { domain: "physics / aerodynamics", pattern: /風箏|空氣動力|升力|阻力|風速|拉力|kite|aerodynamics|lift|drag|tethered flight|wind tunnel/i },
-  { domain: "physics / optics", pattern: /泡泡|肥皂膜|薄膜|干涉|繞射|光學|光波長|soap bubble|soap film|thin film|interference|diffraction|optics|wavelength/i },
-  { domain: "chemistry", pattern: /化學|塑膠|材料|受熱|BPA|鄰苯|反應|金屬離子|焰色|火焰顏色|咖啡因|萃取|chemistry|plastic|polymer|thermal|material|metal ion|flame test|caffeine|extraction/i },
-  { domain: "environmental science", pattern: /空氣污染|污染|環境|PM2\.?5|氣候|洋流|海流|黑潮|生物多樣性|海洋|鳥類|餵食|覓食|食性|environment|pollution|air quality|climate|ocean current|Kuroshio|biodiversity|marine|bird|avian|feeding ecology|foraging|trophic/i },
-  { domain: "mixed / biology + culture_linguistics", pattern: /熊貓|貓熊|大熊貓|小熊貓|小貓熊|giant panda|red panda|Ailuropoda|Ailurus|cat-bear|Chinese terminology/i },
-  { domain: "biology", pattern: /光合作用|植物|物種|分類|分類學|photosynthesis|photosynthetic|plant physiology|taxonomy|species/i },
-  { domain: "psychology / education", pattern: /高中生|學生|注意力|學習|教育|psychology|education|student|attention|learning/i },
-  { domain: "history / culture", pattern: /文化|歷史|工藝|藍染|保存|heritage|culture|history|craft/i },
-  { domain: "technology / computer science", pattern: /人工智慧|AI|科技|生成式|computer science|technology|generative ai|artificial intelligence/i },
-  { domain: "social science", pattern: /政策|社會|影響|風險|social|policy|society/i },
+  {
+    domain: "animal behavior / veterinary behavior",
+    pattern:
+      /狗|犬|護食|資源防衛|食物攻擊|犬類行為|dog|canine|resource guarding|food aggression|veterinary behavior/i,
+  },
+  {
+    domain: "psychology / adolescent cognition",
+    pattern:
+      /睡眠不足|睡眠限制|青少年.*(?:工作記憶|注意力|認知)|sleep deprivation|sleep restriction|adolescent cognition|working memory.*attention/i,
+  },
+  {
+    domain: "marine ecology / sea turtle hatchling orientation",
+    pattern:
+      /海龜|綠蠵龜|幼龜|海龜幼體|入海|人工夜間照明|夜間照明|光害|sea turtle|marine turtle|hatchling orientation|artificial light at night|coastal lighting|light pollution/i,
+  },
+  {
+    domain: "applied linguistics / writing education",
+    pattern:
+      /同儕回饋|第二語言|寫作修訂|修訂品質|peer feedback|second language writing|L2 writing|writing revision/i,
+  },
+  {
+    domain: "indoor air / adsorption engineering",
+    pattern:
+      /活性碳|活性炭|甲醛|室內空氣|移除效率|activated carbon|formaldehyde|indoor air quality|adsorption efficiency/i,
+  },
+  {
+    domain: "biomedical / oral health / dentistry",
+    pattern:
+      /健康|醫|睡眠|心率|氣喘|咖啡因|抗生素|抗藥性|牙菌斑|牙垢|口腔生物膜|牙周病|health|medical|sleep|heart rate|asthma|caffeine|antibiotic|dental plaque|oral biofilm|periodontal|plaque control/i,
+  },
+  {
+    domain: "physics / aerospace",
+    pattern:
+      /太陽帆|輻射壓|光壓|航天推進|深空探測|solar sail|solar sailing|radiation pressure|spacecraft propulsion|deep space/i,
+  },
+  {
+    domain: "energy / photovoltaic engineering",
+    pattern:
+      /太陽能板|光伏|光電轉換|表面粗糙|反射率|光反射|發電效率|solar panel|photovoltaic|surface roughness|optical reflectance|anti-reflection|power conversion efficiency|solar cell efficiency/i,
+  },
+  {
+    domain: "physics / aerodynamics",
+    pattern:
+      /風箏|空氣動力|升力|阻力|風速|拉力|kite|aerodynamics|lift|drag|tethered flight|wind tunnel/i,
+  },
+  {
+    domain: "physics / optics",
+    pattern:
+      /泡泡|肥皂膜|薄膜|干涉|繞射|光學|光波長|soap bubble|soap film|thin film|interference|diffraction|optics|wavelength/i,
+  },
+  {
+    domain: "chemistry",
+    pattern:
+      /化學|塑膠|材料|受熱|BPA|鄰苯|反應|金屬離子|焰色|火焰顏色|咖啡因|萃取|chemistry|plastic|polymer|thermal|material|metal ion|flame test|caffeine|extraction/i,
+  },
+  {
+    domain: "environmental science",
+    pattern:
+      /空氣污染|污染|環境|PM2\.?5|氣候|洋流|海流|黑潮|生物多樣性|海洋|鳥類|餵食|覓食|食性|environment|pollution|air quality|climate|ocean current|Kuroshio|biodiversity|marine|bird|avian|feeding ecology|foraging|trophic/i,
+  },
+  {
+    domain: "mixed / biology + culture_linguistics",
+    pattern:
+      /熊貓|貓熊|大熊貓|小熊貓|小貓熊|giant panda|red panda|Ailuropoda|Ailurus|cat-bear|Chinese terminology/i,
+  },
+  {
+    domain: "biology",
+    pattern:
+      /光合作用|植物|物種|分類|分類學|photosynthesis|photosynthetic|plant physiology|taxonomy|species/i,
+  },
+  {
+    domain: "psychology / education",
+    pattern:
+      /高中生|學生|注意力|學習|教育|psychology|education|student|attention|learning/i,
+  },
+  {
+    domain: "history / culture",
+    pattern: /文化|歷史|工藝|藍染|保存|heritage|culture|history|craft/i,
+  },
+  {
+    domain: "technology / computer science",
+    pattern:
+      /人工智慧|AI|科技|生成式|computer science|technology|generative ai|artificial intelligence/i,
+  },
+  {
+    domain: "social science",
+    pattern: /政策|社會|影響|風險|social|policy|society/i,
+  },
 ];
 
 const RESEARCH_INTENT_PATTERNS: Array<{
@@ -288,29 +371,50 @@ const RESEARCH_INTENT_PATTERNS: Array<{
   pattern: RegExp;
 }> = [
   { intent: "mechanism", pattern: /如何|原因|機制|原理|mechanism|why|how/i },
-  { intent: "health_effect", pattern: /健康|睡眠|心率|氣喘|風險|health|heart rate|asthma|risk|sleep/i },
+  {
+    intent: "health_effect",
+    pattern: /健康|睡眠|心率|氣喘|風險|health|heart rate|asthma|risk|sleep/i,
+  },
   { intent: "risk_factor", pattern: /風險|危害|有害|risk|harm|hazard/i },
   { intent: "comparison", pattern: /比較|差異|comparison|versus|difference/i },
-  { intent: "terminology_taxonomy", pattern: /熊貓|貓熊|大熊貓|小熊貓|小貓熊|名稱|命名|用法|分類|taxonomy|terminology|naming|cat-bear/i },
+  {
+    intent: "terminology_taxonomy",
+    pattern:
+      /熊貓|貓熊|大熊貓|小熊貓|小貓熊|名稱|命名|用法|分類|taxonomy|terminology|naming|cat-bear/i,
+  },
   { intent: "historical_origin", pattern: /起源|歷史|origin|history/i },
-  { intent: "cultural_meaning", pattern: /文化|保存|角色|heritage|culture|meaning|preservation/i },
+  {
+    intent: "cultural_meaning",
+    pattern: /文化|保存|角色|heritage|culture|meaning|preservation/i,
+  },
   { intent: "application", pattern: /應用|使用|application|use/i },
   { intent: "policy_impact", pattern: /政策|制度|policy|governance/i },
-  { intent: "experimental_principle", pattern: /實驗|反應|experiment|reaction/i },
+  {
+    intent: "experimental_principle",
+    pattern: /實驗|反應|experiment|reaction/i,
+  },
 ];
 
 const GENERIC_FOOD_TEMPLATE_QUERY =
   /food safety.*(?:storage|processing|risk)|(?:storage|processing).*food safety|market.*brand|consumption.*(?:food culture|dietary culture)|culinary culture|regional food culture|食品安全.*(?:保存|加工|風險)|(?:保存|加工).*食品安全|市場.*品牌|消費.*(?:飲食文化|食物文化)/i;
 
 function hasExplicitFoodTemplateIntent(value: string): boolean {
-  return /食品安全|保存|加工|市場|品牌|消費|飲食文化|food safety|storage|processing|market|brand|consumer|consumption|food culture|culinary|cuisine/i.test(value);
+  return /食品安全|保存|加工|市場|品牌|消費|飲食文化|food safety|storage|processing|market|brand|consumer|consumption|food culture|culinary|cuisine/i.test(
+    value,
+  );
 }
 
 function isProteinMuscleTopic(value: string): boolean {
-  return /蛋白質|protein/i.test(value) && /肌肉|肌肥大|muscle|hypertrophy|leucine|mTOR|阻力訓練/i.test(value);
+  return (
+    /蛋白質|protein/i.test(value) &&
+    /肌肉|肌肥大|muscle|hypertrophy|leucine|mTOR|阻力訓練/i.test(value)
+  );
 }
 
-function sanitizeGroundingQueries(queries: string[], topicText: string): string[] {
+function sanitizeGroundingQueries(
+  queries: string[],
+  topicText: string,
+): string[] {
   const allowFoodTemplates = hasExplicitFoodTemplateIntent(topicText);
   const cleaned = queries.filter(
     (query) => allowFoodTemplates || !GENERIC_FOOD_TEMPLATE_QUERY.test(query),
@@ -395,7 +499,10 @@ function isColaHealthTopic(topic: string): boolean {
   return hasBeverageCue && hasHealthCue && !fuelCue;
 }
 
-function paleontologyAlgaeQueries(topic: string): { zh: string[]; en: string[] } {
+function paleontologyAlgaeQueries(topic: string): {
+  zh: string[];
+  en: string[];
+} {
   const normalized = compactWhitespace(topic);
   return {
     zh: uniqueStrings([
@@ -414,7 +521,10 @@ function paleontologyAlgaeQueries(topic: string): { zh: string[]; en: string[] }
   };
 }
 
-function astronomyScienceEducationQueries(topic: string): { zh: string[]; en: string[] } {
+function astronomyScienceEducationQueries(topic: string): {
+  zh: string[];
+  en: string[];
+} {
   const normalized = compactWhitespace(topic);
   return {
     zh: uniqueStrings([
@@ -434,7 +544,10 @@ function astronomyScienceEducationQueries(topic: string): { zh: string[]; en: st
   };
 }
 
-function agriculturalWastePollutionQueries(topic: string): { zh: string[]; en: string[] } {
+function agriculturalWastePollutionQueries(topic: string): {
+  zh: string[];
+  en: string[];
+} {
   const normalized = compactWhitespace(topic);
   return {
     zh: uniqueStrings([
@@ -500,10 +613,19 @@ const LEGACY_GENERIC_OUTPUT_PATTERNS: Array<{
 }> = [
   { label: "如何形成並產生作用", pattern: /如何形成並產生作用/u },
   { label: "原理、應用與限制", pattern: /原理、應用與限制/u },
-  { label: "不同環境與條件下會怎麼變化", pattern: /不同環境與條件下會怎麼變化/u },
+  {
+    label: "不同環境與條件下會怎麼變化",
+    pattern: /不同環境與條件下會怎麼變化/u,
+  },
   { label: "生活連結", pattern: /生活連結/u },
-  { label: "比較", pattern: /(?:^|[\s:：，、(（「『])比較(?:$|[\s:：，、)）」』])/u },
-  { label: "行銷", pattern: /(?:^|[\s:：，、(（「『])行銷(?:$|[\s:：，、)）」』])/u },
+  {
+    label: "比較",
+    pattern: /(?:^|[\s:：，、(（「『])比較(?:$|[\s:：，、)）」』])/u,
+  },
+  {
+    label: "行銷",
+    pattern: /(?:^|[\s:：，、(（「『])行銷(?:$|[\s:：，、)）」』])/u,
+  },
   { label: "科學比較", pattern: /科學比較/u },
   { label: "資料策略", pattern: /資料策略/u },
 ];
@@ -541,7 +663,11 @@ export interface GroundingPipelineDependencies {
     input: KeywordExpansionRequest,
   ) => Promise<KeywordExpansionResult>;
   lexiconAdapters?: LexiconAdapter[];
-  acceptedSourceEnricher?: (sources: SourceCandidate[]) => Promise<SourceCandidate[]>;
+  acceptedSourceEnricher?: (
+    sources: SourceCandidate[],
+  ) => Promise<SourceCandidate[]>;
+  contentFetchImpl?: typeof fetch;
+  evidenceChunkRetrieval?: EvidenceChunkRetrievalOptions;
   onProgress?: (update: GroundingPipelineProgress) => void | Promise<void>;
 }
 
@@ -554,7 +680,9 @@ export type GroundingPipelineResult = Omit<
   "requestId" | "attemptId" | "revision" | "expiresAt"
 >;
 
-type GroundingFallbackAttempt = NonNullable<GroundingPipelineDiagnostics["fallbackAttempts"]>[number];
+type GroundingFallbackAttempt = NonNullable<
+  GroundingPipelineDiagnostics["fallbackAttempts"]
+>[number];
 type SourceCandidateBuildResult = ReturnType<typeof buildSourceCandidates>;
 
 const MIN_REVIEWABLE_SOURCE_COUNT = 4;
@@ -593,7 +721,9 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return Array.from(
     new Set(
       values
-        .map((value) => (typeof value === "string" ? compactWhitespace(value) : ""))
+        .map((value) =>
+          typeof value === "string" ? compactWhitespace(value) : "",
+        )
         .filter(Boolean),
     ),
   );
@@ -728,7 +858,9 @@ export function buildFinalGroundingQueryBundle(input: {
     input.requestQuerySeedEn ?? [],
   );
   const expansionEnglishQueries = sanitizeEnglishProviderQueries([
-    ...(!containsZh(expansionNormalizedTopic) ? [expansionNormalizedTopic] : []),
+    ...(!containsZh(expansionNormalizedTopic)
+      ? [expansionNormalizedTopic]
+      : []),
     ...(input.keywordExpansion.english_queries ?? []),
     ...expansionSearchQueries.filter((query) => !containsZh(query)),
   ]);
@@ -760,7 +892,11 @@ export function buildFinalGroundingQueryBundle(input: {
   };
 }
 
-type QueryClassification = "providerQuery" | "backgroundQuery" | "outlineHint" | "rejectedQuery";
+type QueryClassification =
+  | "providerQuery"
+  | "backgroundQuery"
+  | "outlineHint"
+  | "rejectedQuery";
 
 const REPORT_OUTLINE_HINT_QUERY =
   /^(背景脈絡|主要類型|核心特徵|形成過程|使用方式|章節安排|研究架構|background context|main types|core features|formation process|usage|how to use|report outline)$/i;
@@ -781,15 +917,21 @@ function querySharesTopicSignal(query: string, topicText: string): boolean {
   const normalizedQuery = compactWhitespace(query).toLowerCase();
   const normalizedTopic = compactWhitespace(topicText).toLowerCase();
   if (!normalizedQuery || !normalizedTopic) return false;
-  if (normalizedTopic.includes(normalizedQuery) && normalizedQuery.length >= 4) return true;
+  if (normalizedTopic.includes(normalizedQuery) && normalizedQuery.length >= 4)
+    return true;
   const topicPieces = normalizedTopic
     .split(/\s+|[、,，;；:：。！？?()（）「」『』]/u)
     .map((piece) => piece.trim())
-    .filter((piece) => piece.length >= 2 && !GENERIC_PROVIDER_QUERY.test(piece));
+    .filter(
+      (piece) => piece.length >= 2 && !GENERIC_PROVIDER_QUERY.test(piece),
+    );
   return topicPieces.some((piece) => normalizedQuery.includes(piece));
 }
 
-function classifySearchQueryForRouting(query: string, topicText: string): {
+function classifySearchQueryForRouting(
+  query: string,
+  topicText: string,
+): {
   classification: QueryClassification;
   reason: string;
 } {
@@ -799,10 +941,16 @@ function classifySearchQueryForRouting(query: string, topicText: string): {
     return { classification: "rejectedQuery", reason: "empty query" };
   }
   if (REPORT_OUTLINE_HINT_QUERY.test(normalized)) {
-    return { classification: "outlineHint", reason: "report outline hint, not a provider search query" };
+    return {
+      classification: "outlineHint",
+      reason: "report outline hint, not a provider search query",
+    };
   }
   if (REPORT_QUESTION_HINT.test(normalized)) {
-    return { classification: "outlineHint", reason: "report-planning question, not a provider search query" };
+    return {
+      classification: "outlineHint",
+      reason: "report-planning question, not a provider search query",
+    };
   }
   if (
     REPORT_OUTLINE_HINT_FRAGMENT.test(normalized) &&
@@ -810,16 +958,35 @@ function classifySearchQueryForRouting(query: string, topicText: string): {
       normalized,
     )
   ) {
-    return { classification: "outlineHint", reason: "topic-prefixed report outline hint, not a provider search query" };
+    return {
+      classification: "outlineHint",
+      reason: "topic-prefixed report outline hint, not a provider search query",
+    };
   }
-  if (GENERIC_PROVIDER_QUERY.test(normalized) && !querySharesTopicSignal(normalized, topicText)) {
-    return { classification: "outlineHint", reason: "generic report-template phrase without topic entities" };
+  if (
+    GENERIC_PROVIDER_QUERY.test(normalized) &&
+    !querySharesTopicSignal(normalized, topicText)
+  ) {
+    return {
+      classification: "outlineHint",
+      reason: "generic report-template phrase without topic entities",
+    };
   }
   if (LOCALE_ONLY_QUERY.test(normalized)) {
-    return { classification: "rejectedQuery", reason: "locale-only query lacks topic entities" };
+    return {
+      classification: "rejectedQuery",
+      reason: "locale-only query lacks topic entities",
+    };
   }
-  if (normalized.length < 2 || (/^[A-Za-z]{1,2}$/u.test(normalized) && !querySharesTopicSignal(normalized, topicText))) {
-    return { classification: "rejectedQuery", reason: "query is too short for provider routing" };
+  if (
+    normalized.length < 2 ||
+    (/^[A-Za-z]{1,2}$/u.test(normalized) &&
+      !querySharesTopicSignal(normalized, topicText))
+  ) {
+    return {
+      classification: "rejectedQuery",
+      reason: "query is too short for provider routing",
+    };
   }
   if (
     /官方|百科|博物館|動物園|科普|背景|用法|詞源|命名|terminology|naming|etymology|common name|museum|zoo|encyclopedia|official background|trusted background/i.test(
@@ -829,17 +996,31 @@ function classifySearchQueryForRouting(query: string, topicText: string): {
       normalized,
     )
   ) {
-    return { classification: "backgroundQuery", reason: "background or terminology query routed away from academic providers" };
+    return {
+      classification: "backgroundQuery",
+      reason:
+        "background or terminology query routed away from academic providers",
+    };
   }
-  if (/旅遊|攝影|詩詞|桌布|wallpaper|photography|travel|poem|tourism/i.test(lower)) {
-    return { classification: "rejectedQuery", reason: "known drift query for this workflow" };
+  if (
+    /旅遊|攝影|詩詞|桌布|wallpaper|photography|travel|poem|tourism/i.test(lower)
+  ) {
+    return {
+      classification: "rejectedQuery",
+      reason: "known drift query for this workflow",
+    };
   }
-  return { classification: "providerQuery", reason: "contains searchable topic or domain entities" };
+  return {
+    classification: "providerQuery",
+    reason: "contains searchable topic or domain entities",
+  };
 }
 
 function providerSafeQueries(queries: string[], topicText: string): string[] {
   return uniqueStrings(queries).filter(
-    (query) => classifySearchQueryForRouting(query, topicText).classification === "providerQuery",
+    (query) =>
+      classifySearchQueryForRouting(query, topicText).classification ===
+      "providerQuery",
   );
 }
 
@@ -851,13 +1032,16 @@ type TopicQueryAnchorProfile = {
 
 const TOPIC_QUERY_ANCHOR_PROFILES: TopicQueryAnchorProfile[] = [
   {
-    topicPattern: /太陽能板|光伏|光電轉換|發電效率|solar panel|photovoltaic|solar cell|power conversion efficiency/i,
+    topicPattern:
+      /太陽能板|光伏|光電轉換|發電效率|solar panel|photovoltaic|solar cell|power conversion efficiency/i,
     queryAllowed: (query) =>
       !/formation|development/i.test(query) &&
-      (/太陽能板|光伏|光電轉換|solar panel|photovoltaic|solar cell/i.test(query) &&
-        /表面粗糙|反射|發電效率|surface roughness|surface texture|reflectance|reflection|anti-reflection|power conversion efficiency|solar cell efficiency|power output|photovoltaic performance/i.test(
-          query,
-        )),
+      /太陽能板|光伏|光電轉換|solar panel|photovoltaic|solar cell/i.test(
+        query,
+      ) &&
+      /表面粗糙|反射|發電效率|surface roughness|surface texture|reflectance|reflection|anti-reflection|power conversion efficiency|solar cell efficiency|power output|photovoltaic performance/i.test(
+        query,
+      ),
     fallbackQueries: [
       "surface roughness reflectance photovoltaic cell efficiency",
       "surface texturing light trapping silicon solar cells reflectance efficiency",
@@ -865,15 +1049,24 @@ const TOPIC_QUERY_ANCHOR_PROFILES: TopicQueryAnchorProfile[] = [
     ],
   },
   {
-    topicPattern: /睡眠不足|睡眠限制|青少年.*(?:工作記憶|注意力|認知)|sleep deprivation|sleep restriction|adolescent cognition|working memory.*attention/i,
+    topicPattern:
+      /睡眠不足|睡眠限制|青少年.*(?:工作記憶|注意力|認知)|sleep deprivation|sleep restriction|adolescent cognition|working memory.*attention/i,
     queryAllowed: (query) => {
       const normalized = compactWhitespace(query);
-      if (/^(attention|working memory|cognition|adolescents?|teenagers?|sleep deprivation|sleep restriction|sleep quality)$/i.test(normalized)) {
+      if (
+        /^(attention|working memory|cognition|adolescents?|teenagers?|sleep deprivation|sleep restriction|sleep quality)$/i.test(
+          normalized,
+        )
+      ) {
         return false;
       }
       return (
-        /睡眠不足|睡眠限制|sleep deprivation|sleep restriction|sleep quality|sleep duration|insufficient sleep/i.test(query) &&
-        /工作記憶|注意力|認知|working memory|attention|cognition|cognitive performance|sustained attention|executive function/i.test(query)
+        /睡眠不足|睡眠限制|sleep deprivation|sleep restriction|sleep quality|sleep duration|insufficient sleep/i.test(
+          query,
+        ) &&
+        /工作記憶|注意力|認知|working memory|attention|cognition|cognitive performance|sustained attention|executive function/i.test(
+          query,
+        )
       );
     },
     fallbackQueries: [
@@ -883,12 +1076,21 @@ const TOPIC_QUERY_ANCHOR_PROFILES: TopicQueryAnchorProfile[] = [
     ],
   },
   {
-    topicPattern: /海龜|綠蠵龜|海龜幼體|幼龜|入海|人工夜間照明|夜間照明|光害|sea turtle|marine turtle|hatchling orientation|artificial light at night|coastal lighting|light pollution/i,
+    topicPattern:
+      /海龜|綠蠵龜|海龜幼體|幼龜|入海|人工夜間照明|夜間照明|光害|sea turtle|marine turtle|hatchling orientation|artificial light at night|coastal lighting|light pollution/i,
     queryAllowed: (query) =>
-      ((/海龜|綠蠵龜|幼龜|sea turtle|marine turtle|loggerhead|green turtle/i.test(query) &&
-        /幼體|入海|夜間照明|人工夜間照明|光害|hatchling|orientation|disorientation|artificial light|light pollution|coastal lighting|beach lighting|sea finding|seaward/i.test(query)) ||
-        /海龜幼體|hatchling orientation|hatchling disorientation|marine turtle hatchling/i.test(query)) &&
-      !/habitat fragmentation|population distribution|conservation corridor/i.test(query),
+      ((/海龜|綠蠵龜|幼龜|sea turtle|marine turtle|loggerhead|green turtle/i.test(
+        query,
+      ) &&
+        /幼體|入海|夜間照明|人工夜間照明|光害|hatchling|orientation|disorientation|artificial light|light pollution|coastal lighting|beach lighting|sea finding|seaward/i.test(
+          query,
+        )) ||
+        /海龜幼體|hatchling orientation|hatchling disorientation|marine turtle hatchling/i.test(
+          query,
+        )) &&
+      !/habitat fragmentation|population distribution|conservation corridor/i.test(
+        query,
+      ),
     fallbackQueries: [
       "sea turtle hatchling orientation artificial light at night",
       "sea turtle hatchling disorientation light pollution coastal lighting",
@@ -896,12 +1098,12 @@ const TOPIC_QUERY_ANCHOR_PROFILES: TopicQueryAnchorProfile[] = [
     ],
   },
   {
-    topicPattern: /同儕回饋|第二語言|寫作修訂|修訂品質|peer feedback|second language writing|L2 writing|writing revision/i,
+    topicPattern:
+      /同儕回饋|第二語言|寫作修訂|修訂品質|peer feedback|second language writing|L2 writing|writing revision/i,
     queryAllowed: (query) =>
       /同儕回饋|第二語言|寫作|修訂|peer feedback|peer response|peer assessment|second language writing|L2 writing|EFL writing|ESL writing|writing revision|revision quality/i.test(
         query,
-      ) &&
-      !/^peer review$/i.test(compactWhitespace(query)),
+      ) && !/^peer review$/i.test(compactWhitespace(query)),
     fallbackQueries: [
       "peer feedback second language writing revision quality",
       "L2 writing peer feedback revision quality students",
@@ -909,7 +1111,8 @@ const TOPIC_QUERY_ANCHOR_PROFILES: TopicQueryAnchorProfile[] = [
     ],
   },
   {
-    topicPattern: /活性碳|活性炭|甲醛|室內空氣|移除效率|activated carbon|formaldehyde|indoor air quality|adsorption efficiency/i,
+    topicPattern:
+      /活性碳|活性炭|甲醛|室內空氣|移除效率|activated carbon|formaldehyde|indoor air quality|adsorption efficiency/i,
     queryAllowed: (query) => {
       const normalized = compactWhitespace(query);
       if (
@@ -920,8 +1123,12 @@ const TOPIC_QUERY_ANCHOR_PROFILES: TopicQueryAnchorProfile[] = [
         return false;
       }
       return (
-        /活性碳|活性炭|activated carbon|active carbon|carbon filter|activated carbon fiber|碳濾材/i.test(query) &&
-        /甲醛|室內空氣|formaldehyde|indoor air|air filtration|VOC|volatile organic/i.test(query)
+        /活性碳|活性炭|activated carbon|active carbon|carbon filter|activated carbon fiber|碳濾材/i.test(
+          query,
+        ) &&
+        /甲醛|室內空氣|formaldehyde|indoor air|air filtration|VOC|volatile organic/i.test(
+          query,
+        )
       );
     },
     fallbackQueries: [
@@ -932,38 +1139,66 @@ const TOPIC_QUERY_ANCHOR_PROFILES: TopicQueryAnchorProfile[] = [
   },
 ];
 
-function topicQueryAnchorProfile(topicText: string): TopicQueryAnchorProfile | null {
-  return TOPIC_QUERY_ANCHOR_PROFILES.find((profile) => profile.topicPattern.test(topicText)) ?? null;
+function topicQueryAnchorProfile(
+  topicText: string,
+): TopicQueryAnchorProfile | null {
+  return (
+    TOPIC_QUERY_ANCHOR_PROFILES.find((profile) =>
+      profile.topicPattern.test(topicText),
+    ) ?? null
+  );
 }
 
-function providerSafeDomainAnchoredQueries(queries: string[], topicText: string): string[] {
+function providerSafeDomainAnchoredQueries(
+  queries: string[],
+  topicText: string,
+): string[] {
   const safe = providerSafeQueries(queries, topicText);
   const profile = topicQueryAnchorProfile(topicText);
   if (!profile) return safe;
   return safe.filter((query) => profile.queryAllowed(query));
 }
 
-function topicAnchoredPlanQueries(queries: string[], topicText: string): string[] {
+function topicAnchoredPlanQueries(
+  queries: string[],
+  topicText: string,
+): string[] {
   const cleaned = uniqueStrings(queries);
   const profile = topicQueryAnchorProfile(topicText);
   if (!profile) return cleaned;
-  return providerSafeQueries(cleaned, topicText).filter((query) => profile.queryAllowed(query));
+  return providerSafeQueries(cleaned, topicText).filter((query) =>
+    profile.queryAllowed(query),
+  );
 }
 
-function backgroundRoutedQueries(queries: string[], topicText: string): string[] {
+function backgroundRoutedQueries(
+  queries: string[],
+  topicText: string,
+): string[] {
   return uniqueStrings(queries).filter(
-    (query) => classifySearchQueryForRouting(query, topicText).classification === "backgroundQuery",
+    (query) =>
+      classifySearchQueryForRouting(query, topicText).classification ===
+      "backgroundQuery",
   );
 }
 
 function webSafeQueries(queries: string[], topicText: string): string[] {
   return uniqueStrings(queries).filter((query) => {
-    const classification = classifySearchQueryForRouting(query, topicText).classification;
-    return classification === "providerQuery" || classification === "backgroundQuery";
+    const classification = classifySearchQueryForRouting(
+      query,
+      topicText,
+    ).classification;
+    return (
+      classification === "providerQuery" || classification === "backgroundQuery"
+    );
   });
 }
 
-type SourceBucketDecision = "accepted" | "fallback_review" | "manual_review" | "rejected";
+type SourceBucketDecision =
+  | "accepted"
+  | "fallback_review"
+  | "manual_review"
+  | "rejected";
 
 type BucketEntityDefinition = {
   bucket: SourceResearchBucket;
@@ -1097,7 +1332,10 @@ function genericAcademicEntityDefinition(
       ...conceptTerms,
       ...(queryPlan?.primaryQueries ?? []),
     ]).slice(0, 32),
-    strongTerms: uniqueStrings([...requiredAnyTerms, ...repeatedTerms]).slice(0, 16),
+    strongTerms: uniqueStrings([...requiredAnyTerms, ...repeatedTerms]).slice(
+      0,
+      16,
+    ),
     ...(requiredAnyTerms.length > 0
       ? {
           requiredSignals: ["topic entity match"],
@@ -1113,20 +1351,37 @@ function scoreBucketText(input: {
   definition: BucketEntityDefinition;
 }): { score: number; matched: string[] } {
   const matched = matchedBucketTerms(input.fullText, input.definition.terms);
-  const strongMatched = matchedBucketTerms(input.fullText, input.definition.strongTerms ?? []);
-  const titleMatched = matchedBucketTerms(input.titleText, input.definition.terms);
+  const strongMatched = matchedBucketTerms(
+    input.fullText,
+    input.definition.strongTerms ?? [],
+  );
+  const titleMatched = matchedBucketTerms(
+    input.titleText,
+    input.definition.terms,
+  );
   let score = Math.min(
     0.98,
-    matched.length * 0.12 + strongMatched.length * 0.2 + Math.min(0.16, titleMatched.length * 0.08),
+    matched.length * 0.12 +
+      strongMatched.length * 0.2 +
+      Math.min(0.16, titleMatched.length * 0.08),
   );
   if (strongMatched.length >= 2) score = Math.max(score, 0.78);
-  if (strongMatched.length >= 1 && matched.length >= 2) score = Math.max(score, 0.62);
+  if (strongMatched.length >= 1 && matched.length >= 2)
+    score = Math.max(score, 0.62);
   if (matched.length >= 3) score = Math.max(score, 0.58);
-  if (matched.length >= 2 && titleMatched.length >= 1) score = Math.max(score, 0.52);
-  if (matched.length === 1 && strongMatched.length === 1 && titleMatched.length === 1) {
+  if (matched.length >= 2 && titleMatched.length >= 1)
+    score = Math.max(score, 0.52);
+  if (
+    matched.length === 1 &&
+    strongMatched.length === 1 &&
+    titleMatched.length === 1
+  ) {
     score = Math.max(score, 0.5);
   }
-  return { score: Number(score.toFixed(3)), matched: uniqueStrings([...strongMatched, ...matched]) };
+  return {
+    score: Number(score.toFixed(3)),
+    matched: uniqueStrings([...strongMatched, ...matched]),
+  };
 }
 
 function pandaEntityDefinitions(): BucketEntityDefinition[] {
@@ -1150,7 +1405,13 @@ function pandaEntityDefinitions(): BucketEntityDefinition[] {
         "用法",
         "名稱",
       ],
-      strongTerms: ["熊貓", "貓熊", "cat-bear", "Chinese terminology", "Taiwan panda terminology"],
+      strongTerms: [
+        "熊貓",
+        "貓熊",
+        "cat-bear",
+        "Chinese terminology",
+        "Taiwan panda terminology",
+      ],
       requiredSignals: ["panda terminology or Chinese usage"],
     },
     {
@@ -1200,28 +1461,56 @@ function pandaEntityDefinitions(): BucketEntityDefinition[] {
         "詞源",
         "名稱演變",
       ],
-      strongTerms: ["naming history", "etymology", "命名史", "詞源", "cat-bear"],
+      strongTerms: [
+        "naming history",
+        "etymology",
+        "命名史",
+        "詞源",
+        "cat-bear",
+      ],
       requiredSignals: ["naming or etymology signal"],
     },
     {
       bucket: "general_background",
-      terms: ["panda", "giant panda", "red panda", "動物園", "zoo", "museum", "encyclopedia", "background"],
+      terms: [
+        "panda",
+        "giant panda",
+        "red panda",
+        "動物園",
+        "zoo",
+        "museum",
+        "encyclopedia",
+        "background",
+      ],
       strongTerms: ["giant panda", "red panda", "zoo", "museum"],
     },
   ];
 }
 
-function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan): TopicEntityMap {
-  const text = compactWhitespace([
-    topicText,
-    queryPlan?.domain,
-    queryPlan?.intent,
-    ...(queryPlan?.primaryQueries ?? []),
-    ...(queryPlan?.secondaryQueries ?? []),
-    ...(queryPlan?.conceptGroups ?? []).flatMap((group) => [group.name, ...group.zhTerms, ...group.enTerms]),
-  ].join(" ")).toLowerCase();
+function buildTopicEntityMap(
+  topicText: string,
+  queryPlan?: GroundingQueryPlan,
+): TopicEntityMap {
+  const text = compactWhitespace(
+    [
+      topicText,
+      queryPlan?.domain,
+      queryPlan?.intent,
+      ...(queryPlan?.primaryQueries ?? []),
+      ...(queryPlan?.secondaryQueries ?? []),
+      ...(queryPlan?.conceptGroups ?? []).flatMap((group) => [
+        group.name,
+        ...group.zhTerms,
+        ...group.enTerms,
+      ]),
+    ].join(" "),
+  ).toLowerCase();
 
-  if (/牙菌斑|牙垢|口腔生物膜|牙周病|dental plaque|oral biofilm|dental biofilm|periodontal|plaque control/i.test(text)) {
+  if (
+    /牙菌斑|牙垢|口腔生物膜|牙周病|dental plaque|oral biofilm|dental biofilm|periodontal|plaque control/i.test(
+      text,
+    )
+  ) {
     return {
       buckets: [
         "oral_biofilm_formation",
@@ -1243,7 +1532,12 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
             "biofilm formation",
             "plaque formation",
           ],
-          strongTerms: ["dental plaque", "oral biofilm", "牙菌斑", "口腔生物膜"],
+          strongTerms: [
+            "dental plaque",
+            "oral biofilm",
+            "牙菌斑",
+            "口腔生物膜",
+          ],
           requiredSignals: ["dental plaque / oral biofilm formation signal"],
         },
         {
@@ -1262,7 +1556,12 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
             "口腔衛生",
             "洗牙",
           ],
-          strongTerms: ["plaque control", "periodontal therapy", "chlorhexidine", "scaling"],
+          strongTerms: [
+            "plaque control",
+            "periodontal therapy",
+            "chlorhexidine",
+            "scaling",
+          ],
         },
         {
           bucket: "periodontal_context",
@@ -1290,7 +1589,13 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
             "university extension",
             "government",
           ],
-          strongTerms: ["WHO", "CDC", "NIH", "dental association", "official guideline"],
+          strongTerms: [
+            "WHO",
+            "CDC",
+            "NIH",
+            "dental association",
+            "official guideline",
+          ],
         },
       ],
       offTopicPatterns: [
@@ -1306,7 +1611,11 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
     };
   }
 
-  if (/狗|犬|護食|資源防衛|食物攻擊|犬類行為|dog|canine|resource guarding|food aggression|veterinary behavior/i.test(text)) {
+  if (
+    /狗|犬|護食|資源防衛|食物攻擊|犬類行為|dog|canine|resource guarding|food aggression|veterinary behavior/i.test(
+      text,
+    )
+  ) {
     return {
       buckets: [
         "canine_resource_guarding_behavior",
@@ -1332,8 +1641,16 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
             "資源防衛",
             "食物攻擊",
           ],
-          strongTerms: ["resource guarding", "food aggression", "food guarding", "護食", "資源防衛"],
-          requiredSignals: ["dog/canine plus resource guarding/food aggression signal"],
+          strongTerms: [
+            "resource guarding",
+            "food aggression",
+            "food guarding",
+            "護食",
+            "資源防衛",
+          ],
+          requiredSignals: [
+            "dog/canine plus resource guarding/food aggression signal",
+          ],
         },
         {
           bucket: "behavior_modification_training",
@@ -1370,12 +1687,27 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
             "犬類攻擊",
             "動物福利",
           ],
-          strongTerms: ["veterinary behavior", "canine aggression", "animal behavior", "獸醫行為學"],
+          strongTerms: [
+            "veterinary behavior",
+            "canine aggression",
+            "animal behavior",
+            "獸醫行為學",
+          ],
         },
         {
           bucket: "general_background",
-          terms: ["animal welfare", "veterinary association", "university extension", "official", "guideline"],
-          strongTerms: ["animal welfare", "veterinary association", "university extension"],
+          terms: [
+            "animal welfare",
+            "veterinary association",
+            "university extension",
+            "official",
+            "guideline",
+          ],
+          strongTerms: [
+            "animal welfare",
+            "veterinary association",
+            "university extension",
+          ],
         },
       ],
       offTopicPatterns: [
@@ -1395,9 +1727,19 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
     };
   }
 
-  if (/熊貓|貓熊|大熊貓|小熊貓|小貓熊|紅熊貓|giant panda|red panda|ailuropoda|ailurus|cat-bear|chinese terminology/i.test(text)) {
+  if (
+    /熊貓|貓熊|大熊貓|小熊貓|小貓熊|紅熊貓|giant panda|red panda|ailuropoda|ailurus|cat-bear|chinese terminology/i.test(
+      text,
+    )
+  ) {
     return {
-      buckets: ["terminology_usage", "taxonomy_distinction", "naming_history", "general_background", "off_topic"],
+      buckets: [
+        "terminology_usage",
+        "taxonomy_distinction",
+        "naming_history",
+        "general_background",
+        "off_topic",
+      ],
       definitions: pandaEntityDefinitions(),
       offTopicPatterns: [
         /vaquita/i,
@@ -1408,13 +1750,22 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
         /spider monkey|salmonella|microplastics/i,
       ],
       backgroundSourceNeeded: true,
-      missingProviderReason: "terminology_usage/naming_history need trusted background or official web routing beyond academic providers",
+      missingProviderReason:
+        "terminology_usage/naming_history need trusted background or official web routing beyond academic providers",
     };
   }
 
-  if (/玉佩|玉器|玉飾|jade pendant|jade ornament|chinese jade|material culture|archaeology/i.test(text)) {
+  if (
+    /玉佩|玉器|玉飾|jade pendant|jade ornament|chinese jade|material culture|archaeology/i.test(
+      text,
+    )
+  ) {
     return {
-      buckets: ["archaeology_history_culture", "general_background", "off_topic"],
+      buckets: [
+        "archaeology_history_culture",
+        "general_background",
+        "off_topic",
+      ],
       definitions: [
         {
           bucket: "archaeology_history_culture",
@@ -1437,21 +1788,43 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
             "考古",
             "禮制",
           ],
-          strongTerms: ["玉佩", "jade pendant", "Chinese jade", "archaeology", "material culture", "ritual"],
-          requiredSignals: ["jade object plus archaeology/history/culture signal"],
+          strongTerms: [
+            "玉佩",
+            "jade pendant",
+            "Chinese jade",
+            "archaeology",
+            "material culture",
+            "ritual",
+          ],
+          requiredSignals: [
+            "jade object plus archaeology/history/culture signal",
+          ],
         },
         {
           bucket: "general_background",
-          terms: ["museum", "British Museum", "Smithsonian", "Metropolitan Museum", "文化背景", "博物館"],
+          terms: [
+            "museum",
+            "British Museum",
+            "Smithsonian",
+            "Metropolitan Museum",
+            "文化背景",
+            "博物館",
+          ],
           strongTerms: ["museum", "博物館"],
         },
       ],
-      offTopicPatterns: [/biomedical|clinical|protein|virus|scattering|tourism|photography/i],
+      offTopicPatterns: [
+        /biomedical|clinical|protein|virus|scattering|tourism|photography/i,
+      ],
       backgroundSourceNeeded: true,
     };
   }
 
-  if (/愛滋病|人類免疫缺乏病毒|免疫系統|hiv|aids|human immunodeficiency virus|immune system|cd4/i.test(text)) {
+  if (
+    /愛滋病|人類免疫缺乏病毒|免疫系統|hiv|aids|human immunodeficiency virus|immune system|cd4/i.test(
+      text,
+    )
+  ) {
     return {
       buckets: ["biomedical", "general_background", "off_topic"],
       definitions: [
@@ -1471,12 +1844,26 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
             "pathogenesis",
             "antiretroviral",
           ],
-          strongTerms: ["HIV", "AIDS", "human immunodeficiency virus", "CD4", "immune system", "免疫系統"],
+          strongTerms: [
+            "HIV",
+            "AIDS",
+            "human immunodeficiency virus",
+            "CD4",
+            "immune system",
+            "免疫系統",
+          ],
           requiredSignals: ["HIV/AIDS immune-system mechanism"],
         },
         {
           bucket: "general_background",
-          terms: ["WHO", "CDC", "NIH", "public health", "official", "medical background"],
+          terms: [
+            "WHO",
+            "CDC",
+            "NIH",
+            "public health",
+            "official",
+            "medical background",
+          ],
           strongTerms: ["WHO", "CDC", "NIH"],
         },
       ],
@@ -1485,9 +1872,17 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
     };
   }
 
-  if (/夕陽|餘暉|日落|sunset|twilight|rayleigh|wavelength|大氣散射|mie scattering|atmospheric optics/i.test(text)) {
+  if (
+    /夕陽|餘暉|日落|sunset|twilight|rayleigh|wavelength|大氣散射|mie scattering|atmospheric optics/i.test(
+      text,
+    )
+  ) {
     return {
-      buckets: ["physics_atmospheric_optics", "general_background", "off_topic"],
+      buckets: [
+        "physics_atmospheric_optics",
+        "general_background",
+        "off_topic",
+      ],
       definitions: [
         {
           bucket: "physics_atmospheric_optics",
@@ -1511,8 +1906,16 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
             "大氣光學",
             "大氣散射",
           ],
-          strongTerms: ["Rayleigh scattering", "wavelength", "atmospheric optics", "瑞利散射", "波長"],
-          requiredSignals: ["Rayleigh scattering, wavelength, or atmospheric-optics signal"],
+          strongTerms: [
+            "Rayleigh scattering",
+            "wavelength",
+            "atmospheric optics",
+            "瑞利散射",
+            "波長",
+          ],
+          requiredSignals: [
+            "Rayleigh scattering, wavelength, or atmospheric-optics signal",
+          ],
         },
         {
           bucket: "general_background",
@@ -1520,7 +1923,9 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
           strongTerms: ["NASA", "NOAA", "UCAR"],
         },
       ],
-      offTopicPatterns: [/旅遊|攝影|詩詞|wallpaper|photography|travel|poem|tourism/i],
+      offTopicPatterns: [
+        /旅遊|攝影|詩詞|wallpaper|photography|travel|poem|tourism/i,
+      ],
       backgroundSourceNeeded: true,
     };
   }
@@ -1531,7 +1936,14 @@ function buildTopicEntityMap(topicText: string, queryPlan?: GroundingQueryPlan):
       genericAcademicEntityDefinition(queryPlan),
       {
         bucket: "general_background",
-        terms: ["official", "government", "museum", "education", "encyclopedia", "background"],
+        terms: [
+          "official",
+          "government",
+          "museum",
+          "education",
+          "encyclopedia",
+          "background",
+        ],
       },
     ],
     offTopicPatterns: [
@@ -1585,21 +1997,27 @@ function assessSourceBucket(input: {
     matchedByBucket.set(definition.bucket, scored.matched);
   }
 
-  const bestEntry =
-    Object.entries(bucketScores)
-      .filter((entry): entry is [SourceResearchBucket, number] => typeof entry[1] === "number")
-      .sort((left, right) => right[1] - left[1])[0] ?? ["general_academic", 0];
-  const offTopicHit = input.topicEntityMap.offTopicPatterns.some((pattern) => pattern.test(fullText));
+  const bestEntry = Object.entries(bucketScores)
+    .filter(
+      (entry): entry is [SourceResearchBucket, number] =>
+        typeof entry[1] === "number",
+    )
+    .sort((left, right) => right[1] - left[1])[0] ?? ["general_academic", 0];
+  const offTopicHit = input.topicEntityMap.offTopicPatterns.some((pattern) =>
+    pattern.test(fullText),
+  );
   const bestScore = bestEntry[1];
-  const offTopicScore = offTopicHit && bestScore < 0.72 ? 0.92 : bestScore < 0.12 ? 0.45 : 0;
+  const offTopicScore =
+    offTopicHit && bestScore < 0.72 ? 0.92 : bestScore < 0.12 ? 0.45 : 0;
   if (offTopicScore > 0) bucketScores.off_topic = offTopicScore;
   const bucket: SourceResearchBucket =
     offTopicScore >= 0.65 ? "off_topic" : bestEntry[0];
   const bucketScore = bucket === "off_topic" ? offTopicScore : bestScore;
-  const matchedEntities = bucket === "off_topic"
-    ? []
-    : matchedByBucket.get(bucket) ?? [];
-  const definition = input.topicEntityMap.definitions.find((item) => item.bucket === bucket);
+  const matchedEntities =
+    bucket === "off_topic" ? [] : (matchedByBucket.get(bucket) ?? []);
+  const definition = input.topicEntityMap.definitions.find(
+    (item) => item.bucket === bucket,
+  );
   const matchedRequiredTerms =
     bucket === "off_topic"
       ? []
@@ -1648,12 +2066,16 @@ function assessSourceBucket(input: {
     decision = "rejected";
     sourceUseCase = "rejected";
     decisionReasons.push("明顯命中 off_topic bucket，且缺少本題必要實體。");
-  } else if (bucket === "general_academic" && missingRequiredSignals.length > 0) {
+  } else if (
+    bucket === "general_academic" &&
+    missingRequiredSignals.length > 0
+  ) {
     decision = "rejected";
     sourceUseCase = "rejected";
     decisionReasons.push("缺少重複出現在核心查詢中的研究對象實體。 ");
   } else if (
-    (scholarlyAcceptedBuckets.includes(bucket) || bucket === "general_academic") &&
+    (scholarlyAcceptedBuckets.includes(bucket) ||
+      bucket === "general_academic") &&
     bucketScore >= 0.52 &&
     academicTrace &&
     input.sourceQualityScore >= 0.45 &&
@@ -1661,11 +2083,19 @@ function assessSourceBucket(input: {
   ) {
     decision = "accepted";
     sourceUseCase = "academic_claim";
-    decisionReasons.push(`${bucket} bucket strong match with academic/traceable metadata.`);
-  } else if (bucket === "archaeology_history_culture" && bucketScore >= 0.52 && academicTrace) {
+    decisionReasons.push(
+      `${bucket} bucket strong match with academic/traceable metadata.`,
+    );
+  } else if (
+    bucket === "archaeology_history_culture" &&
+    bucketScore >= 0.52 &&
+    academicTrace
+  ) {
     decision = "accepted";
     sourceUseCase = "academic_claim";
-    decisionReasons.push("humanities/culture bucket strong match with traceable scholarly metadata.");
+    decisionReasons.push(
+      "humanities/culture bucket strong match with traceable scholarly metadata.",
+    );
   } else if (
     backgroundOnlyBuckets.includes(bucket) &&
     bucketScore >= 0.48 &&
@@ -1673,12 +2103,16 @@ function assessSourceBucket(input: {
   ) {
     decision = "fallback_review";
     sourceUseCase = "background_context";
-    decisionReasons.push(`${bucket} bucket supports background context, not strict academic claims.`);
+    decisionReasons.push(
+      `${bucket} bucket supports background context, not strict academic claims.`,
+    );
   } else if (bucketScore >= 0.38) {
     decision = "manual_review";
     sourceUseCase = academicTrace ? "academic_claim" : "manual_review_only";
     highConfidenceManual = bucketScore >= 0.45;
-    decisionReasons.push(`${bucket} bucket partial match requires human confirmation.`);
+    decisionReasons.push(
+      `${bucket} bucket partial match requires human confirmation.`,
+    );
   } else {
     decision = input.relevanceScore >= 0.18 ? "manual_review" : "rejected";
     sourceUseCase = decision === "rejected" ? "rejected" : "manual_review_only";
@@ -1702,7 +2136,9 @@ function assessSourceBucket(input: {
   };
 }
 
-function bucketCountsForCandidates(candidates: SourceCandidate[]): Record<string, number> {
+function bucketCountsForCandidates(
+  candidates: SourceCandidate[],
+): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const candidate of candidates) {
     const bucket = candidate.sourceBucket ?? "general_academic";
@@ -1725,33 +2161,102 @@ function evidenceFacetsForSource(source: {
   const patterns: Array<{ label: string; pattern: RegExp }> = [
     { label: "微化石", pattern: /微化石|microfossil/i },
     { label: "藻類化石", pattern: /藻類|藻|algae|algal|fossil algae/i },
-    { label: "古環境重建", pattern: /古環境|paleoenvironment|palaeoenvironment/i },
+    {
+      label: "古環境重建",
+      pattern: /古環境|paleoenvironment|palaeoenvironment/i,
+    },
     { label: "沉積環境", pattern: /沉積|sediment|sedimentary|marine shale/i },
-    { label: "疊層石與藍綠菌", pattern: /疊層石|藍綠菌|stromatolite|cyanobacteria/i },
+    {
+      label: "疊層石與藍綠菌",
+      pattern: /疊層石|藍綠菌|stromatolite|cyanobacteria/i,
+    },
     { label: "化石保存", pattern: /保存|preservation|soft tissue/i },
     { label: "化石紀錄", pattern: /化石紀錄|fossil record/i },
-    { label: "天文距離", pattern: /恆星距離|星星距離|光年|視差|stellar distance|astronomical distance|light[-\s]?year|parallax/i },
-    { label: "天文教育", pattern: /天文教育|科學教育|博物館展示|大眾理解|astronomy education|science education|museum exhibition|public understanding|planetarium/i },
-    { label: "農業廢棄物", pattern: /農業廢料|農業廢棄物|畜牧廢棄物|agricultural waste|farm waste|agricultural residues|manure/i },
-    { label: "水土污染", pattern: /水質污染|土壤污染|逕流|徑流|富營養化|water pollution|soil contamination|runoff|eutrophication|nutrient pollution/i },
-    { label: "AI 與工作", pattern: /人工智慧|生成式AI|(^|[^A-Za-z])AI(?=$|[^A-Za-z])|artificial intelligence|generative AI|future of work|workplace|labor market|employment|job transformation|勞動市場|職務變遷|工作本質/i },
-    { label: "含糖飲料", pattern: /可樂|汽水|碳酸飲料|含糖飲料|cola|soda|soft drinks?|sugar[-\s]?sweetened beverages?|carbonated beverages?|sugary drinks?/i },
-    { label: "糖分與咖啡因", pattern: /糖分|游離糖|添加糖|咖啡因|sugar|free sugar|added sugar|caffeine/i },
-    { label: "健康風險", pattern: /肥胖|代謝|蛀牙|牙齒|糖尿病|心血管|公共衛生|obesity|metabolic|diabetes|cardiovascular|dental|caries|public health/i },
-    { label: "牙菌斑形成", pattern: /牙菌斑形成|牙菌斑|dental plaque|plaque formation|biofilm formation/i },
+    {
+      label: "天文距離",
+      pattern:
+        /恆星距離|星星距離|光年|視差|stellar distance|astronomical distance|light[-\s]?year|parallax/i,
+    },
+    {
+      label: "天文教育",
+      pattern:
+        /天文教育|科學教育|博物館展示|大眾理解|astronomy education|science education|museum exhibition|public understanding|planetarium/i,
+    },
+    {
+      label: "農業廢棄物",
+      pattern:
+        /農業廢料|農業廢棄物|畜牧廢棄物|agricultural waste|farm waste|agricultural residues|manure/i,
+    },
+    {
+      label: "水土污染",
+      pattern:
+        /水質污染|土壤污染|逕流|徑流|富營養化|water pollution|soil contamination|runoff|eutrophication|nutrient pollution/i,
+    },
+    {
+      label: "AI 與工作",
+      pattern:
+        /人工智慧|生成式AI|(^|[^A-Za-z])AI(?=$|[^A-Za-z])|artificial intelligence|generative AI|future of work|workplace|labor market|employment|job transformation|勞動市場|職務變遷|工作本質/i,
+    },
+    {
+      label: "含糖飲料",
+      pattern:
+        /可樂|汽水|碳酸飲料|含糖飲料|cola|soda|soft drinks?|sugar[-\s]?sweetened beverages?|carbonated beverages?|sugary drinks?/i,
+    },
+    {
+      label: "糖分與咖啡因",
+      pattern:
+        /糖分|游離糖|添加糖|咖啡因|sugar|free sugar|added sugar|caffeine/i,
+    },
+    {
+      label: "健康風險",
+      pattern:
+        /肥胖|代謝|蛀牙|牙齒|糖尿病|心血管|公共衛生|obesity|metabolic|diabetes|cardiovascular|dental|caries|public health/i,
+    },
+    {
+      label: "牙菌斑形成",
+      pattern:
+        /牙菌斑形成|牙菌斑|dental plaque|plaque formation|biofilm formation/i,
+    },
     { label: "口腔生物膜", pattern: /口腔生物膜|oral biofilm|dental biofilm/i },
-    { label: "牙周治療", pattern: /牙周治療|牙周病|periodontal therapy|periodontal treatment|periodontal disease|periodontitis/i },
-    { label: "牙菌斑控制", pattern: /牙菌斑控制|plaque control|chlorhexidine|scaling|洗牙/i },
+    {
+      label: "牙周治療",
+      pattern:
+        /牙周治療|牙周病|periodontal therapy|periodontal treatment|periodontal disease|periodontitis/i,
+    },
+    {
+      label: "牙菌斑控制",
+      pattern: /牙菌斑控制|plaque control|chlorhexidine|scaling|洗牙/i,
+    },
     { label: "口腔衛生", pattern: /口腔衛生|oral hygiene|prevention|預防/i },
     { label: "護食行為", pattern: /護食|food guarding|resource guarding/i },
-    { label: "資源防衛", pattern: /資源防衛|resource guarding|possession aggression/i },
+    {
+      label: "資源防衛",
+      pattern: /資源防衛|resource guarding|possession aggression/i,
+    },
     { label: "食物攻擊", pattern: /食物攻擊|food aggression/i },
-    { label: "行為矯正", pattern: /行為矯正|behavior modification|behavior therapy|desensitization|counterconditioning/i },
-    { label: "正向增強訓練", pattern: /正向增強|positive reinforcement|training|訓練/i },
-    { label: "獸醫行為學", pattern: /獸醫行為學|veterinary behavior|animal behavior|canine aggression/i },
-    { label: "測量或分類證據", pattern: /測量|分類|indicator|classification|structures/i },
+    {
+      label: "行為矯正",
+      pattern:
+        /行為矯正|behavior modification|behavior therapy|desensitization|counterconditioning/i,
+    },
+    {
+      label: "正向增強訓練",
+      pattern: /正向增強|positive reinforcement|training|訓練/i,
+    },
+    {
+      label: "獸醫行為學",
+      pattern:
+        /獸醫行為學|veterinary behavior|animal behavior|canine aggression/i,
+    },
+    {
+      label: "測量或分類證據",
+      pattern: /測量|分類|indicator|classification|structures/i,
+    },
     { label: "影響與關聯", pattern: /影響|關係|relationship|effect|impact/i },
-    { label: "研究方法", pattern: /方法|method|model|analysis|reconstruction/i },
+    {
+      label: "研究方法",
+      pattern: /方法|method|model|analysis|reconstruction/i,
+    },
   ];
   return patterns
     .filter((entry) => entry.pattern.test(text))
@@ -2081,32 +2586,50 @@ function charSimilarity(left: string, right: string): number {
   const leftChars = new Set(left.replace(/\s+/g, ""));
   const rightChars = new Set(right.replace(/\s+/g, ""));
   if (leftChars.size === 0 || rightChars.size === 0) return 0;
-  const overlap = Array.from(leftChars).filter((char) => rightChars.has(char)).length;
+  const overlap = Array.from(leftChars).filter((char) =>
+    rightChars.has(char),
+  ).length;
   return overlap / Math.max(leftChars.size, rightChars.size);
 }
 
 function listsSemanticallyEquivalent(left: string[], right: string[]): boolean {
   const normalizedLeft = normalizeCompareList(left);
   const normalizedRight = normalizeCompareList(right);
-  if (JSON.stringify(normalizedLeft) === JSON.stringify(normalizedRight)) return true;
+  if (JSON.stringify(normalizedLeft) === JSON.stringify(normalizedRight))
+    return true;
   if (normalizedLeft.length !== normalizedRight.length) return false;
-  return normalizedLeft.every((item, index) => charSimilarity(item, normalizedRight[index] ?? "") >= 0.6);
+  return normalizedLeft.every(
+    (item, index) => charSimilarity(item, normalizedRight[index] ?? "") >= 0.6,
+  );
 }
 
 function classifyNonsense(topic: string): string | null {
   const normalized = compactWhitespace(topic);
   if (!normalized) return "empty";
-  if (/幫我(做|寫|產生|生成).{0,6}報告|做一份報告|寫一份報告|我要研究(一個)?(東西|主題)|研究一個東西|報告題目|隨便.*報告/u.test(normalized)) {
+  if (
+    /幫我(做|寫|產生|生成).{0,6}報告|做一份報告|寫一份報告|我要研究(一個)?(東西|主題)|研究一個東西|報告題目|隨便.*報告/u.test(
+      normalized,
+    )
+  ) {
     return "missing_research_subject";
   }
   if (!/[A-Za-z0-9\u3400-\u9fff]/u.test(normalized)) return "symbol_only";
   const stripped = normalized.replace(/\s+/g, "");
   if (/^[?？!！.。]+$/u.test(stripped)) return "punctuation_only";
-  if (/[ㄅ-ㄩ]/u.test(stripped) && !/[\u3400-\u9fff]/u.test(stripped)) return "phonetic_garbage";
-  if (/^(?:asdf|qwer|qwerty|zzz|xxx|abc)(?:\s+(?:asdf|qwer|qwerty|zzz|xxx|abc))*$/i.test(normalized)) {
+  if (/[ㄅ-ㄩ]/u.test(stripped) && !/[\u3400-\u9fff]/u.test(stripped))
+    return "phonetic_garbage";
+  if (
+    /^(?:asdf|qwer|qwerty|zzz|xxx|abc)(?:\s+(?:asdf|qwer|qwerty|zzz|xxx|abc))*$/i.test(
+      normalized,
+    )
+  ) {
     return "ascii_garbage";
   }
-  if (/^[A-Za-z0-9_-]+$/.test(stripped)) {
+  // Consonant-run heuristics are meaningful only for a single opaque token.
+  // Applying them after whitespace removal rejects ordinary multi-word
+  // English research questions such as "high school students" or battery
+  // comparison titles.
+  if (/^[A-Za-z0-9_-]+$/.test(stripped) && !/\s/u.test(normalized)) {
     const vowels = (stripped.match(/[aeiou]/gi) ?? []).length;
     const hasDigit = /\d/.test(stripped);
     if (stripped.length <= 3) return "too_short";
@@ -2133,38 +2656,46 @@ function domainSignals(topic: string): DomainHypothesis[] {
     {
       domain: "chemistry_materials",
       confidence: 0.82,
-      pattern: /反應|電鍍|燃料電池|聚乳酸|銅綠|氧化|還原|酸鹼|材料|降解|chemical|reaction/i,
+      pattern:
+        /反應|電鍍|燃料電池|聚乳酸|銅綠|氧化|還原|酸鹼|材料|降解|chemical|reaction/i,
       evidence: ["chemistry/material keyword match"],
     },
     {
       domain: "biology_medicine",
       confidence: 0.84,
-      pattern: /抗藥性|珊瑚|發芽|發酵|藍綠菌|蚊子|心率|生長|biology|medical|antibiotic|coral/i,
+      pattern:
+        /抗藥性|珊瑚|發芽|發酵|藍綠菌|蚊子|心率|生長|biology|medical|antibiotic|coral/i,
       evidence: ["biology/medical keyword match"],
     },
     {
       domain: "physics_engineering",
       confidence: 0.8,
-      pattern: /太陽帆|輻射壓|光壓|航天推進|深空探測|電磁感應|太陽能|熱傳導|橋樑|水火箭|承重|效率|physics|engineering|induction|solar sail|radiation pressure|spacecraft propulsion/i,
+      pattern:
+        /太陽帆|輻射壓|光壓|航天推進|深空探測|電磁感應|太陽能|熱傳導|橋樑|水火箭|承重|效率|physics|engineering|induction|solar sail|radiation pressure|spacecraft propulsion/i,
       evidence: ["physics/engineering keyword match"],
     },
     {
       domain: "social_science",
       confidence: 0.78,
-      pattern: /學習|注意力|壓力|校園|閱讀|寫作|教育|犯罪|公共衛生|政策|social|education|policy/i,
+      pattern:
+        /學習|注意力|壓力|校園|閱讀|寫作|教育|犯罪|公共衛生|政策|social|education|policy/i,
       evidence: ["social-science keyword match"],
     },
     {
       domain: "geography_ecology_geology",
       confidence: 0.88,
-      pattern: /黃石國家公園|yellowstone|國家公園|地質|火山系統|保育|生態|觀光管理/i,
+      pattern:
+        /黃石國家公園|yellowstone|國家公園|地質|火山系統|保育|生態|觀光管理/i,
       evidence: ["geography / ecology / geology keyword match"],
     },
     {
       domain: "mixed_biology_culture_linguistics",
       confidence: 0.9,
-      pattern: /熊貓|貓熊|大熊貓|小熊貓|小貓熊|giant panda|red panda|Ailuropoda|Ailurus|cat-bear|Chinese terminology/i,
-      evidence: ["panda terminology, taxonomy, and Chinese usage keyword match"],
+      pattern:
+        /熊貓|貓熊|大熊貓|小熊貓|小貓熊|giant panda|red panda|Ailuropoda|Ailurus|cat-bear|Chinese terminology/i,
+      evidence: [
+        "panda terminology, taxonomy, and Chinese usage keyword match",
+      ],
     },
     {
       domain: "folklore_mythology_literature",
@@ -2196,7 +2727,10 @@ function domainSignals(topic: string): DomainHypothesis[] {
     signals.push({
       domain: understanding.domain,
       confidence: 0.7,
-      evidence: uniqueStrings([understanding.domain, ...understanding.coreConcepts.slice(0, 3)]),
+      evidence: uniqueStrings([
+        understanding.domain,
+        ...understanding.coreConcepts.slice(0, 3),
+      ]),
       source: "search_signal",
     });
   }
@@ -2210,7 +2744,9 @@ function domainSignals(topic: string): DomainHypothesis[] {
     });
   }
 
-  return signals.sort((left, right) => right.confidence - left.confidence).slice(0, 4);
+  return signals
+    .sort((left, right) => right.confidence - left.confidence)
+    .slice(0, 4);
 }
 
 function completenessForTopic(
@@ -2268,7 +2804,9 @@ function completenessForTopic(
       level: "missing_subject_or_variable",
       score: 0.38,
       reason: "relation is visible but variables are incomplete",
-      missingFields: uniqueStrings(parse.missingFields.concat(["subject_or_variable"])),
+      missingFields: uniqueStrings(
+        parse.missingFields.concat(["subject_or_variable"]),
+      ),
       suggestedClarifyingQuestions: ["請補充研究對象、自變因或依變因。"],
     };
   }
@@ -2282,7 +2820,9 @@ function completenessForTopic(
   };
 }
 
-export function parseResearchTitleSentence(text: string): ResearchTitleSentenceParse {
+export function parseResearchTitleSentence(
+  text: string,
+): ResearchTitleSentenceParse {
   const originalText = compactWhitespace(text);
   const normalizedText = originalText.replace(/[「」"'`]/g, "");
   const warnings: string[] = [];
@@ -2451,10 +2991,14 @@ export function analyzeTopicInput(input: {
     !understandTopic(normalizedTopic).canonicalEnglishTopic &&
     (input.parsedInput?.queryPlan.enQueries.length ?? 0) === 0
   ) {
-    warnings.push("english query translation is unavailable; keeping Chinese seed queries");
+    warnings.push(
+      "english query translation is unavailable; keeping Chinese seed queries",
+    );
   }
   if (titleParse.confidence < 0.6) {
-    warnings.push("title parser confidence below 0.6; preserve original topic for semantic safety");
+    warnings.push(
+      "title parser confidence below 0.6; preserve original topic for semantic safety",
+    );
   }
 
   return {
@@ -2464,7 +3008,11 @@ export function analyzeTopicInput(input: {
     normalizedTopic,
     detectedLanguage: detectLanguage(normalizedTopic),
     isNonsenseInput: nonsenseReason !== null,
-    topicCompleteness: completenessForTopic(normalizedTopic, nonsenseReason, titleParse),
+    topicCompleteness: completenessForTopic(
+      normalizedTopic,
+      nonsenseReason,
+      titleParse,
+    ),
     domainHypotheses: domainSignals(normalizedTopic),
     warnings,
   };
@@ -2478,21 +3026,26 @@ export function compareTitleSemantics(
     return {
       isSemanticallyEquivalent: false,
       changedFields: [],
-      reason: "parser confidence below 0.6; preserve original topic to avoid semantic drift",
+      reason:
+        "parser confidence below 0.6; preserve original topic to avoid semantic drift",
     };
   }
 
   const changedFields: TitleSemanticComparison["changedFields"] = [];
   const fieldPairs: Array<
-    [
-      TitleSemanticComparison["changedFields"][number],
-      string[],
-      string[],
-    ]
+    [TitleSemanticComparison["changedFields"][number], string[], string[]]
   > = [
     ["subject", originalParse.subject, candidateParse.subject],
-    ["independentVariables", originalParse.independentVariables, candidateParse.independentVariables],
-    ["dependentVariables", originalParse.dependentVariables, candidateParse.dependentVariables],
+    [
+      "independentVariables",
+      originalParse.independentVariables,
+      candidateParse.independentVariables,
+    ],
+    [
+      "dependentVariables",
+      originalParse.dependentVariables,
+      candidateParse.dependentVariables,
+    ],
     ["relation", originalParse.relation, candidateParse.relation],
     ["conditions", originalParse.conditions, candidateParse.conditions],
     ["scope", originalParse.scope, candidateParse.scope],
@@ -2523,7 +3076,9 @@ export function createTopicTitleState(input: {
   const parse = parseResearchTitleSentence(input.originalTopic);
   return {
     originalTopic: compactWhitespace(input.originalTopic),
-    ...(input.polishedTitle ? { polishedTitle: compactWhitespace(input.polishedTitle) } : {}),
+    ...(input.polishedTitle
+      ? { polishedTitle: compactWhitespace(input.polishedTitle) }
+      : {}),
     ...(input.acceptedDisplayTitle
       ? { acceptedDisplayTitle: compactWhitespace(input.acceptedDisplayTitle) }
       : {}),
@@ -2551,7 +3106,9 @@ export function buildSeedQueryPlan(input: {
     input.topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW",
   );
   const understanding = understandTopic(input.topicAnalysis.normalizedTopic);
-  const specializedQueries = isPaleontologyAlgaeTopic(input.topicAnalysis.normalizedTopic)
+  const specializedQueries = isPaleontologyAlgaeTopic(
+    input.topicAnalysis.normalizedTopic,
+  )
     ? paleontologyAlgaeQueries(input.topicAnalysis.normalizedTopic)
     : isAstronomyScienceEducationTopic(input.topicAnalysis.normalizedTopic)
       ? astronomyScienceEducationQueries(input.topicAnalysis.normalizedTopic)
@@ -2563,17 +3120,23 @@ export function buildSeedQueryPlan(input: {
             ? colaHealthQueries(input.topicAnalysis.normalizedTopic)
             : null;
   const titleParse =
-    input.titleParse ?? parseResearchTitleSentence(input.topicAnalysis.normalizedTopic);
+    input.titleParse ??
+    parseResearchTitleSentence(input.topicAnalysis.normalizedTopic);
   const parsedZhQueries = input.parsedInput?.queryPlan.zhQueries ?? [];
   const parsedEnQueries = input.parsedInput?.queryPlan.enQueries ?? [];
-  const parsedTranslationTerms = input.parsedInput?.mustIncludeTerms.filter(containsLatin) ?? [];
+  const parsedTranslationTerms =
+    input.parsedInput?.mustIncludeTerms.filter(containsLatin) ?? [];
   const requestZhQueries = input.querySeedZh ?? [];
   const requestEnQueries = input.querySeedEn ?? [];
   const localTranslations = uniqueStrings([
     ...(LOCAL_TRANSLATIONS[input.topicAnalysis.normalizedTopic] ?? []),
     ...titleParse.subject.flatMap((term) => LOCAL_TRANSLATIONS[term] ?? []),
-    ...titleParse.independentVariables.flatMap((term) => LOCAL_TRANSLATIONS[term] ?? []),
-    ...titleParse.dependentVariables.flatMap((term) => LOCAL_TRANSLATIONS[term] ?? []),
+    ...titleParse.independentVariables.flatMap(
+      (term) => LOCAL_TRANSLATIONS[term] ?? [],
+    ),
+    ...titleParse.dependentVariables.flatMap(
+      (term) => LOCAL_TRANSLATIONS[term] ?? [],
+    ),
   ]);
   const topicText = [
     input.topicAnalysis.normalizedTopic,
@@ -2584,46 +3147,67 @@ export function buildSeedQueryPlan(input: {
     ...parsedZhQueries,
     ...parsedEnQueries,
   ].join(" ");
-  const exactQueries = sanitizeGroundingQueries([
-    ...requestZhQueries.slice(0, 2),
-    ...normalizedResearchTopic.zhAcademicQuery.slice(0, 2),
-    titleParse.normalizedText,
-    ...parsedZhQueries.slice(0, 2),
-    ...(specializedQueries?.zh.slice(1, 3) ?? []),
-  ], topicText);
-  const broadQueries = sanitizeGroundingQueries([
-    ...normalizedResearchTopic.broaderAcademicQueries,
-    ...(specializedQueries?.zh.slice(1) ?? []),
-    titleParse.subject.join(" "),
-    titleParse.independentVariables.join(" "),
-    ...(specializedQueries ? [] : [understanding.coreConcepts.slice(0, 3).join(" ")]),
-  ], topicText).filter((query) => query.length >= 2 && query !== input.topicAnalysis.normalizedTopic);
+  const exactQueries = sanitizeGroundingQueries(
+    [
+      ...requestZhQueries.slice(0, 2),
+      ...normalizedResearchTopic.zhAcademicQuery.slice(0, 2),
+      titleParse.normalizedText,
+      ...parsedZhQueries.slice(0, 2),
+      ...(specializedQueries?.zh.slice(1, 3) ?? []),
+    ],
+    topicText,
+  );
+  const broadQueries = sanitizeGroundingQueries(
+    [
+      ...normalizedResearchTopic.broaderAcademicQueries,
+      ...(specializedQueries?.zh.slice(1) ?? []),
+      titleParse.subject.join(" "),
+      titleParse.independentVariables.join(" "),
+      ...(specializedQueries
+        ? []
+        : [understanding.coreConcepts.slice(0, 3).join(" ")]),
+    ],
+    topicText,
+  ).filter(
+    (query) =>
+      query.length >= 2 && query !== input.topicAnalysis.normalizedTopic,
+  );
   const zhQueries =
     input.topicAnalysis.detectedLanguage === "en"
       ? []
-      : sanitizeGroundingQueries([
-          ...requestZhQueries,
-          ...exactQueries,
-          ...normalizedResearchTopic.zhAcademicQuery,
-          ...(specializedQueries?.zh ?? []),
-          ...broadQueries,
-          ...titleParse.subject,
-          ...titleParse.independentVariables,
-          ...titleParse.dependentVariables,
-          ...parsedZhQueries,
-        ], topicText);
-  const enQueries = sanitizeEnglishProviderQueries(sanitizeGroundingQueries([
-    ...requestEnQueries,
-    ...normalizedResearchTopic.enAcademicQuery,
-    ...(specializedQueries?.en ?? []),
-    ...(specializedQueries ? [] : [understanding.canonicalEnglishTopic]),
-    ...localTranslations,
-    ...parsedEnQueries,
-    ...parsedTranslationTerms,
-    ...(specializedQueries
-      ? []
-      : understanding.coreConcepts.filter((concept) => containsLatin(concept))),
-  ], topicText));
+      : sanitizeGroundingQueries(
+          [
+            ...requestZhQueries,
+            ...exactQueries,
+            ...normalizedResearchTopic.zhAcademicQuery,
+            ...(specializedQueries?.zh ?? []),
+            ...broadQueries,
+            ...titleParse.subject,
+            ...titleParse.independentVariables,
+            ...titleParse.dependentVariables,
+            ...parsedZhQueries,
+          ],
+          topicText,
+        );
+  const enQueries = sanitizeEnglishProviderQueries(
+    sanitizeGroundingQueries(
+      [
+        ...requestEnQueries,
+        ...normalizedResearchTopic.enAcademicQuery,
+        ...(specializedQueries?.en ?? []),
+        ...(specializedQueries ? [] : [understanding.canonicalEnglishTopic]),
+        ...localTranslations,
+        ...parsedEnQueries,
+        ...parsedTranslationTerms,
+        ...(specializedQueries
+          ? []
+          : understanding.coreConcepts.filter((concept) =>
+              containsLatin(concept),
+            )),
+      ],
+      topicText,
+    ),
+  );
   const topicAnchorProfile = topicQueryAnchorProfile(topicText);
   const anchoredExactQueries = topicAnchorProfile
     ? providerSafeDomainAnchoredQueries(exactQueries, topicText)
@@ -2653,15 +3237,63 @@ export function buildSeedQueryPlan(input: {
     zhQueries: anchoredZhQueries,
     enQueries: anchoredEnQueries,
     providerQueries: {
-      openalex: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries([...anchoredEnQueries.slice(0, 5), ...anchoredExactQueries], topicText), topicText),
-      crossref: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries([...anchoredEnQueries.slice(0, 5), ...anchoredExactQueries], topicText), topicText),
-      core: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries([...anchoredEnQueries.slice(0, 3), ...anchoredExactQueries, ...anchoredBroadQueries.slice(0, 2)], topicText), topicText),
-      semanticScholar: providerSafeDomainAnchoredQueries(sanitizeGroundingQueries([...anchoredEnQueries.slice(0, 3), ...anchoredExactQueries.slice(0, 2)], topicText), topicText),
-      web: webSafeQueries(sanitizeGroundingQueries([...anchoredBroadQueries.slice(0, 2), ...anchoredExactQueries.slice(0, 2)], topicText), topicText),
+      openalex: providerSafeDomainAnchoredQueries(
+        sanitizeGroundingQueries(
+          [...anchoredEnQueries.slice(0, 5), ...anchoredExactQueries],
+          topicText,
+        ),
+        topicText,
+      ),
+      crossref: providerSafeDomainAnchoredQueries(
+        sanitizeGroundingQueries(
+          [...anchoredEnQueries.slice(0, 5), ...anchoredExactQueries],
+          topicText,
+        ),
+        topicText,
+      ),
+      core: providerSafeDomainAnchoredQueries(
+        sanitizeGroundingQueries(
+          [
+            ...anchoredEnQueries.slice(0, 3),
+            ...anchoredExactQueries,
+            ...anchoredBroadQueries.slice(0, 2),
+          ],
+          topicText,
+        ),
+        topicText,
+      ),
+      semanticScholar: providerSafeDomainAnchoredQueries(
+        sanitizeGroundingQueries(
+          [
+            ...anchoredEnQueries.slice(0, 3),
+            ...anchoredExactQueries.slice(0, 2),
+          ],
+          topicText,
+        ),
+        topicText,
+      ),
+      web: webSafeQueries(
+        sanitizeGroundingQueries(
+          [
+            ...anchoredBroadQueries.slice(0, 2),
+            ...anchoredExactQueries.slice(0, 2),
+          ],
+          topicText,
+        ),
+        topicText,
+      ),
     },
-    excludedDriftTerms: uniqueStrings(input.topicAnalysis.warnings.filter((warning) =>
-      warning.includes("drift") || warning.includes("preserve original"),
-    ).concat(normalizedResearchTopic.negativeKeywords, input.excludeTerms ?? [])),
+    excludedDriftTerms: uniqueStrings(
+      input.topicAnalysis.warnings
+        .filter(
+          (warning) =>
+            warning.includes("drift") || warning.includes("preserve original"),
+        )
+        .concat(
+          normalizedResearchTopic.negativeKeywords,
+          input.excludeTerms ?? [],
+        ),
+    ),
   };
 }
 
@@ -2682,7 +3314,11 @@ class LocalLexiconAdapter implements LexiconAdapter {
           aliases: specializedQueries.en,
           translations: specializedQueries.en,
           broaderTerms: ["paleontology", "fossil record", "paleoenvironment"],
-          narrowerTerms: ["algal microfossils", "stromatolites", "cyanobacteria"],
+          narrowerTerms: [
+            "algal microfossils",
+            "stromatolites",
+            "cyanobacteria",
+          ],
           relatedTerms: [
             "sedimentary environment",
             "fossil preservation",
@@ -2704,11 +3340,29 @@ class LocalLexiconAdapter implements LexiconAdapter {
           source: "local",
           aliases: specializedQueries.en,
           translations: specializedQueries.en,
-          broaderTerms: ["astronomy", "science education", "science communication"],
-          narrowerTerms: ["stellar distance", "parallax", "light year", "planetarium education"],
-          relatedTerms: ["museum exhibition", "public understanding of science", "informal science learning"],
+          broaderTerms: [
+            "astronomy",
+            "science education",
+            "science communication",
+          ],
+          narrowerTerms: [
+            "stellar distance",
+            "parallax",
+            "light year",
+            "planetarium education",
+          ],
+          relatedTerms: [
+            "museum exhibition",
+            "public understanding of science",
+            "informal science learning",
+          ],
           domainHints: ["astronomy", "physics", "education"],
-          excludedDriftTerms: ["generic learning outcomes", "physical education", "language learning", "annual report"],
+          excludedDriftTerms: [
+            "generic learning outcomes",
+            "physical education",
+            "language learning",
+            "annual report",
+          ],
           confidence: 0.92,
         },
       ];
@@ -2723,11 +3377,29 @@ class LocalLexiconAdapter implements LexiconAdapter {
           source: "local",
           aliases: specializedQueries.en,
           translations: specializedQueries.en,
-          broaderTerms: ["agricultural pollution", "environmental pollution", "waste management"],
-          narrowerTerms: ["agricultural runoff", "manure waste", "nutrient pollution", "soil contamination"],
-          relatedTerms: ["eutrophication", "water quality", "pollution control"],
+          broaderTerms: [
+            "agricultural pollution",
+            "environmental pollution",
+            "waste management",
+          ],
+          narrowerTerms: [
+            "agricultural runoff",
+            "manure waste",
+            "nutrient pollution",
+            "soil contamination",
+          ],
+          relatedTerms: [
+            "eutrophication",
+            "water quality",
+            "pollution control",
+          ],
           domainHints: ["environment", "agriculture", "waste_management"],
-          excludedDriftTerms: ["microplastics human health", "Salmonella food safety", "nutrition label", "annual report"],
+          excludedDriftTerms: [
+            "microplastics human health",
+            "Salmonella food safety",
+            "nutrition label",
+            "annual report",
+          ],
           confidence: 0.92,
         },
       ];
@@ -2742,11 +3414,25 @@ class LocalLexiconAdapter implements LexiconAdapter {
           source: "local",
           aliases: specializedQueries.en,
           translations: specializedQueries.en,
-          broaderTerms: ["future of work", "labor market", "workplace transformation"],
-          narrowerTerms: ["task automation", "job transformation", "skills demand", "organizational management"],
+          broaderTerms: [
+            "future of work",
+            "labor market",
+            "workplace transformation",
+          ],
+          narrowerTerms: [
+            "task automation",
+            "job transformation",
+            "skills demand",
+            "organizational management",
+          ],
           relatedTerms: ["employment", "productivity", "work practices"],
           domainHints: ["artificial_intelligence", "labor", "organization"],
-          excludedDriftTerms: ["AI market positioning", "brand strategy", "supply chain emissions", "microplastics"],
+          excludedDriftTerms: [
+            "AI market positioning",
+            "brand strategy",
+            "supply chain emissions",
+            "microplastics",
+          ],
           confidence: 0.92,
         },
       ];
@@ -2761,16 +3447,34 @@ class LocalLexiconAdapter implements LexiconAdapter {
           source: "local",
           aliases: specializedQueries.en,
           translations: specializedQueries.en,
-          broaderTerms: ["sugar-sweetened beverages", "soft drink consumption", "public health nutrition"],
-          narrowerTerms: ["sugar intake", "caffeine intake", "dental caries", "metabolic health"],
+          broaderTerms: [
+            "sugar-sweetened beverages",
+            "soft drink consumption",
+            "public health nutrition",
+          ],
+          narrowerTerms: [
+            "sugar intake",
+            "caffeine intake",
+            "dental caries",
+            "metabolic health",
+          ],
           relatedTerms: ["obesity", "adolescents", "dietary intake"],
           domainHints: ["nutrition", "public_health", "beverage_health"],
-          excludedDriftTerms: ["microplastics human health", "Salmonella food safety", "foodborne illness", "coal"],
+          excludedDriftTerms: [
+            "microplastics human health",
+            "Salmonella food safety",
+            "foodborne illness",
+            "coal",
+          ],
           confidence: 0.92,
         },
       ];
     }
-    if (/熊貓|貓熊|大熊貓|小熊貓|小貓熊|giant panda|red panda|Ailuropoda|Ailurus/i.test(normalized)) {
+    if (
+      /熊貓|貓熊|大熊貓|小熊貓|小貓熊|giant panda|red panda|Ailuropoda|Ailurus/i.test(
+        normalized,
+      )
+    ) {
       return [
         {
           originalTerm: normalized,
@@ -2791,10 +3495,26 @@ class LocalLexiconAdapter implements LexiconAdapter {
             "giant panda Ailuropoda melanoleuca red panda Ailurus fulgens distinction",
           ],
           broaderTerms: ["taxonomy", "Chinese terminology", "naming history"],
-          narrowerTerms: ["giant panda", "red panda", "Ailuropoda melanoleuca", "Ailurus fulgens"],
-          relatedTerms: ["Ursidae", "Ailuridae", "Taiwan usage", "Mainland China usage"],
+          narrowerTerms: [
+            "giant panda",
+            "red panda",
+            "Ailuropoda melanoleuca",
+            "Ailurus fulgens",
+          ],
+          relatedTerms: [
+            "Ursidae",
+            "Ailuridae",
+            "Taiwan usage",
+            "Mainland China usage",
+          ],
           domainHints: ["biology", "culture_linguistics", "general_academic"],
-          excludedDriftTerms: ["kung fu panda", "panda express", "toy", "wallpaper", "mascot"],
+          excludedDriftTerms: [
+            "kung fu panda",
+            "panda express",
+            "toy",
+            "wallpaper",
+            "mascot",
+          ],
           confidence: 0.93,
         },
       ];
@@ -2837,7 +3557,8 @@ export async function collectLexicalSignals(input: {
 }): Promise<LexicalSignal[]> {
   const adapters = input.adapters ?? [new LocalLexiconAdapter()];
   const titleParse =
-    input.titleParse ?? parseResearchTitleSentence(input.topicAnalysis.normalizedTopic);
+    input.titleParse ??
+    parseResearchTitleSentence(input.topicAnalysis.normalizedTopic);
   const terms = uniqueStrings([
     input.topicAnalysis.normalizedTopic,
     ...titleParse.subject,
@@ -2851,7 +3572,9 @@ export async function collectLexicalSignals(input: {
     ),
   );
 
-  return allSignals.flat().sort((left, right) => right.confidence - left.confidence);
+  return allSignals
+    .flat()
+    .sort((left, right) => right.confidence - left.confidence);
 }
 
 function providerQueriesFromPlan(input: {
@@ -2860,43 +3583,58 @@ function providerQueriesFromPlan(input: {
   secondaryQueries: string[];
   topicText: string;
 }): GroundingQueryPlan["providerQueries"] {
-	  const combined = uniqueStrings([...input.primaryQueries, ...input.secondaryQueries]);
-	  return {
-	    openalex: providerSafeDomainAnchoredQueries([
-	      ...input.seedQueryPlan.providerQueries.openalex,
-	      ...combined.slice(0, 4),
-	    ], input.topicText),
-	    crossref: providerSafeDomainAnchoredQueries([
-	      ...input.seedQueryPlan.providerQueries.crossref,
-	      ...combined.slice(0, 4),
-	    ], input.topicText),
-	    core: providerSafeDomainAnchoredQueries([
-	      ...input.seedQueryPlan.providerQueries.core,
-	      ...combined.slice(0, 4),
-	    ], input.topicText),
-	    semanticScholar: providerSafeDomainAnchoredQueries([
-	      ...(input.seedQueryPlan.providerQueries.semanticScholar ?? []),
-	      ...combined.filter((query) => containsLatin(query)).slice(0, 4),
-	    ], input.topicText),
-    web: webSafeQueries([
-      ...backgroundRoutedQueries(combined, input.topicText),
-      ...(input.seedQueryPlan.providerQueries.web ?? []),
-      ...input.secondaryQueries.slice(0, 3),
-    ], input.topicText),
+  const combined = uniqueStrings([
+    ...input.primaryQueries,
+    ...input.secondaryQueries,
+  ]);
+  return {
+    openalex: providerSafeDomainAnchoredQueries(
+      [
+        ...input.seedQueryPlan.providerQueries.openalex,
+        ...combined.slice(0, 4),
+      ],
+      input.topicText,
+    ),
+    crossref: providerSafeDomainAnchoredQueries(
+      [
+        ...input.seedQueryPlan.providerQueries.crossref,
+        ...combined.slice(0, 4),
+      ],
+      input.topicText,
+    ),
+    core: providerSafeDomainAnchoredQueries(
+      [...input.seedQueryPlan.providerQueries.core, ...combined.slice(0, 4)],
+      input.topicText,
+    ),
+    semanticScholar: providerSafeDomainAnchoredQueries(
+      [
+        ...(input.seedQueryPlan.providerQueries.semanticScholar ?? []),
+        ...combined.filter((query) => containsLatin(query)).slice(0, 4),
+      ],
+      input.topicText,
+    ),
+    web: webSafeQueries(
+      [
+        ...backgroundRoutedQueries(combined, input.topicText),
+        ...(input.seedQueryPlan.providerQueries.web ?? []),
+        ...input.secondaryQueries.slice(0, 3),
+      ],
+      input.topicText,
+    ),
   };
 }
 
 function inferGroundingDomain(topicText: string): string {
   return (
-    DOMAIN_INTENT_PATTERNS.find((entry) => entry.pattern.test(topicText))?.domain ??
-    "general academic"
+    DOMAIN_INTENT_PATTERNS.find((entry) => entry.pattern.test(topicText))
+      ?.domain ?? "general academic"
   );
 }
 
 function inferGroundingIntent(topicText: string): string {
   return (
-    RESEARCH_INTENT_PATTERNS.find((entry) => entry.pattern.test(topicText))?.intent ??
-    "general_academic"
+    RESEARCH_INTENT_PATTERNS.find((entry) => entry.pattern.test(topicText))
+      ?.intent ?? "general_academic"
   );
 }
 
@@ -2936,7 +3674,8 @@ function conceptGroupsFromGroundingInput(input: {
     ...signal.translations,
     ...signal.relatedTerms.slice(0, 2),
   ]);
-  const queryEnglishTerms = input.seedQueryPlan.enQueries.flatMap(splitConceptPieces);
+  const queryEnglishTerms =
+    input.seedQueryPlan.enQueries.flatMap(splitConceptPieces);
   const groups = directTerms.slice(0, 10).map((term, index) => {
     const zhTerms = containsZh(term) ? [term] : [];
     const enTerms = uniqueStrings([
@@ -2953,7 +3692,10 @@ function conceptGroupsFromGroundingInput(input: {
       }),
       ...queryEnglishTerms.filter((item) => {
         const normalizedTerm = term.toLowerCase();
-        return item.toLowerCase().includes(normalizedTerm) || normalizedTerm.includes(item.toLowerCase());
+        return (
+          item.toLowerCase().includes(normalizedTerm) ||
+          normalizedTerm.includes(item.toLowerCase())
+        );
       }),
     ]).filter(containsLatin);
     return {
@@ -2981,12 +3723,15 @@ function escapeRegExp(value: string): string {
 function bridgeTextContainsTerm(haystack: string, needle: string): boolean {
   const normalizedNeedle = normalizedBridgeText(needle);
   if (!normalizedNeedle) return false;
-  if (!containsLatin(normalizedNeedle)) return haystack.includes(normalizedNeedle);
+  if (!containsLatin(normalizedNeedle))
+    return haystack.includes(normalizedNeedle);
   const tokenPattern = normalizedNeedle
     .split(/\s+/u)
     .map(escapeRegExp)
     .join("\\s+");
-  return new RegExp(`(^|[^a-z0-9])${tokenPattern}($|[^a-z0-9])`, "i").test(haystack);
+  return new RegExp(`(^|[^a-z0-9])${tokenPattern}($|[^a-z0-9])`, "i").test(
+    haystack,
+  );
 }
 
 function bridgeConceptGroupsFromTopicText(topicText: string): ConceptGroup[] {
@@ -3023,7 +3768,8 @@ function conceptGroupsFromSearchIntentTerms(terms: string[]): ConceptGroup[] {
   return uniqueStrings(terms)
     .filter(
       (term) =>
-        term.trim().length >= 2 && !GENERIC_CONCEPT_GROUP_TERM.test(term.trim()),
+        term.trim().length >= 2 &&
+        !GENERIC_CONCEPT_GROUP_TERM.test(term.trim()),
     )
     .slice(0, 12)
     .map((term, index) => ({
@@ -3035,9 +3781,11 @@ function conceptGroupsFromSearchIntentTerms(terms: string[]): ConceptGroup[] {
 }
 
 function conceptBridgeQueries(groups: ConceptGroup[]): string[] {
-  const leadTerms = uniqueStrings(groups
-    .map((group) => group.enTerms[0] ?? group.zhTerms[0] ?? "")
-    .filter((term) => term && containsLatin(term)));
+  const leadTerms = uniqueStrings(
+    groups
+      .map((group) => group.enTerms[0] ?? group.zhTerms[0] ?? "")
+      .filter((term) => term && containsLatin(term)),
+  );
   const queries = [
     leadTerms.slice(0, 4).join(" "),
     leadTerms.slice(0, 3).join(" "),
@@ -3050,7 +3798,9 @@ function conceptBridgeQueries(groups: ConceptGroup[]): string[] {
     queries.push(`${leadTerms.slice(0, 3).join(" ")} review`);
     queries.push(`${leadTerms.slice(0, 3).join(" ")} systematic review`);
   }
-  return uniqueStrings(queries.filter((query) => query.trim().length >= 3)).slice(0, 12);
+  return uniqueStrings(
+    queries.filter((query) => query.trim().length >= 3),
+  ).slice(0, 12);
 }
 
 export function buildGroundingQueryPlan(input: {
@@ -3060,7 +3810,8 @@ export function buildGroundingQueryPlan(input: {
   titleParse?: ResearchTitleSentenceParse;
 }): GroundingQueryPlan {
   const titleParse =
-    input.titleParse ?? parseResearchTitleSentence(input.topicAnalysis.normalizedTopic);
+    input.titleParse ??
+    parseResearchTitleSentence(input.topicAnalysis.normalizedTopic);
   const topicText = [
     input.topicAnalysis.normalizedTopic,
     titleParse.normalizedText,
@@ -3074,12 +3825,18 @@ export function buildGroundingQueryPlan(input: {
     lexicalSignals: input.lexicalSignals,
   });
   const bridgeQueries = conceptBridgeQueries(conceptGroups);
-  const primaryQueries = topicAnchoredPlanQueries(sanitizeGroundingQueries([
-    ...input.seedQueryPlan.exactQueries,
-    ...input.seedQueryPlan.enQueries.slice(0, 4),
-    ...bridgeQueries.slice(0, 4),
-    ...input.seedQueryPlan.broadQueries,
-  ], topicText), topicText);
+  const primaryQueries = topicAnchoredPlanQueries(
+    sanitizeGroundingQueries(
+      [
+        ...input.seedQueryPlan.exactQueries,
+        ...input.seedQueryPlan.enQueries.slice(0, 4),
+        ...bridgeQueries.slice(0, 4),
+        ...input.seedQueryPlan.broadQueries,
+      ],
+      topicText,
+    ),
+    topicText,
+  );
   const secondaryQueries = sanitizeGroundingQueries(
     input.lexicalSignals.flatMap((signal) => [
       ...signal.aliases,
@@ -3089,18 +3846,29 @@ export function buildGroundingQueryPlan(input: {
     ]),
     topicText,
   ).filter((query) => query.length >= 2 && !primaryQueries.includes(query));
-	const bilingualQueries = {
-	  zh: sanitizeGroundingQueries([
-      ...input.seedQueryPlan.zhQueries,
-      ...titleParse.subject.filter(containsZh),
-      ...titleParse.independentVariables.filter(containsZh),
-    ], topicText),
-	  en: sanitizeEnglishProviderQueries(topicAnchoredPlanQueries(sanitizeGroundingQueries([
-	    ...input.seedQueryPlan.enQueries,
-      ...bridgeQueries,
-	    ...secondaryQueries.filter((query) => containsLatin(query)),
-	  ], topicText), topicText)),
-	};
+  const bilingualQueries = {
+    zh: sanitizeGroundingQueries(
+      [
+        ...input.seedQueryPlan.zhQueries,
+        ...titleParse.subject.filter(containsZh),
+        ...titleParse.independentVariables.filter(containsZh),
+      ],
+      topicText,
+    ),
+    en: sanitizeEnglishProviderQueries(
+      topicAnchoredPlanQueries(
+        sanitizeGroundingQueries(
+          [
+            ...input.seedQueryPlan.enQueries,
+            ...bridgeQueries,
+            ...secondaryQueries.filter((query) => containsLatin(query)),
+          ],
+          topicText,
+        ),
+        topicText,
+      ),
+    ),
+  };
   const rawProviderQueries = providerQueriesFromPlan({
     seedQueryPlan: input.seedQueryPlan,
     primaryQueries,
@@ -3108,11 +3876,37 @@ export function buildGroundingQueryPlan(input: {
     topicText,
   });
   const providerQueries = {
-    openalex: sanitizeEnglishProviderQueries(providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.openalex, topicText), topicText)),
-    crossref: sanitizeEnglishProviderQueries(providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.crossref, topicText), topicText)),
-    core: sanitizeEnglishProviderQueries(providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.core, topicText), topicText)),
-    semanticScholar: sanitizeEnglishProviderQueries(providerSafeDomainAnchoredQueries(sanitizeGroundingQueries(rawProviderQueries.semanticScholar ?? [], topicText), topicText)),
-    web: webSafeQueries(sanitizeGroundingQueries(rawProviderQueries.web ?? [], topicText), topicText),
+    openalex: sanitizeEnglishProviderQueries(
+      providerSafeDomainAnchoredQueries(
+        sanitizeGroundingQueries(rawProviderQueries.openalex, topicText),
+        topicText,
+      ),
+    ),
+    crossref: sanitizeEnglishProviderQueries(
+      providerSafeDomainAnchoredQueries(
+        sanitizeGroundingQueries(rawProviderQueries.crossref, topicText),
+        topicText,
+      ),
+    ),
+    core: sanitizeEnglishProviderQueries(
+      providerSafeDomainAnchoredQueries(
+        sanitizeGroundingQueries(rawProviderQueries.core, topicText),
+        topicText,
+      ),
+    ),
+    semanticScholar: sanitizeEnglishProviderQueries(
+      providerSafeDomainAnchoredQueries(
+        sanitizeGroundingQueries(
+          rawProviderQueries.semanticScholar ?? [],
+          topicText,
+        ),
+        topicText,
+      ),
+    ),
+    web: webSafeQueries(
+      sanitizeGroundingQueries(rawProviderQueries.web ?? [], topicText),
+      topicText,
+    ),
   };
   const domain = inferGroundingDomain(topicText);
   const intent = inferGroundingIntent(topicText);
@@ -3145,7 +3939,9 @@ export function buildGroundingQueryPlan(input: {
       ...providerQueries.openalex,
       ...providerQueries.semanticScholar,
       ...providerQueries.crossref,
-    ]).filter(containsLatin).slice(0, 8),
+    ])
+      .filter(containsLatin)
+      .slice(0, 8),
     broadFallbackQueries: providerQueries.web ?? [],
     bilingualQueries,
     providerQueries,
@@ -3174,19 +3970,30 @@ export function reviewAcademicSafety(input: {
 }): AcademicSafetyReview {
   const topic = compactWhitespace(input.topic);
   const riskCategories = uniqueStrings(
-    HIGH_RISK_PATTERNS.filter((item) => item.pattern.test(topic)).map((item) => item.category),
+    HIGH_RISK_PATTERNS.filter((item) => item.pattern.test(topic)).map(
+      (item) => item.category,
+    ),
   ) as AcademicSafetyReview["riskCategories"];
   const academicIntent =
-    ACADEMIC_INTENT_PATTERNS.some((pattern) => pattern.test(topic)) || !actionableIntent(topic);
+    ACADEMIC_INTENT_PATTERNS.some((pattern) => pattern.test(topic)) ||
+    !actionableIntent(topic);
   const topicRiskLevel: AcademicSafetyReview["topicRiskLevel"] =
-    riskCategories.length >= 2 ? "high" : riskCategories.length === 1 ? "medium" : "low";
+    riskCategories.length >= 2
+      ? "high"
+      : riskCategories.length === 1
+        ? "medium"
+        : "low";
 
   let allowedUse: AcademicSafetyReview["allowedUse"] = "normal_research";
   if (topicRiskLevel === "high" && actionableIntent(topic) && !academicIntent) {
     allowedUse = "block_actionable_output";
   } else if (topicRiskLevel === "high") {
     allowedUse = "restricted_academic_summary";
-  } else if (topicRiskLevel === "medium" && academicIntent && !actionableIntent(topic)) {
+  } else if (
+    topicRiskLevel === "medium" &&
+    academicIntent &&
+    !actionableIntent(topic)
+  ) {
     allowedUse = "restricted_academic_summary";
   } else if (topicRiskLevel === "medium") {
     allowedUse = "redirect_to_prevention_or_policy";
@@ -3270,7 +4077,10 @@ function rawPayloadText(payload: unknown): string {
 }
 
 function institutionTypeForCandidate(
-  source: Pick<SourceClassificationInput, "provider" | "url" | "venue" | "rawProviderPayload">,
+  source: Pick<
+    SourceClassificationInput,
+    "provider" | "url" | "venue" | "rawProviderPayload"
+  >,
 ): SourceInstitutionType {
   const text = normalizedLowerText([
     source.provider,
@@ -3278,27 +4088,49 @@ function institutionTypeForCandidate(
     source.venue,
     rawPayloadText(source.rawProviderPayload),
   ]);
-  if (/nasa|space agency|esa|jaxa|goddard|giss/.test(text)) return "space_agency";
-  if (/noaa|nesdis|gml|epa|\.gov|government|agency|ministry|department|bureau/.test(text)) {
+  if (/nasa|space agency|esa|jaxa|goddard|giss/.test(text))
+    return "space_agency";
+  if (
+    /noaa|nesdis|gml|epa|\.gov|government|agency|ministry|department|bureau/.test(
+      text,
+    )
+  ) {
     return "government_agency";
   }
-  if (/ucar|ncar|national center for atmospheric research|scientific institution|research institute|academy/.test(text)) {
+  if (
+    /ucar|ncar|national center for atmospheric research|scientific institution|research institute|academy/.test(
+      text,
+    )
+  ) {
     return "scientific_institution";
   }
   if (/university|college|\.edu\b|大學|學院/.test(text)) return "university";
-  if (/ipcc|unep|who|unesco|un\.org|oecd|world bank|international organization/.test(text)) {
+  if (
+    /ipcc|unep|who|unesco|un\.org|oecd|world bank|international organization/.test(
+      text,
+    )
+  ) {
     return "international_organization";
   }
-  if (/reuters|bbc|guardian|new york times|media|news/.test(text)) return "media";
+  if (/reuters|bbc|guardian|new york times|media|news/.test(text))
+    return "media";
   if (/company|inc\.|corp\.|ltd\.|com\b/.test(text)) return "commercial";
   return "unknown";
 }
 
 function hasNegativeKeywordHit(
-  source: Pick<SourceClassificationInput, "title" | "abstractOriginal" | "url" | "venue">,
+  source: Pick<
+    SourceClassificationInput,
+    "title" | "abstractOriginal" | "url" | "venue"
+  >,
   negativeKeywords: string[],
 ): boolean {
-  const text = normalizedLowerText([source.title, source.abstractOriginal, source.url, source.venue]);
+  const text = normalizedLowerText([
+    source.title,
+    source.abstractOriginal,
+    source.url,
+    source.venue,
+  ]);
   const driftTerms = uniqueStrings([
     ...negativeKeywords,
     "photography",
@@ -3316,24 +4148,34 @@ function hasNegativeKeywordHit(
 }
 
 function isScholarlyProvider(provider: SourceCandidate["provider"]): boolean {
-  return provider === "openalex" ||
+  return (
+    provider === "openalex" ||
     provider === "crossref" ||
     provider === "semanticScholar" ||
-    provider === "core";
+    provider === "core"
+  );
 }
 
 function hasScholarlyMetadata(source: SourceClassificationInput): boolean {
   if (source.provider === "core") {
-    return Boolean(source.doi) || Boolean(source.isPeerReviewed) || Boolean(source.venue);
+    return (
+      Boolean(source.doi) ||
+      Boolean(source.isPeerReviewed) ||
+      Boolean(source.venue)
+    );
   }
   const scholarlySourceType =
     source.sourceType === "paper" || source.sourceType === "review";
-  return Boolean(source.doi) ||
+  return (
+    Boolean(source.doi) ||
     Boolean(source.isPeerReviewed) ||
     scholarlySourceType ||
     (isScholarlyProvider(source.provider) && Boolean(source.venue)) ||
-    (source.provider === "openalex" && /^https?:\/\/openalex\.org\//i.test(source.sourceId)) ||
-    (source.provider === "semanticScholar" && /semantic/i.test(rawPayloadText(source.rawProviderPayload)));
+    (source.provider === "openalex" &&
+      /^https?:\/\/openalex\.org\//i.test(source.sourceId)) ||
+    (source.provider === "semanticScholar" &&
+      /semantic/i.test(rawPayloadText(source.rawProviderPayload)))
+  );
 }
 
 export function classifySourceCandidate(
@@ -3357,9 +4199,15 @@ export function classifySourceCandidate(
     institutionType === "university" ||
     institutionType === "scientific_institution" ||
     institutionType === "international_organization";
-  const text = normalizedLowerText([topic, source.title, source.abstractOriginal]);
-  const datasetCue = /dataset|data product|monitoring|statistics|資料集|統計/.test(text);
-  const definitionCue = /definition|what is|why is|explains|說明|定義|概念/.test(text);
+  const text = normalizedLowerText([
+    topic,
+    source.title,
+    source.abstractOriginal,
+  ]);
+  const datasetCue =
+    /dataset|data product|monitoring|statistics|資料集|統計/.test(text);
+  const definitionCue =
+    /definition|what is|why is|explains|說明|定義|概念/.test(text);
   const preprintCue =
     !source.doi &&
     !source.isPeerReviewed &&
@@ -3438,7 +4286,8 @@ function retrievalModeForSource(
   if (/core/i.test(source.provider ?? source.sourceType)) {
     return "supplemental_fulltext_or_repository";
   }
-  if (/manual/i.test(source.provider ?? source.sourceType)) return "user_import";
+  if (/manual/i.test(source.provider ?? source.sourceType))
+    return "user_import";
   if (
     searchResult.diagnostics?.cache_status === "stale_hit_refreshing" ||
     searchResult.diagnostics?.cache_status === "refresh_failed_using_stale"
@@ -3491,8 +4340,16 @@ function sourceEvidencePoints(input: {
   topic: string;
   role: SourceRole;
 }): string[] {
-  const text = normalizedLowerText([input.topic, input.source.title, input.source.abstractOriginal]);
-  if (/sunset|twilight|夕陽|餘暉|rayleigh|scattering|散射|wavelength|波長/.test(text)) {
+  const text = normalizedLowerText([
+    input.topic,
+    input.source.title,
+    input.source.abstractOriginal,
+  ]);
+  if (
+    /sunset|twilight|夕陽|餘暉|rayleigh|scattering|散射|wavelength|波長/.test(
+      text,
+    )
+  ) {
     return [
       "sunset / twilight color 與 Rayleigh scattering 有關",
       "shorter wavelengths scatter more strongly",
@@ -3500,7 +4357,9 @@ function sourceEvidencePoints(input: {
       "aerosols / Mie scattering may affect color",
     ];
   }
-  const abstractSentences = compactWhitespace(input.source.abstractOriginal ?? "")
+  const abstractSentences = compactWhitespace(
+    input.source.abstractOriginal ?? "",
+  )
     .split(/(?<=[.!?。！？])\s+/u)
     .map((sentence) => sentence.trim())
     .filter(Boolean)
@@ -3524,18 +4383,12 @@ function sourceLimitations(input: {
   sourceQualityScore: number;
 }): string[] {
   return uniqueStrings([
-    input.bucket === "official_background"
-      ? "非同行評審論文"
-      : "",
+    input.bucket === "official_background" ? "非同行評審論文" : "",
     input.bucket === "official_background"
       ? "適合背景說明，不足以支撐完整學術文獻回顧"
       : "",
-    input.bucket === "manual_review"
-      ? "需人工確認用途後才可進入正式段落"
-      : "",
-    input.bucket === "rejected"
-      ? "不建議納入 Evidence Card"
-      : "",
+    input.bucket === "manual_review" ? "需人工確認用途後才可進入正式段落" : "",
+    input.bucket === "rejected" ? "不建議納入 Evidence Card" : "",
     !input.hasAbstract ? "metadata-only or title-only grounding" : "",
     input.sourceQualityScore < 0.55 ? "source quality is limited" : "",
     input.role === "teaching_or_public_explainer"
@@ -3548,14 +4401,77 @@ function uniqueSourceRecords(sources: SourceRecord[]): SourceRecord[] {
   return dedupeSourceRecords(sources);
 }
 
-function sourceTypeForCandidate(source: SourceRecord): SourceCandidate["sourceType"] {
+function sourceTypeForCandidate(
+  source: SourceRecord,
+): SourceCandidate["sourceType"] {
+  if (/^https?:\/\/(?:www\.)?(?:pmc\.ncbi\.nlm\.nih\.gov\/articles\/PMC|europepmc\.org\/articles\/PMC)/iu.test(source.url ?? source.fullTextUrl ?? "")) {
+    return "paper";
+  }
   if (source.sourceKind === "web") {
-    return source.sourceType === "Official Source" || source.sourceType === "Institutional Source"
+    return source.sourceType === "Official Source" ||
+      source.sourceType === "Institutional Source"
       ? "official"
       : "web";
   }
-  if (source.sourceKind === "journal" || source.sourceKind === "conference") return "paper";
+  if (source.sourceKind === "journal" || source.sourceKind === "conference")
+    return "paper";
   return "unknown";
+}
+
+function isScholarlyAcquisitionCandidate(source: SourceCandidate): boolean {
+  if (source.reviewStatus === "rejected" || source.topicIntegrityAssessment?.sourceRole === "REJECTED_OFF_TOPIC") return false;
+  const url = source.fullTextUrl ?? source.url ?? "";
+  const repositoryArticle = /^https?:\/\/(?:www\.)?(?:pmc\.ncbi\.nlm\.nih\.gov\/articles\/PMC|europepmc\.org\/articles\/PMC|journals\.plos\.org\/|frontiersin\.org\/journals\/|mdpi\.com\/\d)/iu.test(url);
+  const scholarlyTrace = source.sourceType === "paper" || source.sourceType === "review" ||
+    ["openalex", "crossref", "semanticScholar", "core"].includes(source.provider) || repositoryArticle;
+  return scholarlyTrace && Boolean(source.abstractOriginal ?? source.abstract ?? source.extractedAbstract) &&
+    source.relevanceScore >= 0.18 && Boolean(url);
+}
+
+function canonicalDirectStudyCount(sources: SourceCandidate[]): number {
+  return auditDirectStudyCandidatesV3(sources).filter((item) => item.decision === "DIRECT").length;
+}
+
+function zeroDirectStudyQueryCascade(input: {
+  activeResearchTopic: string;
+  canonicalEnglishTopic: string;
+  englishSeeds: string[];
+}): Array<{
+  query: string;
+  reason: "STRICT_TOPIC" | "REDUCED_CONJUNCTION" | "CONCEPTUAL_EXPANSION";
+  purpose: ReturnType<typeof buildEvidenceGapDrivenQueryPlan>["queries"][number]["purpose"];
+  targetGap: string;
+  expectedEvidenceType: ReturnType<typeof buildEvidenceGapDrivenQueryPlan>["queries"][number]["expectedEvidenceType"];
+  language: ReturnType<typeof buildEvidenceGapDrivenQueryPlan>["queries"][number]["language"];
+  provider: ReturnType<typeof buildEvidenceGapDrivenQueryPlan>["queries"][number]["provider"];
+  dimensions: ReturnType<typeof buildEvidenceGapDrivenQueryPlan>["dimensions"];
+}> {
+  const activeTopic = compactWhitespace(input.activeResearchTopic);
+  if (!activeTopic) return [];
+  const researchQuestion = compactWhitespace(input.canonicalEnglishTopic) ||
+    input.englishSeeds.map(compactWhitespace).find(Boolean) || activeTopic;
+  const technical = /\b(?:algorithm|model|software|dataset|benchmark|accuracy|factuality|retrieval|network|system|computer|machine learning|artificial intelligence)\b/iu.test(
+    `${activeTopic} ${researchQuestion}`,
+  );
+  const plan = buildEvidenceGapDrivenQueryPlan({
+    topic: activeTopic,
+    researchQuestion,
+    existingDirectStudies: [],
+    studyTypes: technical ? ["technical computational dataset"] : ["direct empirical study"],
+    purposes: ["DISCOVERY", "DIRECT_EMPIRICAL", "REVIEW_SEED", "CITATION_CHAIN"],
+    maxQueries: 8,
+  });
+  const reasonByIndex = ["STRICT_TOPIC", "REDUCED_CONJUNCTION", "CONCEPTUAL_EXPANSION"] as const;
+  return plan.queries.slice(0, 3).map((query, index) => ({
+    query: query.query,
+    reason: reasonByIndex[index]!,
+    purpose: query.purpose,
+    targetGap: query.targetGap,
+    expectedEvidenceType: query.expectedEvidenceType,
+    language: query.language,
+    provider: query.provider,
+    dimensions: plan.dimensions,
+  }));
 }
 
 function reviewStatusFromSignals(input: {
@@ -3564,7 +4480,12 @@ function reviewStatusFromSignals(input: {
   hasTitleCoreConceptMatch: boolean;
 }): SourceCandidate["reviewStatus"] {
   if (input.score >= 0.35 && input.hasCoreConceptMatch) return "accepted";
-  if (input.score >= 0.18 || input.hasTitleCoreConceptMatch || input.hasCoreConceptMatch) return "review";
+  if (
+    input.score >= 0.18 ||
+    input.hasTitleCoreConceptMatch ||
+    input.hasCoreConceptMatch
+  )
+    return "review";
   return "rejected";
 }
 
@@ -3581,40 +4502,61 @@ function normalizedCandidateTitle(candidate: SourceCandidate): string {
     .trim();
 }
 
-function candidateProviderIds(candidate: SourceCandidate): Record<string, string> {
-  const raw = candidate.rawProviderPayload && typeof candidate.rawProviderPayload === "object"
-    ? candidate.rawProviderPayload as Record<string, unknown>
-    : {};
-  const rawIds = raw.providerIds && typeof raw.providerIds === "object"
-    ? raw.providerIds as Record<string, unknown>
-    : {};
+function candidateProviderIds(
+  candidate: SourceCandidate,
+): Record<string, string> {
+  const raw =
+    candidate.rawProviderPayload &&
+    typeof candidate.rawProviderPayload === "object"
+      ? (candidate.rawProviderPayload as Record<string, unknown>)
+      : {};
+  const rawIds =
+    raw.providerIds && typeof raw.providerIds === "object"
+      ? (raw.providerIds as Record<string, unknown>)
+      : {};
   const providerIds = { ...(candidate.providerIds ?? {}) };
   for (const [key, value] of Object.entries(rawIds)) {
-    if (typeof value === "string" && value.trim()) providerIds[key] = value.trim();
+    if (typeof value === "string" && value.trim())
+      providerIds[key] = value.trim();
   }
   return providerIds;
 }
 
-function sameCandidateIdentity(left: SourceCandidate, right: SourceCandidate): boolean {
+function sameCandidateIdentity(
+  left: SourceCandidate,
+  right: SourceCandidate,
+): boolean {
   const leftDoi = normalizedCandidateDoi(left);
   const rightDoi = normalizedCandidateDoi(right);
-  if (leftDoi || rightDoi) return Boolean(leftDoi && rightDoi && leftDoi === rightDoi);
+  if (leftDoi || rightDoi)
+    return Boolean(leftDoi && rightDoi && leftDoi === rightDoi);
 
   const leftIds = candidateProviderIds(left);
   const rightIds = candidateProviderIds(right);
-  if (Object.entries(leftIds).some(([provider, id]) => rightIds[provider] === id)) return true;
+  if (
+    Object.entries(leftIds).some(([provider, id]) => rightIds[provider] === id)
+  )
+    return true;
   if (
     left.canonicalSourceIdentity &&
     right.canonicalSourceIdentity &&
     left.canonicalSourceIdentity === right.canonicalSourceIdentity
-  ) return true;
-  if (left.dedupeKey && right.dedupeKey && left.dedupeKey === right.dedupeKey) return true;
+  )
+    return true;
+  if (left.dedupeKey && right.dedupeKey && left.dedupeKey === right.dedupeKey)
+    return true;
 
-  const sameTitle = normalizedCandidateTitle(left) === normalizedCandidateTitle(right);
-  const sameYear = left.year != null && right.year != null && left.year === right.year;
+  const sameTitle =
+    normalizedCandidateTitle(left) === normalizedCandidateTitle(right);
+  const sameYear =
+    left.year != null && right.year != null && left.year === right.year;
   const leftAuthor = compactWhitespace(left.authors?.[0] ?? "").toLowerCase();
   const rightAuthor = compactWhitespace(right.authors?.[0] ?? "").toLowerCase();
-  return sameTitle && sameYear && Boolean(leftAuthor && rightAuthor && leftAuthor === rightAuthor);
+  return (
+    sameTitle &&
+    sameYear &&
+    Boolean(leftAuthor && rightAuthor && leftAuthor === rightAuthor)
+  );
 }
 
 function candidateContentRank(candidate: SourceCandidate): number {
@@ -3623,36 +4565,59 @@ function candidateContentRank(candidate: SourceCandidate): number {
     candidate.accessLevel === "full_text" ||
     (candidate.fullTextCharCount ?? 0) > 0 ||
     (candidate.extractedChunks?.length ?? 0) > 0
-  ) return 3;
+  )
+    return 3;
   if (
     candidate.contentLevel === "abstract" ||
     candidate.abstractOriginal ||
     candidate.abstract ||
     candidate.extractedAbstract
-  ) return 2;
+  )
+    return 2;
   return 1;
 }
 
-function longestCandidateText(...values: Array<string | null | undefined>): string | undefined {
-  return uniqueStrings(values).sort((left, right) => right.length - left.length)[0];
+function longestCandidateText(
+  ...values: Array<string | null | undefined>
+): string | undefined {
+  return uniqueStrings(values).sort(
+    (left, right) => right.length - left.length,
+  )[0];
 }
 
-function mergeCandidatePayloads(left: SourceCandidate, right: SourceCandidate): unknown {
+function mergeCandidatePayloads(
+  left: SourceCandidate,
+  right: SourceCandidate,
+): unknown {
   const flatten = (value: unknown): unknown[] => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return value ? [value] : [];
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return value ? [value] : [];
     const versions = (value as Record<string, unknown>).versions;
     return Array.isArray(versions) ? versions : [value];
   };
   return {
-    versions: [...flatten(left.rawProviderPayload), ...flatten(right.rawProviderPayload)],
-    providerIds: { ...candidateProviderIds(left), ...candidateProviderIds(right) },
+    versions: [
+      ...flatten(left.rawProviderPayload),
+      ...flatten(right.rawProviderPayload),
+    ],
+    providerIds: {
+      ...candidateProviderIds(left),
+      ...candidateProviderIds(right),
+    },
   };
 }
 
-function mergeSourceCandidatePair<T extends SourceCandidate>(left: T, right: T): T {
-  const canonical = sourceCandidateMergeRank(right) > sourceCandidateMergeRank(left) ? right : left;
+function mergeSourceCandidatePair<T extends SourceCandidate>(
+  left: T,
+  right: T,
+): T {
+  const canonical =
+    sourceCandidateMergeRank(right) > sourceCandidateMergeRank(left)
+      ? right
+      : left;
   const secondary = canonical === left ? right : left;
-  const richer = candidateContentRank(right) > candidateContentRank(left) ? right : left;
+  const richer =
+    candidateContentRank(right) > candidateContentRank(left) ? right : left;
   const doi = normalizedCandidateDoi(left) || normalizedCandidateDoi(right);
   const abstract = longestCandidateText(
     left.abstract,
@@ -3673,29 +4638,45 @@ function mergeSourceCandidatePair<T extends SourceCandidate>(left: T, right: T):
     year: canonical.year ?? secondary.year,
     venue: canonical.venue ?? secondary.venue,
     url: canonical.url ?? secondary.url,
-    fullTextUrl: richer.fullTextUrl ?? canonical.fullTextUrl ?? secondary.fullTextUrl,
-    readableUrl: richer.readableUrl ?? canonical.readableUrl ?? secondary.readableUrl,
+    fullTextUrl:
+      richer.fullTextUrl ?? canonical.fullTextUrl ?? secondary.fullTextUrl,
+    readableUrl:
+      richer.readableUrl ?? canonical.readableUrl ?? secondary.readableUrl,
     isOpenAccess: Boolean(left.isOpenAccess || right.isOpenAccess),
-    providerIds: { ...candidateProviderIds(left), ...candidateProviderIds(right) },
-    canonicalSourceIdentity:
-      doi
-        ? `doi:${doi}`
-        : canonical.canonicalSourceIdentity ?? secondary.canonicalSourceIdentity ?? canonical.dedupeKey,
-    contentLevel: candidateContentRank(richer) === 3 ? "fulltext" : abstract ? "abstract" : "metadata",
-    enrichmentAttempted: Boolean(left.enrichmentAttempted || right.enrichmentAttempted),
+    providerIds: {
+      ...candidateProviderIds(left),
+      ...candidateProviderIds(right),
+    },
+    canonicalSourceIdentity: doi
+      ? `doi:${doi}`
+      : (canonical.canonicalSourceIdentity ??
+        secondary.canonicalSourceIdentity ??
+        canonical.dedupeKey),
+    contentLevel:
+      candidateContentRank(richer) === 3
+        ? "fulltext"
+        : abstract
+          ? "abstract"
+          : "metadata",
+    enrichmentAttempted: Boolean(
+      left.enrichmentAttempted || right.enrichmentAttempted,
+    ),
     enrichmentProviders: uniqueStrings([
       ...(left.enrichmentProviders ?? []),
       ...(right.enrichmentProviders ?? []),
     ]),
     enrichmentStatus:
-      left.enrichmentStatus === "success" || right.enrichmentStatus === "success"
+      left.enrichmentStatus === "success" ||
+      right.enrichmentStatus === "success"
         ? "success"
-        : canonical.enrichmentStatus ?? secondary.enrichmentStatus,
-    ...(!abstract && candidateContentRank(richer) !== 3 &&
+        : (canonical.enrichmentStatus ?? secondary.enrichmentStatus),
+    ...(!abstract &&
+    candidateContentRank(richer) !== 3 &&
     (canonical.enrichmentFailureReason ?? secondary.enrichmentFailureReason)
       ? {
           enrichmentFailureReason:
-            canonical.enrichmentFailureReason ?? secondary.enrichmentFailureReason,
+            canonical.enrichmentFailureReason ??
+            secondary.enrichmentFailureReason,
         }
       : {}),
     enrichmentProvenance: [
@@ -3703,39 +4684,67 @@ function mergeSourceCandidatePair<T extends SourceCandidate>(left: T, right: T):
       ...(right.enrichmentProvenance ?? []),
     ],
     extractedAbstract: richer.extractedAbstract ?? abstract,
-    extractedSections: richer.extractedSections ?? canonical.extractedSections ?? secondary.extractedSections,
-    extractedChunks: richer.extractedChunks ?? canonical.extractedChunks ?? secondary.extractedChunks,
+    extractedSections:
+      richer.extractedSections ??
+      canonical.extractedSections ??
+      secondary.extractedSections,
+    extractedChunks:
+      richer.extractedChunks ??
+      canonical.extractedChunks ??
+      secondary.extractedChunks,
     extractionWarnings: uniqueStrings([
       ...(left.extractionWarnings ?? []),
       ...(right.extractionWarnings ?? []),
     ]),
-    evidencePoints: uniqueStrings([...left.evidencePoints, ...right.evidencePoints]),
+    evidencePoints: uniqueStrings([
+      ...left.evidencePoints,
+      ...right.evidencePoints,
+    ]),
     limitations: uniqueStrings([...left.limitations, ...right.limitations]),
-    usableSections: uniqueStrings([...left.usableSections, ...right.usableSections]),
+    usableSections: uniqueStrings([
+      ...left.usableSections,
+      ...right.usableSections,
+    ]),
     matchedConcepts: uniqueStrings([
       ...(left.matchedConcepts ?? []),
       ...(right.matchedConcepts ?? []),
     ]),
     rawProviderPayload: mergeCandidatePayloads(left, right),
   } as unknown as T;
-  const leftSignals = (left as unknown as { _signals?: SourceCandidateWithSignals["_signals"] })._signals;
-  const rightSignals = (right as unknown as { _signals?: SourceCandidateWithSignals["_signals"] })._signals;
+  const leftSignals = (
+    left as unknown as { _signals?: SourceCandidateWithSignals["_signals"] }
+  )._signals;
+  const rightSignals = (
+    right as unknown as { _signals?: SourceCandidateWithSignals["_signals"] }
+  )._signals;
   if (leftSignals || rightSignals) {
-    (merged as unknown as { _signals: SourceCandidateWithSignals["_signals"] })._signals = {
-      finalScore: Math.max(leftSignals?.finalScore ?? 0, rightSignals?.finalScore ?? 0),
-      hasCoreConceptMatch: Boolean(leftSignals?.hasCoreConceptMatch || rightSignals?.hasCoreConceptMatch),
+    (
+      merged as unknown as { _signals: SourceCandidateWithSignals["_signals"] }
+    )._signals = {
+      finalScore: Math.max(
+        leftSignals?.finalScore ?? 0,
+        rightSignals?.finalScore ?? 0,
+      ),
+      hasCoreConceptMatch: Boolean(
+        leftSignals?.hasCoreConceptMatch || rightSignals?.hasCoreConceptMatch,
+      ),
       hasTitleCoreConceptMatch: Boolean(
-        leftSignals?.hasTitleCoreConceptMatch || rightSignals?.hasTitleCoreConceptMatch,
+        leftSignals?.hasTitleCoreConceptMatch ||
+        rightSignals?.hasTitleCoreConceptMatch,
       ),
     };
   }
   return merged;
 }
 
-export function mergeSourceCandidateRecords<T extends SourceCandidate>(candidates: T[]): T[] {
+export function mergeSourceCandidateRecords<T extends SourceCandidate>(
+  candidates: T[],
+): T[] {
   const merged: T[] = [];
   for (const candidate of candidates) {
-    const index = merged.findIndex((item) => sameCandidateIdentity(item, candidate));
+    const index = merged.findIndex((item) =>
+      sameCandidateIdentity(item, candidate),
+    );
     if (index < 0) {
       merged.push(candidate);
     } else {
@@ -3753,11 +4762,16 @@ function dedupeSourceCandidates(
   );
 }
 
-function applyReviewFallback(
-  candidates: SourceCandidateWithSignals[],
-): { candidates: SourceCandidateWithSignals[]; warnings: string[] } {
-  const acceptedCount = candidates.filter((candidate) => candidate.reviewStatus === "accepted").length;
-  const reviewCount = candidates.filter((candidate) => candidate.reviewStatus === "review").length;
+function applyReviewFallback(candidates: SourceCandidateWithSignals[]): {
+  candidates: SourceCandidateWithSignals[];
+  warnings: string[];
+} {
+  const acceptedCount = candidates.filter(
+    (candidate) => candidate.reviewStatus === "accepted",
+  ).length;
+  const reviewCount = candidates.filter(
+    (candidate) => candidate.reviewStatus === "review",
+  ).length;
   if (candidates.length === 0 || acceptedCount > 0 || reviewCount > 0) {
     return { candidates, warnings: [] };
   }
@@ -3781,12 +4795,16 @@ function applyReviewFallback(
   if (promotable.length === 0) {
     return {
       candidates,
-      warnings: ["找到資料但被篩選器全部排除；缺少主題必要實體的來源不會自動提升為人工審查。"],
+      warnings: [
+        "找到資料但被篩選器全部排除；缺少主題必要實體的來源不會自動提升為人工審查。",
+      ],
     };
   }
 
   const promotionCount = Math.min(10, promotable.length);
-  const promotedKeys = new Set(promotable.slice(0, promotionCount).map((candidate) => candidate.dedupeKey));
+  const promotedKeys = new Set(
+    promotable.slice(0, promotionCount).map((candidate) => candidate.dedupeKey),
+  );
   return {
     candidates: candidates.map((candidate) =>
       promotedKeys.has(candidate.dedupeKey)
@@ -3807,7 +4825,9 @@ function applyReviewFallback(
                 ? usableSectionsForRole("weak_or_uncertain")
                 : candidate.usableSections,
             limitations: uniqueStrings([
-              ...candidate.limitations.filter((item) => item !== "不建議納入 Evidence Card"),
+              ...candidate.limitations.filter(
+                (item) => item !== "不建議納入 Evidence Card",
+              ),
               "需人工確認用途後才可進入正式段落",
             ]),
           }
@@ -3819,7 +4839,10 @@ function applyReviewFallback(
   };
 }
 
-function queryIntentForQuery(query: string, queryPlan: GroundingQueryPlan): string {
+function queryIntentForQuery(
+  query: string,
+  queryPlan: GroundingQueryPlan,
+): string {
   return (
     queryPlan.queryIntents.find((item) => item.query === query)?.intent ??
     (queryPlan.primaryQueries.includes(query) ? "exact" : "fallback")
@@ -3831,7 +4854,8 @@ function aggregateProviderCounts(
 ): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const group of searchResult?.provider_status ?? []) {
-    counts[group.provider] = (counts[group.provider] ?? 0) + (group.raw_count ?? group.results.length);
+    counts[group.provider] =
+      (counts[group.provider] ?? 0) + (group.raw_count ?? group.results.length);
   }
   return counts;
 }
@@ -3849,8 +4873,12 @@ function providerErrorsFromSearchResult(
     }));
 }
 
-function requiredHighConfidenceConceptCount(queryPlan?: GroundingQueryPlan): number {
-  const coreConceptCount = queryPlan?.conceptGroups?.filter((group) => group.weight >= 0.75).length ?? 0;
+function requiredHighConfidenceConceptCount(
+  queryPlan?: GroundingQueryPlan,
+): number {
+  const coreConceptCount =
+    queryPlan?.conceptGroups?.filter((group) => group.weight >= 0.75).length ??
+    0;
   return coreConceptCount >= 4 ? 3 : 2;
 }
 
@@ -3859,19 +4887,20 @@ function highConfidenceSourceCandidates(
   queryPlan?: GroundingQueryPlan,
 ): SourceCandidate[] {
   const requiredConceptCount = requiredHighConfidenceConceptCount(queryPlan);
-	  return sourceCandidates.filter(
-	    (candidate) =>
-        candidate.recommendationBucket === "scholarly_recommended" &&
-	      candidate.reviewStatus === "accepted" &&
-	      (
-	        ((candidate.matchedConcepts?.length ?? 0) >= requiredConceptCount &&
-	          (candidate.matchedFields?.some((field) => field === "title" || field === "abstract") ?? false)) ||
-	        ((Boolean(candidate.doi) || Boolean(candidate.url)) &&
-	          (candidate.finalScore ?? candidate.relevanceScore) >= 0.5 &&
-	          candidate.sourceQualityScore >= 0.55)
-	      ) &&
-	      candidate.confidenceTier !== "fallback" &&
-	      !candidate.lowConfidence &&
+  return sourceCandidates.filter(
+    (candidate) =>
+      candidate.recommendationBucket === "scholarly_recommended" &&
+      candidate.reviewStatus === "accepted" &&
+      (((candidate.matchedConcepts?.length ?? 0) >= requiredConceptCount &&
+        (candidate.matchedFields?.some(
+          (field) => field === "title" || field === "abstract",
+        ) ??
+          false)) ||
+        ((Boolean(candidate.doi) || Boolean(candidate.url)) &&
+          (candidate.finalScore ?? candidate.relevanceScore) >= 0.5 &&
+          candidate.sourceQualityScore >= 0.55)) &&
+      candidate.confidenceTier !== "fallback" &&
+      !candidate.lowConfidence &&
       !candidate.needsReview,
   );
 }
@@ -3911,10 +4940,15 @@ function manualReviewSourceCandidates(
 }
 
 function sourceCandidateHasDoi(candidate: SourceCandidate): boolean {
-  return Boolean(candidate.doi?.trim()) || /(?:doi\.org\/|^10\.\d{4,9}\/)/i.test(candidate.url ?? "");
+  return (
+    Boolean(candidate.doi?.trim()) ||
+    /(?:doi\.org\/|^10\.\d{4,9}\/)/i.test(candidate.url ?? "")
+  );
 }
 
-function sourceCandidateIsOfficialBackground(candidate: SourceCandidate): boolean {
+function sourceCandidateIsOfficialBackground(
+  candidate: SourceCandidate,
+): boolean {
   if (
     candidate.recommendationBucket !== "official_background" &&
     (sourceCandidateHasDoi(candidate) || candidate.isPeerReviewed === true) &&
@@ -3944,7 +4978,9 @@ function sourceCandidateIsOfficialBackground(candidate: SourceCandidate): boolea
     candidate.url,
     candidate.title,
   ]);
-  return /nasa|space place|giss|\.gov|government|education|encyclopedia|kids|classroom/.test(text);
+  return /nasa|space place|giss|\.gov|government|education|encyclopedia|kids|classroom/.test(
+    text,
+  );
 }
 
 function sourceCandidateIsAcademic(candidate: SourceCandidate): boolean {
@@ -3954,7 +4990,8 @@ function sourceCandidateIsAcademic(candidate: SourceCandidate): boolean {
   if (candidate.recommendationBucket === "scholarly_recommended") return true;
   if (candidate.sourceRole === "academic_evidence") return true;
   if (candidate.sourceRole === "core_scholarly_evidence") return true;
-  if (candidate.sourceType === "paper" || candidate.sourceType === "review") return true;
+  if (candidate.sourceType === "paper" || candidate.sourceType === "review")
+    return true;
   const providerAcademic =
     candidate.provider === "openalex" ||
     candidate.provider === "crossref" ||
@@ -3966,7 +5003,9 @@ function sourceCandidateIsAcademic(candidate: SourceCandidate): boolean {
     candidate.sourceKind,
     candidate.venue,
     candidate.url,
-    candidate.rawProviderPayload ? rawPayloadText(candidate.rawProviderPayload) : "",
+    candidate.rawProviderPayload
+      ? rawPayloadText(candidate.rawProviderPayload)
+      : "",
   ]);
   return (
     sourceCandidateHasDoi(candidate) ||
@@ -3978,7 +5017,9 @@ function sourceCandidateIsAcademic(candidate: SourceCandidate): boolean {
   );
 }
 
-function sourceCandidateIsPeerReviewedOrDoi(candidate: SourceCandidate): boolean {
+function sourceCandidateIsPeerReviewedOrDoi(
+  candidate: SourceCandidate,
+): boolean {
   if (!sourceCandidateIsAcademic(candidate)) return false;
   return (
     candidate.isPeerReviewed === true ||
@@ -3987,13 +5028,24 @@ function sourceCandidateIsPeerReviewedOrDoi(candidate: SourceCandidate): boolean
   );
 }
 
-function buildSourceQualitySummary(sourceCandidates: SourceCandidate[]): SourceQualitySummary {
-  const reviewable = sourceCandidates.filter((candidate) => candidate.reviewStatus !== "rejected");
+function buildSourceQualitySummary(
+  sourceCandidates: SourceCandidate[],
+): SourceQualitySummary {
+  const reviewable = sourceCandidates.filter(
+    (candidate) => candidate.reviewStatus !== "rejected",
+  );
   const academicCandidates = reviewable.filter(sourceCandidateIsAcademic);
-  const peerReviewedOrDoiCount = academicCandidates.filter(sourceCandidateIsPeerReviewedOrDoi).length;
-  const officialBackgroundCount = reviewable.filter(sourceCandidateIsOfficialBackground).length;
-  const fallbackReviewCount = fallbackReviewSourceCandidates(sourceCandidates).length;
-  const rejectedCount = sourceCandidates.filter((candidate) => candidate.reviewStatus === "rejected").length;
+  const peerReviewedOrDoiCount = academicCandidates.filter(
+    sourceCandidateIsPeerReviewedOrDoi,
+  ).length;
+  const officialBackgroundCount = reviewable.filter(
+    sourceCandidateIsOfficialBackground,
+  ).length;
+  const fallbackReviewCount =
+    fallbackReviewSourceCandidates(sourceCandidates).length;
+  const rejectedCount = sourceCandidates.filter(
+    (candidate) => candidate.reviewStatus === "rejected",
+  ).length;
   return {
     totalSources: reviewable.length,
     academicCandidateCount: academicCandidates.length,
@@ -4002,11 +5054,13 @@ function buildSourceQualitySummary(sourceCandidates: SourceCandidate[]): SourceQ
     fallbackReviewCount,
     rejectedCount,
     academicEnough:
-      academicCandidates.length >= ACADEMIC_RETRY_POLICY.minAcademicCandidates &&
+      academicCandidates.length >=
+        ACADEMIC_RETRY_POLICY.minAcademicCandidates &&
       peerReviewedOrDoiCount >= ACADEMIC_RETRY_POLICY.minPeerReviewedOrDOI,
     evidenceUsableEnough:
-      academicCandidates.filter((candidate) => candidate.usableAsEvidence !== false).length >=
-      ACADEMIC_RETRY_POLICY.minEvidenceUsableSources,
+      academicCandidates.filter(
+        (candidate) => candidate.usableAsEvidence !== false,
+      ).length >= ACADEMIC_RETRY_POLICY.minEvidenceUsableSources,
   };
 }
 
@@ -4030,14 +5084,21 @@ function academicRetryTriggerReason(input: {
   ) {
     return "only_official_background_sources";
   }
-  if (summary.academicCandidateCount < ACADEMIC_RETRY_POLICY.minAcademicCandidates) {
+  if (
+    summary.academicCandidateCount < ACADEMIC_RETRY_POLICY.minAcademicCandidates
+  ) {
     return "academic_candidates_below_threshold";
   }
-  if (summary.peerReviewedOrDoiCount < ACADEMIC_RETRY_POLICY.minPeerReviewedOrDOI) {
+  if (
+    summary.peerReviewedOrDoiCount < ACADEMIC_RETRY_POLICY.minPeerReviewedOrDOI
+  ) {
     return "peer_reviewed_or_doi_below_threshold";
   }
-  if (!summary.evidenceUsableEnough) return "evidence_usable_sources_below_threshold";
-  return hasEnglishAcademicQuery ? "academic_query_results_below_threshold" : null;
+  if (!summary.evidenceUsableEnough)
+    return "evidence_usable_sources_below_threshold";
+  return hasEnglishAcademicQuery
+    ? "academic_query_results_below_threshold"
+    : null;
 }
 
 function rejectionReasonCounts(
@@ -4065,12 +5126,17 @@ function finalUiStateForDiagnostics(input: {
 }): string {
   if (input.currentPhase === "searching_initial") return "searching_initial";
   if (input.currentPhase === "searching_fallback") return "searching_fallback";
-  if (input.currentPhase === "academic_retrying" || input.academicRetry?.active) {
+  if (
+    input.currentPhase === "academic_retrying" ||
+    input.academicRetry?.active
+  ) {
     return "academic_retrying";
   }
   if (input.currentPhase === "scoring_sources") return "scoring_sources";
-  if (input.currentPhase === "source_review_ready") return "source_review_ready";
-  if (input.currentPhase === "source_review_needs_manual") return "source_review_needs_manual";
+  if (input.currentPhase === "source_review_ready")
+    return "source_review_ready";
+  if (input.currentPhase === "source_review_needs_manual")
+    return "source_review_needs_manual";
   if (input.sourceQualitySummary && input.candidateCount > 0) {
     if (
       input.sourceQualitySummary.academicEnough ||
@@ -4099,7 +5165,8 @@ function finalUiStateForDiagnostics(input: {
   if (input.rawCount === 0 && input.candidateCount === 0) {
     return "no_raw_results_retry_with_english_relaxed_queries";
   }
-  if (input.candidateCount === 0) return "raw_results_filtered_relaxed_review_fallback";
+  if (input.candidateCount === 0)
+    return "raw_results_filtered_relaxed_review_fallback";
   return "sources_ready";
 }
 
@@ -4121,10 +5188,15 @@ function buildGroundingDiagnostics(input: {
   sourceQualitySummary?: SourceQualitySummary;
 }): GroundingPipelineDiagnostics {
   const sourceCandidates = input.sourceCandidates ?? [];
-  const highConfidenceCandidates = highConfidenceSourceCandidates(sourceCandidates, input.queryPlan);
-  const officialBackgroundCandidates = officialBackgroundSourceCandidates(sourceCandidates);
+  const highConfidenceCandidates = highConfidenceSourceCandidates(
+    sourceCandidates,
+    input.queryPlan,
+  );
+  const officialBackgroundCandidates =
+    officialBackgroundSourceCandidates(sourceCandidates);
   const manualReviewCandidates = manualReviewSourceCandidates(sourceCandidates);
-  const fallbackReviewCandidates = fallbackReviewSourceCandidates(sourceCandidates);
+  const fallbackReviewCandidates =
+    fallbackReviewSourceCandidates(sourceCandidates);
   const reviewableCandidates = sourceCandidates.filter(
     (candidate) => candidate.reviewStatus !== "rejected",
   );
@@ -4143,7 +5215,8 @@ function buildGroundingDiagnostics(input: {
   const normalizedValidCount =
     input.searchResult?.diagnostics?.normalized_valid_count ??
     (input.searchResult?.provider_status ?? []).reduce(
-      (sum, group) => sum + (group.normalized_valid_count ?? group.results.length),
+      (sum, group) =>
+        sum + (group.normalized_valid_count ?? group.results.length),
       0,
     );
   const normalizedInvalidCount =
@@ -4164,17 +5237,22 @@ function buildGroundingDiagnostics(input: {
       candidate.userDecision === "accepted_as_manual_review" ||
       Boolean(candidate.acceptedAs),
   ).length;
-  const scholarlyDraftCount = highConfidenceCandidates.length + acceptedManualReviewCount;
+  const scholarlyDraftCount =
+    highConfidenceCandidates.length + acceptedManualReviewCount;
   const scholarlyMinimumMet =
-    scholarlyDraftCount >= academicMinimum || sourceQualitySummary.academicEnough;
+    scholarlyDraftCount >= academicMinimum ||
+    sourceQualitySummary.academicEnough;
   const officialBackgroundMinimumMet = officialBackgroundCandidates.length > 0;
   const canProceedToSourceReview =
-    supportCandidateCount >= MIN_REVIEWABLE_SOURCE_COUNT && academicRetry?.active !== true;
-  const canProceedToAcademicDraft = sourceQualitySummary.academicEnough || scholarlyMinimumMet;
+    supportCandidateCount >= MIN_REVIEWABLE_SOURCE_COUNT &&
+    academicRetry?.active !== true;
+  const canProceedToAcademicDraft =
+    sourceQualitySummary.academicEnough || scholarlyMinimumMet;
   const canProceedToBackgroundDraft =
     canProceedToAcademicDraft || officialBackgroundMinimumMet;
   const readinessWarnings = uniqueStrings([
-    sourceQualitySummary.academicCandidateCount === 0 && officialBackgroundCandidates.length > 0
+    sourceQualitySummary.academicCandidateCount === 0 &&
+    officialBackgroundCandidates.length > 0
       ? "目前只找到官方背景來源，尚未找到可自動推薦的學術論文。"
       : "",
     academicRetry?.active
@@ -4186,7 +5264,8 @@ function buildGroundingDiagnostics(input: {
     manualReviewCandidates.length > 0 && acceptedManualReviewCount === 0
       ? "待人工審查來源需由使用者明確接受後，才會影響草稿準備度。"
       : "",
-    supportCandidateCount > 0 && supportCandidateCount < MIN_REVIEWABLE_SOURCE_COUNT
+    supportCandidateCount > 0 &&
+    supportCandidateCount < MIN_REVIEWABLE_SOURCE_COUNT
       ? `只找到 ${supportCandidateCount} 筆可審查來源，未達最低 ${MIN_REVIEWABLE_SOURCE_COUNT} 筆，請放寬搜尋或重新搜尋。`
       : "",
     supportCandidateCount >= MIN_REVIEWABLE_SOURCE_COUNT &&
@@ -4194,57 +5273,64 @@ function buildGroundingDiagnostics(input: {
       ? "來源較少，建議補充。"
       : "",
   ]);
-  const readinessReason =
-    academicRetry?.active
-      ? "正在延伸學術查詢並重新搜尋論文來源。"
-      : academicRetry?.exhausted && supportCandidateCount > 0 && !sourceQualitySummary.academicEnough
-        ? "已完成所有自動學術延伸查詢；目前來源仍需人工審查或補充。"
-        : supportCandidateCount === 0
-          ? input.fallbackCompleted
-            ? "所有自動 fallback 查詢完成後仍未找到可審查來源。"
-            : "系統正在改用更精確的學術查詢重新搜尋。"
-          : supportCandidateCount < MIN_REVIEWABLE_SOURCE_COUNT
-            ? `只找到 ${supportCandidateCount} 筆可審查來源，未達最低 ${MIN_REVIEWABLE_SOURCE_COUNT} 筆。`
-            : !canProceedToAcademicDraft && officialBackgroundCandidates.length > 0
-              ? "目前只找到官方背景來源，尚未找到可自動推薦的學術論文。"
-              : canProceedToAcademicDraft
-                ? "已達學術草稿最低來源門檻。"
-                : supportCandidateCount < READY_REVIEWABLE_SOURCE_COUNT
-                  ? "來源較少，建議補充，但仍可進入來源審查。"
-                  : "來源已可審查，學術草稿來源尚未達最低門檻。";
+  const readinessReason = academicRetry?.active
+    ? "正在延伸學術查詢並重新搜尋論文來源。"
+    : academicRetry?.exhausted &&
+        supportCandidateCount > 0 &&
+        !sourceQualitySummary.academicEnough
+      ? "已完成所有自動學術延伸查詢；目前來源仍需人工審查或補充。"
+      : supportCandidateCount === 0
+        ? input.fallbackCompleted
+          ? "所有自動 fallback 查詢完成後仍未找到可審查來源。"
+          : "系統正在改用更精確的學術查詢重新搜尋。"
+        : supportCandidateCount < MIN_REVIEWABLE_SOURCE_COUNT
+          ? `只找到 ${supportCandidateCount} 筆可審查來源，未達最低 ${MIN_REVIEWABLE_SOURCE_COUNT} 筆。`
+          : !canProceedToAcademicDraft &&
+              officialBackgroundCandidates.length > 0
+            ? "目前只找到官方背景來源，尚未找到可自動推薦的學術論文。"
+            : canProceedToAcademicDraft
+              ? "已達學術草稿最低來源門檻。"
+              : supportCandidateCount < READY_REVIEWABLE_SOURCE_COUNT
+                ? "來源較少，建議補充，但仍可進入來源審查。"
+                : "來源已可審查，學術草稿來源尚未達最低門檻。";
   const canProceedToNextStage = canProceedToSourceReview;
   const blockingReason = canProceedToNextStage
     ? null
     : input.parsedInput.inputType === "invalid"
-        ? "無法辨識有效研究主題。"
-        : readinessReason;
+      ? "無法辨識有效研究主題。"
+      : readinessReason;
   const userVisibleStatus =
     academicRetry?.active || input.currentPhase === "academic_retrying"
       ? "正在延伸學術查詢，重新搜尋期刊、論文與 DOI 來源..."
       : input.currentPhase === "searching_fallback"
-      ? "系統正在改用更精確的學術查詢重新搜尋……"
-      : academicRetry?.exhausted && !sourceQualitySummary.academicEnough && supportCandidateCount > 0
-        ? `已自動嘗試 ${academicRetry.count} 輪學術延伸查詢，但學術來源仍不足；請在來源審查中補充或手動調整查詢。`
-      : input.fallbackCompleted && supportCandidateCount === 0
-        ? "所有自動 fallback 查詢完成後，仍未取得可審查來源。"
-        : sourceQualitySummary.academicCandidateCount >= MIN_REVIEWABLE_SOURCE_COUNT &&
-          canProceedToSourceReview
-          ? `已找到 ${sourceQualitySummary.academicCandidateCount} 筆學術候選來源，可進入來源審查。`
-            : supportCandidateCount > 0 && supportCandidateCount < MIN_REVIEWABLE_SOURCE_COUNT
-              ? `只找到 ${supportCandidateCount} 筆可審查來源，未達最低 ${MIN_REVIEWABLE_SOURCE_COUNT} 筆；請放寬搜尋或重新搜尋。`
-            : supportCandidateCount >= MIN_REVIEWABLE_SOURCE_COUNT &&
-              supportCandidateCount < READY_REVIEWABLE_SOURCE_COUNT
-              ? `已找到 ${supportCandidateCount} 筆可審查來源；來源較少，建議補充，但可先進入來源審查。`
-              : fallbackReviewCandidates.length > 0
-                ? `已找到 ${fallbackReviewCandidates.length} 筆待人工審查來源，可先進入來源審查確認。`
-                : providerErrors.length > 0 && canProceedToSourceReview
-                  ? "部分來源服務受限，已使用可取得來源繼續。"
-                  : canProceedToSourceReview
-                    ? "來源已可審查。"
-                    : "尚未取得可審查來源。";
+        ? "系統正在改用更精確的學術查詢重新搜尋……"
+        : academicRetry?.exhausted &&
+            !sourceQualitySummary.academicEnough &&
+            supportCandidateCount > 0
+          ? `已自動嘗試 ${academicRetry.count} 輪學術延伸查詢，但學術來源仍不足；請在來源審查中補充或手動調整查詢。`
+          : input.fallbackCompleted && supportCandidateCount === 0
+            ? "所有自動 fallback 查詢完成後，仍未取得可審查來源。"
+            : sourceQualitySummary.academicCandidateCount >=
+                  MIN_REVIEWABLE_SOURCE_COUNT && canProceedToSourceReview
+              ? `已找到 ${sourceQualitySummary.academicCandidateCount} 筆學術候選來源，可進入來源審查。`
+              : supportCandidateCount > 0 &&
+                  supportCandidateCount < MIN_REVIEWABLE_SOURCE_COUNT
+                ? `只找到 ${supportCandidateCount} 筆可審查來源，未達最低 ${MIN_REVIEWABLE_SOURCE_COUNT} 筆；請放寬搜尋或重新搜尋。`
+                : supportCandidateCount >= MIN_REVIEWABLE_SOURCE_COUNT &&
+                    supportCandidateCount < READY_REVIEWABLE_SOURCE_COUNT
+                  ? `已找到 ${supportCandidateCount} 筆可審查來源；來源較少，建議補充，但可先進入來源審查。`
+                  : fallbackReviewCandidates.length > 0
+                    ? `已找到 ${fallbackReviewCandidates.length} 筆待人工審查來源，可先進入來源審查確認。`
+                    : providerErrors.length > 0 && canProceedToSourceReview
+                      ? "部分來源服務受限，已使用可取得來源繼續。"
+                      : canProceedToSourceReview
+                        ? "來源已可審查。"
+                        : "尚未取得可審查來源。";
   const providerStatus = input.searchResult?.diagnostics?.provider_status ?? [];
   const providerHealth = input.searchResult?.diagnostics?.provider_health ?? [];
-  const attemptedProviders = uniqueStrings(providerStatus.map((provider) => provider.provider));
+  const attemptedProviders = uniqueStrings(
+    providerStatus.map((provider) => provider.provider),
+  );
   const degradedProviders = uniqueStrings(
     providerHealth
       .filter((provider) => provider.status === "degraded")
@@ -4257,7 +5343,9 @@ function buildGroundingDiagnostics(input: {
   );
   const skippedProviders = uniqueStrings([
     ...providerStatus
-      .filter((provider) => /cooling down|cooldown|down/i.test(provider.error_message ?? ""))
+      .filter((provider) =>
+        /cooling down|cooldown|down/i.test(provider.error_message ?? ""),
+      )
       .map((provider) => provider.provider),
     ...downProviders,
   ]);
@@ -4289,7 +5377,10 @@ function buildGroundingDiagnostics(input: {
       ? {
           originalQuery: input.queryPlan.originalQuery ?? input.rawTopic,
           zhAcademicQuery: input.queryPlan.zhCoreQueries ?? [],
-          enAcademicQuery: input.queryPlan.enAcademicQueries ?? input.queryPlan.enCoreQueries ?? [],
+          enAcademicQuery:
+            input.queryPlan.enAcademicQueries ??
+            input.queryPlan.enCoreQueries ??
+            [],
           keywordSet: uniqueStrings(
             (input.queryPlan.conceptGroups ?? []).flatMap((group) => [
               group.name,
@@ -4313,10 +5404,12 @@ function buildGroundingDiagnostics(input: {
       ...(input.queryPlan?.primaryQueries ?? []),
       ...(input.queryPlan?.bilingualQueries.en ?? []),
     ]).slice(0, 8),
-    selectedTopic: input.parsedInput.canonicalTopic || input.topicAnalysis.normalizedTopic,
+    selectedTopic:
+      input.parsedInput.canonicalTopic || input.topicAnalysis.normalizedTopic,
     selectedDomain: input.selectedDomain ?? input.parsedInput.domain,
     researchQuestion: input.researchQuestion,
-    researchTitle: input.parsedInput.displayTitle || input.parsedInput.canonicalTopic,
+    researchTitle:
+      input.parsedInput.displayTitle || input.parsedInput.canonicalTopic,
     queryPlan: input.queryPlan,
     zhQueries: uniqueStrings([
       ...(input.queryPlan?.bilingualQueries.zh ?? []),
@@ -4331,7 +5424,9 @@ function buildGroundingDiagnostics(input: {
       ...(input.searchResult?.queries.fallbackRelaxed ?? []),
     ]),
     providersCalled: uniqueStrings(
-      (input.searchResult?.provider_status ?? []).map((group) => group.provider),
+      (input.searchResult?.provider_status ?? []).map(
+        (group) => group.provider,
+      ),
     ),
     rawProviderCounts: aggregateProviderCounts(input.searchResult),
     rawProviderCount: rawCount,
@@ -4353,7 +5448,9 @@ function buildGroundingDiagnostics(input: {
     manualReviewCount: manualReviewCandidates.length,
     candidateCount,
     fallbackReviewCount: fallbackReviewCandidates.length,
-    rejectedCount: sourceCandidates.filter((candidate) => candidate.reviewStatus === "rejected").length,
+    rejectedCount: sourceCandidates.filter(
+      (candidate) => candidate.reviewStatus === "rejected",
+    ).length,
     acceptedCount,
     canProceedToSourceReview,
     canProceedToAcademicDraft,
@@ -4365,28 +5462,32 @@ function buildGroundingDiagnostics(input: {
     userVisibleStatus,
     academicRetry,
     sourceQualitySummary,
-    topHighConfidenceSources: highConfidenceCandidates.slice(0, 5).map((candidate) => ({
-      title: candidate.title,
-      provider: candidate.provider,
-      finalScore: candidate.finalScore,
-      matchedConcepts: candidate.matchedConcepts,
-      matchedFields: candidate.matchedFields,
-      acceptReason: candidate.acceptReason,
-      confidenceTier: candidate.confidenceTier,
-      recommendationBucket: candidate.recommendationBucket,
-    })),
-    topFallbackSources: fallbackReviewCandidates.slice(0, 5).map((candidate) => ({
-      title: candidate.title,
-      provider: candidate.provider,
-      finalScore: candidate.finalScore,
-      matchedConcepts: candidate.matchedConcepts,
-      matchedFields: candidate.matchedFields,
-      rejectionReason: candidate.rejectionReason,
-      lowConfidence: candidate.lowConfidence,
-      needsReview: candidate.needsReview,
-      recommendationBucket: candidate.recommendationBucket,
-      sourceRole: candidate.sourceRole,
-    })),
+    topHighConfidenceSources: highConfidenceCandidates
+      .slice(0, 5)
+      .map((candidate) => ({
+        title: candidate.title,
+        provider: candidate.provider,
+        finalScore: candidate.finalScore,
+        matchedConcepts: candidate.matchedConcepts,
+        matchedFields: candidate.matchedFields,
+        acceptReason: candidate.acceptReason,
+        confidenceTier: candidate.confidenceTier,
+        recommendationBucket: candidate.recommendationBucket,
+      })),
+    topFallbackSources: fallbackReviewCandidates
+      .slice(0, 5)
+      .map((candidate) => ({
+        title: candidate.title,
+        provider: candidate.provider,
+        finalScore: candidate.finalScore,
+        matchedConcepts: candidate.matchedConcepts,
+        matchedFields: candidate.matchedFields,
+        rejectionReason: candidate.rejectionReason,
+        lowConfidence: candidate.lowConfidence,
+        needsReview: candidate.needsReview,
+        recommendationBucket: candidate.recommendationBucket,
+        sourceRole: candidate.sourceRole,
+      })),
     rejectedReasonCounts: rejectionReasonCounts(sourceCandidates),
     rejectionReasons: {
       ...(input.searchResult?.diagnostics?.rejection_reasons ?? {}),
@@ -4431,17 +5532,24 @@ function buildGroundingDiagnostics(input: {
     cacheStatus: input.searchResult?.diagnostics?.cache_status ?? "miss",
     earlyStopReason: input.searchResult?.diagnostics?.early_stop_reason,
     foregroundLatencyMs:
-      input.foregroundLatencyMs ?? input.searchResult?.diagnostics?.foreground_latency_ms,
-    firstCandidateLatencyMs: input.searchResult?.diagnostics?.first_candidate_latency_ms,
+      input.foregroundLatencyMs ??
+      input.searchResult?.diagnostics?.foreground_latency_ms,
+    firstCandidateLatencyMs:
+      input.searchResult?.diagnostics?.first_candidate_latency_ms,
     triedQueries: input.searchResult?.diagnostics?.tried_queries,
+    budgetAuthority: input.searchResult?.diagnostics?.budgetAuthority,
   };
 }
 
-function shouldIncludeDiagnosticTrace(input: ResearchGroundingJobCreateRequest): boolean {
+function shouldIncludeDiagnosticTrace(
+  input: ResearchGroundingJobCreateRequest,
+): boolean {
   return input.debugTrace === true || process.env.NODE_ENV !== "production";
 }
 
-function sanitizeProviderError(value: string | null | undefined): string | undefined {
+function sanitizeProviderError(
+  value: string | null | undefined,
+): string | undefined {
   const sanitized = compactWhitespace(value ?? "")
     .replace(/authorization\s*[:=]\s*[^\s,;]+/gi, "authorization=[redacted]")
     .replace(/bearer\s+[a-z0-9._-]+/gi, "bearer [redacted]")
@@ -4453,16 +5561,27 @@ function sanitizeProviderError(value: string | null | undefined): string | undef
   return sanitized || undefined;
 }
 
-function diagnosticQueryPurpose(query: string): ResearchGroundingDiagnosticTrace["step3_queryPlan"]["bilingualQueries"][number]["purpose"] {
-  if (/分類|分類學|taxonomy|Ailuropoda|Ailurus|Ursidae|Ailuridae|giant panda|red panda/i.test(query)) {
+function diagnosticQueryPurpose(
+  query: string,
+): ResearchGroundingDiagnosticTrace["step3_queryPlan"]["bilingualQueries"][number]["purpose"] {
+  if (
+    /分類|分類學|taxonomy|Ailuropoda|Ailurus|Ursidae|Ailuridae|giant panda|red panda/i.test(
+      query,
+    )
+  ) {
     return "taxonomy";
   }
-  if (/名稱|命名|用法|語境|terminology|naming|cat-bear|Chinese language/i.test(query)) {
+  if (
+    /名稱|命名|用法|語境|terminology|naming|cat-bear|Chinese language/i.test(
+      query,
+    )
+  ) {
     return "terminology";
   }
   if (/定義|definition|what is/i.test(query)) return "definition";
   if (/review|文獻|研究|academic/i.test(query)) return "review";
-  if (/背景|科普|教育|background|education|explainer/i.test(query)) return "background";
+  if (/背景|科普|教育|background|education|explainer/i.test(query))
+    return "background";
   if (query.split(/\s+/u).length <= 3) return "specific";
   return "broad";
 }
@@ -4473,10 +5592,16 @@ function providerHintsForDiagnosticQuery(
 ): string[] {
   const hints: string[] = [];
   const includesQuery = (queries: string[] | undefined) =>
-    (queries ?? []).some((candidate) => candidate === query || candidate.includes(query) || query.includes(candidate));
+    (queries ?? []).some(
+      (candidate) =>
+        candidate === query ||
+        candidate.includes(query) ||
+        query.includes(candidate),
+    );
   if (includesQuery(providerQueries.openalex)) hints.push("OpenAlex");
   if (includesQuery(providerQueries.crossref)) hints.push("Crossref");
-  if (includesQuery(providerQueries.semanticScholar)) hints.push("Semantic Scholar");
+  if (includesQuery(providerQueries.semanticScholar))
+    hints.push("Semantic Scholar");
   if (includesQuery(providerQueries.core)) hints.push("CORE");
   if (includesQuery(providerQueries.web)) hints.push("web");
   return hints.length ? hints : ["OpenAlex", "Crossref"];
@@ -4491,25 +5616,37 @@ function diagnosticBilingualQueries(
       query,
       lang: "zh" as const,
       purpose: diagnosticQueryPurpose(query),
-      providerHints: providerHintsForDiagnosticQuery(query, queryPlan.providerQueries),
+      providerHints: providerHintsForDiagnosticQuery(
+        query,
+        queryPlan.providerQueries,
+      ),
     })),
     ...uniqueStrings(queryPlan.bilingualQueries.en).map((query) => ({
       query,
       lang: "en" as const,
       purpose: diagnosticQueryPurpose(query),
-      providerHints: providerHintsForDiagnosticQuery(query, queryPlan.providerQueries),
+      providerHints: providerHintsForDiagnosticQuery(
+        query,
+        queryPlan.providerQueries,
+      ),
     })),
   ];
 }
 
 function queryRoutingTextForPlan(queryPlan: GroundingQueryPlan): string {
-  return compactWhitespace([
-    queryPlan.originalQuery,
-    queryPlan.domain,
-    queryPlan.intent,
-    ...(queryPlan.conceptGroups ?? []).flatMap((group) => [group.name, ...group.zhTerms, ...group.enTerms]),
-    ...queryPlan.primaryQueries,
-  ].join(" "));
+  return compactWhitespace(
+    [
+      queryPlan.originalQuery,
+      queryPlan.domain,
+      queryPlan.intent,
+      ...(queryPlan.conceptGroups ?? []).flatMap((group) => [
+        group.name,
+        ...group.zhTerms,
+        ...group.enTerms,
+      ]),
+      ...queryPlan.primaryQueries,
+    ].join(" "),
+  );
 }
 
 function selectedQueriesByProviderForDiagnostic(
@@ -4517,25 +5654,42 @@ function selectedQueriesByProviderForDiagnostic(
 ): Record<string, string[]> | undefined {
   if (!queryPlan) return undefined;
   const topicText = queryRoutingTextForPlan(queryPlan);
-  const backgroundQueries = backgroundRoutedQueries([
-    ...queryPlan.primaryQueries,
-    ...queryPlan.secondaryQueries,
-    ...queryPlan.bilingualQueries.zh,
-    ...queryPlan.bilingualQueries.en,
-    ...(queryPlan.providerQueries.web ?? []),
-  ], topicText);
+  const backgroundQueries = backgroundRoutedQueries(
+    [
+      ...queryPlan.primaryQueries,
+      ...queryPlan.secondaryQueries,
+      ...queryPlan.bilingualQueries.zh,
+      ...queryPlan.bilingualQueries.en,
+      ...(queryPlan.providerQueries.web ?? []),
+    ],
+    topicText,
+  );
   return {
-    openalex: providerSafeQueries(queryPlan.providerQueries.openalex, topicText),
-    crossref: providerSafeQueries(queryPlan.providerQueries.crossref, topicText),
-    semanticScholar: providerSafeQueries(queryPlan.providerQueries.semanticScholar ?? [], topicText),
+    openalex: providerSafeQueries(
+      queryPlan.providerQueries.openalex,
+      topicText,
+    ),
+    crossref: providerSafeQueries(
+      queryPlan.providerQueries.crossref,
+      topicText,
+    ),
+    semanticScholar: providerSafeQueries(
+      queryPlan.providerQueries.semanticScholar ?? [],
+      topicText,
+    ),
     core: providerSafeQueries(queryPlan.providerQueries.core, topicText),
-    web: uniqueStrings([...(queryPlan.providerQueries.web ?? []), ...backgroundQueries]).slice(0, 12),
+    web: uniqueStrings([
+      ...(queryPlan.providerQueries.web ?? []),
+      ...backgroundQueries,
+    ]).slice(0, 12),
   };
 }
 
 function diagnosticClassifiedQueries(
   queryPlan?: GroundingQueryPlan,
-): NonNullable<ResearchGroundingDiagnosticTrace["step3_queryPlan"]["classifiedQueries"]> {
+): NonNullable<
+  ResearchGroundingDiagnosticTrace["step3_queryPlan"]["classifiedQueries"]
+> {
   if (!queryPlan) return [];
   const topicText = queryRoutingTextForPlan(queryPlan);
   return uniqueStrings([
@@ -4548,15 +5702,20 @@ function diagnosticClassifiedQueries(
     ...(queryPlan.providerQueries.semanticScholar ?? []),
     ...queryPlan.providerQueries.core,
     ...(queryPlan.providerQueries.web ?? []),
-  ]).slice(0, 80).map((query) => {
-    const routed = classifySearchQueryForRouting(query, topicText);
-    return {
-      query,
-      classification: routed.classification,
-      reason: routed.reason,
-      providerHints: providerHintsForDiagnosticQuery(query, queryPlan.providerQueries),
-    };
-  });
+  ])
+    .slice(0, 80)
+    .map((query) => {
+      const routed = classifySearchQueryForRouting(query, topicText);
+      return {
+        query,
+        classification: routed.classification,
+        reason: routed.reason,
+        providerHints: providerHintsForDiagnosticQuery(
+          query,
+          queryPlan.providerQueries,
+        ),
+      };
+    });
 }
 
 function providerExecutionTrace(
@@ -4582,36 +5741,44 @@ function providerExecutionTrace(
 
   for (const group of groups) {
     const provider = group.provider || "unknown";
-    const current =
-      byProvider.get(provider) ??
-      {
-        provider,
-        queriesUsed: [],
-        rawCount: 0,
-        latencyMs: 0,
-        okCount: 0,
-        emptyOkCount: 0,
-        timeoutCount: 0,
-        failedCount: 0,
-        skippedCount: 0,
-      };
+    const current = byProvider.get(provider) ?? {
+      provider,
+      queriesUsed: [],
+      rawCount: 0,
+      latencyMs: 0,
+      okCount: 0,
+      emptyOkCount: 0,
+      timeoutCount: 0,
+      failedCount: 0,
+      skippedCount: 0,
+    };
     const rawCount = group.raw_count ?? group.results.length;
-    if (group.query) current.queriesUsed = uniqueStrings([...current.queriesUsed, group.query]);
+    if (group.query)
+      current.queriesUsed = uniqueStrings([
+        ...current.queriesUsed,
+        group.query,
+      ]);
     current.rawCount += rawCount;
     current.latencyMs += Math.max(0, Math.round(group.latency_ms ?? 0));
     if (group.ok && rawCount > 0) current.okCount += 1;
     if (group.ok && rawCount === 0) current.emptyOkCount += 1;
     if (group.error_type === "timeout") current.timeoutCount += 1;
     if (!group.ok && group.error_type !== "timeout") {
-      if (/cooldown|cooling down|disabled|skipped/i.test(group.error_message ?? "")) {
+      if (
+        /cooldown|cooling down|disabled|skipped/i.test(
+          group.error_message ?? "",
+        )
+      ) {
         current.skippedCount += 1;
       } else {
         current.failedCount += 1;
       }
     }
-    if (!current.errorType && group.error_type) current.errorType = group.error_type;
+    if (!current.errorType && group.error_type)
+      current.errorType = group.error_type;
     const safeErrorMessage = sanitizeProviderError(group.error_message);
-    if (!current.safeErrorMessage && safeErrorMessage) current.safeErrorMessage = safeErrorMessage;
+    if (!current.safeErrorMessage && safeErrorMessage)
+      current.safeErrorMessage = safeErrorMessage;
     byProvider.set(provider, current);
   }
 
@@ -4633,12 +5800,16 @@ function providerExecutionTrace(
       rawCount: item.rawCount,
       latencyMs: item.latencyMs,
       ...(item.errorType ? { errorType: item.errorType } : {}),
-      ...(item.safeErrorMessage ? { safeErrorMessage: item.safeErrorMessage } : {}),
+      ...(item.safeErrorMessage
+        ? { safeErrorMessage: item.safeErrorMessage }
+        : {}),
     };
   });
 }
 
-function sourceCandidateProviderLabel(provider: SourceCandidate["provider"]): string {
+function sourceCandidateProviderLabel(
+  provider: SourceCandidate["provider"],
+): string {
   switch (provider) {
     case "openalex":
       return "OpenAlex";
@@ -4660,7 +5831,9 @@ function providerProgressForDiagnostics(
   searchResult: SearchIntentSourceSearchResult,
   sourceCandidates: SourceCandidate[],
 ): NonNullable<GroundingPipelineDiagnostics["providerProgress"]> {
-  type ProviderProgress = NonNullable<GroundingPipelineDiagnostics["providerProgress"]>[number];
+  type ProviderProgress = NonNullable<
+    GroundingPipelineDiagnostics["providerProgress"]
+  >[number];
   type ProviderBucketCounts = {
     acceptedCount: number;
     candidateCount: number;
@@ -4671,14 +5844,12 @@ function providerProgressForDiagnostics(
 
   for (const candidate of sourceCandidates) {
     const provider = sourceCandidateProviderLabel(candidate.provider);
-    const current =
-      bucketCounts.get(provider) ??
-      {
-        acceptedCount: 0,
-        candidateCount: 0,
-        fallbackReviewCount: 0,
-        rejectedCount: 0,
-      };
+    const current = bucketCounts.get(provider) ?? {
+      acceptedCount: 0,
+      candidateCount: 0,
+      fallbackReviewCount: 0,
+      rejectedCount: 0,
+    };
     if (candidate.reviewStatus === "accepted") current.acceptedCount += 1;
     if (candidate.reviewStatus === "rejected") {
       current.rejectedCount += 1;
@@ -4716,22 +5887,22 @@ function providerProgressForDiagnostics(
 
   for (const group of searchResult.provider_status ?? []) {
     const provider = group.provider || "unknown";
-    const current =
-      grouped.get(provider) ??
-      {
-        provider,
-        queries: [],
-        rawResultsCount: 0,
-        normalizedCount: 0,
-        durationMs: 0,
-        okCount: 0,
-        emptyOkCount: 0,
-        timeoutCount: 0,
-        errorCount: 0,
-      };
+    const current = grouped.get(provider) ?? {
+      provider,
+      queries: [],
+      rawResultsCount: 0,
+      normalizedCount: 0,
+      durationMs: 0,
+      okCount: 0,
+      emptyOkCount: 0,
+      timeoutCount: 0,
+      errorCount: 0,
+    };
     const rawCount = group.raw_count ?? group.results.length;
-    const normalizedCount = group.normalized_valid_count ?? group.results.length;
-    if (group.query) current.queries = uniqueStrings([...current.queries, group.query]);
+    const normalizedCount =
+      group.normalized_valid_count ?? group.results.length;
+    if (group.query)
+      current.queries = uniqueStrings([...current.queries, group.query]);
     current.rawResultsCount += rawCount;
     current.normalizedCount += normalizedCount;
     current.durationMs += Math.max(0, Math.round(group.latency_ms ?? 0));
@@ -4799,11 +5970,15 @@ function providerProgressForDiagnostics(
 function diagnosticSourceBucket(
   candidate: SourceCandidate,
 ): ResearchGroundingDiagnosticTrace["step6_scoring"][number]["finalBucket"] {
-  if (candidate.reviewStatus === "rejected" || candidate.recommendationBucket === "rejected") {
+  if (
+    candidate.reviewStatus === "rejected" ||
+    candidate.recommendationBucket === "rejected"
+  ) {
     return "rejected";
   }
   if (candidate.reviewStatus === "accepted") return "accepted";
-  if (candidate.recommendationBucket === "official_background") return "fallback_review";
+  if (candidate.recommendationBucket === "official_background")
+    return "fallback_review";
   return "manual_review";
 }
 
@@ -4814,7 +5989,8 @@ function workflowStatusForDiagnosticTrace(
   reviewableFallbackSources: number,
 ): ResearchGroundingDiagnosticTrace["step8_nextStepDecision"]["workflowStatus"] {
   if (status === "failed") return "failed";
-  if (status === "no_sources_after_fallback" && !canProceedToSourceReview) return "empty";
+  if (status === "no_sources_after_fallback" && !canProceedToSourceReview)
+    return "empty";
   if (!canProceedToSourceReview && reviewableFallbackSources > 0) {
     return "needs_query_revision";
   }
@@ -4881,17 +6057,28 @@ function buildResearchGroundingDiagnosticTrace(input: {
     input.groundingDiagnostics?.dedupedCount ??
     input.searchResult?.diagnostics?.deduped_count ??
     sourceCandidates.length;
-  const acceptedSources = sourceCandidates.filter((candidate) => candidate.reviewStatus === "accepted").length;
-  const officialBackgroundSources = officialBackgroundSourceCandidates(sourceCandidates).length;
-  const manualReviewSources = manualReviewSourceCandidates(sourceCandidates).length;
-  const fallbackReviewSources = fallbackReviewSourceCandidates(sourceCandidates).length;
-  const rejectedSources = sourceCandidates.filter((candidate) => candidate.reviewStatus === "rejected").length;
+  const acceptedSources = sourceCandidates.filter(
+    (candidate) => candidate.reviewStatus === "accepted",
+  ).length;
+  const officialBackgroundSources =
+    officialBackgroundSourceCandidates(sourceCandidates).length;
+  const manualReviewSources =
+    manualReviewSourceCandidates(sourceCandidates).length;
+  const fallbackReviewSources =
+    fallbackReviewSourceCandidates(sourceCandidates).length;
+  const rejectedSources = sourceCandidates.filter(
+    (candidate) => candidate.reviewStatus === "rejected",
+  ).length;
   const highConfidenceManualSources = sourceCandidates.filter(
     (candidate) =>
       candidate.reviewStatus === "review" &&
-      (candidate.highConfidenceManual === true || (candidate.bucketScore ?? 0) >= 0.45),
+      (candidate.highConfidenceManual === true ||
+        (candidate.bucketScore ?? 0) >= 0.45),
   ).length;
-  const topicEntityMap = buildTopicEntityMap(input.originalTopic, input.queryPlan);
+  const topicEntityMap = buildTopicEntityMap(
+    input.originalTopic,
+    input.queryPlan,
+  );
   const backgroundSourceNeeded =
     topicEntityMap.backgroundSourceNeeded && officialBackgroundSources === 0;
   const domainSignal = input.topicAnalysis.domainHypotheses[0];
@@ -4921,7 +6108,9 @@ function buildResearchGroundingDiagnosticTrace(input: {
     (canProceedToSourceReview
       ? "At least one source is available for source review."
       : "No reviewable sources are available after provider execution and scoring.");
-  const selectedQueriesByProvider = selectedQueriesByProviderForDiagnostic(input.queryPlan);
+  const selectedQueriesByProvider = selectedQueriesByProviderForDiagnostic(
+    input.queryPlan,
+  );
 
   return {
     workflowId: input.workflowId,
@@ -4936,12 +6125,12 @@ function buildResearchGroundingDiagnosticTrace(input: {
       searchDepth: input.searchDepth,
     },
     step2_normalization: {
-      normalizedTopicZh: input.normalizedSearchTopic.displayTitle || input.topicAnalysis.normalizedTopic,
+      normalizedTopicZh:
+        input.normalizedSearchTopic.displayTitle ||
+        input.topicAnalysis.normalizedTopic,
       normalizedTopicEn: englishDiagnosticTopic(input),
       detectedDomain:
-        input.queryPlan?.domain ??
-        domainSignal?.domain ??
-        "general_academic",
+        input.queryPlan?.domain ?? domainSignal?.domain ?? "general_academic",
       confidence: domainSignal?.confidence ?? 0.55,
       ambiguityFlags: uniqueStrings([
         input.topicAnalysis.topicCompleteness?.level,
@@ -4953,9 +6142,7 @@ function buildResearchGroundingDiagnosticTrace(input: {
     },
     step3_queryPlan: {
       bilingualQueries: diagnosticBilingualQueries(input.queryPlan),
-      ...(selectedQueriesByProvider
-        ? { selectedQueriesByProvider }
-        : {}),
+      ...(selectedQueriesByProvider ? { selectedQueriesByProvider } : {}),
       classifiedQueries: diagnosticClassifiedQueries(input.queryPlan),
     },
     step4_providerExecution: providerExecutionTrace(input.searchResult),
@@ -4964,15 +6151,21 @@ function buildResearchGroundingDiagnosticTrace(input: {
       normalizedTotal,
       dedupedTotal,
       duplicateRemoved: Math.max(0, normalizedTotal - dedupedTotal),
-      missingTitleCount: sourceCandidates.filter((candidate) => !candidate.title?.trim()).length,
+      missingTitleCount: sourceCandidates.filter(
+        (candidate) => !candidate.title?.trim(),
+      ).length,
       missingAbstractCount: sourceCandidates.filter(
-        (candidate) => !candidate.abstractOriginal?.trim() && !candidate.abstract?.trim(),
+        (candidate) =>
+          !candidate.abstractOriginal?.trim() && !candidate.abstract?.trim(),
       ).length,
     },
     step6_scoring: sourceCandidates.slice(0, 50).map((candidate) => {
       const rejectionReasons =
         candidate.reviewStatus === "rejected"
-          ? uniqueStrings([candidate.rejectionReason, ...(candidate.limitations ?? [])])
+          ? uniqueStrings([
+              candidate.rejectionReason,
+              ...(candidate.limitations ?? []),
+            ])
           : undefined;
       return {
         sourceId: candidate.sourceId,
@@ -4985,14 +6178,22 @@ function buildResearchGroundingDiagnosticTrace(input: {
         relevanceScore: candidate.relevanceScore,
         qualityScore: candidate.sourceQualityScore,
         ...(candidate.sourceBucket ? { bucket: candidate.sourceBucket } : {}),
-        ...(typeof candidate.bucketScore === "number" ? { bucketScore: candidate.bucketScore } : {}),
+        ...(typeof candidate.bucketScore === "number"
+          ? { bucketScore: candidate.bucketScore }
+          : {}),
         decision: diagnosticSourceBucket(candidate),
-        ...(candidate.decisionReasons?.length ? { decisionReasons: candidate.decisionReasons } : {}),
-        ...(candidate.matchedEntities?.length ? { matchedEntities: candidate.matchedEntities } : {}),
+        ...(candidate.decisionReasons?.length
+          ? { decisionReasons: candidate.decisionReasons }
+          : {}),
+        ...(candidate.matchedEntities?.length
+          ? { matchedEntities: candidate.matchedEntities }
+          : {}),
         ...(candidate.missingRequiredSignals?.length
           ? { missingRequiredSignals: candidate.missingRequiredSignals }
           : {}),
-        ...(candidate.sourceUseCase ? { sourceUseCase: candidate.sourceUseCase } : {}),
+        ...(candidate.sourceUseCase
+          ? { sourceUseCase: candidate.sourceUseCase }
+          : {}),
         finalBucket: diagnosticSourceBucket(candidate),
         matchedTerms: uniqueStrings([
           ...(candidate.matchedEntities ?? []),
@@ -5004,9 +6205,15 @@ function buildResearchGroundingDiagnosticTrace(input: {
           `reviewStatus=${candidate.reviewStatus}`,
           `recommendationBucket=${candidate.recommendationBucket}`,
           `sourceRole=${candidate.sourceRole}`,
-          candidate.confidenceTier ? `confidenceTier=${candidate.confidenceTier}` : "",
-          candidate.governanceReason ? `governance=${candidate.governanceReason}` : "",
-          candidate.acceptReason ? `acceptReason=${candidate.acceptReason}` : "",
+          candidate.confidenceTier
+            ? `confidenceTier=${candidate.confidenceTier}`
+            : "",
+          candidate.governanceReason
+            ? `governance=${candidate.governanceReason}`
+            : "",
+          candidate.acceptReason
+            ? `acceptReason=${candidate.acceptReason}`
+            : "",
           ...(candidate.limitations ?? []).slice(0, 3),
         ]),
       };
@@ -5029,7 +6236,10 @@ function buildResearchGroundingDiagnosticTrace(input: {
       canProceedToSourceReview,
       reason,
       ...(!canProceedToSourceReview
-        ? { requiredUserAction: "調整主題、加入查詢詞，或手動提供來源後重新搜尋。" }
+        ? {
+            requiredUserAction:
+              "調整主題、加入查詢詞，或手動提供來源後重新搜尋。",
+          }
         : {}),
     },
   };
@@ -5042,18 +6252,23 @@ export function buildSourceCandidates(input: {
   searchResult: SearchIntentSourceSearchResult;
   parsedInput: ParsedResearchInput;
   retryRound?: number;
+  enforceTopicIntegrity?: boolean;
 }): { sourceCandidates: SourceCandidate[]; warnings: string[] } {
   const createdAt = nowIso();
-  const fallbackQueryPlanHash = stableQueryHash(input.queryPlan.primaryQueries.join("|"));
+  const fallbackQueryPlanHash = stableQueryHash(
+    input.queryPlan.primaryQueries.join("|"),
+  );
   const requiresPaleontologyAlgaeEvidence = isPaleontologyAlgaeTopic(
     input.searchResult.topic || input.parsedInput.canonicalTopic,
   );
-  const requiresAstronomyScienceEducationEvidence = isAstronomyScienceEducationTopic(
-    input.searchResult.topic || input.parsedInput.canonicalTopic,
-  );
-  const requiresAgriculturalWastePollutionEvidence = isAgriculturalWastePollutionTopic(
-    input.searchResult.topic || input.parsedInput.canonicalTopic,
-  );
+  const requiresAstronomyScienceEducationEvidence =
+    isAstronomyScienceEducationTopic(
+      input.searchResult.topic || input.parsedInput.canonicalTopic,
+    );
+  const requiresAgriculturalWastePollutionEvidence =
+    isAgriculturalWastePollutionTopic(
+      input.searchResult.topic || input.parsedInput.canonicalTopic,
+    );
   const requiresAiWorkImpactEvidence = isAiWorkImpactTopic(
     input.searchResult.topic || input.parsedInput.canonicalTopic,
   );
@@ -5114,95 +6329,120 @@ export function buildSourceCandidates(input: {
     ...(input.searchResult.rejectedSources ?? []),
     ...((input.searchResult.candidateSources?.length ?? 0) === 0 &&
     (input.searchResult.rejectedSources?.length ?? 0) === 0
-      ? input.searchResult.sources ?? []
+      ? (input.searchResult.sources ?? [])
       : []),
   ]);
   const topicEntityMap = buildTopicEntityMap(
     input.searchResult.topic || input.parsedInput.canonicalTopic,
     input.queryPlan,
   );
+  const topicIntegrityContract = buildTopicIntegrityContract({
+    canonicalTopic:
+      input.searchResult.topic || input.parsedInput.canonicalTopic,
+    researchQuestion: input.parsedInput.researchQuestion,
+    domain: input.parsedInput.domain,
+    allowedAdjacentConcepts: input.parsedInput.shouldIncludeTerms,
+    excludedConcepts: [
+      ...input.parsedInput.mustExcludeTerms,
+      ...input.queryPlan.excludedDriftTerms,
+    ],
+  });
 
   const candidates = canonicalSources.map((source, index) => {
-      const normalized = sourceRecordToNormalizedSource(source, {
-        workflowId: input.workflowId,
-        topicHash: input.topicHash,
-        queryPlanHash: input.searchResult.queryPlanHash || fallbackQueryPlanHash,
-      });
-      const relevanceAnalysis = analyzeRelevanceScore(normalized, scoringPlan);
-      const intentAssessment = evaluateSourceAgainstIntent(normalized, input.parsedInput);
-      const passesPaleontologyAlgaeEvidence =
-        !requiresPaleontologyAlgaeEvidence ||
-        hasPaleontologyAlgaeSourceEvidence(normalized);
-      const passesAstronomyScienceEducationEvidence =
-        !requiresAstronomyScienceEducationEvidence ||
-        hasAstronomyScienceEducationSourceEvidence(normalized);
-      const passesAgriculturalWastePollutionEvidence =
-        !requiresAgriculturalWastePollutionEvidence ||
-        hasAgriculturalWastePollutionSourceEvidence(normalized);
-      const passesAiWorkImpactEvidence =
-        !requiresAiWorkImpactEvidence || hasAiWorkImpactSourceEvidence(normalized);
-      const passesColaHealthEvidence =
-        !requiresColaHealthEvidence || hasColaHealthSourceEvidence(normalized);
-      const passesRequiredTopicEvidence =
-        passesPaleontologyAlgaeEvidence &&
-        passesAstronomyScienceEducationEvidence &&
-        passesAgriculturalWastePollutionEvidence &&
-        passesAiWorkImpactEvidence &&
-        passesColaHealthEvidence;
-      const canonicalRelevanceScore =
-        typeof source.relevanceScore === "number"
-          ? Math.max(0, Math.min(1, source.relevanceScore / 100))
-          : null;
-      const canonicalQualityScore =
-        typeof source.sourceQualityScore === "number"
-          ? Math.max(0, Math.min(1, source.sourceQualityScore / 100))
-          : null;
-      const lexicalRelevanceScore = Number(relevanceAnalysis.score.toFixed(3));
-      const rawRelevanceScore = Number(
-        (lexicalRelevanceScore * 0.75 + intentAssessment.score * 0.25).toFixed(3),
-      );
-      const relevanceScore = Number(
-        (canonicalRelevanceScore ??
-          (passesRequiredTopicEvidence
-            ? rawRelevanceScore
-            : Math.min(rawRelevanceScore, 0.18))).toFixed(3),
-      );
-      const sourceQualityScore = Number(
-        (canonicalQualityScore ?? computeSourceQualityScore(normalized) / 100).toFixed(3),
-      );
-      const sourceType = sourceTypeForCandidate(source);
-      const provider = providerKey(source.provider ?? source.sourceType);
-      const retrievalMode = retrievalModeForSource(source, input.searchResult);
-      const bucketAssessment = assessSourceBucket({
-        source: {
-          title: normalized.title,
-          abstract: normalized.abstract,
-          keywords: normalized.keywords,
-          venue: normalized.venue,
-          url: normalized.url,
-          queryUsed: normalized.queryUsed,
-          sourceType: source.sourceType,
-        },
-        topicEntityMap,
-        provider,
-        sourceType,
-        doi: normalized.doi,
-        url: normalized.url,
+    const normalized = sourceRecordToNormalizedSource(source, {
+      workflowId: input.workflowId,
+      topicHash: input.topicHash,
+      queryPlanHash: input.searchResult.queryPlanHash || fallbackQueryPlanHash,
+    });
+    const relevanceAnalysis = analyzeRelevanceScore(normalized, scoringPlan);
+    const intentAssessment = evaluateSourceAgainstIntent(
+      normalized,
+      input.parsedInput,
+    );
+    const passesPaleontologyAlgaeEvidence =
+      !requiresPaleontologyAlgaeEvidence ||
+      hasPaleontologyAlgaeSourceEvidence(normalized);
+    const passesAstronomyScienceEducationEvidence =
+      !requiresAstronomyScienceEducationEvidence ||
+      hasAstronomyScienceEducationSourceEvidence(normalized);
+    const passesAgriculturalWastePollutionEvidence =
+      !requiresAgriculturalWastePollutionEvidence ||
+      hasAgriculturalWastePollutionSourceEvidence(normalized);
+    const passesAiWorkImpactEvidence =
+      !requiresAiWorkImpactEvidence ||
+      hasAiWorkImpactSourceEvidence(normalized);
+    const passesColaHealthEvidence =
+      !requiresColaHealthEvidence || hasColaHealthSourceEvidence(normalized);
+    const passesRequiredTopicEvidence =
+      passesPaleontologyAlgaeEvidence &&
+      passesAstronomyScienceEducationEvidence &&
+      passesAgriculturalWastePollutionEvidence &&
+      passesAiWorkImpactEvidence &&
+      passesColaHealthEvidence;
+    const canonicalRelevanceScore =
+      typeof source.relevanceScore === "number"
+        ? Math.max(0, Math.min(1, source.relevanceScore / 100))
+        : null;
+    const canonicalQualityScore =
+      typeof source.sourceQualityScore === "number"
+        ? Math.max(0, Math.min(1, source.sourceQualityScore / 100))
+        : null;
+    const lexicalRelevanceScore = Number(relevanceAnalysis.score.toFixed(3));
+    const rawRelevanceScore = Number(
+      (lexicalRelevanceScore * 0.75 + intentAssessment.score * 0.25).toFixed(3),
+    );
+    const relevanceScore = Number(
+      (
+        canonicalRelevanceScore ??
+        (passesRequiredTopicEvidence
+          ? rawRelevanceScore
+          : Math.min(rawRelevanceScore, 0.18))
+      ).toFixed(3),
+    );
+    const sourceQualityScore = Number(
+      (
+        canonicalQualityScore ?? computeSourceQualityScore(normalized) / 100
+      ).toFixed(3),
+    );
+    const sourceType = sourceTypeForCandidate(source);
+    const provider = providerKey(source.provider ?? source.sourceType);
+    const retrievalMode = retrievalModeForSource(source, input.searchResult);
+    const bucketAssessment = assessSourceBucket({
+      source: {
+        title: normalized.title,
+        abstract: normalized.abstract,
+        keywords: normalized.keywords,
         venue: normalized.venue,
-        isPeerReviewed: normalized.isPeerReviewed ?? null,
-        sourceQualityScore,
-        relevanceScore,
-      });
-      const effectiveRelevanceScore =
-        bucketAssessment.decision === "rejected"
-          ? Math.min(relevanceScore, 0.12)
-          : bucketAssessment.decision === "manual_review"
-            ? Math.min(relevanceScore, Math.max(0.18, bucketAssessment.bucketScore))
+        url: normalized.url,
+        queryUsed: normalized.queryUsed,
+        sourceType: source.sourceType,
+      },
+      topicEntityMap,
+      provider,
+      sourceType,
+      doi: normalized.doi,
+      url: normalized.url,
+      venue: normalized.venue,
+      isPeerReviewed: normalized.isPeerReviewed ?? null,
+      sourceQualityScore,
+      relevanceScore,
+    });
+    const effectiveRelevanceScore =
+      bucketAssessment.decision === "rejected"
+        ? Math.min(relevanceScore, 0.12)
+        : bucketAssessment.decision === "manual_review"
+          ? Math.min(
+              relevanceScore,
+              Math.max(0.18, bucketAssessment.bucketScore),
+            )
           : Math.max(
               relevanceScore,
-              bucketAssessment.bucketScore >= 0.5 ? bucketAssessment.bucketScore : relevanceScore,
+              bucketAssessment.bucketScore >= 0.5
+                ? bucketAssessment.bucketScore
+                : relevanceScore,
             );
-      const finalScore = Number((
+    const finalScore = Number(
+      (
         computeFinalScore(
           {
             ...normalized,
@@ -5211,366 +6451,449 @@ export function buildSourceCandidates(input: {
           },
           scoringPlan,
         ) / 100
-      ).toFixed(3));
-      const confidenceTier: SourceCandidate["confidenceTier"] =
-        reviewStatusFromSignals({
-          score: Math.max(finalScore, relevanceScore),
-          hasCoreConceptMatch:
-            relevanceAnalysis.hasCoreConceptMatch ||
-            intentAssessment.matchedMustIncludeTerms.length > 0,
-          hasTitleCoreConceptMatch: relevanceAnalysis.hasTitleCoreConceptMatch,
-        }) === "rejected"
-          ? "rejected"
-          : relevanceAnalysis.confidenceTier;
-      const canonicalRejected =
-        source.reviewState === "rejected" ||
-        source.classification === "off_topic" ||
-        source.classification === "trusted_but_off_topic" ||
-        source.relevanceLevel === "off_topic" ||
-        source.relevanceLevel === "low";
-      const relaxedAcademicRetryReview =
-        (input.retryRound ?? 0) >= 2 &&
-        canonicalRejected &&
-        (provider === "openalex" ||
-          provider === "crossref" ||
-          provider === "semanticScholar" ||
-          provider === "core") &&
-        (Boolean(normalized.doi) || Boolean(normalized.venue) || sourceType === "paper" || sourceType === "review") &&
-        rawRelevanceScore >= 0.12 &&
-        (relevanceAnalysis.hasCoreConceptMatch ||
-          relevanceAnalysis.hasTitleCoreConceptMatch ||
-          intentAssessment.matchedMustIncludeTerms.length > 0);
-      const reviewStatus: SourceCandidate["reviewStatus"] =
-        source.lowConfidence || source.needsReview
-          ? "review"
-          : canonicalRejected && !relaxedAcademicRetryReview
-            ? "rejected"
-        : !passesRequiredTopicEvidence
-          ? "rejected"
-          : relevanceAnalysis.confidenceTier === "high" &&
-              relevanceAnalysis.matchedConcepts.length >= 2 &&
-              relevanceScore >= 0.28
-            ? "accepted"
-          : (requiresPaleontologyAlgaeEvidence ||
-                requiresAstronomyScienceEducationEvidence ||
-                requiresAgriculturalWastePollutionEvidence ||
-                requiresAiWorkImpactEvidence ||
-                requiresColaHealthEvidence) &&
-              relevanceScore >= 0.22
-            ? "review"
-          : intentAssessment.decision === "reject" &&
-              !relevanceAnalysis.hasCoreConceptMatch &&
-              !relevanceAnalysis.hasTitleCoreConceptMatch &&
-              relevanceScore < 0.25
-            ? "rejected"
-            : intentAssessment.decision === "accept" &&
-                intentAssessment.matchedMustIncludeTerms.length >= 2 &&
-                relevanceScore >= 0.6 &&
-                relevanceAnalysis.hasCoreConceptMatch
-              ? "accepted"
-              : intentAssessment.decision === "accept" ||
-                  intentAssessment.decision === "supplementary" ||
-                  relevanceAnalysis.hasTitleCoreConceptMatch
-                ? "review"
-                : reviewStatusFromSignals({
-                    score: relevanceScore,
-                    hasCoreConceptMatch: relevanceAnalysis.hasCoreConceptMatch,
-                    hasTitleCoreConceptMatch: relevanceAnalysis.hasTitleCoreConceptMatch,
-                  });
-      const rawProviderPayload = {
-        provider: source.provider ?? source.sourceType,
-        id: source.id,
-        providerIds: source.providerIds,
-        publisher: source.publisher,
-        containerTitle: source.containerTitle,
-        sourceType: source.sourceType,
-        queryUsed: source.queryUsed,
-        sourceKind: source.sourceKind,
-        citationCount: source.citationCount,
-        isOpenAccess: source.isOpenAccess,
-        abstract: source.abstract,
-        abstractOriginal: source.abstractOriginal,
-        originalAbstract: source.originalAbstract,
-        extractedAbstract: source.extractedAbstract,
-        sourceLinkInfo: source.sourceLinkInfo,
-      };
-      const initialCandidateForClassification: SourceClassificationInput = {
-        sourceId: normalized.id,
-        provider,
-        retrievalMode,
-        title: normalized.title,
-        ...(normalized.venue ? { venue: normalized.venue } : {}),
-        ...(normalized.doi ? { doi: normalized.doi } : {}),
-        ...(normalized.url ? { url: normalized.url } : {}),
-        ...(normalized.abstract ? { abstractOriginal: normalized.abstract } : {}),
-        sourceType,
-        ...(typeof normalized.isPeerReviewed === "boolean"
-          ? { isPeerReviewed: normalized.isPeerReviewed }
-          : {}),
-        relevanceScore,
-        sourceQualityScore,
-        reviewStatus,
-        rawProviderPayload,
-      };
-      let sourceClassification = classifySourceCandidate(
-        initialCandidateForClassification,
-        input.searchResult.topic || input.parsedInput.canonicalTopic,
-        {
-          negativeKeywords: input.queryPlan.excludedDriftTerms,
-          excludedDriftTerms: input.queryPlan.excludedDriftTerms,
-        },
-      );
-      if (bucketAssessment.decision === "rejected") {
-        sourceClassification = {
-          recommendationBucket: "rejected",
-          sourceRole: "rejected",
-          institutionType: sourceClassification.institutionType,
-        };
-      } else if (bucketAssessment.decision === "accepted") {
-        sourceClassification = {
-          recommendationBucket: "scholarly_recommended",
-          sourceRole: "core_scholarly_evidence",
-          institutionType: sourceClassification.institutionType,
-        };
-      } else if (bucketAssessment.decision === "fallback_review") {
-        sourceClassification = {
-          recommendationBucket: "official_background",
-          sourceRole:
-            bucketAssessment.sourceUseCase === "background_context"
-              ? "definition_or_concept"
-              : "weak_or_uncertain",
-          institutionType: sourceClassification.institutionType,
-        };
-      } else if (
-        bucketAssessment.highConfidenceManual &&
-        passesRequiredTopicEvidence &&
-        sourceClassification.recommendationBucket === "rejected"
-      ) {
-        sourceClassification = {
-          recommendationBucket: "manual_review",
-          sourceRole: "weak_or_uncertain",
-          institutionType: sourceClassification.institutionType,
-        };
-      } else if (
-        bucketAssessment.decision === "manual_review" &&
-        sourceClassification.recommendationBucket === "scholarly_recommended"
-      ) {
-        sourceClassification = {
-          recommendationBucket: "manual_review",
-          sourceRole: "weak_or_uncertain",
-          institutionType: sourceClassification.institutionType,
-        };
-      }
-      if (
-        !relevanceAnalysis.hasCoreConceptMatch &&
-        bucketAssessment.matchedEntities.length === 0 &&
-        sourceClassification.recommendationBucket === "scholarly_recommended"
-      ) {
-        sourceClassification = {
-          recommendationBucket: "manual_review",
-          sourceRole: "weak_or_uncertain",
-          institutionType: sourceClassification.institutionType,
-        };
-      }
-      const finalReviewStatus: SourceCandidate["reviewStatus"] =
-        sourceClassification.recommendationBucket === "rejected"
-          ? "rejected"
-          : sourceClassification.recommendationBucket === "scholarly_recommended"
-            ? "accepted"
-            : "review";
-      const hasDoi =
-        Boolean(normalized.doi?.trim()) || /(?:doi\.org\/|^10\.\d{4,9}\/)/i.test(normalized.url ?? "");
-      const isOfficialBackground =
-        sourceClassification.recommendationBucket === "official_background";
-      const hasAcademicTrace =
-        sourceClassification.recommendationBucket === "scholarly_recommended" ||
-        sourceClassification.sourceRole === "core_scholarly_evidence" ||
+      ).toFixed(3),
+    );
+    const confidenceTier: SourceCandidate["confidenceTier"] =
+      reviewStatusFromSignals({
+        score: Math.max(finalScore, relevanceScore),
+        hasCoreConceptMatch:
+          relevanceAnalysis.hasCoreConceptMatch ||
+          intentAssessment.matchedMustIncludeTerms.length > 0,
+        hasTitleCoreConceptMatch: relevanceAnalysis.hasTitleCoreConceptMatch,
+      }) === "rejected"
+        ? "rejected"
+        : relevanceAnalysis.confidenceTier;
+    const canonicalRejected =
+      source.reviewState === "rejected" ||
+      source.classification === "off_topic" ||
+      source.classification === "trusted_but_off_topic" ||
+      source.relevanceLevel === "off_topic" ||
+      source.relevanceLevel === "low";
+    const relaxedAcademicRetryReview =
+      (input.retryRound ?? 0) >= 2 &&
+      canonicalRejected &&
+      (provider === "openalex" ||
+        provider === "crossref" ||
+        provider === "semanticScholar" ||
+        provider === "core") &&
+      (Boolean(normalized.doi) ||
+        Boolean(normalized.venue) ||
         sourceType === "paper" ||
-        sourceType === "review" ||
-        (isScholarlyProvider(provider) &&
-          (hasDoi || normalized.isPeerReviewed === true || Boolean(normalized.venue)));
-      const isAcademic =
-        finalReviewStatus !== "rejected" && !isOfficialBackground && hasAcademicTrace;
-      const usableAsEvidence = finalReviewStatus !== "rejected" && isAcademic;
-      const usableAsBackground =
-        finalReviewStatus !== "rejected" &&
-        (isOfficialBackground ||
-          isAcademic ||
-          sourceClassification.recommendationBucket === "manual_review");
-      const governanceReason =
-        finalReviewStatus === "rejected"
-          ? "rejected_by_relevance_or_governance"
-          : isAcademic
-            ? hasDoi
-              ? "academic_traceable_doi_or_scholarly_provider"
-              : "academic_provider_or_scholarly_metadata"
-            : isOfficialBackground
-              ? "official_background_not_counted_as_academic"
-              : "manual_review_required_before_evidence_use";
-      const abstractZh = sourceCandidateZhSummary({
-        topic: input.searchResult.topic || input.parsedInput.canonicalTopic,
-        normalized,
+        sourceType === "review") &&
+      rawRelevanceScore >= 0.12 &&
+      (relevanceAnalysis.hasCoreConceptMatch ||
+        relevanceAnalysis.hasTitleCoreConceptMatch ||
+        intentAssessment.matchedMustIncludeTerms.length > 0);
+    const reviewStatus: SourceCandidate["reviewStatus"] =
+      source.lowConfidence || source.needsReview
+        ? "review"
+        : canonicalRejected && !relaxedAcademicRetryReview
+          ? "rejected"
+          : !passesRequiredTopicEvidence
+            ? "rejected"
+            : relevanceAnalysis.confidenceTier === "high" &&
+                relevanceAnalysis.matchedConcepts.length >= 2 &&
+                relevanceScore >= 0.28
+              ? "accepted"
+              : (requiresPaleontologyAlgaeEvidence ||
+                    requiresAstronomyScienceEducationEvidence ||
+                    requiresAgriculturalWastePollutionEvidence ||
+                    requiresAiWorkImpactEvidence ||
+                    requiresColaHealthEvidence) &&
+                  relevanceScore >= 0.22
+                ? "review"
+                : intentAssessment.decision === "reject" &&
+                    !relevanceAnalysis.hasCoreConceptMatch &&
+                    !relevanceAnalysis.hasTitleCoreConceptMatch &&
+                    relevanceScore < 0.25
+                  ? "rejected"
+                  : intentAssessment.decision === "accept" &&
+                      intentAssessment.matchedMustIncludeTerms.length >= 2 &&
+                      relevanceScore >= 0.6 &&
+                      relevanceAnalysis.hasCoreConceptMatch
+                    ? "accepted"
+                    : intentAssessment.decision === "accept" ||
+                        intentAssessment.decision === "supplementary" ||
+                        relevanceAnalysis.hasTitleCoreConceptMatch
+                      ? "review"
+                      : reviewStatusFromSignals({
+                          score: relevanceScore,
+                          hasCoreConceptMatch:
+                            relevanceAnalysis.hasCoreConceptMatch,
+                          hasTitleCoreConceptMatch:
+                            relevanceAnalysis.hasTitleCoreConceptMatch,
+                        });
+    const rawProviderPayload = {
+      provider: source.provider ?? source.sourceType,
+      id: source.id,
+      providerIds: source.providerIds,
+      publisher: source.publisher,
+      containerTitle: source.containerTitle,
+      sourceType: source.sourceType,
+      queryUsed: source.queryUsed,
+      sourceKind: source.sourceKind,
+      citationCount: source.citationCount,
+      isOpenAccess: source.isOpenAccess,
+      abstract: source.abstract,
+      abstractOriginal: source.abstractOriginal,
+      originalAbstract: source.originalAbstract,
+      extractedAbstract: source.extractedAbstract,
+      sourceLinkInfo: source.sourceLinkInfo,
+    };
+    const initialCandidateForClassification: SourceClassificationInput = {
+      sourceId: normalized.id,
+      provider,
+      retrievalMode,
+      title: normalized.title,
+      ...(normalized.venue ? { venue: normalized.venue } : {}),
+      ...(normalized.doi ? { doi: normalized.doi } : {}),
+      ...(normalized.url ? { url: normalized.url } : {}),
+      ...(normalized.abstract ? { abstractOriginal: normalized.abstract } : {}),
+      sourceType,
+      ...(typeof normalized.isPeerReviewed === "boolean"
+        ? { isPeerReviewed: normalized.isPeerReviewed }
+        : {}),
+      relevanceScore,
+      sourceQualityScore,
+      reviewStatus,
+      rawProviderPayload,
+    };
+    let sourceClassification = classifySourceCandidate(
+      initialCandidateForClassification,
+      input.searchResult.topic || input.parsedInput.canonicalTopic,
+      {
+        negativeKeywords: input.queryPlan.excludedDriftTerms,
+        excludedDriftTerms: input.queryPlan.excludedDriftTerms,
+      },
+    );
+    if (bucketAssessment.decision === "rejected") {
+      sourceClassification = {
+        recommendationBucket: "rejected",
+        sourceRole: "rejected",
+        institutionType: sourceClassification.institutionType,
+      };
+    } else if (bucketAssessment.decision === "accepted") {
+      sourceClassification = {
+        recommendationBucket: "scholarly_recommended",
+        sourceRole: "core_scholarly_evidence",
+        institutionType: sourceClassification.institutionType,
+      };
+    } else if (bucketAssessment.decision === "fallback_review") {
+      sourceClassification = {
+        recommendationBucket: "official_background",
+        sourceRole:
+          bucketAssessment.sourceUseCase === "background_context"
+            ? "definition_or_concept"
+            : "weak_or_uncertain",
+        institutionType: sourceClassification.institutionType,
+      };
+    } else if (
+      bucketAssessment.highConfidenceManual &&
+      passesRequiredTopicEvidence &&
+      sourceClassification.recommendationBucket === "rejected"
+    ) {
+      sourceClassification = {
+        recommendationBucket: "manual_review",
+        sourceRole: "weak_or_uncertain",
+        institutionType: sourceClassification.institutionType,
+      };
+    } else if (
+      bucketAssessment.decision === "manual_review" &&
+      sourceClassification.recommendationBucket === "scholarly_recommended"
+    ) {
+      sourceClassification = {
+        recommendationBucket: "manual_review",
+        sourceRole: "weak_or_uncertain",
+        institutionType: sourceClassification.institutionType,
+      };
+    }
+    if (
+      !relevanceAnalysis.hasCoreConceptMatch &&
+      bucketAssessment.matchedEntities.length === 0 &&
+      sourceClassification.recommendationBucket === "scholarly_recommended"
+    ) {
+      sourceClassification = {
+        recommendationBucket: "manual_review",
+        sourceRole: "weak_or_uncertain",
+        institutionType: sourceClassification.institutionType,
+      };
+    }
+    const topicIntegrityAssessment = assessSourceTopicIntegrity(
+      {
+        sourceId: normalized.id,
+        title: normalized.title,
+        abstract: normalized.abstract,
+        keywords: normalized.keywords,
+        venue: normalized.venue,
         sourceType,
-        provider,
-        reviewStatus: finalReviewStatus,
-      });
-      const rejectionReason =
-        source.rejectionReason ??
-        source.rejectReason ??
-        (!passesPaleontologyAlgaeEvidence
+        relevanceScore,
+        finalScore,
+      },
+      topicIntegrityContract,
+    );
+    if (
+      input.enforceTopicIntegrity &&
+      topicIntegrityAssessment.sourceRole === "REJECTED_OFF_TOPIC"
+    ) {
+      sourceClassification = {
+        recommendationBucket: "rejected",
+        sourceRole: "rejected",
+        institutionType: sourceClassification.institutionType,
+      };
+    } else if (
+      input.enforceTopicIntegrity &&
+      topicIntegrityAssessment.sourceRole !== "DIRECT_FINDING" &&
+      sourceClassification.recommendationBucket === "scholarly_recommended"
+    ) {
+      sourceClassification = {
+        recommendationBucket: "manual_review",
+        sourceRole: "weak_or_uncertain",
+        institutionType: sourceClassification.institutionType,
+      };
+    }
+    const finalReviewStatus: SourceCandidate["reviewStatus"] =
+      sourceClassification.recommendationBucket === "rejected"
+        ? "rejected"
+        : sourceClassification.recommendationBucket === "scholarly_recommended"
+          ? "accepted"
+          : "review";
+    const hasDoi =
+      Boolean(normalized.doi?.trim()) ||
+      /(?:doi\.org\/|^10\.\d{4,9}\/)/i.test(normalized.url ?? "");
+    const isOfficialBackground =
+      sourceClassification.recommendationBucket === "official_background";
+    const hasAcademicTrace =
+      sourceClassification.recommendationBucket === "scholarly_recommended" ||
+      sourceClassification.sourceRole === "core_scholarly_evidence" ||
+      sourceType === "paper" ||
+      sourceType === "review" ||
+      (isScholarlyProvider(provider) &&
+        (hasDoi ||
+          normalized.isPeerReviewed === true ||
+          Boolean(normalized.venue)));
+    const isAcademic =
+      finalReviewStatus !== "rejected" &&
+      !isOfficialBackground &&
+      hasAcademicTrace;
+    const usableAsEvidence =
+      finalReviewStatus !== "rejected" &&
+      isAcademic &&
+      (!input.enforceTopicIntegrity ||
+        topicIntegrityAssessment.sourceRole === "DIRECT_FINDING");
+    const usableAsBackground =
+      finalReviewStatus !== "rejected" &&
+      (isOfficialBackground ||
+        isAcademic ||
+        sourceClassification.recommendationBucket === "manual_review");
+    const governanceReason =
+      input.enforceTopicIntegrity &&
+      topicIntegrityAssessment.sourceRole === "REJECTED_OFF_TOPIC"
+        ? `topic_integrity:${topicIntegrityAssessment.topicIntegrityReason}`
+        : finalReviewStatus === "rejected"
+          ? "rejected_by_relevance_or_governance"
+        : isAcademic
+          ? hasDoi
+            ? "academic_traceable_doi_or_scholarly_provider"
+            : "academic_provider_or_scholarly_metadata"
+          : isOfficialBackground
+            ? "official_background_not_counted_as_academic"
+            : "manual_review_required_before_evidence_use";
+    const abstractZh = sourceCandidateZhSummary({
+      topic: input.searchResult.topic || input.parsedInput.canonicalTopic,
+      normalized,
+      sourceType,
+      provider,
+      reviewStatus: finalReviewStatus,
+    });
+    const rejectionReason =
+      (input.enforceTopicIntegrity &&
+      topicIntegrityAssessment.sourceRole === "REJECTED_OFF_TOPIC"
+        ? topicIntegrityAssessment.topicIntegrityReason
+        : undefined) ??
+      source.rejectionReason ??
+      source.rejectReason ??
+      (!passesPaleontologyAlgaeEvidence
+        ? "missing_core_concept"
+        : !passesAstronomyScienceEducationEvidence
           ? "missing_core_concept"
-          : !passesAstronomyScienceEducationEvidence
-            ? "missing_core_concept"
           : !passesAgriculturalWastePollutionEvidence
             ? "missing_core_concept"
-          : !passesAiWorkImpactEvidence
-            ? "missing_core_concept"
-          : intentAssessment.excludeHits.length > 0
-          ? "excluded_drift_term_match"
-          : intentAssessment.decision === "reject"
-            ? "low_topic_relevance"
-            : relevanceAnalysis.hasCoreConceptMatch
-              ? "low_topic_relevance"
-              : bucketAssessment.decision === "rejected"
-                ? bucketAssessment.decisionReasons[0] ?? "missing_core_concept"
-                : relevanceAnalysis.rejectionReason ?? "missing_core_concept");
-      const acceptReason =
-        (bucketAssessment.decision === "accepted"
-          ? bucketAssessment.decisionReasons[0]
-          : undefined) ??
-        relevanceAnalysis.acceptReason ??
-        (intentAssessment.decision === "accept"
-          ? "direct_topic_match"
-          : source.sourceType === "Official Source" || source.sourceType === "Institutional Source"
-            ? "official_source_match"
-            : undefined);
+            : !passesAiWorkImpactEvidence
+              ? "missing_core_concept"
+              : intentAssessment.excludeHits.length > 0
+                ? "excluded_drift_term_match"
+                : intentAssessment.decision === "reject"
+                  ? "low_topic_relevance"
+                  : relevanceAnalysis.hasCoreConceptMatch
+                    ? "low_topic_relevance"
+                    : bucketAssessment.decision === "rejected"
+                      ? (bucketAssessment.decisionReasons[0] ??
+                        "missing_core_concept")
+                      : (relevanceAnalysis.rejectionReason ??
+                        "missing_core_concept"));
+    const acceptReason =
+      (bucketAssessment.decision === "accepted"
+        ? bucketAssessment.decisionReasons[0]
+        : undefined) ??
+      relevanceAnalysis.acceptReason ??
+      (intentAssessment.decision === "accept"
+        ? "direct_topic_match"
+        : source.sourceType === "Official Source" ||
+            source.sourceType === "Institutional Source"
+          ? "official_source_match"
+          : undefined);
 
-      const evidencePoints = sourceEvidencePoints({
-        source: initialCandidateForClassification,
-        topic: input.searchResult.topic || input.parsedInput.canonicalTopic,
-        role: sourceClassification.sourceRole,
-      });
-      const limitations = sourceLimitations({
-        bucket: sourceClassification.recommendationBucket,
-        role: sourceClassification.sourceRole,
-        hasAbstract: Boolean(normalized.abstract),
-        isPeerReviewed: normalized.isPeerReviewed ?? undefined,
-        sourceQualityScore,
-      });
-      const usableSections = usableSectionsForRole(sourceClassification.sourceRole);
-      const providerHealthSnapshot = providerHealthForCandidate(provider, input.searchResult);
-
-      return {
-        sourceId: normalized.id,
-        workflowId: input.workflowId,
-        topicHash: input.topicHash,
-        queryUsed: normalized.queryUsed,
-        queryIntent: queryIntentForQuery(normalized.queryUsed, input.queryPlan),
-        provider,
-        title: normalized.title,
-        ...(normalized.authors.length ? { authors: normalized.authors } : {}),
-        ...(normalized.year != null ? { year: normalized.year } : {}),
-        ...(normalized.venue ? { venue: normalized.venue } : {}),
-        ...(normalized.doi ? { doi: normalized.doi } : {}),
-        ...(normalized.url ? { url: normalized.url } : {}),
-        ...(normalized.abstract ? { abstract: normalized.abstract } : {}),
-        ...(normalized.abstract ? { abstractOriginal: normalized.abstract } : {}),
-        ...(source.abstractZhTw || abstractZh ? { abstractZh: source.abstractZhTw ?? abstractZh ?? undefined } : {}),
-        ...(normalized.language ? { language: normalized.language } : {}),
-        ...(normalized.keywords ? { keywords: normalized.keywords } : {}),
-        sourceType,
-        ...(source.sourceKind ? { sourceKind: source.sourceKind } : {}),
-        institutionType: sourceClassification.institutionType,
-        ...(typeof normalized.isPeerReviewed === "boolean"
-          ? { isPeerReviewed: normalized.isPeerReviewed }
-          : {}),
-        hasDoi,
-        isAcademic,
-        isOfficialBackground,
-        usableAsEvidence,
-        usableAsBackground,
-        governanceReason,
-        retryRound: input.retryRound ?? 0,
-        ...(typeof normalized.isOpenAccess === "boolean"
-          ? { isOpenAccess: normalized.isOpenAccess }
-          : {}),
-        ...(normalized.fullTextUrl ? { fullTextUrl: normalized.fullTextUrl } : {}),
-        ...(source.providerIds ? { providerIds: source.providerIds } : {}),
-        canonicalSourceIdentity: source.dedupeKey ?? normalized.dedupeKey,
-        contentLevel: normalized.abstract ? "abstract" : "metadata",
-        enrichmentAttempted: false,
-        enrichmentStatus: "not_attempted",
-        ...(typeof normalized.citationCount === "number"
-          ? { citationCount: normalized.citationCount }
-          : {}),
-        relevanceScore,
-        sourceQualityScore,
-        finalScore,
-        retrievalMode,
-        recommendationBucket: sourceClassification.recommendationBucket,
-        sourceRole: sourceClassification.sourceRole,
-        sourceBucket: bucketAssessment.bucket,
-        bucketScore: bucketAssessment.bucketScore,
-        bucketScores: bucketAssessment.bucketScores,
-        decisionReasons: bucketAssessment.decisionReasons,
-        matchedEntities: bucketAssessment.matchedEntities,
-        missingRequiredSignals: bucketAssessment.missingRequiredSignals,
-        sourceUseCase: bucketAssessment.sourceUseCase,
-        ...(bucketAssessment.highConfidenceManual ? { highConfidenceManual: true } : {}),
-        confidenceTier:
-          finalReviewStatus === "rejected"
-            ? "rejected"
-            : sourceClassification.recommendationBucket !== "scholarly_recommended" ||
-                source.lowConfidence ||
-                source.needsReview
-              ? "fallback"
-              : confidenceTier === "rejected"
-                ? "fallback"
-                : confidenceTier,
-        ...(relevanceAnalysis.matchedConcepts.length || bucketAssessment.matchedEntities.length
-          ? {
-              matchedConcepts: uniqueStrings([
-                ...bucketAssessment.matchedEntities,
-                ...relevanceAnalysis.matchedConcepts,
-              ]),
-            }
-          : {}),
-        ...(relevanceAnalysis.matchedFields.length
-          ? { matchedFields: relevanceAnalysis.matchedFields }
-          : {}),
-        ...(finalReviewStatus !== "rejected" && acceptReason ? { acceptReason } : {}),
-        reviewStatus: finalReviewStatus,
-        ...(finalReviewStatus === "rejected" || source.lowConfidence || source.needsReview
-          ? {
-              rejectionReason,
-            }
-          : {}),
-        ...(source.lowConfidence ? { lowConfidence: true } : {}),
-        ...(source.needsReview ? { needsReview: true } : {}),
-        evidencePoints,
-        limitations,
-        usableSections,
-        citationMarker: `［S${index + 1}］`,
-        ...(providerHealthSnapshot ? { providerHealthSnapshot } : {}),
-        dedupeKey: normalized.dedupeKey,
-        createdAt,
-        retrievedAt: normalized.retrievedAt,
-        rawProviderPayload,
-        _signals: {
-          finalScore,
-          hasCoreConceptMatch:
-            (sourceClassification.recommendationBucket === "scholarly_recommended" &&
-              passesRequiredTopicEvidence &&
-              (relevanceAnalysis.hasCoreConceptMatch ||
-                intentAssessment.matchedMustIncludeTerms.length > 0)) ||
-            (bucketAssessment.decision === "accepted" && bucketAssessment.bucketScore >= 0.5),
-          hasTitleCoreConceptMatch:
-            (sourceClassification.recommendationBucket === "scholarly_recommended" &&
-              passesRequiredTopicEvidence && relevanceAnalysis.hasTitleCoreConceptMatch) ||
-            (bucketAssessment.decision === "accepted" && bucketAssessment.bucketScore >= 0.5),
-        },
-      } satisfies SourceCandidateWithSignals;
+    const evidencePoints = sourceEvidencePoints({
+      source: initialCandidateForClassification,
+      topic: input.searchResult.topic || input.parsedInput.canonicalTopic,
+      role: sourceClassification.sourceRole,
     });
+    const limitations = sourceLimitations({
+      bucket: sourceClassification.recommendationBucket,
+      role: sourceClassification.sourceRole,
+      hasAbstract: Boolean(normalized.abstract),
+      isPeerReviewed: normalized.isPeerReviewed ?? undefined,
+      sourceQualityScore,
+    });
+    const usableSections = input.enforceTopicIntegrity &&
+      topicIntegrityAssessment.allowedSections.length > 0
+      ? topicIntegrityAssessment.allowedSections
+      : usableSectionsForRole(sourceClassification.sourceRole);
+    const providerHealthSnapshot = providerHealthForCandidate(
+      provider,
+      input.searchResult,
+    );
+
+    return {
+      sourceId: normalized.id,
+      workflowId: input.workflowId,
+      topicHash: input.topicHash,
+      queryUsed: normalized.queryUsed,
+      queryIntent: queryIntentForQuery(normalized.queryUsed, input.queryPlan),
+      provider,
+      title: normalized.title,
+      ...(normalized.authors.length ? { authors: normalized.authors } : {}),
+      ...(normalized.year != null ? { year: normalized.year } : {}),
+      ...(normalized.venue ? { venue: normalized.venue } : {}),
+      ...(normalized.doi ? { doi: normalized.doi } : {}),
+      ...(normalized.url ? { url: normalized.url } : {}),
+      ...(normalized.abstract ? { abstract: normalized.abstract } : {}),
+      ...(normalized.abstract ? { abstractOriginal: normalized.abstract } : {}),
+      ...(source.abstractZhTw || abstractZh
+        ? { abstractZh: source.abstractZhTw ?? abstractZh ?? undefined }
+        : {}),
+      ...(normalized.language ? { language: normalized.language } : {}),
+      ...(normalized.keywords ? { keywords: normalized.keywords } : {}),
+      sourceType,
+      ...(source.sourceKind ? { sourceKind: source.sourceKind } : {}),
+      institutionType: sourceClassification.institutionType,
+      ...(typeof normalized.isPeerReviewed === "boolean"
+        ? { isPeerReviewed: normalized.isPeerReviewed }
+        : {}),
+      hasDoi,
+      isAcademic,
+      isOfficialBackground,
+      usableAsEvidence,
+      usableAsBackground,
+      governanceReason,
+      retryRound: input.retryRound ?? 0,
+      ...(typeof normalized.isOpenAccess === "boolean"
+        ? { isOpenAccess: normalized.isOpenAccess }
+        : {}),
+      ...(normalized.fullTextUrl
+        ? { fullTextUrl: normalized.fullTextUrl }
+        : {}),
+      ...(source.providerIds ? { providerIds: source.providerIds } : {}),
+      canonicalSourceIdentity: source.dedupeKey ?? normalized.dedupeKey,
+      contentLevel: normalized.abstract ? "abstract" : "metadata",
+      enrichmentAttempted: false,
+      enrichmentStatus: "not_attempted",
+      ...(typeof normalized.citationCount === "number"
+        ? { citationCount: normalized.citationCount }
+        : {}),
+      relevanceScore,
+      sourceQualityScore,
+      finalScore,
+      retrievalMode,
+      recommendationBucket: sourceClassification.recommendationBucket,
+      sourceRole: sourceClassification.sourceRole,
+      formalEvidenceRole: topicIntegrityAssessment.sourceRole,
+      topicIntegrityAssessment,
+      sourceBucket: bucketAssessment.bucket,
+      bucketScore: bucketAssessment.bucketScore,
+      bucketScores: bucketAssessment.bucketScores,
+      decisionReasons: bucketAssessment.decisionReasons,
+      matchedEntities: bucketAssessment.matchedEntities,
+      missingRequiredSignals: bucketAssessment.missingRequiredSignals,
+      sourceUseCase: bucketAssessment.sourceUseCase,
+      ...(bucketAssessment.highConfidenceManual
+        ? { highConfidenceManual: true }
+        : {}),
+      confidenceTier:
+        finalReviewStatus === "rejected"
+          ? "rejected"
+          : sourceClassification.recommendationBucket !==
+                "scholarly_recommended" ||
+              source.lowConfidence ||
+              source.needsReview
+            ? "fallback"
+            : confidenceTier === "rejected"
+              ? "fallback"
+              : confidenceTier,
+      ...(relevanceAnalysis.matchedConcepts.length ||
+      bucketAssessment.matchedEntities.length
+        ? {
+            matchedConcepts: uniqueStrings([
+              ...bucketAssessment.matchedEntities,
+              ...relevanceAnalysis.matchedConcepts,
+            ]),
+          }
+        : {}),
+      ...(relevanceAnalysis.matchedFields.length
+        ? { matchedFields: relevanceAnalysis.matchedFields }
+        : {}),
+      ...(finalReviewStatus !== "rejected" && acceptReason
+        ? { acceptReason }
+        : {}),
+      reviewStatus: finalReviewStatus,
+      ...(finalReviewStatus === "rejected" ||
+      source.lowConfidence ||
+      source.needsReview
+        ? {
+            rejectionReason,
+          }
+        : {}),
+      ...(source.lowConfidence ? { lowConfidence: true } : {}),
+      ...(source.needsReview ? { needsReview: true } : {}),
+      evidencePoints,
+      limitations,
+      usableSections,
+      citationMarker: `［S${index + 1}］`,
+      ...(providerHealthSnapshot ? { providerHealthSnapshot } : {}),
+      dedupeKey: normalized.dedupeKey,
+      createdAt,
+      retrievedAt: normalized.retrievedAt,
+      rawProviderPayload,
+      _signals: {
+        finalScore,
+        hasCoreConceptMatch:
+          (sourceClassification.recommendationBucket ===
+            "scholarly_recommended" &&
+            passesRequiredTopicEvidence &&
+            (relevanceAnalysis.hasCoreConceptMatch ||
+              intentAssessment.matchedMustIncludeTerms.length > 0)) ||
+          (bucketAssessment.decision === "accepted" &&
+            bucketAssessment.bucketScore >= 0.5),
+        hasTitleCoreConceptMatch:
+          (sourceClassification.recommendationBucket ===
+            "scholarly_recommended" &&
+            passesRequiredTopicEvidence &&
+            relevanceAnalysis.hasTitleCoreConceptMatch) ||
+          (bucketAssessment.decision === "accepted" &&
+            bucketAssessment.bucketScore >= 0.5),
+      },
+    } satisfies SourceCandidateWithSignals;
+  });
 
   const deduped = dedupeSourceCandidates(candidates);
   const reviewFallback = applyReviewFallback(deduped);
@@ -5579,7 +6902,8 @@ export function buildSourceCandidates(input: {
   ).length;
   return {
     sourceCandidates: reviewFallback.candidates.map((candidateWithSignals) => {
-      const aligned = alignCandidateSummaryWithReviewStatus(candidateWithSignals);
+      const aligned =
+        alignCandidateSummaryWithReviewStatus(candidateWithSignals);
       const { _signals: _unused, ...candidate } = aligned;
       return candidate;
     }),
@@ -5592,7 +6916,9 @@ export function buildSourceCandidates(input: {
   };
 }
 
-function searchResultRawCount(searchResult: SearchIntentSourceSearchResult): number {
+function searchResultRawCount(
+  searchResult: SearchIntentSourceSearchResult,
+): number {
   return (
     searchResult.diagnostics?.raw_provider_count ??
     searchResult.diagnostics?.provider_search_results_count ??
@@ -5603,18 +6929,25 @@ function searchResultRawCount(searchResult: SearchIntentSourceSearchResult): num
   );
 }
 
-function searchResultNormalizedValidCount(searchResult: SearchIntentSourceSearchResult): number {
+function searchResultNormalizedValidCount(
+  searchResult: SearchIntentSourceSearchResult,
+): number {
   return (
     searchResult.diagnostics?.normalized_valid_count ??
     searchResult.provider_status.reduce(
-      (sum, group) => sum + (group.normalized_valid_count ?? group.results.length),
+      (sum, group) =>
+        sum + (group.normalized_valid_count ?? group.results.length),
       0,
     )
   );
 }
 
-function reviewableSourceCandidateCount(sourceCandidates: SourceCandidate[]): number {
-  return sourceCandidates.filter((candidate) => candidate.reviewStatus !== "rejected").length;
+function reviewableSourceCandidateCount(
+  sourceCandidates: SourceCandidate[],
+): number {
+  return sourceCandidates.filter(
+    (candidate) => candidate.reviewStatus !== "rejected",
+  ).length;
 }
 
 function fallbackTriggerReason(input: {
@@ -5632,19 +6965,28 @@ function fallbackTriggerReason(input: {
   const rejectedCount = input.sourceCandidates.filter(
     (candidate) => candidate.reviewStatus === "rejected",
   ).length;
-  const reviewableCount = reviewableSourceCandidateCount(input.sourceCandidates);
+  const reviewableCount = reviewableSourceCandidateCount(
+    input.sourceCandidates,
+  );
   const hasEnglishQuery =
     input.normalizedSearchTopic.enAcademicQuery.length > 0 ||
     (input.queryPlan.enAcademicQueries?.length ?? 0) > 0 ||
     input.queryPlan.bilingualQueries.en.length > 0;
 
-  if (rawCount > 0 && canonicalCandidateCount === 0) return "raw_results_filtered_to_zero";
+  if (rawCount > 0 && canonicalCandidateCount === 0)
+    return "raw_results_filtered_to_zero";
   if (input.sourceCandidates.length === 0) return "candidate_sources_empty";
   if (reviewableCount === 0) return "reviewable_sources_empty";
-  if (input.academicSources.length === 0 && input.fallbackReviewSources.length === 0) {
+  if (
+    input.academicSources.length === 0 &&
+    input.fallbackReviewSources.length === 0
+  ) {
     return "academic_and_fallback_review_empty";
   }
-  if (input.sourceCandidates.length > 0 && rejectedCount === input.sourceCandidates.length) {
+  if (
+    input.sourceCandidates.length > 0 &&
+    rejectedCount === input.sourceCandidates.length
+  ) {
     return "relevance_scoring_all_rejected";
   }
   if (hasEnglishQuery && reviewableCount < MIN_REVIEWABLE_SOURCE_COUNT) {
@@ -5653,20 +6995,26 @@ function fallbackTriggerReason(input: {
   return null;
 }
 
-function domainSpecificFallbackQueries(queryPlan: GroundingQueryPlan): string[] {
+function domainSpecificFallbackQueries(
+  queryPlan: GroundingQueryPlan,
+): string[] {
   const domain = compactWhitespace(queryPlan.domain ?? "").toLowerCase();
   const leadTerms = uniqueStrings(
-    (queryPlan.conceptGroups ?? []).flatMap((group) => group.enTerms).filter(containsLatin),
+    (queryPlan.conceptGroups ?? [])
+      .flatMap((group) => group.enTerms)
+      .filter(containsLatin),
   ).slice(0, 5);
   const lead = leadTerms.slice(0, 4).join(" ");
   const profile = topicQueryAnchorProfile(
-    compactWhitespace([
-      queryPlan.domain,
-      queryPlan.intent,
-      ...queryPlan.primaryQueries,
-      ...queryPlan.bilingualQueries.en,
-      ...leadTerms,
-    ].join(" ")),
+    compactWhitespace(
+      [
+        queryPlan.domain,
+        queryPlan.intent,
+        ...queryPlan.primaryQueries,
+        ...queryPlan.bilingualQueries.en,
+        ...leadTerms,
+      ].join(" "),
+    ),
   );
   if (profile) {
     return uniqueStrings([
@@ -5715,7 +7063,9 @@ function fallbackSearchInput(input: {
   queryPlan: GroundingQueryPlan;
   round: number;
 }): { reason: string; searchInput: SearchIntentPlannerInput } {
-  const originalQuery = compactWhitespace(input.base.originalTopic ?? input.base.topic);
+  const originalQuery = compactWhitespace(
+    input.base.originalTopic ?? input.base.topic,
+  );
   const normalizedChineseQueries = uniqueStrings([
     input.topicAnalysis.normalizedTopic,
     ...input.normalizedSearchTopic.zhAcademicQuery,
@@ -5773,20 +7123,29 @@ function fallbackSearchInput(input: {
         ...recommendedQueries.filter(containsZh),
       ])
     : [];
-  const routingText = compactWhitespace([
-    input.topicAnalysis.normalizedTopic,
-    input.normalizedSearchTopic.displayTitle,
-    input.queryPlan.domain,
-    input.queryPlan.intent,
-    ...(input.queryPlan.conceptGroups ?? []).flatMap((group) => [group.name, ...group.zhTerms, ...group.enTerms]),
-  ].join(" "));
+  const routingText = compactWhitespace(
+    [
+      input.topicAnalysis.normalizedTopic,
+      input.normalizedSearchTopic.displayTitle,
+      input.queryPlan.domain,
+      input.queryPlan.intent,
+      ...(input.queryPlan.conceptGroups ?? []).flatMap((group) => [
+        group.name,
+        ...group.zhTerms,
+        ...group.enTerms,
+      ]),
+    ].join(" "),
+  );
   const querySeedEn = sanitizeEnglishProviderQueries(
     providerSafeDomainAnchoredQueries(
       input.round === 1 ? roundOneEn : roundTwoEn,
       routingText,
     ),
   );
-  const querySeedZh = providerSafeDomainAnchoredQueries(input.round === 1 ? roundOneZh : roundTwoZh, routingText);
+  const querySeedZh = providerSafeDomainAnchoredQueries(
+    input.round === 1 ? roundOneZh : roundTwoZh,
+    routingText,
+  );
   const reason =
     input.round === 1
       ? "automatic_academic_query_expansion"
@@ -5799,7 +7158,8 @@ function fallbackSearchInput(input: {
       originalTopic: input.base.originalTopic ?? input.base.topic,
       refinedTopic: input.topicAnalysis.normalizedTopic,
       canonicalTopicZh: input.topicAnalysis.normalizedTopic,
-      canonicalTopicEn: querySeedEn[0] ?? input.normalizedSearchTopic.enAcademicQuery[0],
+      canonicalTopicEn:
+        querySeedEn[0] ?? input.normalizedSearchTopic.enAcademicQuery[0],
       displayTitle: input.base.originalTopic ?? input.base.topic,
       querySeedZh,
       querySeedEn,
@@ -5818,7 +7178,14 @@ function fallbackSearchInput(input: {
       audience: input.base.audience,
       language: input.topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW",
       sourceMode: "academic",
-      searchProfile: input.base.searchProfile === "quick" ? "standard" : input.base.searchProfile,
+      searchProfile:
+        input.base.searchProfile === "quick"
+          ? "standard"
+          : input.base.searchProfile,
+      executionBudgetContext: {
+        expandedQuery: true,
+        fallbackLayer: input.round,
+      },
     },
   };
 }
@@ -5828,7 +7195,12 @@ export function academicRetryQueryExpansion(input: {
   topicAnalysis: TopicAnalysis;
   normalizedSearchTopic: ReturnType<typeof normalizeResearchTopic>;
   queryPlan: GroundingQueryPlan;
-}): { querySeedEn: string[]; querySeedZh: string[]; excludeTerms: string[]; retryQueries: string[] } {
+}): {
+  querySeedEn: string[];
+  querySeedZh: string[];
+  excludeTerms: string[];
+  retryQueries: string[];
+} {
   const text = normalizedLowerText([
     input.base.topic,
     input.topicAnalysis.normalizedTopic,
@@ -5846,7 +7218,11 @@ export function academicRetryQueryExpansion(input: {
   const enSpecific: string[] = [];
   const zhSpecific: string[] = [];
 
-  if (/夕陽|餘暉|日落|sunset|twilight|rayleigh|wavelength|波長|大氣散射/.test(text)) {
+  if (
+    /夕陽|餘暉|日落|sunset|twilight|rayleigh|wavelength|波長|大氣散射/.test(
+      text,
+    )
+  ) {
     enSpecific.push(
       "sunset color wavelength Rayleigh scattering atmospheric optics",
       "spectral irradiance sunset wavelength atmospheric scattering",
@@ -5864,7 +7240,11 @@ export function academicRetryQueryExpansion(input: {
       "夕陽餘暉 光譜分布 大氣光學 論文",
     );
   }
-  if (/校園噪音|高中生專注|noise exposure|school noise|attention|cognitive performance/.test(text)) {
+  if (
+    /校園噪音|高中生專注|noise exposure|school noise|attention|cognitive performance/.test(
+      text,
+    )
+  ) {
     enSpecific.push(
       "noise exposure attention adolescents school environment cognitive performance",
       "classroom noise high school students attention academic achievement",
@@ -5888,7 +7268,11 @@ export function academicRetryQueryExpansion(input: {
       "青少年 咖啡因 睡眠 時間 文獻",
     );
   }
-  if (/太陽能板|光伏|表面粗糙|光反射|發電效率|solar panel|photovoltaic|surface roughness|power conversion efficiency/.test(text)) {
+  if (
+    /太陽能板|光伏|表面粗糙|光反射|發電效率|solar panel|photovoltaic|surface roughness|power conversion efficiency/.test(
+      text,
+    )
+  ) {
     enSpecific.push(
       "solar panel surface roughness optical reflectance power conversion efficiency",
       "photovoltaic surface texture anti-reflection power output",
@@ -5899,7 +7283,11 @@ export function academicRetryQueryExpansion(input: {
       "光伏元件 表面紋理 反射率 轉換效率 文獻",
     );
   }
-  if (/睡眠不足|睡眠限制|工作記憶|注意力|sleep deprivation|sleep restriction|working memory|sustained attention/.test(text)) {
+  if (
+    /睡眠不足|睡眠限制|工作記憶|注意力|sleep deprivation|sleep restriction|working memory|sustained attention/.test(
+      text,
+    )
+  ) {
     enSpecific.push(
       "sleep deprivation adolescents working memory attention cognitive performance",
       "sleep restriction adolescent cognition attention working memory",
@@ -5910,7 +7298,11 @@ export function academicRetryQueryExpansion(input: {
       "睡眠限制 青少年 注意力 工作記憶 研究",
     );
   }
-  if (/海龜|綠蠵龜|幼龜|入海|人工夜間照明|夜間照明|光害|sea turtle|hatchling orientation|artificial light|light pollution/.test(text)) {
+  if (
+    /海龜|綠蠵龜|幼龜|入海|人工夜間照明|夜間照明|光害|sea turtle|hatchling orientation|artificial light|light pollution/.test(
+      text,
+    )
+  ) {
     enSpecific.push(
       "sea turtle hatchling orientation artificial light at night",
       "sea turtle hatchling disorientation light pollution coastal lighting",
@@ -5921,7 +7313,11 @@ export function academicRetryQueryExpansion(input: {
       "海龜幼體 錯向行為 夜間照明 海岸光害 研究",
     );
   }
-  if (/同儕回饋|第二語言|寫作修訂|修訂品質|peer feedback|second language writing|l2 writing|writing revision/.test(text)) {
+  if (
+    /同儕回饋|第二語言|寫作修訂|修訂品質|peer feedback|second language writing|l2 writing|writing revision/.test(
+      text,
+    )
+  ) {
     enSpecific.push(
       "peer feedback second language writing revision quality",
       "L2 writing peer feedback revision quality students",
@@ -5932,7 +7328,11 @@ export function academicRetryQueryExpansion(input: {
       "同儕回饋 寫作修訂 第二語言 學生 研究",
     );
   }
-  if (/活性碳|活性炭|甲醛|室內空氣|移除效率|activated carbon|formaldehyde|indoor air quality|adsorption efficiency/.test(text)) {
+  if (
+    /活性碳|活性炭|甲醛|室內空氣|移除效率|activated carbon|formaldehyde|indoor air quality|adsorption efficiency/.test(
+      text,
+    )
+  ) {
     enSpecific.push(
       "activated carbon formaldehyde adsorption indoor air removal efficiency",
       "activated carbon filter formaldehyde removal indoor air quality",
@@ -5943,7 +7343,11 @@ export function academicRetryQueryExpansion(input: {
       "活性炭 濾材 甲醛 去除效率 室內空氣 研究",
     );
   }
-  if (/太陽帆|solar sail|solar sailing|radiation pressure|spacecraft propulsion|深空探測/.test(text)) {
+  if (
+    /太陽帆|solar sail|solar sailing|radiation pressure|spacecraft propulsion|深空探測/.test(
+      text,
+    )
+  ) {
     enSpecific.push(
       "solar sail propulsion radiation pressure",
       "solar sail spacecraft mission applications",
@@ -5957,7 +7361,9 @@ export function academicRetryQueryExpansion(input: {
       "太陽帆 深空探測 優勢 限制",
     );
   }
-  if (/漢代|玉佩|jade pendant|han dynasty|ritual culture|archaeology/.test(text)) {
+  if (
+    /漢代|玉佩|jade pendant|han dynasty|ritual culture|archaeology/.test(text)
+  ) {
     enSpecific.push(
       "Han dynasty jade pendant ritual culture archaeology material culture",
       "Han dynasty jade ornament burial ritual archaeology journal",
@@ -5983,10 +7389,14 @@ export function academicRetryQueryExpansion(input: {
   }
 
   const leadEnTerms = uniqueStrings(
-    (input.queryPlan.conceptGroups ?? []).flatMap((group) => group.enTerms).filter(containsLatin),
+    (input.queryPlan.conceptGroups ?? [])
+      .flatMap((group) => group.enTerms)
+      .filter(containsLatin),
   ).slice(0, 6);
   const leadZhTerms = uniqueStrings(
-    (input.queryPlan.conceptGroups ?? []).flatMap((group) => group.zhTerms).filter(containsZh),
+    (input.queryPlan.conceptGroups ?? [])
+      .flatMap((group) => group.zhTerms)
+      .filter(containsZh),
   ).slice(0, 6);
   const leadEn = leadEnTerms.slice(0, 5).join(" ");
   const leadZh = leadZhTerms.slice(0, 5).join(" ");
@@ -5997,10 +7407,7 @@ export function academicRetryQueryExpansion(input: {
       ]
     : [];
   const evidenceFocusedZh = leadZh
-    ? [
-        `${leadZh} 原理 應用 發現`,
-        `${leadZh} 證據 限制 文獻`,
-      ]
+    ? [`${leadZh} 原理 應用 發現`, `${leadZh} 證據 限制 文獻`]
     : [];
   const genericEn = uniqueStrings([
     ...(input.normalizedSearchTopic.enAcademicQuery ?? []),
@@ -6020,7 +7427,8 @@ export function academicRetryQueryExpansion(input: {
     leadZh ? `${leadZh} 期刊 研究` : "",
     ...evidenceFocusedZh,
   ]);
-  const topicIsMythResearch = /月兔|jade rabbit|moon rabbit|神話|folklore|myth/.test(text);
+  const topicIsMythResearch =
+    /月兔|jade rabbit|moon rabbit|神話|folklore|myth/.test(text);
   const excludeTerms = uniqueStrings([
     ...input.normalizedSearchTopic.negativeKeywords,
     ...input.queryPlan.excludedDriftTerms,
@@ -6034,7 +7442,10 @@ export function academicRetryQueryExpansion(input: {
       text,
     ),
   ).slice(0, 10);
-  const querySeedZh = providerSafeDomainAnchoredQueries(uniqueStrings([...zhSpecific, ...genericZh]), text).slice(0, 8);
+  const querySeedZh = providerSafeDomainAnchoredQueries(
+    uniqueStrings([...zhSpecific, ...genericZh]),
+    text,
+  ).slice(0, 8);
   const retryQueries = uniqueStrings([...querySeedEn, ...querySeedZh]);
   return { querySeedEn, querySeedZh, excludeTerms, retryQueries };
 }
@@ -6046,7 +7457,11 @@ function academicRetrySearchInput(input: {
   queryPlan: GroundingQueryPlan;
   round: number;
   reason: string;
-}): { reason: string; retryQueries: string[]; searchInput: SearchIntentPlannerInput } {
+}): {
+  reason: string;
+  retryQueries: string[];
+  searchInput: SearchIntentPlannerInput;
+} {
   const expansion = academicRetryQueryExpansion(input);
   const relaxedRoundQueries = uniqueStrings([
     ...expansion.querySeedEn,
@@ -6055,28 +7470,37 @@ function academicRetrySearchInput(input: {
     ...(input.queryPlan.broadFallbackQueries ?? []).filter(containsLatin),
   ]);
   const querySeedEn =
-    input.round >= 2
-      ? relaxedRoundQueries
-      : expansion.querySeedEn;
+    input.round >= 2 ? relaxedRoundQueries : expansion.querySeedEn;
   const querySeedZh =
     input.round >= 2
       ? uniqueStrings([
           ...expansion.querySeedZh,
-          ...(input.normalizedSearchTopic.broaderAcademicQueries ?? []).filter(containsZh),
+          ...(input.normalizedSearchTopic.broaderAcademicQueries ?? []).filter(
+            containsZh,
+          ),
           ...(input.queryPlan.broadFallbackQueries ?? []).filter(containsZh),
         ])
       : expansion.querySeedZh;
-  const routingText = compactWhitespace([
-    input.topicAnalysis.normalizedTopic,
-    input.normalizedSearchTopic.displayTitle,
-    input.queryPlan.domain,
-    input.queryPlan.intent,
-    ...(input.queryPlan.conceptGroups ?? []).flatMap((group) => [group.name, ...group.zhTerms, ...group.enTerms]),
-  ].join(" "));
+  const routingText = compactWhitespace(
+    [
+      input.topicAnalysis.normalizedTopic,
+      input.normalizedSearchTopic.displayTitle,
+      input.queryPlan.domain,
+      input.queryPlan.intent,
+      ...(input.queryPlan.conceptGroups ?? []).flatMap((group) => [
+        group.name,
+        ...group.zhTerms,
+        ...group.enTerms,
+      ]),
+    ].join(" "),
+  );
   const routedQuerySeedEn = sanitizeEnglishProviderQueries(
     providerSafeDomainAnchoredQueries(querySeedEn, routingText),
   );
-  const routedQuerySeedZh = providerSafeDomainAnchoredQueries(querySeedZh, routingText);
+  const routedQuerySeedZh = providerSafeDomainAnchoredQueries(
+    querySeedZh,
+    routingText,
+  );
   return {
     reason: `academic_retry_${input.reason}`,
     retryQueries: uniqueStrings([...routedQuerySeedEn, ...routedQuerySeedZh]),
@@ -6085,13 +7509,16 @@ function academicRetrySearchInput(input: {
       originalTopic: input.base.originalTopic ?? input.base.topic,
       refinedTopic: input.topicAnalysis.normalizedTopic,
       canonicalTopicZh: input.topicAnalysis.normalizedTopic,
-      canonicalTopicEn: routedQuerySeedEn[0] ?? input.normalizedSearchTopic.enAcademicQuery[0],
+      canonicalTopicEn:
+        routedQuerySeedEn[0] ?? input.normalizedSearchTopic.enAcademicQuery[0],
       displayTitle: input.base.originalTopic ?? input.base.topic,
       querySeedZh: routedQuerySeedZh,
       querySeedEn: routedQuerySeedEn,
       mustIncludeTerms: uniqueStrings([
         ...input.normalizedSearchTopic.keywordSet,
-        ...routedQuerySeedEn.flatMap((query) => query.split(/\s+/u).slice(0, 6)),
+        ...routedQuerySeedEn.flatMap((query) =>
+          query.split(/\s+/u).slice(0, 6),
+        ),
         ...(input.queryPlan.conceptGroups ?? []).flatMap((group) => [
           group.name,
           ...group.zhTerms,
@@ -6106,6 +7533,10 @@ function academicRetrySearchInput(input: {
       language: input.topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW",
       sourceMode: "academic",
       searchProfile: input.base.searchProfile === "quick" ? "standard" : "deep",
+      executionBudgetContext: {
+        expandedQuery: true,
+        fallbackLayer: MAX_FALLBACK_ROUNDS + input.round,
+      },
     },
   };
 }
@@ -6117,7 +7548,9 @@ function fallbackAttemptsFromSearchRun(input: {
   searchResult: SearchIntentSourceSearchResult;
   sourceCandidateResult: SourceCandidateBuildResult;
 }): GroundingFallbackAttempt[] {
-  const candidateCount = reviewableSourceCandidateCount(input.sourceCandidateResult.sourceCandidates);
+  const candidateCount = reviewableSourceCandidateCount(
+    input.sourceCandidateResult.sourceCandidates,
+  );
   const rejectedCount = input.sourceCandidateResult.sourceCandidates.filter(
     (candidate) => candidate.reviewStatus === "rejected",
   ).length;
@@ -6133,6 +7566,8 @@ function fallbackAttemptsFromSearchRun(input: {
         candidateCount,
         rejectedCount,
         status: rawCount > 0 ? "completed" : "failed",
+        authoritativeLedgerId:
+          input.searchResult.diagnostics?.budgetAuthority?.ledgerId,
       },
     ];
   }
@@ -6145,18 +7580,23 @@ function fallbackAttemptsFromSearchRun(input: {
     candidateCount,
     rejectedCount,
     status: group.ok ? "completed" : "failed",
+    authoritativeLedgerId:
+      input.searchResult.diagnostics?.budgetAuthority?.ledgerId,
   }));
 }
 
 function sourceCandidateMergeRank(candidate: SourceCandidate): number {
   const statusRank =
-    candidate.reviewStatus === "accepted" ? 3000 : candidate.reviewStatus === "review" ? 2000 : 1000;
-  const academicRank =
-    sourceCandidateIsAcademic(candidate)
-      ? 500
-      : sourceCandidateIsOfficialBackground(candidate)
-        ? 60
-        : 0;
+    candidate.reviewStatus === "accepted"
+      ? 3000
+      : candidate.reviewStatus === "review"
+        ? 2000
+        : 1000;
+  const academicRank = sourceCandidateIsAcademic(candidate)
+    ? 500
+    : sourceCandidateIsOfficialBackground(candidate)
+      ? 60
+      : 0;
   const bucketRank =
     candidate.recommendationBucket === "scholarly_recommended"
       ? 300
@@ -6165,18 +7605,28 @@ function sourceCandidateMergeRank(candidate: SourceCandidate): number {
         : candidate.recommendationBucket === "manual_review"
           ? 180
           : 0;
-  return statusRank + academicRank + bucketRank + Math.round((candidate.finalScore ?? candidate.relevanceScore) * 100);
-}
-
-function mergeSourceCandidates(results: SourceCandidateBuildResult[]): SourceCandidate[] {
-  return mergeSourceCandidateRecords(
-    results.flatMap((result) => result.sourceCandidates),
-  ).sort(
-    (left, right) => sourceCandidateMergeRank(right) - sourceCandidateMergeRank(left),
+  return (
+    statusRank +
+    academicRank +
+    bucketRank +
+    Math.round((candidate.finalScore ?? candidate.relevanceScore) * 100)
   );
 }
 
-function mergeSearchResults(results: SearchIntentSourceSearchResult[]): SearchIntentSourceSearchResult {
+function mergeSourceCandidates(
+  results: SourceCandidateBuildResult[],
+): SourceCandidate[] {
+  return mergeSourceCandidateRecords(
+    results.flatMap((result) => result.sourceCandidates),
+  ).sort(
+    (left, right) =>
+      sourceCandidateMergeRank(right) - sourceCandidateMergeRank(left),
+  );
+}
+
+function mergeSearchResults(
+  results: SearchIntentSourceSearchResult[],
+): SearchIntentSourceSearchResult {
   const [first, ...rest] = results;
   if (!first) {
     throw new Error("cannot merge empty search result list");
@@ -6186,12 +7636,25 @@ function mergeSearchResults(results: SearchIntentSourceSearchResult[]): SearchIn
   const diagnosticsProviderStatus = results.flatMap(
     (result) => result.diagnostics?.provider_status ?? [],
   );
-  const scoredSources = uniqueSourceRecords(results.flatMap((result) => result.scoredSources ?? []));
-  const candidateSources = uniqueSourceRecords(results.flatMap((result) => result.candidateSources ?? []));
-  const fallbackReviewSources = uniqueSourceRecords(results.flatMap((result) => result.fallbackReviewSources ?? []));
-  const rejectedSources = uniqueSourceRecords(results.flatMap((result) => result.rejectedSources ?? []));
-  const sources = uniqueSourceRecords(results.flatMap((result) => result.sources ?? result.results ?? []));
-  const rawProviderCount = results.reduce((sum, result) => sum + searchResultRawCount(result), 0);
+  const scoredSources = uniqueSourceRecords(
+    results.flatMap((result) => result.scoredSources ?? []),
+  );
+  const candidateSources = uniqueSourceRecords(
+    results.flatMap((result) => result.candidateSources ?? []),
+  );
+  const fallbackReviewSources = uniqueSourceRecords(
+    results.flatMap((result) => result.fallbackReviewSources ?? []),
+  );
+  const rejectedSources = uniqueSourceRecords(
+    results.flatMap((result) => result.rejectedSources ?? []),
+  );
+  const sources = uniqueSourceRecords(
+    results.flatMap((result) => result.sources ?? result.results ?? []),
+  );
+  const rawProviderCount = results.reduce(
+    (sum, result) => sum + searchResultRawCount(result),
+    0,
+  );
   const normalizedValidCount = results.reduce(
     (sum, result) => sum + searchResultNormalizedValidCount(result),
     0,
@@ -6221,29 +7684,62 @@ function mergeSearchResults(results: SearchIntentSourceSearchResult[]): SearchIn
     warnings: uniqueStrings(results.flatMap((result) => result.warnings ?? [])),
     queries: {
       ...last.queries,
-      coreConcepts: uniqueStrings(results.flatMap((result) => result.queries.coreConcepts ?? [])),
-      chinese: uniqueStrings(results.flatMap((result) => result.queries.chinese ?? [])),
-      english: uniqueStrings(results.flatMap((result) => result.queries.english ?? [])),
-      highPrecision: uniqueStrings(results.flatMap((result) => result.queries.highPrecision ?? [])),
-      broad: uniqueStrings(results.flatMap((result) => result.queries.broad ?? [])),
-      coreEnglishAcademic: uniqueStrings(results.flatMap((result) => result.queries.coreEnglishAcademic ?? [])),
-      academicSynonyms: uniqueStrings(results.flatMap((result) => result.queries.academicSynonyms ?? [])),
-      education: uniqueStrings(results.flatMap((result) => result.queries.education ?? [])),
-      chineseSupplemental: uniqueStrings(results.flatMap((result) => result.queries.chineseSupplemental ?? [])),
-      fallbackRelaxed: uniqueStrings(results.flatMap((result) => result.queries.fallbackRelaxed ?? [])),
+      coreConcepts: uniqueStrings(
+        results.flatMap((result) => result.queries.coreConcepts ?? []),
+      ),
+      chinese: uniqueStrings(
+        results.flatMap((result) => result.queries.chinese ?? []),
+      ),
+      english: uniqueStrings(
+        results.flatMap((result) => result.queries.english ?? []),
+      ),
+      highPrecision: uniqueStrings(
+        results.flatMap((result) => result.queries.highPrecision ?? []),
+      ),
+      broad: uniqueStrings(
+        results.flatMap((result) => result.queries.broad ?? []),
+      ),
+      coreEnglishAcademic: uniqueStrings(
+        results.flatMap((result) => result.queries.coreEnglishAcademic ?? []),
+      ),
+      academicSynonyms: uniqueStrings(
+        results.flatMap((result) => result.queries.academicSynonyms ?? []),
+      ),
+      education: uniqueStrings(
+        results.flatMap((result) => result.queries.education ?? []),
+      ),
+      chineseSupplemental: uniqueStrings(
+        results.flatMap((result) => result.queries.chineseSupplemental ?? []),
+      ),
+      fallbackRelaxed: uniqueStrings(
+        results.flatMap((result) => result.queries.fallbackRelaxed ?? []),
+      ),
       phases: results.flatMap((result) => result.queries.phases ?? []),
     },
     searchTrace: {
       ...last.searchTrace,
-      providerQueries: uniqueStrings(results.flatMap((result) => result.searchTrace?.providerQueries ?? [])),
-      candidateCount:
-        results.reduce((sum, result) => sum + (result.searchTrace?.candidateCount ?? 0), 0),
-      dedupedCount: Math.max(...results.map((result) => result.searchTrace?.dedupedCount ?? 0), 0),
-      acceptedCount:
-        results.reduce((sum, result) => sum + (result.searchTrace?.acceptedCount ?? 0), 0),
-      rejectedCount:
-        results.reduce((sum, result) => sum + (result.searchTrace?.rejectedCount ?? 0), 0),
-      sourceDecisions: results.flatMap((result) => result.searchTrace?.sourceDecisions ?? []),
+      providerQueries: uniqueStrings(
+        results.flatMap((result) => result.searchTrace?.providerQueries ?? []),
+      ),
+      candidateCount: results.reduce(
+        (sum, result) => sum + (result.searchTrace?.candidateCount ?? 0),
+        0,
+      ),
+      dedupedCount: Math.max(
+        ...results.map((result) => result.searchTrace?.dedupedCount ?? 0),
+        0,
+      ),
+      acceptedCount: results.reduce(
+        (sum, result) => sum + (result.searchTrace?.acceptedCount ?? 0),
+        0,
+      ),
+      rejectedCount: results.reduce(
+        (sum, result) => sum + (result.searchTrace?.rejectedCount ?? 0),
+        0,
+      ),
+      sourceDecisions: results.flatMap(
+        (result) => result.searchTrace?.sourceDecisions ?? [],
+      ),
     },
     diagnostics: {
       ...last.diagnostics,
@@ -6257,30 +7753,43 @@ function mergeSearchResults(results: SearchIntentSourceSearchResult[]): SearchIn
         0,
       ),
       deduped_count: uniqueSourceRecords(
-        results.flatMap((result) => result.scoredSources ?? result.sources ?? []),
+        results.flatMap(
+          (result) => result.scoredSources ?? result.sources ?? [],
+        ),
       ).length,
       scored_count: scoredSources.length,
       rejected_count: rejectedSources.length,
       candidate_count: candidateSources.length,
       fallback_review_count: fallbackReviewSources.length,
       displayed_count: sources.length,
-      provider_status: diagnosticsProviderStatus.length > 0
-        ? diagnosticsProviderStatus
-        : providerStatus.map((group) => ({
-            provider: group.provider,
-            query: group.query,
-            ok: group.ok,
-            result_count: group.results.length,
-            raw_count: group.raw_count ?? group.results.length,
-            normalize_attempt_count: group.normalize_attempt_count ?? group.raw_count ?? group.results.length,
-            normalized_valid_count: group.normalized_valid_count ?? group.results.length,
-            normalized_invalid_count: group.normalized_invalid_count ?? 0,
-            error_type: group.error_type,
-            error_message: group.error_message,
-            latency_ms: group.latency_ms,
-          })),
-      warnings: uniqueStrings(results.flatMap((result) => result.diagnostics?.warnings ?? result.warnings ?? [])),
-      tried_queries: uniqueStrings(results.flatMap((result) => result.diagnostics?.tried_queries ?? [])),
+      provider_status:
+        diagnosticsProviderStatus.length > 0
+          ? diagnosticsProviderStatus
+          : providerStatus.map((group) => ({
+              provider: group.provider,
+              query: group.query,
+              ok: group.ok,
+              result_count: group.results.length,
+              raw_count: group.raw_count ?? group.results.length,
+              normalize_attempt_count:
+                group.normalize_attempt_count ??
+                group.raw_count ??
+                group.results.length,
+              normalized_valid_count:
+                group.normalized_valid_count ?? group.results.length,
+              normalized_invalid_count: group.normalized_invalid_count ?? 0,
+              error_type: group.error_type,
+              error_message: group.error_message,
+              latency_ms: group.latency_ms,
+            })),
+      warnings: uniqueStrings(
+        results.flatMap(
+          (result) => result.diagnostics?.warnings ?? result.warnings ?? [],
+        ),
+      ),
+      tried_queries: uniqueStrings(
+        results.flatMap((result) => result.diagnostics?.tried_queries ?? []),
+      ),
     },
   };
 }
@@ -6292,7 +7801,8 @@ function safeEvidenceText(
   safetyReview: AcademicSafetyReview,
 ): { text: string; safety: EvidenceSafety } {
   const normalized = compactWhitespace(text);
-  const actionable = actionableIntent(normalized) && safetyReview.topicRiskLevel !== "low";
+  const actionable =
+    actionableIntent(normalized) && safetyReview.topicRiskLevel !== "low";
   if (!actionable) {
     return {
       text: normalized,
@@ -6314,16 +7824,21 @@ function safeEvidenceText(
         safetyReview.allowedUse === "redirect_to_prevention_or_policy"
           ? "policy_or_health_focused"
           : "high_level_summary",
-      safetyNotes: ["actionable details redacted before evidence-card generation"],
+      safetyNotes: [
+        "actionable details redacted before evidence-card generation",
+      ],
     },
   };
 }
 
-type GroundingEvidenceType = NonNullable<GroundingEvidenceCard["evidence_type"]>;
+type GroundingEvidenceType = NonNullable<
+  GroundingEvidenceCard["evidence_type"]
+>;
 
 function accessLevelForSource(source: SourceCandidate): ContentAccessLevel {
   if (source.accessLevel) return source.accessLevel;
-  if (source.abstractOriginal || source.abstractZh || source.abstract) return "abstract_only";
+  if (source.abstractOriginal || source.abstractZh || source.abstract)
+    return "abstract_only";
   return "metadata_only";
 }
 
@@ -6334,25 +7849,48 @@ function citationMarkerForSource(index: number): string {
 function firstSentence(value: string, limit = 260): string {
   const text = compactWhitespace(value);
   const sentence = text.split(/(?<=[。！？.!?])\s+/u)[0]?.trim() ?? text;
-  return sentence.length > limit ? `${sentence.slice(0, limit - 1)}…` : sentence;
+  return sentence.length > limit
+    ? `${sentence.slice(0, limit - 1)}…`
+    : sentence;
 }
 
 function proseJoin(items: string[]): string {
-  const fragments = items.map((item) => compactWhitespace(item).replace(/[。！？.!?；，、\s]+$/u, "")).filter(Boolean);
+  const fragments = items
+    .map((item) =>
+      compactWhitespace(item).replace(/[。！？.!?；，、\s]+$/u, ""),
+    )
+    .filter(Boolean);
   if (fragments.length === 0) return "目前可驗證資料";
   if (fragments.length === 1) return fragments[0]!;
   if (fragments.length === 2) return `${fragments[0]}與${fragments[1]}`;
   return `${fragments.slice(0, -1).join("、")}，以及${fragments[fragments.length - 1]}`;
 }
 
-function evidenceTypeForChunk(chunk: Pick<ExtractedChunk, "text" | "section_heading">, index: number): GroundingEvidenceType {
+function evidenceTypeForChunk(
+  chunk: Pick<ExtractedChunk, "text" | "section_heading">,
+  index: number,
+): GroundingEvidenceType {
   const text = `${chunk.section_heading ?? ""} ${chunk.text}`.toLowerCase();
-  if (/limit|limitation|uncertain|uncertainty|bias|不足|限制|侷限|爭議|counter/i.test(text)) return "limitation";
-  if (/method|materials|experiment|survey|analysis|方法|實驗|問卷|資料來源/i.test(text)) return "method";
-  if (/define|definition|concept|means|定義|概念|意指/i.test(text)) return "definition";
-  if (/theor|model|framework|mechanism|機制|理論|模型/i.test(text)) return "theory";
-  if (/%|\b\d+(?:\.\d+)?\b|statistic|rate|ratio|統計|比例|數據/i.test(text)) return "statistic";
-  if (/result|finding|show|found|indicat|發現|顯示|指出|結果/i.test(text)) return "finding";
+  if (
+    /limit|limitation|uncertain|uncertainty|bias|不足|限制|侷限|爭議|counter/i.test(
+      text,
+    )
+  )
+    return "limitation";
+  if (
+    /method|materials|experiment|survey|analysis|方法|實驗|問卷|資料來源/i.test(
+      text,
+    )
+  )
+    return "method";
+  if (/define|definition|concept|means|定義|概念|意指/i.test(text))
+    return "definition";
+  if (/theor|model|framework|mechanism|機制|理論|模型/i.test(text))
+    return "theory";
+  if (/%|\b\d+(?:\.\d+)?\b|statistic|rate|ratio|統計|比例|數據/i.test(text))
+    return "statistic";
+  if (/result|finding|show|found|indicat|發現|顯示|指出|結果/i.test(text))
+    return "finding";
   return index < 2 ? "background" : "finding";
 }
 
@@ -6369,33 +7907,66 @@ function usableForEvidenceType(
       evidenceType === "limitation" ? "limitations" : "",
     ]);
   }
-  if (safetyReview.allowedUse !== "normal_research") return ["literature_review", "discussion", "policy"];
-  if (evidenceType === "definition" || evidenceType === "background" || evidenceType === "theory") {
-    return uniqueStrings(["introduction", "background", "literature_review", "discussion"]);
+  if (safetyReview.allowedUse !== "normal_research")
+    return ["literature_review", "discussion", "policy"];
+  if (
+    evidenceType === "definition" ||
+    evidenceType === "background" ||
+    evidenceType === "theory"
+  ) {
+    return uniqueStrings([
+      "introduction",
+      "background",
+      "literature_review",
+      "discussion",
+    ]);
   }
-  if (evidenceType === "method") return ["methods_context", "literature_review"];
+  if (evidenceType === "method")
+    return ["methods_context", "literature_review"];
   if (evidenceType === "limitation" || evidenceType === "counterpoint") {
     return ["literature_review", "discussion", "limitations"];
   }
-  return uniqueStrings(["literature_review", "analysis", "discussion", ...usableSectionsForRole(source.sourceRole)]);
+  return uniqueStrings([
+    "literature_review",
+    "analysis",
+    "discussion",
+    ...usableSectionsForRole(source.sourceRole),
+  ]);
 }
 
-function sourceAccessLimitations(source: SourceCandidate, accessLevel: ContentAccessLevel): string[] {
+function sourceAccessLimitations(
+  source: SourceCandidate,
+  accessLevel: ContentAccessLevel,
+): string[] {
   return uniqueStrings([
     ...(source.limitations ?? []),
-    source.recommendationBucket === "manual_review" ? "manual review source accepted by user" : "",
-    source.isPeerReviewed === false ? "非同行評審論文；不可支撐學術因果或實驗結論" : "",
+    source.recommendationBucket === "manual_review"
+      ? "manual review source accepted by user"
+      : "",
+    source.isPeerReviewed === false
+      ? "非同行評審論文；不可支撐學術因果或實驗結論"
+      : "",
     source.sourceQualityScore < 0.55 ? "source quality is limited" : "",
     accessLevel === "abstract_only" ? "僅摘要可用；正文不得宣稱已讀全文。" : "",
-    accessLevel === "metadata_only" ? "metadata_only；只能作為搜尋脈絡或人工審查，不能支撐學術主張。" : "",
-    accessLevel === "blocked_or_paywalled" ? "來源可能需要登入或付費；未抓取全文。" : "",
-    accessLevel === "failed_extraction" ? "全文抽取失敗；需人工審查後才能使用為強主張。" : "",
+    accessLevel === "metadata_only"
+      ? "metadata_only；只能作為搜尋脈絡或人工審查，不能支撐學術主張。"
+      : "",
+    accessLevel === "blocked_or_paywalled"
+      ? "來源可能需要登入或付費；未抓取全文。"
+      : "",
+    accessLevel === "failed_extraction"
+      ? "全文抽取失敗；需人工審查後才能使用為強主張。"
+      : "",
     ...(source.extractionWarnings ?? []),
   ]);
 }
 
 function canonicalKeyForCandidate(source: SourceCandidate): string {
-  return source.canonicalSourceIdentity?.trim() || source.dedupeKey.trim() || source.sourceId;
+  return (
+    source.canonicalSourceIdentity?.trim() ||
+    source.dedupeKey.trim() ||
+    source.sourceId
+  );
 }
 
 function makeGroundingEvidenceCard(input: {
@@ -6419,12 +7990,18 @@ function makeGroundingEvidenceCard(input: {
   const citationMarker = citationMarkerForSource(input.sourceIndex);
   const evidenceId = `evidence-${input.source.sourceId}-${input.cardIndex + 1}`;
   const canonicalSourceKey = canonicalKeyForCandidate(input.source);
-  const usableFor = usableForEvidenceType(input.source, input.evidenceType, input.safetyReview);
+  const usableFor = usableForEvidenceType(
+    input.source,
+    input.evidenceType,
+    input.safetyReview,
+  );
   const confidence = Math.min(0.55, Math.max(0.05, input.confidence));
   const createdAt = nowIso();
   const contentHash =
     input.source.contentHash ??
-    stableQueryHash([input.source.sourceId, input.chunkId ?? "", input.quotedText].join("|"));
+    stableQueryHash(
+      [input.source.sourceId, input.chunkId ?? "", input.quotedText].join("|"),
+    );
   return {
     evidenceId,
     evidence_id: evidenceId,
@@ -6450,7 +8027,11 @@ function makeGroundingEvidenceCard(input: {
     source_location: input.sourceLocation,
     ...(input.sectionHeading ? { section_heading: input.sectionHeading } : {}),
     ...(typeof input.page === "number" ? { page: input.page } : {}),
-    sourceUri: input.source.url ?? input.source.fullTextUrl ?? input.source.doi ?? input.source.sourceId,
+    sourceUri:
+      input.source.url ??
+      input.source.fullTextUrl ??
+      input.source.doi ??
+      input.source.sourceId,
     sourceTitle: input.source.title,
     ...(input.source.url ? { sourceUrl: input.source.url } : {}),
     ...(input.source.doi ? { sourceDoi: input.source.doi } : {}),
@@ -6469,7 +8050,9 @@ function makeGroundingEvidenceCard(input: {
     ...(typeof input.source.acceptedByUser === "boolean"
       ? { acceptedByUser: input.source.acceptedByUser }
       : {}),
-    ...(input.source.userDecision ? { userDecision: input.source.userDecision } : {}),
+    ...(input.source.userDecision
+      ? { userDecision: input.source.userDecision }
+      : {}),
     ...(input.source.acceptedAs ? { acceptedAs: input.source.acceptedAs } : {}),
     quoteOrSpan: input.quotedText,
     sourceQualityScore: input.source.sourceQualityScore,
@@ -6491,7 +8074,9 @@ function makeGroundingEvidenceCard(input: {
       query_used: input.source.queryUsed,
       ...(input.source.url ? { url: input.source.url } : {}),
       ...(input.source.doi ? { doi: input.source.doi } : {}),
-      ...(input.source.extractionMethod ? { extraction_method: input.source.extractionMethod } : {}),
+      ...(input.source.extractionMethod
+        ? { extraction_method: input.source.extractionMethod }
+        : {}),
       content_hash: contentHash,
     },
     needsManualReview: true,
@@ -6506,7 +8091,9 @@ function makeGroundingEvidenceCard(input: {
   } as unknown as GroundingEvidenceCard;
 }
 
-function evidenceTypeForClaimType(type: ClaimCandidate["claimType"]): GroundingEvidenceType {
+function evidenceTypeForClaimType(
+  type: ClaimCandidate["claimType"],
+): GroundingEvidenceType {
   switch (type) {
     case "definition":
       return "definition";
@@ -6528,7 +8115,10 @@ function evidenceTypeForClaimType(type: ClaimCandidate["claimType"]): GroundingE
   }
 }
 
-function usableForClaim(claim: ClaimCandidate, source: SourceCandidate): string[] {
+function usableForClaim(
+  claim: ClaimCandidate,
+  source: SourceCandidate,
+): string[] {
   const mapped = claim.usableSections.flatMap((section) => {
     switch (section) {
       case "background":
@@ -6548,26 +8138,78 @@ function usableForClaim(claim: ClaimCandidate, source: SourceCandidate): string[
     }
   });
   if (source.recommendationBucket === "official_background") {
-    return uniqueStrings(["introduction", "background", "concept_explanation", ...mapped]);
+    return uniqueStrings([
+      "introduction",
+      "background",
+      "concept_explanation",
+      ...mapped,
+    ]);
   }
-  return uniqueStrings(mapped.length ? mapped : ["literature_review", "discussion"]);
+  return uniqueStrings(
+    mapped.length ? mapped : ["literature_review", "discussion"],
+  );
 }
 
 function governanceFlagsForClaim(
   claim: ClaimCandidate,
   source: SourceCandidate,
   accessLevel: ContentAccessLevel,
+  exactSupportSpanVerified: boolean,
 ): string[] {
   return uniqueStrings([
-    claim.extractionMode === "rule_fallback" ? "claim_extraction_rule_fallback" : "",
-    claim.extractionMode === "metadata_only" ? "claim_extraction_metadata_only" : "",
+    exactSupportSpanVerified
+      ? "exact_support_span_verified"
+      : "exact_support_span_unverified",
+    claim.extractionMode === "rule_fallback"
+      ? "claim_extraction_rule_fallback"
+      : "",
+    claim.extractionMode === "metadata_only"
+      ? "claim_extraction_metadata_only"
+      : "",
     accessLevel === "abstract_only" ? "abstract_only_support" : "",
     accessLevel === "blocked_or_paywalled" ? "blocked_or_paywalled_source" : "",
     accessLevel === "failed_extraction" ? "failed_extraction_source" : "",
-    source.recommendationBucket === "manual_review" ? "manual_review_source" : "",
-    source.recommendationBucket === "official_background" ? "official_background_source" : "",
+    source.recommendationBucket === "manual_review"
+      ? "manual_review_source"
+      : "",
+    source.recommendationBucket === "official_background"
+      ? "official_background_source"
+      : "",
     claim.confidence < 0.65 ? "low_or_moderate_claim_confidence" : "",
   ]);
+}
+
+function claimHasExactSourceSupport(
+  claim: ClaimCandidate,
+  source: SourceCandidate,
+): boolean {
+  const supportSpan = compactWhitespace(claim.supportSpanText ?? "");
+  if (!supportSpan) return false;
+  const normalizedSupport = supportSpan.toLocaleLowerCase();
+  const matchingChunk = (source.extractedChunks ?? []).find(
+    (chunk) => chunk.chunk_id === claim.chunkId,
+  );
+  return uniqueStrings([
+    matchingChunk?.text,
+    source.extractedAbstract,
+    source.abstractOriginal,
+    source.abstract,
+  ]).some((text) =>
+    compactWhitespace(text).toLocaleLowerCase().includes(normalizedSupport),
+  );
+}
+
+const NON_BLOCKING_CLAIM_GOVERNANCE_FLAGS = new Set([
+  // Positive provenance: validateRawClaim accepted the support span only after
+  // locating it as an exact contiguous substring of the source chunk.
+  "exact_support_span_verified",
+  // Access disclosure: abstract evidence may support bounded claims, while the
+  // existing limitation text continues to prohibit full-text representations.
+  "abstract_only_support",
+]);
+
+function claimGovernanceRequiresManualReview(flags: string[]): boolean {
+  return flags.some((flag) => !NON_BLOCKING_CLAIM_GOVERNANCE_FLAGS.has(flag));
 }
 
 function makeGroundingEvidenceCardFromClaim(input: {
@@ -6583,13 +8225,16 @@ function makeGroundingEvidenceCardFromClaim(input: {
   if (!supportSpan) return null;
   if (input.claim.status !== "accepted") return null;
   const accessLevel = accessLevelForSource(input.source);
-  if (accessLevel === "metadata_only" || accessLevel === "failed_extraction") return null;
-  if (input.source.extractionStatus === "extraction_unavailable_no_parser") return null;
+  if (accessLevel === "metadata_only" || accessLevel === "failed_extraction")
+    return null;
+  if (input.source.extractionStatus === "extraction_unavailable_no_parser")
+    return null;
 
   const evidenceType = evidenceTypeForClaimType(input.claim.claimType);
   const safe = safeEvidenceText(input.claim.claimTextZhTw, input.safetyReview);
   const evidenceSafe = safeEvidenceText(supportSpan, input.safetyReview);
-  const citationMarker = input.claim.citationMarker || citationMarkerForSource(input.sourceIndex);
+  const citationMarker =
+    input.claim.citationMarker || citationMarkerForSource(input.sourceIndex);
   const evidenceId = `evidence-${input.claim.claimId}`;
   const canonicalSourceKey = canonicalKeyForCandidate(input.source);
   const usableFor = usableForClaim(input.claim, input.source);
@@ -6604,10 +8249,17 @@ function makeGroundingEvidenceCardFromClaim(input: {
   const createdAt = nowIso();
   const contentHash =
     input.source.contentHash ??
-    stableQueryHash([input.claim.claimId, supportSpan, input.source.sourceId].join("|"));
-  const governanceFlags = governanceFlagsForClaim(input.claim, input.source, accessLevel);
+    stableQueryHash(
+      [input.claim.claimId, supportSpan, input.source.sourceId].join("|"),
+    );
+  const governanceFlags = governanceFlagsForClaim(
+    input.claim,
+    input.source,
+    accessLevel,
+    claimHasExactSourceSupport(input.claim, input.source),
+  );
   const needsManualReview =
-    governanceFlags.length > 0 ||
+    claimGovernanceRequiresManualReview(governanceFlags) ||
     input.claim.confidence < 0.65 ||
     input.source.recommendationBucket === "manual_review";
 
@@ -6631,6 +8283,26 @@ function makeGroundingEvidenceCardFromClaim(input: {
     mainClaimZhTw: safe.text,
     paraphrase_zh: safe.text,
     supportingClaims: [input.claim],
+    ...(input.claim.structuredStudyFact
+      ? {
+          structuredStudyFact: input.claim.structuredStudyFact,
+          studyDesign: input.claim.structuredStudyFact.studyDesign === "unknown"
+            ? undefined
+            : input.claim.structuredStudyFact.studyDesign,
+          dataScope:
+            input.claim.structuredStudyFact.populationDescription ??
+            input.claim.structuredStudyFact.population ??
+            undefined,
+          exposure: input.claim.structuredStudyFact.exposure ?? undefined,
+          comparator: input.claim.structuredStudyFact.comparator ?? undefined,
+          outcome: input.claim.structuredStudyFact.outcome ?? undefined,
+          effectDirection: input.claim.structuredStudyFact.effectDirection,
+          moderators: input.claim.structuredStudyFact.moderators,
+          covariates: input.claim.structuredStudyFact.covariates,
+          confounders: input.claim.structuredStudyFact.confounders,
+          quantitativeFacts: input.claim.structuredStudyFact.quantitativeFacts,
+        }
+      : {}),
     supportedByText: evidenceSafe.text,
     supportSpan,
     ...(typeof input.claim.supportSpanStartOffset === "number"
@@ -6650,16 +8322,30 @@ function makeGroundingEvidenceCardFromClaim(input: {
         ...(typeof input.claim.supportSpanEndOffset === "number"
           ? { endOffset: input.claim.supportSpanEndOffset }
           : {}),
-        ...(typeof input.claim.pageStart === "number" ? { pageStart: input.claim.pageStart } : {}),
-        ...(typeof input.claim.pageEnd === "number" ? { pageEnd: input.claim.pageEnd } : {}),
-        ...(input.claim.sectionHeading ? { sectionHeading: input.claim.sectionHeading } : {}),
+        ...(typeof input.claim.pageStart === "number"
+          ? { pageStart: input.claim.pageStart }
+          : {}),
+        ...(typeof input.claim.pageEnd === "number"
+          ? { pageEnd: input.claim.pageEnd }
+          : {}),
+        ...(input.claim.sectionHeading
+          ? { sectionHeading: input.claim.sectionHeading }
+          : {}),
       },
     ],
     original_language: input.source.language ?? "unknown",
     source_location: input.claim.sectionHeading ?? "chunk",
-    ...(input.claim.sectionHeading ? { section_heading: input.claim.sectionHeading } : {}),
-    ...(typeof input.claim.pageStart === "number" ? { page: input.claim.pageStart } : {}),
-    sourceUri: input.source.url ?? input.source.fullTextUrl ?? input.source.doi ?? input.source.sourceId,
+    ...(input.claim.sectionHeading
+      ? { section_heading: input.claim.sectionHeading }
+      : {}),
+    ...(typeof input.claim.pageStart === "number"
+      ? { page: input.claim.pageStart }
+      : {}),
+    sourceUri:
+      input.source.url ??
+      input.source.fullTextUrl ??
+      input.source.doi ??
+      input.source.sourceId,
     sourceTitle: input.source.title,
     ...(input.source.url ? { sourceUrl: input.source.url } : {}),
     ...(input.source.doi ? { sourceDoi: input.source.doi } : {}),
@@ -6688,7 +8374,9 @@ function makeGroundingEvidenceCardFromClaim(input: {
     ...(typeof input.source.acceptedByUser === "boolean"
       ? { acceptedByUser: input.source.acceptedByUser }
       : {}),
-    ...(input.source.userDecision ? { userDecision: input.source.userDecision } : {}),
+    ...(input.source.userDecision
+      ? { userDecision: input.source.userDecision }
+      : {}),
     ...(input.source.acceptedAs ? { acceptedAs: input.source.acceptedAs } : {}),
     quoteOrSpan: evidenceSafe.text,
     sourceQualityScore: input.source.sourceQualityScore,
@@ -6720,7 +8408,9 @@ function makeGroundingEvidenceCardFromClaim(input: {
       query_used: input.source.queryUsed,
       ...(input.source.url ? { url: input.source.url } : {}),
       ...(input.source.doi ? { doi: input.source.doi } : {}),
-      ...(input.source.extractionMethod ? { extraction_method: input.source.extractionMethod } : {}),
+      ...(input.source.extractionMethod
+        ? { extraction_method: input.source.extractionMethod }
+        : {}),
       content_hash: contentHash,
     },
     extractedBy:
@@ -6732,8 +8422,10 @@ function makeGroundingEvidenceCardFromClaim(input: {
     extractionMethod,
     safety: {
       containsActionableHarm:
-        safe.safety.containsActionableHarm || evidenceSafe.safety.containsActionableHarm,
-      redactionApplied: safe.safety.redactionApplied || evidenceSafe.safety.redactionApplied,
+        safe.safety.containsActionableHarm ||
+        evidenceSafe.safety.containsActionableHarm,
+      redactionApplied:
+        safe.safety.redactionApplied || evidenceSafe.safety.redactionApplied,
       safeSummaryMode:
         safe.safety.safeSummaryMode !== "none"
           ? safe.safety.safeSummaryMode
@@ -6757,12 +8449,17 @@ function evidenceCardsFromClaimCandidates(input: {
   claimCandidates: ClaimCandidate[];
   safetyReview: AcademicSafetyReview;
 }): GroundingEvidenceCard[] {
-  const sourceById = new Map(input.acceptedSources.map((source, index) => [
-    source.sourceId,
-    { source, sourceIndex: index },
-  ]));
+  const sourceById = new Map(
+    input.acceptedSources.map((source, index) => [
+      source.sourceId,
+      { source, sourceIndex: index },
+    ]),
+  );
   const cards: GroundingEvidenceCard[] = [];
-  for (const claim of acceptedClaimCandidates(input.claimCandidates).slice(0, 60)) {
+  for (const claim of acceptedClaimCandidates(input.claimCandidates).slice(
+    0,
+    60,
+  )) {
     const sourceEntry = sourceById.get(claim.sourceId);
     if (!sourceEntry) continue;
     const card = makeGroundingEvidenceCardFromClaim({
@@ -6791,7 +8488,10 @@ function evidenceCardsFromClaimCandidates(input: {
   return cards;
 }
 
-function selectedFullTextChunks(source: SourceCandidate, topic?: string): ExtractedChunk[] {
+function selectedFullTextChunks(
+  source: SourceCandidate,
+  topic?: string,
+): ExtractedChunk[] {
   const chunks = (source.extractedChunks ?? [])
     .map((chunk) =>
       topic
@@ -6815,7 +8515,11 @@ function selectedFullTextChunks(source: SourceCandidate, topic?: string): Extrac
       if (seenClaims.has(key)) continue;
       seenClaims.add(key);
       selected.push(chunk);
-      if (selected.filter((item) => evidenceTypeForChunk(item, 0) === type).length >= limit) break;
+      if (
+        selected.filter((item) => evidenceTypeForChunk(item, 0) === type)
+          .length >= limit
+      )
+        break;
     }
   };
   byType("definition", 2);
@@ -6836,7 +8540,10 @@ function selectedFullTextChunks(source: SourceCandidate, topic?: string): Extrac
   return selected.slice(0, 8);
 }
 
-function abstractChunksForSource(source: SourceCandidate, topic?: string): ExtractedChunk[] {
+function abstractChunksForSource(
+  source: SourceCandidate,
+  topic?: string,
+): ExtractedChunk[] {
   const abstract =
     compactWhitespace(source.extractedAbstract ?? "") ||
     compactWhitespace(source.abstractOriginal ?? "") ||
@@ -6858,14 +8565,15 @@ function abstractChunksForSource(source: SourceCandidate, topic?: string): Extra
   }));
   return topic
     ? abstractChunks
-        .map((chunk) =>
-          cleanExtractedTextChunk({
-            topic,
-            chunk,
-            source,
-            matchedConcepts: source.matchedConcepts,
-            queryUsed: source.queryUsed,
-          }).chunk,
+        .map(
+          (chunk) =>
+            cleanExtractedTextChunk({
+              topic,
+              chunk,
+              source,
+              matchedConcepts: source.matchedConcepts,
+              queryUsed: source.queryUsed,
+            }).chunk,
         )
         .filter((chunk): chunk is ExtractedChunk => Boolean(chunk))
     : abstractChunks;
@@ -6880,39 +8588,50 @@ function evidenceCardsForExtractedSource(input: {
   safetyReview: AcademicSafetyReview;
 }): GroundingEvidenceCard[] {
   const accessLevel = accessLevelForSource(input.source);
-  if (input.source.sourceUseLevel === "rejected" || input.source.recommendationBucket === "rejected") {
+  if (
+    input.source.sourceUseLevel === "rejected" ||
+    input.source.recommendationBucket === "rejected"
+  ) {
     return [];
   }
 
-  if (accessLevel === "full_text" && (input.source.extractedChunks?.length ?? 0) > 0) {
-    return selectedFullTextChunks(input.source, input.topic).map((chunk, index) =>
-      makeGroundingEvidenceCard({
-        ...input,
-        cardIndex: index,
-        evidenceType: evidenceTypeForChunk(chunk, index),
-        quotedText: compactWhitespace(chunk.text),
-        sourceLocation: chunk.source_location,
-        sectionHeading: chunk.section_heading,
-        chunkId: chunk.chunk_id,
-        page: chunk.page,
-        accessLevel,
-        confidence:
-          input.source.extractionMethod === "grobid"
-            ? 0.86
-            : input.source.extractionStatus === "success"
-              ? 0.78
-              : 0.68,
-      }),
+  if (
+    accessLevel === "full_text" &&
+    (input.source.extractedChunks?.length ?? 0) > 0
+  ) {
+    return selectedFullTextChunks(input.source, input.topic).map(
+      (chunk, index) =>
+        makeGroundingEvidenceCard({
+          ...input,
+          cardIndex: index,
+          evidenceType: evidenceTypeForChunk(chunk, index),
+          quotedText: compactWhitespace(chunk.text),
+          sourceLocation: chunk.source_location,
+          sectionHeading: chunk.section_heading,
+          chunkId: chunk.chunk_id,
+          page: chunk.page,
+          accessLevel,
+          confidence:
+            input.source.extractionMethod === "grobid"
+              ? 0.86
+              : input.source.extractionStatus === "success"
+                ? 0.78
+                : 0.68,
+        }),
     );
   }
 
   if (accessLevel === "abstract_only") {
-    const chunks = abstractChunksForSource(input.source, input.topic).slice(0, 2);
+    const chunks = abstractChunksForSource(input.source, input.topic).slice(
+      0,
+      2,
+    );
     return chunks.map((chunk, index) =>
       makeGroundingEvidenceCard({
         ...input,
         cardIndex: index,
-        evidenceType: index === 0 ? "background" : evidenceTypeForChunk(chunk, index),
+        evidenceType:
+          index === 0 ? "background" : evidenceTypeForChunk(chunk, index),
         quotedText: compactWhitespace(chunk.text),
         sourceLocation: "abstract",
         sectionHeading: "Abstract",
@@ -6945,7 +8664,10 @@ function appendExtractedSpanReviewCards(input: {
   topic?: string;
   safetyReview: AcademicSafetyReview;
 }): GroundingEvidenceCard[] {
-  const targetCount = Math.min(8, Math.max(3, Math.ceil(input.evidenceSources.length * 1.5)));
+  const targetCount = Math.min(
+    8,
+    Math.max(3, Math.ceil(input.evidenceSources.length * 1.5)),
+  );
   if (input.cards.length >= targetCount) return input.cards;
 
   const cards = [...input.cards];
@@ -6974,11 +8696,17 @@ function resolvedEvidenceType(
   card: GroundingEvidenceCard,
   resolved: ResolvedEvidence,
 ): GroundingEvidenceCard["evidence_type"] {
-  if (resolved.sectionType === "discussion" || resolved.sectionType === "mechanism_interpretation") {
+  if (
+    resolved.sectionType === "discussion" ||
+    resolved.sectionType === "mechanism_interpretation"
+  ) {
     return "theory";
   }
   if (resolved.sectionType === "limitations") return "limitation";
-  if (resolved.sectionType === "study_design" || resolved.sectionType === "statistical_methods") {
+  if (
+    resolved.sectionType === "study_design" ||
+    resolved.sectionType === "statistical_methods"
+  ) {
     return "method";
   }
   return card.evidence_type;
@@ -6994,77 +8722,100 @@ function resolvedEvidenceType(
 export function resolveGroundingEvidenceCards(
   cards: GroundingEvidenceCard[],
 ): GroundingEvidenceCard[] {
-  const cardById = new Map(cards.map((card) => [card.evidenceId, card] as const));
-  const resolution = resolveEvidenceCandidates(cards.map((card) => ({
-    evidenceId: card.evidenceId,
-    sourceId: card.sourceId,
-    canonicalSourceId: card.canonicalSourceKey ?? card.dedupeKey ?? card.sourceId,
-    claimKey: compactWhitespace(
-      card.claimTextZh ?? card.mainClaimZhTw ?? card.claimText ?? card.claimTextOriginal,
-    ),
-    conceptKey: compactWhitespace(card.evidence_type ?? ""),
-    text: compactWhitespace(card.supportSpan ?? card.supportedByText ?? card.quoted_text ?? ""),
-    material: card.source_access_level === "full_text"
-      ? "full_text" as const
-      : card.source_access_level === "abstract_only"
-        ? "abstract" as const
-        : "metadata" as const,
-    extractionStatus: card.extractionStatus,
-    sectionHeading: card.section_heading ?? card.supportSpans?.[0]?.sectionHeading,
-    sourceLocation: card.source_location,
-    locator: {
-      page: card.page ?? card.supportSpans?.[0]?.pageStart,
-      sectionHeading: card.section_heading ?? card.supportSpans?.[0]?.sectionHeading,
-      chunkId: card.chunkId,
+  const cardById = new Map(
+    cards.map((card) => [card.evidenceId, card] as const),
+  );
+  const resolution = resolveEvidenceCandidates(
+    cards.map((card) => ({
+      evidenceId: card.evidenceId,
+      sourceId: card.sourceId,
+      canonicalSourceId:
+        card.canonicalSourceKey ?? card.dedupeKey ?? card.sourceId,
+      claimKey: compactWhitespace(
+        card.claimTextZh ??
+          card.mainClaimZhTw ??
+          card.claimText ??
+          card.claimTextOriginal,
+      ),
+      conceptKey: compactWhitespace(card.evidence_type ?? ""),
+      text: compactWhitespace(
+        card.supportSpan ?? card.supportedByText ?? card.quoted_text ?? "",
+      ),
+      material:
+        card.source_access_level === "full_text"
+          ? ("full_text" as const)
+          : card.source_access_level === "abstract_only"
+            ? ("abstract" as const)
+            : ("metadata" as const),
+      extractionStatus: card.extractionStatus,
+      sectionHeading:
+        card.section_heading ?? card.supportSpans?.[0]?.sectionHeading,
       sourceLocation: card.source_location,
-      charStart: card.supportStart ?? card.supportSpans?.[0]?.startOffset,
-      charEnd: card.supportEnd ?? card.supportSpans?.[0]?.endOffset,
-    },
-    confidence: card.confidence,
-    structuredFullText: card.source_access_level === "full_text" && Boolean(
-      card.section_heading ?? card.supportSpans?.[0]?.sectionHeading,
-    ),
-    abstractComplete: false,
-  })));
+      locator: {
+        page: card.page ?? card.supportSpans?.[0]?.pageStart,
+        sectionHeading:
+          card.section_heading ?? card.supportSpans?.[0]?.sectionHeading,
+        chunkId: card.chunkId,
+        sourceLocation: card.source_location,
+        charStart: card.supportStart ?? card.supportSpans?.[0]?.startOffset,
+        charEnd: card.supportEnd ?? card.supportSpans?.[0]?.endOffset,
+      },
+      confidence: card.confidence,
+      structuredFullText:
+        card.source_access_level === "full_text" &&
+        Boolean(card.section_heading ?? card.supportSpans?.[0]?.sectionHeading),
+      abstractComplete: false,
+    })),
+  );
   const conflictsByEvidenceId = new Map(
-    resolution.conflicts.map((conflict) => [conflict.selectedEvidenceId, conflict] as const),
+    resolution.conflicts.map(
+      (conflict) => [conflict.selectedEvidenceId, conflict] as const,
+    ),
   );
   return resolution.evidence.flatMap((resolved) => {
     const card = cardById.get(resolved.evidenceId);
     if (!card) return [];
     const conflict = conflictsByEvidenceId.get(resolved.evidenceId);
-    const interpretationOnly = resolved.sectionType === "discussion" ||
+    const interpretationOnly =
+      resolved.sectionType === "discussion" ||
       resolved.sectionType === "mechanism_interpretation";
-    return [{
-      ...card,
-      evidence_type: resolvedEvidenceType(card, resolved),
-      confidence: resolved.confidence,
-      groundingConfidence: resolved.confidence,
-      needsReview: card.needsReview || resolved.verificationStatus !== "verified",
-      governanceFlags: uniqueStrings([
-        ...(card.governanceFlags ?? []),
-        interpretationOnly ? "author_interpretation_not_direct_result" : "",
-        resolved.duplicateEvidenceIds.length > 0 ? "same_source_duplicate_collapsed" : "",
-        conflict ? "abstract_full_text_conflict" : "",
-      ]),
-      sourceMetadata: {
-        ...(card.sourceMetadata ?? {}),
-        atomicEvidence: {
-          accessTier: resolved.accessTier,
-          sectionType: resolved.sectionType,
-          verificationStatus: resolved.verificationStatus,
-          duplicateEvidenceIds: resolved.duplicateEvidenceIds,
-          conflictId: conflict?.conflictId ?? null,
+    return [
+      {
+        ...card,
+        evidence_type: resolvedEvidenceType(card, resolved),
+        confidence: resolved.confidence,
+        groundingConfidence: resolved.confidence,
+        needsReview:
+          card.needsReview || resolved.verificationStatus !== "verified",
+        governanceFlags: uniqueStrings([
+          ...(card.governanceFlags ?? []),
+          interpretationOnly ? "author_interpretation_not_direct_result" : "",
+          resolved.duplicateEvidenceIds.length > 0
+            ? "same_source_duplicate_collapsed"
+            : "",
+          conflict ? "abstract_full_text_conflict" : "",
+        ]),
+        sourceMetadata: {
+          ...(card.sourceMetadata ?? {}),
+          atomicEvidence: {
+            accessTier: resolved.accessTier,
+            sectionType: resolved.sectionType,
+            verificationStatus: resolved.verificationStatus,
+            duplicateEvidenceIds: resolved.duplicateEvidenceIds,
+            conflictId: conflict?.conflictId ?? null,
+          },
         },
+        limitations: uniqueStrings([
+          ...card.limitations,
+          interpretationOnly
+            ? "Discussion 中的來源作者解釋不得當作直接研究結果。"
+            : "",
+          conflict
+            ? "摘要與全文的可核對結果不一致；已保留衝突紀錄並降低信心。"
+            : "",
+        ]),
       },
-      limitations: uniqueStrings([
-        ...card.limitations,
-        interpretationOnly
-          ? "Discussion 中的來源作者解釋不得當作直接研究結果。"
-          : "",
-        conflict ? "摘要與全文的可核對結果不一致；已保留衝突紀錄並降低信心。" : "",
-      ]),
-    }];
+    ];
   });
 }
 
@@ -7091,8 +8842,10 @@ export function buildGroundingEvidenceCards(input: {
       source.sourceRole === "rejected" ||
       source.sourceUseLevel === "rejected" ||
       source.userDecision === "rejected"
-    ) return false;
-    if (source.recommendationBucket === "manual_review") return userAccepted(source);
+    )
+      return false;
+    if (source.recommendationBucket === "manual_review")
+      return userAccepted(source);
     return true;
   });
   const seenSources = new Set<string>();
@@ -7111,14 +8864,16 @@ export function buildGroundingEvidenceCards(input: {
       claimCandidates: input.claimCandidates,
       safetyReview: input.safetyReview,
     });
-    return resolveGroundingEvidenceCards(appendExtractedSpanReviewCards({
-      cards: claimCards,
-      evidenceSources,
-      workflowId: input.workflowId,
-      topicHash: input.topicHash,
-      topic: input.topic,
-      safetyReview: input.safetyReview,
-    }));
+    return resolveGroundingEvidenceCards(
+      appendExtractedSpanReviewCards({
+        cards: claimCards,
+        evidenceSources,
+        workflowId: input.workflowId,
+        topicHash: input.topicHash,
+        topic: input.topic,
+        safetyReview: input.safetyReview,
+      }),
+    );
   }
   const cards: GroundingEvidenceCard[] = [];
   evidenceSources.slice(0, 12).forEach((source, sourceIndex) => {
@@ -7160,7 +8915,10 @@ export function findLegacyGenericTraces(input: {
   });
   input.reportSections.forEach((section, index) => {
     maybeTrace(`reportSections[${index}].title`, section.title);
-    maybeTrace(`reportSections[${index}].synthesizedProse`, section.synthesizedProse);
+    maybeTrace(
+      `reportSections[${index}].synthesizedProse`,
+      section.synthesizedProse,
+    );
   });
   maybeTrace("reportDraft", input.reportDraft);
   return traces;
@@ -7195,7 +8953,10 @@ export function suppressLegacyGenericOutput(input: {
       return {
         ...section,
         synthesizedProse: "目前資料不足，暫不輸出泛用模板敘述。",
-        evidenceGaps: uniqueStrings([...section.evidenceGaps, "legacy_generic_output_suppressed"]),
+        evidenceGaps: uniqueStrings([
+          ...section.evidenceGaps,
+          "legacy_generic_output_suppressed",
+        ]),
       };
     }
     return section;
@@ -7275,13 +9036,16 @@ function evidenceCardCanEnterReportPlan(card: GroundingEvidenceCard): boolean {
   );
 }
 
-function plannedClaimOwnerSection(card: GroundingEvidenceCard): "background" | "evidence" {
+function plannedClaimOwnerSection(
+  card: GroundingEvidenceCard,
+): "background" | "evidence" {
   // Scholarly cards are generally eligible for evidence synthesis, but a card
   // extracted specifically as background/definition must still have a single
   // background owner. Otherwise an academic-only search produces no planned
   // claims for the introduction or research-question chapters.
   if (
-    (card.evidence_type === "background" || card.evidence_type === "definition") &&
+    (card.evidence_type === "background" ||
+      card.evidence_type === "definition") &&
     canUseEvidenceCardForSection(card, "background")
   ) {
     return "background";
@@ -7314,7 +9078,9 @@ function plannedClaimAgreement(
   cards: GroundingEvidenceCard[],
   sourceCount: number,
 ): ReportPlannedClaim["agreementStatus"] {
-  const hasCounterpoint = cards.some((card) => card.evidence_type === "counterpoint");
+  const hasCounterpoint = cards.some(
+    (card) => card.evidence_type === "counterpoint",
+  );
   const hasAffirmativeEvidence = cards.some(
     (card) => card.evidence_type !== "counterpoint",
   );
@@ -7336,10 +9102,17 @@ function plannedClaimEvidenceStrength(
       .filter((card) => card.source_access_level === "full_text")
       .map(plannedClaimSourceKey),
   ).size;
-  if (sourceCount >= 2 && fullTextSourceCount >= 2 && averageConfidence >= 0.72) {
+  if (
+    sourceCount >= 2 &&
+    fullTextSourceCount >= 2 &&
+    averageConfidence >= 0.72
+  ) {
     return "strong";
   }
-  if (sourceCount >= 2 || (fullTextSourceCount >= 1 && averageConfidence >= 0.65)) {
+  if (
+    sourceCount >= 2 ||
+    (fullTextSourceCount >= 1 && averageConfidence >= 0.65)
+  ) {
     return "moderate";
   }
   return "weak";
@@ -7356,8 +9129,12 @@ export function buildStructuredPlannedClaims(input: {
       const rightOwner = plannedClaimOwnerSection(right);
       return (
         leftOwner.localeCompare(rightOwner) ||
-        plannedClaimFingerprint(left).localeCompare(plannedClaimFingerprint(right)) ||
-        plannedClaimSourceKey(left).localeCompare(plannedClaimSourceKey(right)) ||
+        plannedClaimFingerprint(left).localeCompare(
+          plannedClaimFingerprint(right),
+        ) ||
+        plannedClaimSourceKey(left).localeCompare(
+          plannedClaimSourceKey(right),
+        ) ||
         left.evidenceId.localeCompare(right.evidenceId)
       );
     });
@@ -7408,10 +9185,14 @@ export function buildStructuredPlannedClaims(input: {
       );
       const limitations = uniqueSorted([
         ...rankedCards.flatMap((card) => card.limitations),
-        ...(rankedCards.some((card) => card.source_access_level === "abstract_only")
+        ...(rankedCards.some(
+          (card) => card.source_access_level === "abstract_only",
+        )
           ? ["僅以摘要內容支撐，不外推至全文未揭露的結果。"]
           : []),
-        ...(rankedCards.some((card) => card.needsManualReview || card.needsReview)
+        ...(rankedCards.some(
+          (card) => card.needsManualReview || card.needsReview,
+        )
           ? ["此證據仍需人工複核。"]
           : []),
       ]);
@@ -7467,18 +9248,26 @@ export function buildReportArtifacts(input: {
     topicHash: input.topicHash,
     evidenceCards: legalEvidenceCards,
   });
-  const sectionTypeForGroundingSection = (sectionId: string): EvidenceSectionType => {
+  const sectionTypeForGroundingSection = (
+    sectionId: string,
+  ): EvidenceSectionType => {
     if (sectionId === "background") return "background";
     if (sectionId === "evidence") return "evidence_synthesis";
     if (sectionId === "discussion") return "discussion_claim";
     if (sectionId === "conclusion") return "conclusion_claim";
     return "basic_context";
   };
-  const guardedEvidenceCardIds = (sectionId: string, cards: GroundingEvidenceCard[]) =>
+  const guardedEvidenceCardIds = (
+    sectionId: string,
+    cards: GroundingEvidenceCard[],
+  ) =>
     uniqueSorted(
       cards
         .filter((card) =>
-          canUseEvidenceCardForSection(card, sectionTypeForGroundingSection(sectionId)),
+          canUseEvidenceCardForSection(
+            card,
+            sectionTypeForGroundingSection(sectionId),
+          ),
         )
         .map((card) => card.evidenceId),
     );
@@ -7498,7 +9287,10 @@ export function buildReportArtifacts(input: {
       title: "研究背景",
       goal: "交代主題、核心變項與研究脈絡",
       requiredEvidenceTypes: ["background", "review"],
-      evidenceCardIds: guardedEvidenceCardIds("background", legalEvidenceCards.slice(0, 3)),
+      evidenceCardIds: guardedEvidenceCardIds(
+        "background",
+        legalEvidenceCards.slice(0, 3),
+      ),
       plannedClaimIds: plannedClaimIdsForSection("background"),
     },
     {
@@ -7514,7 +9306,10 @@ export function buildReportArtifacts(input: {
       title: "討論",
       goal: "說明可支持的解讀與尚待補證的缺口",
       requiredEvidenceTypes: ["mechanism", "policy"],
-      evidenceCardIds: guardedEvidenceCardIds("discussion", legalEvidenceCards.slice(0, 4)),
+      evidenceCardIds: guardedEvidenceCardIds(
+        "discussion",
+        legalEvidenceCards.slice(0, 4),
+      ),
       plannedClaimIds: plannedClaimIdsForSection("discussion"),
     },
     {
@@ -7522,7 +9317,10 @@ export function buildReportArtifacts(input: {
       title: "結論",
       goal: "只回扣正文已建立的主張，不新增事實判斷",
       requiredEvidenceTypes: ["finding", "limitation"],
-      evidenceCardIds: guardedEvidenceCardIds("conclusion", legalEvidenceCards.slice(0, 4)),
+      evidenceCardIds: guardedEvidenceCardIds(
+        "conclusion",
+        legalEvidenceCards.slice(0, 4),
+      ),
       plannedClaimIds: plannedClaimIdsForSection("conclusion"),
     },
   ];
@@ -7557,10 +9355,16 @@ export function buildReportArtifacts(input: {
   const sectionEvidence = (sectionId: string) =>
     legalEvidenceCards
       .filter((card) => {
-        if (!canUseEvidenceCardForSection(card, sectionTypeForGroundingSection(sectionId))) {
+        if (
+          !canUseEvidenceCardForSection(
+            card,
+            sectionTypeForGroundingSection(sectionId),
+          )
+        ) {
           return false;
         }
-        if (sectionId === "background") return card.usableFor.includes("introduction");
+        if (sectionId === "background")
+          return card.usableFor.includes("introduction");
         if (sectionId === "evidence") {
           return (
             card.recommendationBucket === "scholarly_recommended" ||
@@ -7568,7 +9372,8 @@ export function buildReportArtifacts(input: {
             card.usableFor.includes("analysis")
           );
         }
-        if (sectionId === "discussion") return card.usableFor.includes("discussion");
+        if (sectionId === "discussion")
+          return card.usableFor.includes("discussion");
         if (sectionId === "conclusion") {
           return (
             card.usableFor.includes("discussion") ||
@@ -7602,7 +9407,9 @@ export function buildReportArtifacts(input: {
         .map((card) => card.evidence_type)
         .filter((type): type is GroundingEvidenceType => Boolean(type)),
     );
-    const missingEvidenceTypes = requiredEvidenceTypes.filter((type) => !presentTypes.has(type));
+    const missingEvidenceTypes = requiredEvidenceTypes.filter(
+      (type) => !presentTypes.has(type),
+    );
     const threshold =
       sectionId === "background"
         ? 2
@@ -7611,7 +9418,8 @@ export function buildReportArtifacts(input: {
           : sectionId === "conclusion"
             ? 2
             : 3;
-    const enoughSources = sectionId === "evidence" ? sourceCount >= 2 : sourceCount >= 1;
+    const enoughSources =
+      sectionId === "evidence" ? sourceCount >= 2 : sourceCount >= 1;
     const status: SectionSufficiencyGate["status"] =
       cards.length >= threshold && enoughSources
         ? "sufficient"
@@ -7652,11 +9460,15 @@ export function buildReportArtifacts(input: {
     if (sectionId === "conclusion") {
       return `結論僅回扣正文已建立的 ${plannedClaimIdsForSection(sectionId).length} 項受支撐主張${markerText(cards)}，不新增未經正文驗證的事實判斷。${sufficiency.userVisibleMessage}`;
     }
-    const points = uniqueStrings(cards.map((card) => firstSentence(card.claimTextZh, 90))).slice(0, 4);
+    const points = uniqueStrings(
+      cards.map((card) => firstSentence(card.claimTextZh, 90)),
+    ).slice(0, 4);
     if (sectionId === "evidence" && cards.length >= 2) {
       const firstGroup = cards.slice(0, 2);
       const secondGroup = cards.slice(2, 4);
-      const limits = uniqueStrings(cards.flatMap((card) => card.limitations)).slice(0, 2);
+      const limits = uniqueStrings(
+        cards.flatMap((card) => card.limitations),
+      ).slice(0, 2);
       return [
         `現有文獻可先整合為幾個受限觀點：${proseJoin(points.slice(0, 2))}${markerText(firstGroup)}。`,
         secondGroup.length
@@ -7673,7 +9485,11 @@ export function buildReportArtifacts(input: {
   const reportSections: GroundingReportSection[] = sections.map((section) => {
     const cards = sectionEvidence(section.sectionId);
     const sufficiency = sufficiencyForSection(section.sectionId, cards);
-    const synthesizedProse = proseForSection(section.sectionId, cards, sufficiency);
+    const synthesizedProse = proseForSection(
+      section.sectionId,
+      cards,
+      sufficiency,
+    );
     return {
       sectionId: section.sectionId,
       title: section.title,
@@ -7689,12 +9505,17 @@ export function buildReportArtifacts(input: {
       sufficiency,
     };
   });
-  const reportSectionSufficiency = reportSections.map((section) => section.sufficiency!);
+  const reportSectionSufficiency = reportSections.map(
+    (section) => section.sufficiency!,
+  );
 
-  const reportDraft = reportSections.map((section) => `${section.title}\n${section.synthesizedProse}`).join("\n\n");
+  const reportDraft = reportSections
+    .map((section) => `${section.title}\n${section.synthesizedProse}`)
+    .join("\n\n");
   const researchCandidates = uniqueStrings([
     input.titleParse.subject[0],
-    input.titleParse.independentVariables.length && input.titleParse.dependentVariables.length
+    input.titleParse.independentVariables.length &&
+    input.titleParse.dependentVariables.length
       ? `${input.titleParse.independentVariables.join("、")}與${input.titleParse.dependentVariables.join("、")}之間的研究證據`
       : "",
     input.safetyReview.allowedUse !== "normal_research"
@@ -7726,12 +9547,16 @@ export async function runResearchGroundingPipeline(
 ): Promise<GroundingPipelineResult> {
   const createdAt = nowIso();
   const pipelineStartedAt = Date.now();
-  const originalTopic = compactWhitespace(input.rawUserTopic ?? input.originalTopic ?? input.topic);
+  const originalTopic = compactWhitespace(
+    input.rawUserTopic ?? input.originalTopic ?? input.topic,
+  );
   const planningTopic = compactWhitespace(
     input.normalizedTopic ?? input.researchQuestion ?? input.topic,
   );
   const activeResearchTopic = planningTopic || originalTopic;
-  const requestResearchQuestion = compactWhitespace(input.researchQuestion ?? "");
+  const requestResearchQuestion = compactWhitespace(
+    input.researchQuestion ?? "",
+  );
   const requestQuerySeedZh = uniqueStrings([
     ...(input.bilingualQueries?.zh ?? []),
     ...(input.querySeedZh ?? []),
@@ -7755,7 +9580,10 @@ export async function runResearchGroundingPipeline(
   const topicTitleState = createTopicTitleState({
     originalTopic,
     ...(activeResearchTopic !== originalTopic
-      ? { polishedTitle: activeResearchTopic, acceptedDisplayTitle: originalTopic }
+      ? {
+          polishedTitle: activeResearchTopic,
+          acceptedDisplayTitle: originalTopic,
+        }
       : {}),
     titlePolishMode: "polish_only",
   });
@@ -7767,7 +9595,9 @@ export async function runResearchGroundingPipeline(
   });
 
   const blockedParsedInput =
-    originalParsedInput.nextAction === "block" ? originalParsedInput : parsedInput;
+    originalParsedInput.nextAction === "block"
+      ? originalParsedInput
+      : parsedInput;
   if (blockedParsedInput.nextAction === "block") {
     return {
       jobId: "pending-assignment",
@@ -7852,10 +9682,10 @@ export async function runResearchGroundingPipeline(
   });
   const hasExplicitResearchDirection = Boolean(
     input.selectedDomain?.trim() ||
-      input.normalizedTopic?.trim() ||
-      input.researchQuestion?.trim() ||
-      requestQuerySeedZh.length ||
-      requestQuerySeedEn.length,
+    input.normalizedTopic?.trim() ||
+    input.researchQuestion?.trim() ||
+    requestQuerySeedZh.length ||
+    requestQuerySeedEn.length,
   );
   const canSearchFinalQueryBundle =
     meaningfulResearchTopic(activeResearchTopic) &&
@@ -7865,11 +9695,15 @@ export async function runResearchGroundingPipeline(
   if (
     !hasExplicitResearchDirection &&
     !canSearchFinalQueryBundle &&
-    (parsedInput.nextAction === "ask_clarification" || parsedInput.nextAction === "show_topic_options")
+    (parsedInput.nextAction === "ask_clarification" ||
+      parsedInput.nextAction === "show_topic_options")
   ) {
-    const invalidInputMessage = "無法辨識有效研究主題，請輸入可研究的詞彙或句子。";
-    const needsDirectionMessage = "主題仍偏短或多義，請先從建議研究方向中選一個再搜尋。";
-    const needsMoreDetailMessage = "無法穩定判定研究意圖，請補充研究對象、變項、比較條件或範圍。";
+    const invalidInputMessage =
+      "無法辨識有效研究主題，請輸入可研究的詞彙或句子。";
+    const needsDirectionMessage =
+      "主題仍偏短或多義，請先從建議研究方向中選一個再搜尋。";
+    const needsMoreDetailMessage =
+      "無法穩定判定研究意圖，請補充研究對象、變項、比較條件或範圍。";
     return {
       jobId: "pending-assignment",
       workflowId: input.workflowId,
@@ -7883,7 +9717,8 @@ export async function runResearchGroundingPipeline(
       titleParse,
       topicTitleState,
       researchCandidates: parsedInput.topicOptions.map(
-        (option: ParsedResearchInput["topicOptions"][number]) => option.canonicalTopic,
+        (option: ParsedResearchInput["topicOptions"][number]) =>
+          option.canonicalTopic,
       ),
       warnings: [
         parsedInput.inputType === "invalid"
@@ -7973,28 +9808,43 @@ export async function runResearchGroundingPipeline(
 
   const normalizedSearchTopic =
     seedQueryPlan.normalizedResearchTopic ??
-    normalizeResearchTopic(activeResearchTopic, topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW");
-  const queryRoutingTopicText = compactWhitespace([
-    topicAnalysis.normalizedTopic,
-    normalizedSearchTopic.displayTitle,
-    queryPlan.domain,
-    queryPlan.intent,
-    ...(queryPlan.conceptGroups ?? []).flatMap((group) => [group.name, ...group.zhTerms, ...group.enTerms]),
-  ].join(" "));
-  const initialQuerySeedZh = providerSafeDomainAnchoredQueries([
-    ...finalQueryBundle.querySeedZh,
-    ...normalizedSearchTopic.zhAcademicQuery,
-    ...queryPlan.bilingualQueries.zh,
-  ], queryRoutingTopicText);
+    normalizeResearchTopic(
+      activeResearchTopic,
+      topicAnalysis.detectedLanguage === "en" ? "en" : "zh-TW",
+    );
+  const queryRoutingTopicText = compactWhitespace(
+    [
+      topicAnalysis.normalizedTopic,
+      normalizedSearchTopic.displayTitle,
+      queryPlan.domain,
+      queryPlan.intent,
+      ...(queryPlan.conceptGroups ?? []).flatMap((group) => [
+        group.name,
+        ...group.zhTerms,
+        ...group.enTerms,
+      ]),
+    ].join(" "),
+  );
+  const initialQuerySeedZh = providerSafeDomainAnchoredQueries(
+    [
+      ...finalQueryBundle.querySeedZh,
+      ...normalizedSearchTopic.zhAcademicQuery,
+      ...queryPlan.bilingualQueries.zh,
+    ],
+    queryRoutingTopicText,
+  );
   const initialAnchorProfile = topicQueryAnchorProfile(queryRoutingTopicText);
   const initialQuerySeedEn = sanitizeEnglishProviderQueries(
-    providerSafeDomainAnchoredQueries([
-    ...finalQueryBundle.querySeedEn,
-    ...normalizedSearchTopic.enAcademicQuery,
-    ...(initialAnchorProfile?.fallbackQueries ?? []),
-    ...normalizedSearchTopic.broaderAcademicQueries,
-    ...queryPlan.bilingualQueries.en,
-  ], queryRoutingTopicText),
+    providerSafeDomainAnchoredQueries(
+      [
+        ...finalQueryBundle.querySeedEn,
+        ...normalizedSearchTopic.enAcademicQuery,
+        ...(initialAnchorProfile?.fallbackQueries ?? []),
+        ...normalizedSearchTopic.broaderAcademicQueries,
+        ...queryPlan.bilingualQueries.en,
+      ],
+      queryRoutingTopicText,
+    ),
   );
   await progress(dependencies, {
     status: "searching_initial",
@@ -8028,7 +9878,10 @@ export async function runResearchGroundingPipeline(
       ...finalQueryBundle.subjectAnchorTerms,
       ...normalizedSearchTopic.keywordSet,
     ]),
-    excludeTerms: uniqueStrings([...normalizedSearchTopic.negativeKeywords, ...requestExcludeTerms]),
+    excludeTerms: uniqueStrings([
+      ...normalizedSearchTopic.negativeKeywords,
+      ...requestExcludeTerms,
+    ]),
     domainHints: uniqueStrings([
       input.selectedDomain ?? "",
       ...finalQueryBundle.domains,
@@ -8051,16 +9904,25 @@ export async function runResearchGroundingPipeline(
       queryPlan,
       searchResult: searchResults[0]!,
       parsedInput,
+      enforceTopicIntegrity: /formal|正式二手研究報告/iu.test(input.reportType ?? ""),
     }),
   ];
   let searchResult = mergeSearchResults(searchResults);
   let sourceCandidates = mergeSourceCandidates(sourceCandidateResults);
-  let highConfidenceCandidateSources = highConfidenceSourceCandidates(sourceCandidates, queryPlan);
+  let highConfidenceCandidateSources = highConfidenceSourceCandidates(
+    sourceCandidates,
+    queryPlan,
+  );
   let candidateSources = highConfidenceCandidateSources;
   let fallbackReviewSources = fallbackReviewSourceCandidates(sourceCandidates);
-  let officialBackgroundSources = officialBackgroundSourceCandidates(sourceCandidates);
-  let rejectedSources = sourceCandidates.filter((source) => source.reviewStatus === "rejected");
-  let acceptedSources = sourceCandidates.filter((source) => source.reviewStatus === "accepted");
+  let officialBackgroundSources =
+    officialBackgroundSourceCandidates(sourceCandidates);
+  let rejectedSources = sourceCandidates.filter(
+    (source) => source.reviewStatus === "rejected",
+  );
+  let acceptedSources = sourceCandidates.filter(
+    (source) => source.reviewStatus === "accepted",
+  );
   const fallbackAttempts: GroundingFallbackAttempt[] = [];
   let sourceQualitySummary = buildSourceQualitySummary(sourceCandidates);
   let academicRetry: AcademicRetry = {
@@ -8080,7 +9942,11 @@ export async function runResearchGroundingPipeline(
     queryPlan,
   });
 
-  for (let round = 1; round <= MAX_FALLBACK_ROUNDS && fallbackReason; round += 1) {
+  for (
+    let round = 1;
+    round <= MAX_FALLBACK_ROUNDS && fallbackReason;
+    round += 1
+  ) {
     const fallbackPlan = fallbackSearchInput({
       base: input,
       topicAnalysis,
@@ -8115,12 +9981,15 @@ export async function runResearchGroundingPipeline(
           academicRetry,
           sourceQualitySummary,
           foregroundLatencyMs:
-            searchResult.diagnostics?.foreground_latency_ms ?? Date.now() - pipelineStartedAt,
+            searchResult.diagnostics?.foreground_latency_ms ??
+            Date.now() - pipelineStartedAt,
         }),
       },
     });
 
-    const nextSearchResult = await dependencies.searchHandler(fallbackPlan.searchInput);
+    const nextSearchResult = await dependencies.searchHandler(
+      fallbackPlan.searchInput,
+    );
     fallbackRoundsExecuted = round;
     const nextSourceCandidateResult = buildSourceCandidates({
       workflowId: input.workflowId,
@@ -8128,6 +9997,7 @@ export async function runResearchGroundingPipeline(
       queryPlan,
       searchResult: nextSearchResult,
       parsedInput,
+      enforceTopicIntegrity: /formal|正式二手研究報告/iu.test(input.reportType ?? ""),
     });
     searchResults.push(nextSearchResult);
     sourceCandidateResults.push(nextSourceCandidateResult);
@@ -8143,12 +10013,20 @@ export async function runResearchGroundingPipeline(
 
     searchResult = mergeSearchResults(searchResults);
     sourceCandidates = mergeSourceCandidates(sourceCandidateResults);
-    highConfidenceCandidateSources = highConfidenceSourceCandidates(sourceCandidates, queryPlan);
+    highConfidenceCandidateSources = highConfidenceSourceCandidates(
+      sourceCandidates,
+      queryPlan,
+    );
     candidateSources = highConfidenceCandidateSources;
     fallbackReviewSources = fallbackReviewSourceCandidates(sourceCandidates);
-    officialBackgroundSources = officialBackgroundSourceCandidates(sourceCandidates);
-    rejectedSources = sourceCandidates.filter((source) => source.reviewStatus === "rejected");
-    acceptedSources = sourceCandidates.filter((source) => source.reviewStatus === "accepted");
+    officialBackgroundSources =
+      officialBackgroundSourceCandidates(sourceCandidates);
+    rejectedSources = sourceCandidates.filter(
+      (source) => source.reviewStatus === "rejected",
+    );
+    acceptedSources = sourceCandidates.filter(
+      (source) => source.reviewStatus === "accepted",
+    );
     sourceQualitySummary = buildSourceQualitySummary(sourceCandidates);
     fallbackReason = fallbackTriggerReason({
       searchResult,
@@ -8168,7 +10046,8 @@ export async function runResearchGroundingPipeline(
   });
   for (
     let retryRound = 1;
-    retryRound <= ACADEMIC_RETRY_POLICY.maxAutoAcademicRetries && academicRetryReason;
+    retryRound <= ACADEMIC_RETRY_POLICY.maxAutoAcademicRetries &&
+    academicRetryReason;
     retryRound += 1
   ) {
     const retryPlan = academicRetrySearchInput({
@@ -8186,9 +10065,14 @@ export async function runResearchGroundingPipeline(
       active: true,
       exhausted: false,
       reason: academicRetryReason,
-      retryQueries: uniqueStrings([...(academicRetry.retryQueries ?? []), ...retryPlan.retryQueries]),
+      retryQueries: uniqueStrings([
+        ...(academicRetry.retryQueries ?? []),
+        ...retryPlan.retryQueries,
+      ]),
       lastStartedAt: retryStartedAt,
-      ...(academicRetry.lastCompletedAt ? { lastCompletedAt: academicRetry.lastCompletedAt } : {}),
+      ...(academicRetry.lastCompletedAt
+        ? { lastCompletedAt: academicRetry.lastCompletedAt }
+        : {}),
     };
     await progress(dependencies, {
       status: "academic_retrying",
@@ -8219,12 +10103,15 @@ export async function runResearchGroundingPipeline(
           academicRetry,
           sourceQualitySummary,
           foregroundLatencyMs:
-            searchResult.diagnostics?.foreground_latency_ms ?? Date.now() - pipelineStartedAt,
+            searchResult.diagnostics?.foreground_latency_ms ??
+            Date.now() - pipelineStartedAt,
         }),
       },
     });
 
-    const nextSearchResult = await dependencies.searchHandler(retryPlan.searchInput);
+    const nextSearchResult = await dependencies.searchHandler(
+      retryPlan.searchInput,
+    );
     const nextSourceCandidateResult = buildSourceCandidates({
       workflowId: input.workflowId,
       topicHash: topicAnalysis.topicHash,
@@ -8232,6 +10119,7 @@ export async function runResearchGroundingPipeline(
       searchResult: nextSearchResult,
       parsedInput,
       retryRound,
+      enforceTopicIntegrity: /formal|正式二手研究報告/iu.test(input.reportType ?? ""),
     });
     searchResults.push(nextSearchResult);
     sourceCandidateResults.push(nextSourceCandidateResult);
@@ -8247,12 +10135,20 @@ export async function runResearchGroundingPipeline(
 
     searchResult = mergeSearchResults(searchResults);
     sourceCandidates = mergeSourceCandidates(sourceCandidateResults);
-    highConfidenceCandidateSources = highConfidenceSourceCandidates(sourceCandidates, queryPlan);
+    highConfidenceCandidateSources = highConfidenceSourceCandidates(
+      sourceCandidates,
+      queryPlan,
+    );
     candidateSources = highConfidenceCandidateSources;
     fallbackReviewSources = fallbackReviewSourceCandidates(sourceCandidates);
-    officialBackgroundSources = officialBackgroundSourceCandidates(sourceCandidates);
-    rejectedSources = sourceCandidates.filter((source) => source.reviewStatus === "rejected");
-    acceptedSources = sourceCandidates.filter((source) => source.reviewStatus === "accepted");
+    officialBackgroundSources =
+      officialBackgroundSourceCandidates(sourceCandidates);
+    rejectedSources = sourceCandidates.filter(
+      (source) => source.reviewStatus === "rejected",
+    );
+    acceptedSources = sourceCandidates.filter(
+      (source) => source.reviewStatus === "accepted",
+    );
     sourceQualitySummary = buildSourceQualitySummary(sourceCandidates);
     academicRetryReason = academicRetryTriggerReason({
       sourceQualitySummary,
@@ -8274,14 +10170,97 @@ export async function runResearchGroundingPipeline(
     };
   }
 
+  const provisionalDirectStudyCount = canonicalDirectStudyCount(sourceCandidates);
+  if (provisionalDirectStudyCount === 0 && /formal|正式二手研究報告/iu.test(input.reportType ?? "")) {
+    const cascade = zeroDirectStudyQueryCascade({
+      activeResearchTopic,
+      canonicalEnglishTopic: finalQueryBundle.canonicalEnglishTopic,
+      englishSeeds: initialQuerySeedEn,
+    });
+    for (const [index, step] of cascade.entries()) {
+      const zeroDirectSearchInput: SearchIntentPlannerInput = {
+        ...initialSearchInput,
+        topic: step.query,
+        refinedTopic: activeResearchTopic,
+        querySeedEn: [step.query],
+        querySeedZh: [],
+        domainHints: uniqueStrings([
+          ...(initialSearchInput.domainHints ?? []),
+          "zero_direct_study_query_cascade",
+          `zero_direct_study_q${index + 1}`,
+        ]),
+        executionBudgetContext: {
+          expandedQuery: true,
+          fallbackLayer:
+            MAX_FALLBACK_ROUNDS + ACADEMIC_RETRY_POLICY.maxAutoAcademicRetries + index + 1,
+        },
+      };
+      const zeroDirectResult = await dependencies.searchHandler(zeroDirectSearchInput);
+      const zeroDirectCandidates = buildSourceCandidates({
+        workflowId: input.workflowId,
+        topicHash: topicAnalysis.topicHash,
+        queryPlan,
+        searchResult: zeroDirectResult,
+        parsedInput,
+        retryRound: academicRetry.count + index + 1,
+        enforceTopicIntegrity: /formal|正式二手研究報告/iu.test(input.reportType ?? ""),
+      });
+      searchResults.push(zeroDirectResult);
+      sourceCandidateResults.push(zeroDirectCandidates);
+      searchResult = mergeSearchResults(searchResults);
+      sourceCandidates = mergeSourceCandidates(sourceCandidateResults);
+      const directStudyCandidateCount = canonicalDirectStudyCount(sourceCandidates);
+      fallbackAttempts.push(...fallbackAttemptsFromSearchRun({
+        round: fallbackRoundsExecuted + academicRetry.count + index + 1,
+        fallbackReason: `ZERO_DIRECT_STUDY_QUERY_Q${index + 1}`,
+        queryUsed: step.query,
+        searchResult: zeroDirectResult,
+        sourceCandidateResult: zeroDirectCandidates,
+      }).map((attempt) => ({
+        ...attempt,
+        directStudyCandidateCount,
+        admissionResult: directStudyCandidateCount > 0 ? "FOUND_DIRECT_STUDY" as const : "ZERO_DIRECT_STUDY" as const,
+        queryReason: step.reason,
+        queryPurpose: step.purpose,
+        targetGap: step.targetGap,
+        expectedEvidenceType: step.expectedEvidenceType,
+        queryLanguage: step.language,
+        plannedProvider: step.provider,
+        queryBudget: 3,
+        providerBudget: 3,
+        citationHopBudget: 1,
+        budgetSemantics:
+          "CASCADE_PLAN_3_QUERIES_X_3_PROVIDER_CHOICES_NOT_NETWORK_ATTEMPTS; authoritative execution is the shared job ledger",
+        structuredDimensions: step.dimensions,
+      })));
+      if (directStudyCandidateCount > 0) break;
+    }
+    highConfidenceCandidateSources = highConfidenceSourceCandidates(sourceCandidates, queryPlan);
+    candidateSources = highConfidenceCandidateSources;
+    fallbackReviewSources = fallbackReviewSourceCandidates(sourceCandidates);
+    officialBackgroundSources = officialBackgroundSourceCandidates(sourceCandidates);
+    rejectedSources = sourceCandidates.filter((source) => source.reviewStatus === "rejected");
+    acceptedSources = sourceCandidates.filter((source) => source.reviewStatus === "accepted");
+    sourceQualitySummary = buildSourceQualitySummary(sourceCandidates);
+  }
+
+  const terminalDirectStudyCount = canonicalDirectStudyCount(sourceCandidates);
   const sourceCandidateResult: SourceCandidateBuildResult = {
     sourceCandidates,
-    warnings: uniqueStrings(sourceCandidateResults.flatMap((result) => result.warnings)),
+    warnings: uniqueStrings(
+      [
+        ...sourceCandidateResults.flatMap((result) => result.warnings),
+        ...(terminalDirectStudyCount === 0
+          ? ["BLOCKED_NO_DIRECT_STUDY"]
+          : []),
+      ],
+    ),
   };
   await progress(dependencies, {
     status: "scoring_sources",
     progress: 86,
     patch: {
+      searchCheckpoint: searchResult,
       sourceCandidates,
       highConfidenceCandidateSources,
       candidateSources,
@@ -8302,39 +10281,51 @@ export async function runResearchGroundingPipeline(
         researchQuestion: requestResearchQuestion || activeResearchTopic,
         currentPhase: "scoring_sources",
         fallbackAttempts,
-        fallbackCompleted: fallbackRoundsExecuted > 0 || academicRetry.count > 0,
+        fallbackCompleted:
+          fallbackRoundsExecuted > 0 || academicRetry.count > 0,
         maxFallbackRounds: MAX_FALLBACK_ROUNDS,
         academicRetry,
         sourceQualitySummary,
         foregroundLatencyMs:
-          searchResult.diagnostics?.foreground_latency_ms ?? Date.now() - pipelineStartedAt,
+          searchResult.diagnostics?.foreground_latency_ms ??
+          Date.now() - pipelineStartedAt,
       }),
     },
   });
 
   sourceCandidateResult.sourceCandidates = sourceCandidates;
-  highConfidenceCandidateSources = highConfidenceSourceCandidates(sourceCandidates, queryPlan);
+  highConfidenceCandidateSources = highConfidenceSourceCandidates(
+    sourceCandidates,
+    queryPlan,
+  );
   // Deprecated alias: candidateSources intentionally contains high-confidence sources only.
   candidateSources = highConfidenceCandidateSources;
   fallbackReviewSources = fallbackReviewSourceCandidates(sourceCandidates);
-  officialBackgroundSources = officialBackgroundSourceCandidates(sourceCandidates);
-  rejectedSources = sourceCandidates.filter((source) => source.reviewStatus === "rejected");
-  acceptedSources = sourceCandidates.filter((source) => source.reviewStatus === "accepted");
+  officialBackgroundSources =
+    officialBackgroundSourceCandidates(sourceCandidates);
+  rejectedSources = sourceCandidates.filter(
+    (source) => source.reviewStatus === "rejected",
+  );
+  acceptedSources = sourceCandidates.filter(
+    (source) => source.reviewStatus === "accepted",
+  );
   sourceQualitySummary = buildSourceQualitySummary(sourceCandidates);
   const providerErrors = providerErrorsFromSearchResult(searchResult);
   const reviewableCount = reviewableSourceCandidateCount(sourceCandidates);
-  const fallbackCompleted = fallbackRoundsExecuted > 0 || academicRetry.count > 0;
+  const fallbackCompleted =
+    fallbackRoundsExecuted > 0 || academicRetry.count > 0;
   const finalGroundingPhase =
     reviewableCount === 0 && fallbackCompleted
       ? "no_sources_after_fallback"
       : reviewableCount > 0 && reviewableCount < MIN_REVIEWABLE_SOURCE_COUNT
         ? "waiting_for_review"
-      : reviewableCount >= READY_REVIEWABLE_SOURCE_COUNT &&
-          (sourceQualitySummary.academicEnough || sourceQualitySummary.evidenceUsableEnough)
-        ? "source_review_ready"
-        : reviewableCount >= MIN_REVIEWABLE_SOURCE_COUNT
-          ? "source_review_needs_manual"
-          : "no_sources_after_fallback";
+        : reviewableCount >= READY_REVIEWABLE_SOURCE_COUNT &&
+            (sourceQualitySummary.academicEnough ||
+              sourceQualitySummary.evidenceUsableEnough)
+          ? "source_review_ready"
+          : reviewableCount >= MIN_REVIEWABLE_SOURCE_COUNT
+            ? "source_review_needs_manual"
+            : "no_sources_after_fallback";
   const groundingDiagnostics = buildGroundingDiagnostics({
     rawTopic: originalTopic,
     parsedInput,
@@ -8351,10 +10342,11 @@ export async function runResearchGroundingPipeline(
     academicRetry,
     sourceQualitySummary,
     foregroundLatencyMs:
-      searchResult.diagnostics?.foreground_latency_ms ?? Date.now() - pipelineStartedAt,
+      searchResult.diagnostics?.foreground_latency_ms ??
+      Date.now() - pipelineStartedAt,
   });
   await progress(dependencies, {
-    status: finalGroundingPhase as GroundingJob["status"],
+    status: "classifying_direct_studies",
     progress: 88,
     patch: {
       sourceCandidates,
@@ -8371,33 +10363,49 @@ export async function runResearchGroundingPipeline(
     },
   });
 
-  const reviewSources = sourceCandidates.filter((source) => source.reviewStatus === "review");
+  const reviewSources = sourceCandidates.filter(
+    (source) => source.reviewStatus === "review",
+  );
+  let acquisitionSources = mergeSourceCandidateRecords([
+    ...acceptedSources,
+    ...reviewSources.filter(isScholarlyAcquisitionCandidate),
+  ]).slice(0, 14);
   await progress(dependencies, {
     status: "enriching_sources_background",
     progress: 90,
     patch: { groundingDiagnostics },
   });
-  if (dependencies.acceptedSourceEnricher && acceptedSources.length > 0) {
+  if (dependencies.acceptedSourceEnricher && acquisitionSources.length > 0) {
     try {
       const enrichedAccepted = await dependencies.acceptedSourceEnricher(
-        mergeSourceCandidateRecords(acceptedSources),
+        acquisitionSources,
       );
       const enrichedBySourceId = new Map(
         enrichedAccepted.map((source) => [source.sourceId, source]),
       );
-      const applyAcceptedEnrichment = (items: SourceCandidate[]): SourceCandidate[] =>
-        items.map((source) => enrichedBySourceId.get(source.sourceId) ?? source);
+      const applyAcceptedEnrichment = (
+        items: SourceCandidate[],
+      ): SourceCandidate[] =>
+        items.map(
+          (source) => enrichedBySourceId.get(source.sourceId) ?? source,
+        );
       sourceCandidates = applyAcceptedEnrichment(sourceCandidates);
-      highConfidenceCandidateSources = applyAcceptedEnrichment(highConfidenceCandidateSources);
+      highConfidenceCandidateSources = applyAcceptedEnrichment(
+        highConfidenceCandidateSources,
+      );
       candidateSources = applyAcceptedEnrichment(candidateSources);
       fallbackReviewSources = applyAcceptedEnrichment(fallbackReviewSources);
-      officialBackgroundSources = applyAcceptedEnrichment(officialBackgroundSources);
+      officialBackgroundSources = applyAcceptedEnrichment(
+        officialBackgroundSources,
+      );
       rejectedSources = applyAcceptedEnrichment(rejectedSources);
       acceptedSources = applyAcceptedEnrichment(acceptedSources);
+      acquisitionSources = applyAcceptedEnrichment(acquisitionSources);
     } catch (error) {
-      const failureReason = error instanceof Error
-        ? compactWhitespace(error.message).slice(0, 180)
-        : "accepted_source_enrichment_failed";
+      const failureReason =
+        error instanceof Error
+          ? compactWhitespace(error.message).slice(0, 180)
+          : "accepted_source_enrichment_failed";
       acceptedSources = acceptedSources.map((source) => ({
         ...source,
         canonicalSourceIdentity:
@@ -8405,7 +10413,9 @@ export async function runResearchGroundingPipeline(
         contentLevel:
           source.accessLevel === "full_text"
             ? "fulltext"
-            : source.abstractOriginal || source.abstract || source.extractedAbstract
+            : source.abstractOriginal ||
+                source.abstract ||
+                source.extractedAbstract
               ? "abstract"
               : "metadata",
         enrichmentAttempted: true,
@@ -8417,34 +10427,71 @@ export async function runResearchGroundingPipeline(
       const failedBySourceId = new Map(
         acceptedSources.map((source) => [source.sourceId, source]),
       );
-      const applyFailedEnrichment = (items: SourceCandidate[]): SourceCandidate[] =>
+      const applyFailedEnrichment = (
+        items: SourceCandidate[],
+      ): SourceCandidate[] =>
         items.map((source) => failedBySourceId.get(source.sourceId) ?? source);
       sourceCandidates = applyFailedEnrichment(sourceCandidates);
-      highConfidenceCandidateSources = applyFailedEnrichment(highConfidenceCandidateSources);
+      highConfidenceCandidateSources = applyFailedEnrichment(
+        highConfidenceCandidateSources,
+      );
       candidateSources = applyFailedEnrichment(candidateSources);
       fallbackReviewSources = applyFailedEnrichment(fallbackReviewSources);
-      officialBackgroundSources = applyFailedEnrichment(officialBackgroundSources);
+      officialBackgroundSources = applyFailedEnrichment(
+        officialBackgroundSources,
+      );
       rejectedSources = applyFailedEnrichment(rejectedSources);
     }
   }
-  const extractionResults = await extractContentForSources(acceptedSources);
+  const extractionResults = await extractContentForSources(acquisitionSources, {
+    fetchImpl: dependencies.contentFetchImpl,
+    resolveFullTextLocations: true,
+    maxResolverRequests: 7,
+    maxResolvedLocations: 6,
+    retryCount: 1,
+    backoffMs: 200,
+  });
   const extractionBySourceId = new Map(
     extractionResults.map((result) => [result.source_id, result]),
   );
   const enrichCandidateList = (items: SourceCandidate[]): SourceCandidate[] =>
     items.map((source) => {
       const extraction = extractionBySourceId.get(source.sourceId);
-      return extraction ? enrichSourceCandidateWithExtraction(source, extraction) : source;
+      return extraction
+        ? enrichSourceCandidateWithExtraction(source, extraction)
+        : source;
     });
   sourceCandidates = enrichCandidateList(sourceCandidates);
-  highConfidenceCandidateSources = enrichCandidateList(highConfidenceCandidateSources);
+  highConfidenceCandidateSources = enrichCandidateList(
+    highConfidenceCandidateSources,
+  );
   candidateSources = enrichCandidateList(candidateSources);
   fallbackReviewSources = enrichCandidateList(fallbackReviewSources);
   officialBackgroundSources = enrichCandidateList(officialBackgroundSources);
   rejectedSources = enrichCandidateList(rejectedSources);
   acceptedSources = enrichCandidateList(acceptedSources);
+  acquisitionSources = enrichCandidateList(acquisitionSources);
   await progress(dependencies, {
-    status: "llm_enhancing",
+    status: "parsing_full_text",
+    progress: 92,
+    patch: {
+      sourceCandidates,
+      acceptedSources,
+      groundingDiagnostics,
+    },
+  });
+  const retrievedEvidence = await retrieveEvidenceChunks(
+    {
+      query: activeResearchTopic,
+      workflowId: input.workflowId,
+      topicHash: topicAnalysis.topicHash,
+      sources: acquisitionSources,
+    },
+    dependencies.evidenceChunkRetrieval,
+  );
+  let retrievalSources = retrievedEvidence.sources;
+  await progress(dependencies, {
+    status: "extracting_study_facts",
     progress: 94,
     patch: {
       sourceCandidates,
@@ -8452,17 +10499,59 @@ export async function runResearchGroundingPipeline(
       groundingDiagnostics,
     },
   });
-  const claimCandidates = await extractClaimsForSources({
-    topic: activeResearchTopic,
-    workflowId: input.workflowId,
-    topicHash: topicAnalysis.topicHash,
-    sources: acceptedSources,
-  }, {
-    enableLlm: process.env.ENABLE_CLAIM_EXTRACTION_LLM === "true",
-    maxChunksPerSource: 3,
-    maxTotalClaims: 48,
-    concurrency: 2,
-  });
+  const claimCandidates = await extractClaimsForSources(
+    {
+      topic: activeResearchTopic,
+      workflowId: input.workflowId,
+      topicHash: topicAnalysis.topicHash,
+      sources: retrievalSources,
+    },
+    {
+      enableLlm: process.env.ENABLE_CLAIM_EXTRACTION_LLM === "true",
+      maxChunksPerSource: 3,
+      maxTotalClaims: 48,
+      concurrency: 2,
+    },
+  );
+  const acceptedClaimSourceIds = new Set(
+    claimCandidates.filter((claim) => claim.status === "accepted").map((claim) => claim.sourceId),
+  );
+  for (const claim of claimCandidates) {
+    if (claim.status === "accepted" && claim.structuredStudyFact) {
+      claim.structuredStudyFact = {
+        ...claim.structuredStudyFact,
+        evidenceLevel: "DIRECT_FINDING",
+      };
+    }
+  }
+  const promoteExtractedEvidence = (source: SourceCandidate): SourceCandidate =>
+    acceptedClaimSourceIds.has(source.sourceId)
+      ? {
+          ...source,
+          reviewStatus: "accepted",
+          recommendationBucket: "scholarly_recommended",
+          sourceRole: "core_scholarly_evidence",
+          formalEvidenceRole: "DIRECT_FINDING",
+          usableAsEvidence: true,
+          usableAsBackground: true,
+          governanceReason: "promoted_after_exact_span_claim_extraction",
+          topicIntegrityAssessment: source.topicIntegrityAssessment
+            ? {
+                ...source.topicIntegrityAssessment,
+                sourceRole: "DIRECT_FINDING",
+                acceptedForCanonicalEvidence: true,
+                allowedSections: ["findings", "cross_study_synthesis", "discussion", "limitations"],
+                topicIntegrityReason: "exact-span claim passed topic relevance and provenance gates",
+              }
+            : source.topicIntegrityAssessment,
+        }
+      : source;
+  retrievalSources = retrievalSources.map(promoteExtractedEvidence);
+  sourceCandidates = sourceCandidates.map(promoteExtractedEvidence);
+  acceptedSources = mergeSourceCandidateRecords([
+    ...acceptedSources,
+    ...retrievalSources.filter((source) => source.reviewStatus === "accepted"),
+  ]);
   const claimsBySourceId = new Map<string, ClaimCandidate[]>();
   for (const claim of claimCandidates) {
     const existing = claimsBySourceId.get(claim.sourceId) ?? [];
@@ -8471,8 +10560,12 @@ export async function runResearchGroundingPipeline(
   }
   const annotateClaimStats = (source: SourceCandidate): SourceCandidate => {
     const claims = claimsBySourceId.get(source.sourceId) ?? [];
-    const acceptedClaimCount = claims.filter((claim) => claim.status === "accepted").length;
-    const claimExtractionMode = claims.some((claim) => claim.extractionMode === "llm")
+    const acceptedClaimCount = claims.filter(
+      (claim) => claim.status === "accepted",
+    ).length;
+    const claimExtractionMode = claims.some(
+      (claim) => claim.extractionMode === "llm",
+    )
       ? "llm"
       : claims.some((claim) => claim.extractionMode === "rule_fallback")
         ? "rule_fallback"
@@ -8486,7 +10579,8 @@ export async function runResearchGroundingPipeline(
           ? "enabled"
           : claims.some((claim) => claim.extractionMode === "rule_fallback")
             ? "fallback"
-            : source.accessLevel === "metadata_only" || source.accessLevel === "failed_extraction"
+            : source.accessLevel === "metadata_only" ||
+                source.accessLevel === "failed_extraction"
               ? "skipped"
               : "unavailable";
     return {
@@ -8507,7 +10601,8 @@ export async function runResearchGroundingPipeline(
     };
   };
   sourceCandidates = sourceCandidates.map(annotateClaimStats);
-  highConfidenceCandidateSources = highConfidenceCandidateSources.map(annotateClaimStats);
+  highConfidenceCandidateSources =
+    highConfidenceCandidateSources.map(annotateClaimStats);
   candidateSources = candidateSources.map(annotateClaimStats);
   fallbackReviewSources = fallbackReviewSources.map(annotateClaimStats);
   officialBackgroundSources = officialBackgroundSources.map(annotateClaimStats);
@@ -8517,7 +10612,7 @@ export async function runResearchGroundingPipeline(
     workflowId: input.workflowId,
     topicHash: topicAnalysis.topicHash,
     topic: activeResearchTopic,
-    acceptedSources,
+    acceptedSources: retrievalSources,
     claimCandidates,
     reviewSources,
     safetyReview: academicSafetyReview,
@@ -8531,37 +10626,71 @@ export async function runResearchGroundingPipeline(
   }
   const annotateEvidenceStats = (source: SourceCandidate): SourceCandidate => ({
     ...source,
-    acceptedEvidenceCardCount: evidenceCountBySourceId.get(source.sourceId) ?? 0,
+    acceptedEvidenceCardCount:
+      evidenceCountBySourceId.get(source.sourceId) ?? 0,
   });
   sourceCandidates = sourceCandidates.map(annotateEvidenceStats);
-  highConfidenceCandidateSources = highConfidenceCandidateSources.map(annotateEvidenceStats);
+  highConfidenceCandidateSources = highConfidenceCandidateSources.map(
+    annotateEvidenceStats,
+  );
   candidateSources = candidateSources.map(annotateEvidenceStats);
   fallbackReviewSources = fallbackReviewSources.map(annotateEvidenceStats);
-  officialBackgroundSources = officialBackgroundSources.map(annotateEvidenceStats);
+  officialBackgroundSources = officialBackgroundSources.map(
+    annotateEvidenceStats,
+  );
   rejectedSources = rejectedSources.map(annotateEvidenceStats);
   acceptedSources = acceptedSources.map(annotateEvidenceStats);
 
-  const claimRejectedReasonCounts = claimCandidates.reduce<Record<string, number>>((counts, claim) => {
+  await progress(dependencies, {
+    status: "building_evidence",
+    progress: 98,
+    patch: {
+      sourceCandidates,
+      acceptedSources,
+      claimCandidates,
+      evidenceCards,
+      groundingDiagnostics,
+    },
+  });
+
+  const claimRejectedReasonCounts = claimCandidates.reduce<
+    Record<string, number>
+  >((counts, claim) => {
     if (claim.status === "accepted") return counts;
     const reason = claim.rejectionReason ?? claim.status;
     counts[reason] = (counts[reason] ?? 0) + 1;
     return counts;
   }, {});
-  const claimExtractionDiagnostics: NonNullable<GroundingPipelineDiagnostics["claimExtraction"]> = {
+  const claimExtractionDiagnostics: NonNullable<
+    GroundingPipelineDiagnostics["claimExtraction"]
+  > = {
     totalClaims: claimCandidates.length,
-    acceptedClaims: claimCandidates.filter((claim) => claim.status === "accepted").length,
-    needsReviewClaims: claimCandidates.filter((claim) => claim.status === "needs_review").length,
-    rejectedClaims: claimCandidates.filter((claim) => claim.status === "rejected").length,
+    acceptedClaims: claimCandidates.filter(
+      (claim) => claim.status === "accepted",
+    ).length,
+    needsReviewClaims: claimCandidates.filter(
+      (claim) => claim.status === "needs_review",
+    ).length,
+    rejectedClaims: claimCandidates.filter(
+      (claim) => claim.status === "rejected",
+    ).length,
     evidenceCardCount: evidenceCards.length,
     evidenceCardsWithSupportSpan: evidenceCards.filter((card) =>
-      Boolean(compactWhitespace(card.supportSpan ?? card.supportedByText ?? card.quoted_text ?? "")),
+      Boolean(
+        compactWhitespace(
+          card.supportSpan ?? card.supportedByText ?? card.quoted_text ?? "",
+        ),
+      ),
     ).length,
-    llmEvidenceCardCount: evidenceCards.filter((card) =>
-      card.extractionMethod === "llm_structured_extract" || card.extractedBy === "llm",
+    llmEvidenceCardCount: evidenceCards.filter(
+      (card) =>
+        card.extractionMethod === "llm_structured_extract" ||
+        card.extractedBy === "llm",
     ).length,
-    ruleFallbackEvidenceCardCount: evidenceCards.filter((card) =>
-      card.extractionMethod === "rule_fallback_claim_extraction" ||
-      card.extractedBy === "rule_fallback",
+    ruleFallbackEvidenceCardCount: evidenceCards.filter(
+      (card) =>
+        card.extractionMethod === "rule_fallback_claim_extraction" ||
+        card.extractedBy === "rule_fallback",
     ).length,
     rejectedReasonCounts: claimRejectedReasonCounts,
   };
@@ -8585,10 +10714,11 @@ export async function runResearchGroundingPipeline(
       ? "no_sources_after_fallback"
       : reviewableCount < MIN_REVIEWABLE_SOURCE_COUNT
         ? "waiting_for_review"
-      : reviewableCount >= READY_REVIEWABLE_SOURCE_COUNT &&
-          (sourceQualitySummary.academicEnough || sourceQualitySummary.evidenceUsableEnough)
-        ? "source_review_ready"
-        : "source_review_needs_manual";
+        : reviewableCount >= READY_REVIEWABLE_SOURCE_COUNT &&
+            (sourceQualitySummary.academicEnough ||
+              sourceQualitySummary.evidenceUsableEnough)
+          ? "source_review_ready"
+          : "source_review_needs_manual";
   const diagnosticTrace = shouldIncludeDiagnosticTrace(input)
     ? buildResearchGroundingDiagnosticTrace({
         workflowId: input.workflowId,
@@ -8606,9 +10736,19 @@ export async function runResearchGroundingPipeline(
         finalStatus,
       })
     : undefined;
-  const finalGroundingDiagnostics: GroundingPipelineDiagnostics = diagnosticTrace
-    ? { ...groundingDiagnostics, claimExtraction: claimExtractionDiagnostics, diagnosticTrace }
-    : { ...groundingDiagnostics, claimExtraction: claimExtractionDiagnostics };
+  const finalGroundingDiagnostics: GroundingPipelineDiagnostics =
+    diagnosticTrace
+      ? {
+          ...groundingDiagnostics,
+          chunkRetrieval: retrievedEvidence.diagnostics,
+          claimExtraction: claimExtractionDiagnostics,
+          diagnosticTrace,
+        }
+      : {
+          ...groundingDiagnostics,
+          chunkRetrieval: retrievedEvidence.diagnostics,
+          claimExtraction: claimExtractionDiagnostics,
+        };
 
   return {
     jobId: "pending-assignment",
@@ -8656,7 +10796,10 @@ export async function runResearchGroundingPipeline(
       ),
       ...claimCandidates
         .filter((claim) => claim.status !== "accepted")
-        .map((claim) => `${claim.sourceId}:${claim.rejectionReason ?? claim.status}`),
+        .map(
+          (claim) =>
+            `${claim.sourceId}:${claim.rejectionReason ?? claim.status}`,
+        ),
       ...sanitizedArtifacts.warnings,
       ...(groundingDiagnostics.finalUiState === "provider_failed"
         ? ["來源服務暫時無法取得資料，請稍後重試。已記錄 provider error。"]
@@ -8672,13 +10815,14 @@ export async function runResearchGroundingPipeline(
         : []),
       ...(acceptedSources.length === 0 && evidenceCards.length > 0
         ? [
-            officialBackgroundSources.length > 0 && highConfidenceCandidateSources.length === 0
+            officialBackgroundSources.length > 0 &&
+            highConfidenceCandidateSources.length === 0
               ? "目前來源主要為官方背景或科普說明，缺少同行評審學術論文。"
               : "未找到完全 accepted sources，已改用高相關待審來源產生 provisional 摘要，建議人工複核引用。",
           ]
         : acceptedSources.length === 0 && reviewableCount === 0
-        ? ["查無足夠 accepted sources，請改用更完整的主題或加入關鍵詞。"]
-        : []),
+          ? ["查無足夠 accepted sources，請改用更完整的主題或加入關鍵詞。"]
+          : []),
     ]),
     createdAt,
     updatedAt: nowIso(),

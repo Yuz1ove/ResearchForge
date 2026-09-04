@@ -1,0 +1,35 @@
+{
+  "method": "Browser DOM inspection and visual screenshot review; local MarkdownIt preview, not iThome Preview",
+  "desktop": {
+    "viewport": [
+      1000,
+      1400
+    ],
+    "svg_width": 680,
+    "text_out_of_bounds": []
+  },
+  "mobile": {
+    "viewport": [
+      360,
+      900
+    ],
+    "article_scroll_width": 360,
+    "image_loaded": true,
+    "image_width": 323.9921875,
+    "table_count": 1
+  },
+  "manual_review": {
+    "arrows": "PASS: yes flows downward, no/unknown to BLOCKED, dashed next stage is conditional",
+    "mobile_readability": "PASS: vertical layout; image labels remain readable at 360px",
+    "no_clipping": "PASS",
+    "no_external_fonts": "PASS: system fonts only",
+    "no_foreign_object": "PASS"
+  },
+  "platform_preview": "NOT_RUN",
+  "screenshots": [
+    "diagram-desktop.png",
+    "diagram-mobile.png",
+    "article-desktop.png",
+    "article-mobile.png"
+  ]
+}

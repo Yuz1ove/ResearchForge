@@ -1,5 +1,12 @@
 import type { SourceCandidate } from "@workspace/api-zod/research-grounding";
 import { restoreAbstractFromInvertedIndex } from "@workspace/api-zod/source-record";
+import type { AuthoritativeExecutionBudgetLedger } from "../authoritative-execution-budget";
+import {
+  canonicalMetadataRequest, deriveCanonicalIdentitySeed, identityHash,
+  validateCanonicalIdentitySeed, verifyIndependentCanonicalResponse,
+  type CanonicalIdentitySnapshot, type CanonicalIdentitySeed, type CanonicalIdentityResult,
+  type CanonicalMetadataResponse, type IndependentCanonicalIdentity,
+} from "./canonicalIdentityRestoration";
 
 export type AcceptedSourceEnrichmentProvider =
   | "existing_payload"
@@ -14,7 +21,12 @@ export interface AcceptedSourceEnrichmentOptions {
   retryCount?: number;
   backoffMs?: number;
   now?: () => Date;
+  executionBudget?: AuthoritativeExecutionBudgetLedger;
 }
+
+type ResolvedAcceptedSourceEnrichmentOptions = Required<
+  Omit<AcceptedSourceEnrichmentOptions, "executionBudget">
+> & Pick<AcceptedSourceEnrichmentOptions, "executionBudget">;
 
 interface ProviderDetail {
   provider: Exclude<AcceptedSourceEnrichmentProvider, "existing_payload">;
@@ -313,6 +325,7 @@ async function requestProviderDetail(input: {
   timeoutMs: number;
   retryCount: number;
   backoffMs: number;
+  executionBudget?: AuthoritativeExecutionBudgetLedger;
 }): Promise<ProviderDetail> {
   const url = detailUrl(input.provider, input.source);
   if (!url) {
@@ -332,13 +345,35 @@ async function requestProviderDetail(input: {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
     try {
-      const response = await input.fetchImpl(url, {
-        signal: controller.signal,
-        headers: {
-          Accept: "application/json",
-          "User-Agent": USER_AGENT,
-        },
-      });
+      const fetchDetail = () => input.fetchImpl(url, {
+          signal: controller.signal,
+          headers: {
+            Accept: "application/json",
+            "User-Agent": USER_AGENT,
+          },
+        });
+      const budgeted = input.executionBudget
+        ? await input.executionBudget.execute(
+            {
+              operation: "materialization",
+              query: canonicalAcceptedSourceIdentity(input.source),
+              provider: input.provider,
+              requestIdentity: `accepted-source-detail:${input.provider}:${url}`,
+              attemptType: attempt === 0 ? "initial" : "retry",
+            },
+            fetchDetail,
+          )
+        : { status: "EXECUTED" as const, value: await fetchDetail() };
+      if (budgeted.status === "BLOCKED_BY_BUDGET") {
+        lastReason = `budget_exhausted:${budgeted.block.reasonCode}`;
+        break;
+      }
+      if (budgeted.status === "DEDUPLICATED") {
+        lastReason = "budget_deduplicated:REQUEST_DEDUPLICATED";
+        break;
+      }
+      if (budgeted.status === "FAILED") throw budgeted.error;
+      const response = budgeted.value;
       lastStatus = response.status;
       if (response.ok) {
         const payload = await response.json();
@@ -373,7 +408,16 @@ function cachedProviderDetail(input: Parameters<typeof requestProviderDetail>[0]
   const now = Date.now();
   const cached = detailCache.get(key);
   if (cached && cached.expiresAt > now) return cached.value;
-  const value = requestProviderDetail(input);
+  const value = requestProviderDetail(input).then(
+    (detail) => {
+      if (!detail.ok || detail.temporary) detailCache.delete(key);
+      return detail;
+    },
+    (error) => {
+      detailCache.delete(key);
+      throw error;
+    },
+  );
   detailCache.set(key, { expiresAt: now + DETAIL_CACHE_TTL_MS, value });
   if (detailCache.size > DETAIL_CACHE_MAX) {
     const firstKey = detailCache.keys().next().value;
@@ -395,7 +439,7 @@ function mergeProviderIds(
 
 async function enrichOne(
   source: SourceCandidate,
-  options: Required<AcceptedSourceEnrichmentOptions>,
+  options: ResolvedAcceptedSourceEnrichmentOptions,
 ): Promise<SourceCandidate> {
   const retrievedAt = options.now().toISOString();
   const existingAbstract = abstractFromAcceptedSourceAliases(source);
@@ -534,13 +578,14 @@ export async function enrichAcceptedSources(
   sources: SourceCandidate[],
   options: AcceptedSourceEnrichmentOptions = {},
 ): Promise<SourceCandidate[]> {
-  const resolved: Required<AcceptedSourceEnrichmentOptions> = {
+  const resolved: ResolvedAcceptedSourceEnrichmentOptions = {
     fetchImpl: options.fetchImpl ?? fetch,
     concurrency: Math.max(1, Math.min(6, options.concurrency ?? 3)),
     timeoutMs: Math.max(250, options.timeoutMs ?? 5_000),
     retryCount: Math.max(0, Math.min(2, options.retryCount ?? 1)),
     backoffMs: Math.max(0, options.backoffMs ?? 120),
     now: options.now ?? (() => new Date()),
+    executionBudget: options.executionBudget,
   };
   return mapWithConcurrency(sources, resolved.concurrency, async (source) => {
     try {
@@ -570,4 +615,97 @@ export async function enrichAcceptedSources(
       };
     }
   });
+}
+
+export interface CanonicalMetadataAttempt {
+  provider: string;
+  requestIdentity: string;
+  url: string;
+  attemptedAt: string;
+  status: number;
+  failure?: string;
+}
+
+// Same detail-owner cache TTL/capacity; transport-scoped to exclude controlled/live contamination.
+const identityDetailCaches = new WeakMap<typeof fetch, Map<string, {expiresAt: number; response: CanonicalMetadataResponse}>>();
+
+/** Explicit identity-only entry point. Never called implicitly by acquisition or Writer. */
+export async function resolveIndependentCanonicalIdentity(
+  snapshot: CanonicalIdentitySnapshot,
+  options: Pick<AcceptedSourceEnrichmentOptions, "fetchImpl" | "now" | "executionBudget"> & {seed?: CanonicalIdentitySeed} = {},
+): Promise<{resolution: CanonicalIdentityResult; attempts: CanonicalMetadataAttempt[]; cacheHit: boolean}> {
+  const seed = options.seed ?? deriveCanonicalIdentitySeed(snapshot);
+  const invalid = validateCanonicalIdentitySeed(snapshot, seed);
+  if (invalid) return {resolution:invalid,attempts:[],cacheHit:false};
+  const {provider,url,requestIdentity} = canonicalMetadataRequest(seed);
+  const fetchImpl = options.fetchImpl ?? fetch;
+  let cache = identityDetailCaches.get(fetchImpl);
+  if (!cache) { cache = new Map(); identityDetailCaches.set(fetchImpl, cache); }
+  const cached = cache.get(url);
+  if (cached && cached.expiresAt > Date.now()) {
+    return {resolution:verifyIndependentCanonicalResponse(snapshot,seed,structuredClone(cached.response)),attempts:[],cacheHit:true};
+  }
+  const now = options.now ?? (()=>new Date());
+  const attempt: CanonicalMetadataAttempt = {provider,requestIdentity,url,attemptedAt:now().toISOString(),status:0};
+  const controller = new AbortController();
+  const timeout = setTimeout(()=>controller.abort(), 5_000);
+  let executed = false;
+  try {
+    const run = () => {
+      executed = true;
+      return fetchImpl(url, {method:"GET",redirect:"error",signal:controller.signal,
+        headers:{Accept:"application/json","User-Agent":USER_AGENT}});
+    };
+    const budgeted = options.executionBudget
+      ? await options.executionBudget.execute({operation:"resolver_request",provider,requestIdentity,attemptType:"initial"},run)
+      : {status:"EXECUTED" as const,value:await run()};
+    if (budgeted.status !== "EXECUTED") throw new Error("canonical_metadata_budget_unavailable");
+    const response = budgeted.value;
+    attempt.status = response.status;
+    if (!response.ok) throw new Error("canonical_metadata_http_" + response.status);
+    if (!/application\/json/iu.test(response.headers.get("content-type") ?? "")) throw new Error("canonical_metadata_non_json_response");
+    const body = await response.text();
+    const payload: unknown = JSON.parse(body);
+    const data = rawRecord(payload);
+    // Detail endpoints must return one record; never silently select array member zero.
+    if (Array.isArray(payload) || Array.isArray(data.data) || Array.isArray(data.results))
+      return {resolution:{ok:false,reason:"CANONICAL_IDENTITY_AMBIGUOUS",conflicts:["Multiple records from detail endpoint."]},attempts:[attempt],cacheHit:false};
+    const ownerResponse: CanonicalMetadataResponse = {
+      provider,retrievedAt:now().toISOString(),requestIdentity,responseHash:identityHash(body),rawResponseBody:body,requestUrl:url,
+      ...canonicalOwnerFields(provider,payload,url),
+    };
+    const resolution = verifyIndependentCanonicalResponse(snapshot,seed,ownerResponse);
+    if (resolution.ok) {
+      cache.set(url,{expiresAt:Date.now()+DETAIL_CACHE_TTL_MS,response:structuredClone(ownerResponse)});
+      if (cache.size > DETAIL_CACHE_MAX) cache.delete(cache.keys().next().value!);
+    }
+    return {resolution,attempts:[attempt],cacheHit:false};
+  } catch (error) {
+    attempt.failure = error instanceof Error ? error.message : "canonical_metadata_owner_unavailable";
+    return {resolution:{ok:false,reason:"CANONICAL_IDENTITY_OWNER_UNAVAILABLE",conflicts:[attempt.failure]},attempts:executed?[attempt]:[],cacheHit:false};
+  } finally { clearTimeout(timeout); }
+}
+
+function canonicalOwnerFields(provider: CanonicalMetadataResponse["provider"], payload: unknown, url: string) {
+  const data = rawRecord(payload);
+  const detail = provider === "openalex" ? parseOpenAlex(payload,url) :
+    provider === "semantic_scholar" ? parseSemanticScholar(payload,url) : parseCrossref(payload,url);
+  const ids = rawRecord(provider === "openalex" ? data.ids : data.externalIds);
+  const rawPmcid = cleanText(ids.PubMedCentral ?? ids.PMCID ?? ids.pmcid);
+  const pmcid = rawPmcid ? (/^PMC/u.test(rawPmcid) ? rawPmcid : "PMC" + rawPmcid) : undefined;
+  const pmid = cleanText(ids.PubMed ?? ids.pmid).replace(/^https?:\/\/pubmed\.ncbi\.nlm\.nih\.gov\//iu, "").replace(/\/$/u, "") || undefined;
+  const responseIdentity = provider === "semantic_scholar" ? cleanText(data.paperId) :
+    provider === "openalex" ? cleanText(data.id) : cleanText(rawRecord(data.message).DOI);
+  return {responseIdentity,candidates:[{title:detail.title,authors:detail.authors,year:detail.year,venue:detail.venue,doi:detail.doi,pmid,pmcid,providerIds:detail.providerIds}]};
+}
+
+/** Persistence re-parses the hashed metadata response through the same owner parsers. */
+export function verifyCanonicalIdentityForPersistence(snapshot: CanonicalIdentitySnapshot, value: IndependentCanonicalIdentity): boolean {
+  try {
+    const response = value.evidence.response;
+    const fields = canonicalOwnerFields(response.provider,JSON.parse(response.rawResponseBody),response.requestUrl);
+    if (identityHash(fields) !== identityHash({responseIdentity:response.responseIdentity,candidates:response.candidates})) return false;
+    const verified = verifyIndependentCanonicalResponse(snapshot,value.evidence.seed,response);
+    return verified.ok && identityHash(verified.value) === identityHash(value);
+  } catch { return false; }
 }

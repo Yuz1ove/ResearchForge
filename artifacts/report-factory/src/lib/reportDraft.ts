@@ -107,9 +107,48 @@ export interface ReportDraftSection {
   generationMethod?: string;
   /** Writer-native paragraph-to-claim bindings; never inferred by the renderer. */
   paragraphClaims?: ReportDraftParagraphClaim[];
+  /** Writer-native sentence lineage; canonical rendering must not re-infer it from prose. */
+  sentenceClaimTraces?: ReportDraftSentenceClaimTrace[];
   citationCount: number;
   evidenceCardCount: number;
   warnings: string[];
+}
+
+export type ReportSentenceRepairAction =
+  | "UNCHANGED"
+  | "CITATION_RESTORED"
+  | "SPLIT"
+  | "SCOPE_REDUCED"
+  | "DETERMINISTIC_REWRITE"
+  | "MODEL_REPAIR"
+  | "MERGED"
+  | "DELETED_DUPLICATE"
+  | "DELETED_UNSUPPORTED"
+  | "DELETED_CONTRADICTED";
+
+export interface ReportDraftSentenceClaimTrace {
+  sentenceId: string;
+  sectionId: string;
+  paragraphId: string;
+  originalText: string;
+  finalText: string;
+  originalClaimIds: string[];
+  finalClaimIds: string[];
+  realizedClaimIds: string[];
+  evidenceIds: string[];
+  citationSourceIds: string[];
+  citationIds: string[];
+  factual: boolean;
+  validation: "pass" | "blocked";
+  action: ReportSentenceRepairAction;
+  actionReason: string;
+  repairStage: "A_PRESERVE" | "B_DETERMINISTIC" | "C_MODEL" | "D_DELETE";
+  repairAttempts: number;
+  providerUsed: string | null;
+  validationBefore: "pass" | "blocked";
+  validationAfter: "pass" | "blocked";
+  deleted: boolean;
+  deletionTimestamp?: string;
 }
 
 export interface ReportDraftParagraphClaim {

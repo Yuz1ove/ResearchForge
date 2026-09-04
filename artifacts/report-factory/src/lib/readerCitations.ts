@@ -17,10 +17,19 @@ export interface ReaderCitationEntry {
   anchorId: string;
   externalHref: string | null;
   printHref: string;
+  /** Stable reader-facing ordinal after bibliography canonicalization/dedupe. */
+  referenceNumber: number;
+}
+
+export interface ReaderCitationGroup {
+  label: string;
+  referenceNumbers: number[];
+  citationIds: string[];
+  sourceIds: string[];
 }
 
 const NUMERIC_OR_INTERNAL_CITATION_PATTERN =
-  /(?:\{\{?\s*[sS\uff33\uff53]\s*[0-9\uff10-\uff19]+\s*\}?\}|[\[\uff3b]\s*(?:(?:[sS\uff33\uff53]\s*)|(?:source\s*:\s*))?[0-9\uff10-\uff19]+\s*[\]\uff3d]|\b(?:source|citation)[_-][0-9]+\b)/giu;
+  /(?:\{\{?\s*[sS\uff33\uff53]\s*[0-9\uff10-\uff19]+\s*\}?\}|[\[\uff3b]\s*(?:(?:[sS\uff33\uff53]\s*)|(?:source\s*[:\uff1a]\s*))?[0-9\uff10-\uff19]+\s*[\]\uff3d]|\b(?:source|citation)[_-][0-9]+\b)/giu;
 
 function compact(value: string | null | undefined): string {
   // NFC preserves reader-facing full-width Chinese punctuation. NFKC would
@@ -38,6 +47,7 @@ function asciiDigits(value: string): string {
 export function stripReaderCitationTokens(value: string | null | undefined): string {
   return compact(value)
     .replace(NUMERIC_OR_INTERNAL_CITATION_PATTERN, "")
+    .replace(/([\u3400-\u9fff])\s+([\u3400-\u9fff])/gu, "$1$2")
     .replace(/[ \t]+([\u3002\uff01\uff1f!?\uff1b;\uff0c,\u3001\uff1a:])/gu, "$1")
     .replace(/([\u3001\uff0c,\uff1b;\uff1a:])(?:\s*[\u3001\uff0c,\uff1b;\uff1a:])+/gu, "$1")
     .replace(/[ \t]{2,}/gu, " ")
@@ -141,7 +151,7 @@ export function buildReaderCitationEntries(
   }
   const duplicateIndexes = new Map<string, number>();
 
-  return ordered.map(({ reference, source }) => {
+  return ordered.map(({ reference, source }, index) => {
     const base = baseAuthorYearCitationLabel(source);
     const duplicateIndex = duplicateIndexes.get(base) ?? 0;
     duplicateIndexes.set(base, duplicateIndex + 1);
@@ -166,14 +176,69 @@ export function buildReaderCitationEntries(
       externalHref,
       // Static PDF HTML only permits DOI links or same-document anchors.
       printHref: printExternalHref || `#${anchorId}`,
+      referenceNumber: index + 1,
     };
   });
 }
 
+function numericRanges(values: readonly number[]): string {
+  const numbers = Array.from(new Set(values))
+    .filter((value) => Number.isInteger(value) && value > 0)
+    .sort((left, right) => left - right);
+  const ranges: string[] = [];
+  for (let index = 0; index < numbers.length; index += 1) {
+    const start = numbers[index]!;
+    let end = start;
+    while (index + 1 < numbers.length && numbers[index + 1] === end + 1) {
+      index += 1;
+      end = numbers[index]!;
+    }
+    ranges.push(start === end ? String(start) : `${start}\u2013${end}`);
+  }
+  return ranges.join(", ");
+}
+
+/**
+ * Reader-facing numeric citations use full-width lenticular brackets so they
+ * cannot be mistaken for exponents, measurements, or leaked internal ids.
+ * The numbers remain the deterministic bibliography ordinals.
+ */
+export function readerAcademicCitationMarker(values: readonly number[]): string {
+  const label = numericRanges(values);
+  return label ? `〔${label}〕` : "";
+}
+
+/**
+ * Compresses presentation while retaining the exact citation/source ownership
+ * set. The group is a reader projection only; it never rewrites evidence or
+ * sentence lineage.
+ */
+export function buildReaderCitationGroup(
+  entries: readonly ReaderCitationEntry[],
+): ReaderCitationGroup {
+  const ordered = [...entries].sort((left, right) =>
+    left.referenceNumber - right.referenceNumber,
+  );
+  const referenceNumbers = ordered.map((entry) => entry.referenceNumber);
+  return {
+    label: numericRanges(referenceNumbers),
+    referenceNumbers,
+    citationIds: ordered.map((entry) => entry.citationId),
+    sourceIds: ordered.map((entry) => entry.sourceId),
+  };
+}
+
 export function readerCitationClusterLabel(
-  entries: readonly Pick<ReaderCitationEntry, "label">[],
+  entries: readonly Pick<ReaderCitationEntry, "label" | "referenceNumber">[],
+  mode: "compact" | "academic" | "author_year" = "author_year",
 ): string {
-  return entries.length > 0
-    ? `（${entries.map((entry) => entry.label).join("；")}）`
-    : "";
+  if (entries.length === 0) return "";
+  const numeric = numericRanges(entries.map((entry) => entry.referenceNumber));
+  if (mode === "compact") {
+    return numeric;
+  }
+  if (mode === "academic") {
+    return `〔${numeric}〕`;
+  }
+  return `（${entries.map((entry) => entry.label).join("；")}）`;
 }
